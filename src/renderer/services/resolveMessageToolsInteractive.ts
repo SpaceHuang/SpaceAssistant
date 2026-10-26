@@ -116,6 +116,8 @@ export function resolveRequestIdForConfirmingMessage(args: {
   streamingRequestId?: string | null
 }): string | null {
   const { sessionId, message, pendingItems, streamingAssistantId, streamingRequestId } = args
+  // 终态消息上的 confirming 只可能是持久化残留；迟到的 pending store 项不能重新打开确认入口。
+  if (message.status !== 'streaming') return null
   const pendingToolUseIds = actionablePendingToolUseIds(sessionId, message, pendingItems)
   if (!messageHasConfirmingTool(message) && !message.toolCalls?.some((tc) => pendingToolUseIds.has(tc.id))) return null
 

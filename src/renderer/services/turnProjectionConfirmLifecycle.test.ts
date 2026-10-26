@@ -63,6 +63,43 @@ describe('turn projection confirmation lifecycle', () => {
     off()
   })
 
+  it('点击确认后旧 confirming 快照不重新显示，权威执行快照清除响应占位', async () => {
+    let listener: ((payload: any) => void) | undefined
+    vi.stubGlobal('window', {
+      api: {
+        usageSet: vi.fn().mockResolvedValue(undefined),
+        chatListActiveTurns: vi.fn().mockResolvedValue([]),
+        chatGetPendingConfirmation: vi.fn().mockResolvedValue({
+          sessionId: 's1', turnId: 'turn-ack', requestId: 'request-ack', turnVersion: 1,
+          toolCallId: 'tool-ack', confirmation: { complete: true, riskLevel: 'high', memoryTiers: [], browser: {} }
+        }),
+        toolConfirmResponse: vi.fn().mockResolvedValue({ accepted: true, outcome: 'approved' }),
+        chatOnTurnProjection: vi.fn((cb) => { listener = cb; return () => undefined })
+      }
+    })
+    const off = initTurnProjectionBridge()
+    const message = (status: string) => ({
+      id: 'assistant-ack', sessionId: 's1', role: 'assistant', content: '', timestamp: 1, status: 'streaming', schemaVersion: 1,
+      toolCalls: [{ id: 'tool-ack', toolName: 'run_shell', input: { command: 'pwd' }, status, riskLevel: 'high' }]
+    })
+    const project = (version: number, status: string) => listener?.({
+      turn: { turnId: 'turn-ack', requestId: 'request-ack', sessionId: 's1', version, assistantMessage: message(status) },
+      event: { type: status === 'confirming' ? 'confirm-requested' : 'tool-confirmed' }
+    })
+
+    project(1, 'confirming')
+    await Promise.resolve()
+    await Promise.resolve()
+    pendingConfirmStore.respond('request-ack', 'tool-ack', true, undefined, 's1')
+    project(2, 'confirming')
+    expect(pendingConfirmStore.find('s1', 'tool-ack')?.confirmationReady).toBe(false)
+    project(3, 'executing')
+    expect(pendingConfirmStore.find('s1', 'tool-ack')).toBeUndefined()
+    project(4, 'confirming')
+    expect(pendingConfirmStore.find('s1', 'tool-ack')).toBeDefined()
+    off()
+  })
+
   it.each([
     ['no-tools', [
       { type: 'content-delta', version: 1, content: 'answer', status: 'streaming' },

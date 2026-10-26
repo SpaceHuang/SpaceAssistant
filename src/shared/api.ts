@@ -365,7 +365,6 @@ export type SpaceAssistantApi = {
       | { kind: 'package'; package: PolicyPackage }
       | { kind: 'rule-override'; ruleId: string; action: PolicyAction }
       | { kind: 'rule-reset'; ruleId: string }
-      | { kind: 'rule-enabled'; ruleId: string; enabled: boolean }
       | { kind: 'capability-permission'; capabilityId: string; permission: 'deny' | 'ask' | 'allow' }
       | { kind: 'switch-to-standard'; userChoiceConfirmed: true; displayedDiffs: readonly string[] }
   }) => Promise<
@@ -377,23 +376,21 @@ export type SpaceAssistantApi = {
   securitySetPolicyPackage: (payload: {
     lane: ExecutionLane
     package: PolicyPackage
+    expectedRevision: number
   }) => Promise<{ ok: true } | { ok: false; error: string }>
-  /** 自定义套餐规则覆盖（主进程强制校验：locked 只读、不可增删、顺序不可改；
+  /** 自定义套餐规则覆盖（主进程强制校验：locked 可改动作，不可增删规则或修改顺序/匹配条件；
    *  默认动作即 auto-evaluator 的规则额外允许覆盖回 auto-evaluator）。 */
   securitySetRuleOverride: (payload: {
     ruleId: string
     action: PolicyAction
+    expectedRevision: number
     /** 覆盖提交所在链路（B2 动作域校验；缺省按最严格 3 态域） */
     lane?: ExecutionLane
     params?: Record<string, unknown>
   }) => Promise<{ ok: true } | { ok: false; error: string }>
-  /** 系统保护（禁止类）规则「启用/不启用」：启用=在策略链中生效，不启用=不再作为硬拒绝。 */
-  securitySetRuleEnabled: (payload: {
-    ruleId: string
-    enabled: boolean
-  }) => Promise<{ ok: true } | { ok: false; error: string }>
   securityRemoveRuleOverride: (payload: {
     ruleId: string
+    expectedRevision: number
   }) => Promise<{ ok: true; removed: number } | { ok: false; error: string }>
   /** 确认记忆管理：decision_cache 全量列表。 */
   securityListDecisionCache: () => Promise<DecisionCacheEntry[]>
@@ -554,6 +551,8 @@ export type SpaceAssistantApi = {
     overwrite?: boolean
     installSkill?: boolean
   }) => Promise<{ ok: true; rootPath: string; skillInstalled: boolean } | { ok: false; error: string }>
+  wikiDomainMigrationPreview: () => Promise<import('./domainTypes').WikiBootstrapMigrationPreview>
+  wikiDomainMigrationApply: (payload: { manifestHash: string }) => Promise<{ status: 'completed' | 'cancelled' }>
   wikiStatus: () => Promise<WikiStatus>
   wikiGetSchema: () => Promise<{ content: string } | null>
   wikiResolvePath: (payload: {
@@ -561,7 +560,7 @@ export type SpaceAssistantApi = {
   }) => Promise<{ absPath: string; kind: 'raw' | 'wiki' | 'schema' | 'other'; readOnly?: boolean } | { error: string }>
   wikiImportRaw: (payload: {
     srcRelPath: string
-  }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
+  }) => Promise<{ ok: true; rawRelPath: string; copied: boolean; sourceId?: string; sourceRevision?: number } | { ok: false; error: string }>
   wikiMigrationStatus: () => Promise<import('./domainTypes').WikiStatus>
   wikiMigrateLegacy: (payload?: {
     profileIds?: string[]

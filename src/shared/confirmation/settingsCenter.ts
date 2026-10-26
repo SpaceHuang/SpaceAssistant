@@ -13,7 +13,7 @@ import type {
  * 主进程装配（electron/confirmation/settingsSecurityModel.ts），渲染端只读消费。
  */
 
-/** 策略规则展示视图：默认规则 + 用户覆盖合并（locked 条目只读）。 */
+/** 策略规则展示视图：默认规则 + 用户覆盖合并；custom 套餐可覆盖 locked 规则的动作，不可改规则结构。 */
 export interface SecuritySettingsRuleView {
   id: string
   when: PolicyWhen
@@ -26,6 +26,8 @@ export interface SecuritySettingsRuleView {
   locked: boolean
   reason: string
   overridden: boolean
+  /** True when this override was migrated from the removed legacy disabled list. */
+  migratedFromLegacyDisabled?: boolean
   /** 规则匹配的工具名和显式 toolkit capability id，供用户查看适用能力范围。 */
   capabilities?: string[]
   /** 规则适用链路（rule.match.lane）；缺省表示不限定链路、全链路通用。 */
@@ -36,6 +38,7 @@ export interface SecuritySettingsRuleView {
 export interface SecuritySettingsModelPayload {
   /** 1. 策略套餐（每链路）；规则行的生效动作由渲染端按 LANE_PROFILES.effectiveActionFor 计算 */
   packages: PolicyPackageMap
+  policyRevisions?: Partial<Record<'desktop' | 'im', number>>
   /** 2. 工具开关（deniedTools） */
   deniedTools: string[]
   /** 4. 确认记忆（decision_cache 全量，渲染端按档位分组） */

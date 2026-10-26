@@ -14,7 +14,7 @@ import {
   type SessionEventSink
 } from '../sessionEvents'
 import type { CanonicalLedgerProjectionTarget } from '../sessionLedgerOutbox'
-import { toolCallProjectionPayloadMatches } from '../sessionLedgerProjectionCompatibility'
+import { sessionEventProjectionMatches, sessionEventProjectionSchemasCompatible, toolCallProjectionPayloadMatches, toolResultProjectionPayloadMatches } from '../sessionLedgerProjectionCompatibility'
 
 /** Applies a canonical outbox target through the existing idempotent ledger projection primitive. */
 export async function projectCanonicalSessionLedgerTarget(
@@ -54,7 +54,11 @@ export async function projectCanonicalSessionLedgerTarget(
   const events = target.expectedEvents.map((expected) => {
     const match = persisted.find((event) => sameProjectionIdentity(event, expected))
     if (!match || !projectionPayloadMatches(target.projectionKind, match, expected)) throw new Error('SESSION_LEDGER_PROJECTION_EVENT_NOT_COMMITTED')
-    return { type: match.type, payload: match.payload }
+    return {
+      type: match.type as SessionEventInput['type'],
+      ...(match.schemaVersion !== undefined && match.schemaVersion !== 1 ? { schemaVersion: match.schemaVersion } : {}),
+      payload: match.payload
+    }
   })
   const eventIds = events.map(projectionEventIdentity)
   if (JSON.stringify(eventIds) !== JSON.stringify(target.expectedEventIds)) throw new Error('SESSION_LEDGER_PROJECTION_IDENTITY_MISMATCH')
@@ -62,26 +66,21 @@ export async function projectCanonicalSessionLedgerTarget(
 }
 
 function projectionPayloadMatches(kind: string, actual: SessionEvent, expected: SessionEventInput): boolean {
+  if (kind === 'tool-result' && actual.type === 'tool_result' && expected.type === 'tool_result') {
+    return toolResultProjectionPayloadMatches(actual.payload, expected.payload)
+  }
   if (kind.startsWith('tool-call:') && actual.type === 'tool_call' && expected.type === 'tool_call') {
     return toolCallProjectionPayloadMatches(actual.payload, expected.payload)
   }
   if (kind !== 'invocation-terminal' || actual.type !== 'turn_end' || expected.type !== 'turn_end') {
-    return stableJson(actual.payload) === stableJson(expected.payload)
+    return sessionEventProjectionMatches(actual, expected)
   }
+  if (!sessionEventProjectionSchemasCompatible(actual, expected)) return false
   const { turnId, reason, ...additionalPayload } = actual.payload
   const diagnosticsAreValid = Object.keys(additionalPayload).every((key) => key === 'error' || key === 'errorCode' || key === 'finalSurfaceSnapshot') &&
     (additionalPayload.error === undefined || typeof additionalPayload.error === 'string') &&
     (additionalPayload.errorCode === undefined || typeof additionalPayload.errorCode === 'string')
   return diagnosticsAreValid && turnId === expected.payload.turnId && reason === expected.payload.reason
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value).filter(([, item]) => item !== undefined).sort(([left], [right]) => left.localeCompare(right))
-    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`
-  }
-  return JSON.stringify(value)
 }
 
 function projectionEventIdentity(event: SessionEventInput): string {

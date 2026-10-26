@@ -362,10 +362,26 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       }
       if (payload.feishu !== undefined) {
         // §5.6-6：链路硬约束/确认开关变更落 settings.policy-change（含新旧值）
-        persistFeishuConfig(ctx.db, payload.feishu)
+        // 状态归属：Owner 绑定只由专用绑定 IPC 写入，不接受 renderer 的整份配置快照。
+        const {
+          remoteSenderAllowlist: _remoteSenderAllowlist,
+          ...feishuSettings
+        } = payload.feishu
+        persistFeishuConfig(ctx.db, feishuSettings)
       }
       if (payload.wechat !== undefined) {
-        persistWeChatConfig(ctx.db, payload.wechat)
+        // 状态归属：通用设置只写用户可编辑偏好；登录、绑定与监听生命周期由专用 wechat:* IPC 持有，
+        // 不得被 renderer 旧快照覆盖。
+        const {
+          enabled: _enabled,
+          loggedIn: _loggedIn,
+          remoteEnabled: _remoteEnabled,
+          remoteSenderAllowlist: _remoteSenderAllowlist,
+          displayName: _displayName,
+          botIdSuffix: _botIdSuffix,
+          ...wechatSettings
+        } = payload.wechat
+        persistWeChatConfig(ctx.db, wechatSettings)
       }
       if (payload.workDirProfiles !== undefined) {
         const validation = ctx.workDirManager.validateProfilesForSave(payload.workDirProfiles)

@@ -31,7 +31,7 @@ vi.mock('../FileTree/FileTree', () => ({
 }))
 
 function renderWikiPane(wikiInitialized = true, apiOverride: Record<string, unknown> = {}) {
-  const wikiStatus = (apiOverride.wikiStatus as ReturnType<typeof vi.fn>) ?? vi.fn().mockResolvedValue({ initialized: wikiInitialized })
+  const wikiStatus = (apiOverride.wikiStatus as ReturnType<typeof vi.fn>) ?? vi.fn().mockResolvedValue({ initialized: wikiInitialized, domainLifecycle: 'domain_ready' })
   ;(window as Record<string, unknown>).api = {
     wikiStatus,
     wikiInit: vi.fn(),
@@ -101,6 +101,35 @@ describe('WikiPane', () => {
     await waitFor(() => {
       expect(screen.getByTestId('wiki-tree')).toBeDefined()
     })
+  })
+
+  it('domain_enabled 时保留可浏览树并说明页面由领域工具管理', async () => {
+    renderWikiPane(true, { wikiStatus: vi.fn().mockResolvedValue({ initialized: true, domainLifecycle: 'domain_enabled' }) })
+    await waitFor(() => expect(screen.getByTestId('wiki-tree')).toBeDefined())
+    expect(screen.getByText('当前 Wiki 使用领域工具管理知识内容；此处可继续浏览和打开页面。')).toBeDefined()
+  })
+
+  it('initializing 时先展示领域迁移预检，确认时只提交已审阅的 manifest hash', async () => {
+    const wikiStatus = vi.fn()
+      .mockResolvedValueOnce({ initialized: true, domainLifecycle: 'initializing' })
+      .mockResolvedValue({ initialized: true, domainLifecycle: 'domain_ready' })
+    const wikiDomainMigrationPreview = vi.fn().mockResolvedValue({
+      manifestHash: 'reviewed-manifest', resumeRequired: false,
+      files: [{ path: 'wiki/entities/old.md', sha256: 'file-hash', kind: 'page' }],
+      diagnostics: [],
+      changes: [{ objectKind: 'page', relativePath: 'wiki/entities/old.md', oldHash: 'before', newHash: 'after' }],
+      review: { categories: [{ legacyName: 'entity', categoryId: 'entity', description: 'Entities', status: 'active' }], indexNotes: [], unclassifiedIndexContent: [], readonlyLogArchives: [] }
+    })
+    const wikiDomainMigrationApply = vi.fn().mockResolvedValue({ status: 'completed' })
+    renderWikiPane(true, { wikiStatus, wikiDomainMigrationPreview, wikiDomainMigrationApply })
+
+    fireEvent.click(await screen.findByRole('button', { name: '检查领域迁移' }))
+    expect(await screen.findByText('wiki/entities/old.md')).toBeTruthy()
+    expect(screen.getByText(/entity/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '确认迁移' }))
+
+    await waitFor(() => expect(wikiDomainMigrationApply).toHaveBeenCalledWith({ manifestHash: 'reviewed-manifest' }))
+    expect(await screen.findByText('领域迁移已完成')).toBeTruthy()
   })
 
   it('switches wiki tab and selects wiki paths from navigation', async () => {

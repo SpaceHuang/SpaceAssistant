@@ -3,7 +3,7 @@ import type { WeChatConfig } from '../src/shared/wechatTypes'
 import type { BrowserConfig, ShellConfig, ToolsConfig } from '../src/shared/domainTypes'
 import type { RemoteContext } from './tools/types'
 import { BUILTIN_TOOL_DEFINITIONS } from '../src/shared/builtinToolDefinitions'
-import { evaluateExposure, type ExposureResult } from './confirmation/exposure'
+import { evaluateExposure, issueExposureApprovalPermit, type ExposureResult } from './confirmation/exposure'
 import { getSecurityAuditLog } from './confirmation/audit'
 import type { AuditSink } from './confirmation/channels'
 import type { ExecutionLane, PolicyRule } from '../src/shared/confirmation/types'
@@ -53,7 +53,8 @@ export function filterBuiltinToolsForApi(
   // 测试可注入规则集；默认 DEFAULT_POLICY_RULES
   rules?: PolicyRule[],
   // 可选的请求级 profile snapshot；存在时只重写 run_shell description，不改静态工具 schema。
-  terminalSnapshot?: TerminalProfileSnapshot
+  terminalSnapshot?: TerminalProfileSnapshot,
+  skipExposureEvaluation = false
 ): typeof BUILTIN_TOOL_DEFINITIONS {
   let list = BUILTIN_TOOL_DEFINITIONS.filter((t) => isToolEnabledByConfig(t.name, cfg))
   if (!isShellToolEnabled(shellConfig, cfg)) {
@@ -89,12 +90,6 @@ export function filterBuiltinToolsForApi(
   if (!wechat?.enabled) {
     list = list.filter((t) => t.name !== 'wechat_send' && t.name !== 'wechat_reply')
   }
-  // wechat_send takes an arbitrary model-chosen userId; remote must only reach the
-  // authenticated inbound sender via wechat_reply. This is unconditional — remote never
-  // gets wechat_send regardless of remoteDenyOutbound. Desktop keeps wechat_send.
-  if (remoteContext) {
-    list = list.filter((t) => t.name !== 'wechat_send')
-  }
   if (!browserConfig?.enabled) {
     list = list.filter((t) => t.name !== 'browser')
   }
@@ -115,7 +110,7 @@ export function filterBuiltinToolsForApi(
       ? 'feishu'
       : 'wechat'
     : 'desktop'
-  list = list.filter((t) => {
+  if (!skipExposureEvaluation) list = list.filter((t) => {
     const r = evaluateExposure(rules ? { toolName: t.name, lane, rules } : { toolName: t.name, lane })
     if (!r.allowed) onExposureDeny?.(t.name, r)
     return r.allowed
@@ -123,6 +118,86 @@ export function filterBuiltinToolsForApi(
   if (!terminalSnapshot) return list
   const contract = buildTerminalToolContract(terminalSnapshot)
   return list.map((tool) => tool.name === 'run_shell' ? { ...tool, description: contract.description } : tool)
+}
+
+/** Async production path: do not advertise an ask-gated object until the local owner approves this exact target. */
+export async function filterBuiltinToolsForApiWithApproval(args: {
+  cfg: ToolsConfig
+  feishu?: FeishuConfig | null
+  browserConfig?: BrowserConfig | null
+  remoteContext?: RemoteContext | null
+  shellConfig?: ShellConfig | null
+  wechat?: WeChatConfig | null
+  audit?: AuditSink
+  rules?: PolicyRule[]
+  resolveRules?: () => PolicyRule[]
+  resolveAuthorizationVersion?: () => string
+  subscribePolicyChanges?: (listener: () => void) => () => void
+  locale?: import('../src/shared/locale').AppLocale
+  terminalSnapshot?: TerminalProfileSnapshot
+  requestApproval: (request: { lane: ExecutionLane; toolName: string; ruleId: string }, signal?: AbortSignal) => Promise<boolean>
+}): Promise<typeof BUILTIN_TOOL_DEFINITIONS> {
+  const lane: ExecutionLane = args.remoteContext ? args.remoteContext.source === 'feishu' ? 'feishu' : 'wechat' : 'desktop'
+  const candidates = filterBuiltinToolsForApi(args.cfg, args.feishu, args.browserConfig, args.remoteContext,
+    args.shellConfig, args.wechat, undefined, args.rules, args.terminalSnapshot, true)
+  const sink = args.audit ?? getSecurityAuditLog()
+  const allowed = new Set<string>()
+  for (const tool of candidates) {
+    let currentRules = args.resolveRules?.() ?? args.rules
+    const decision = evaluateExposure({ toolName: tool.name, lane, rules: currentRules })
+    if (decision.allowed) {
+      allowed.add(tool.name)
+      continue
+    }
+    if (decision.action === 'deny') {
+      sink.record({ ts: Date.now(), event: 'policy.deny-exposure', lane, sessionId: '', toolName: tool.name,
+        decision: 'deny', ruleId: decision.ruleId, reason: decision.reason, actor: 'system' })
+      continue
+    }
+    if (decision.action !== 'ask' || !decision.ruleId) continue
+    let pending = decision
+    for (let attempt = 0; attempt < 4 && pending.action === 'ask' && pending.ruleId; attempt += 1) {
+      const approvedRules = JSON.stringify(currentRules ?? [])
+      const approvedVersion = args.resolveAuthorizationVersion?.()
+      let unsubscribe: () => void = () => undefined
+      let changed = false
+      const controller = new AbortController()
+      const change = new Promise<'changed'>((resolve) => {
+        if (!args.subscribePolicyChanges) return
+        unsubscribe = args.subscribePolicyChanges(() => { changed = true; controller.abort(); resolve('changed') })
+      })
+      const rulesAfterSubscribe = args.resolveRules?.() ?? args.rules
+      const versionAfterSubscribe = args.resolveAuthorizationVersion?.()
+      if (JSON.stringify(rulesAfterSubscribe ?? []) !== approvedRules || versionAfterSubscribe !== approvedVersion) {
+        unsubscribe()
+        currentRules = rulesAfterSubscribe
+        pending = evaluateExposure({ toolName: tool.name, lane, rules: currentRules })
+        if (pending.allowed) { allowed.add(tool.name); break }
+        if (pending.action === 'deny' || pending.action !== 'ask' || !pending.ruleId) break
+        continue
+      }
+      let outcome: boolean | 'changed'
+      try { outcome = args.subscribePolicyChanges
+        ? await Promise.race([args.requestApproval({ lane, toolName: tool.name, ruleId: pending.ruleId }, controller.signal).catch(() => false), change])
+        : await args.requestApproval({ lane, toolName: tool.name, ruleId: pending.ruleId }, controller.signal).catch(() => false)
+      } finally { unsubscribe() }
+      // Policy phase: an exposure prompt answer is valid only against the snapshot/version it opened on.
+      currentRules = args.resolveRules?.() ?? args.rules
+      const currentVersion = args.resolveAuthorizationVersion?.()
+      if (outcome === 'changed' || changed || JSON.stringify(currentRules ?? []) !== approvedRules || approvedVersion !== currentVersion) {
+        pending = evaluateExposure({ toolName: tool.name, lane, rules: currentRules })
+        if (pending.allowed) { allowed.add(tool.name); break }
+        if (pending.action === 'deny' || pending.action !== 'ask' || !pending.ruleId) break
+        continue
+      }
+      const approved = outcome
+      if (!approved) break
+      const permit = issueExposureApprovalPermit({ ruleId: pending.ruleId, toolName: tool.name, lane })
+      if (evaluateExposure({ toolName: tool.name, lane, rules: currentRules, approvedExposure: permit }).allowed) allowed.add(tool.name)
+      break
+    }
+  }
+  return candidates.filter((tool) => allowed.has(tool.name))
 }
 
 /**

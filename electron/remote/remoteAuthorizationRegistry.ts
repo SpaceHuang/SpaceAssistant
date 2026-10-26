@@ -50,7 +50,7 @@ export class RemoteAuthorizationRegistry {
   private writeGrantRevoker: WriteGrantRevoker | null = null
   private cacheClearers = new Map<string, CacheClearByChannel>()
   private todoInvalidators = new Map<string, DeferredTodoInvalidator>()
-  private auditAppenders: AuditAppend[] = []
+  private auditAppenders = new Set<AuditAppend>()
   private epochStore: ReturnType<typeof createRemoteAuthorizationEpochStore> | null = null
   private blockedChannels = new Map<RemoteAuthChannel, string>()
 
@@ -159,8 +159,9 @@ export class RemoteAuthorizationRegistry {
     }
   }
 
-  registerAuditAppender(append: AuditAppend): void {
-    this.auditAppenders.push(append)
+  registerAuditAppender(append: AuditAppend): () => void {
+    this.auditAppenders.add(append)
+    return () => { this.auditAppenders.delete(append) }
   }
 
   /**

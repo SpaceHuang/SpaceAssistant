@@ -31,6 +31,14 @@ import { readFeishuAttachmentExecutor } from '../tools/readFeishuAttachmentExecu
 import type { ToolExecutionContext } from '../tools/types'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
 import { recordUserAnswerFromDecision } from './decisionCacheWriter'
+import { createAgentSdkSafetyPolicy } from './agentSdkSafetyPolicy'
+import { ModelProviderRegistry, type StreamChunk } from '../../packages/agent-sdk/src/model'
+import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
+import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
+import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
+import { runAgentTurn } from '../../packages/agent-sdk/src/turn'
+import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
+import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
 
 const shells: AppDatabase[] = []
 describe('buildToolCallGateArgs', () => {
@@ -60,6 +68,28 @@ describe('buildToolCallGateArgs', () => {
       await fs.rm(rootA, { recursive: true, force: true })
       await fs.rm(rootB, { recursive: true, force: true })
     }
+  })
+})
+
+describe('registered dynamic tool policy facts', () => {
+  it('uses registered Wiki read action class to avoid treating the call as an unknown execute tool', async () => {
+    const gate = await evaluateToolCallGate(base({
+      lane: 'wechat', remoteContext: remoteContext({ source: 'wechat' }),
+      toolName: 'memory.wiki_search', toolInput: { query: 'runtime' }, registeredActionClass: 'read'
+    }))
+    expect(gate.facts).toMatchObject({ toolName: 'memory.wiki_search', actionClass: 'read' })
+    expect(gate.facts.signals).not.toContainEqual(expect.objectContaining({ kind: 'extraction-failed' }))
+    expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'default-read-outbound-allow' })
+  })
+
+  it('keeps registered Wiki write actions on the default confirmation path', async () => {
+    const gate = await evaluateToolCallGate(base({
+      lane: 'wechat', remoteContext: remoteContext({ source: 'wechat' }),
+      toolName: 'memory.wiki_save_page', toolInput: {}, registeredActionClass: 'write'
+    }))
+    expect(gate.facts).toMatchObject({ toolName: 'memory.wiki_save_page', actionClass: 'write' })
+    expect(gate.facts.signals).not.toContainEqual(expect.objectContaining({ kind: 'extraction-failed' }))
+    expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
   })
 })
 
@@ -168,7 +198,7 @@ describe('IM standard policy override is final at the gate', () => {
     const db = openDb()
     commitImPolicySnapshot(getDbConnection(db), {
       policyBehaviorVersion: 'im-standard-v2',
-      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'im-time-query-review': 'ask' } },
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'im-time-query-review': 'ask' } },
       updatedAt: 1,
       eventId: 'time-query-user-ask-override'
     })
@@ -228,6 +258,16 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
     expect(event).not.toHaveProperty('fallbackCause')
     expect(event).not.toHaveProperty('todoId')
     expect(event).not.toHaveProperty('dispatchKey')
+  })
+
+  it('persists desktop policy revision and epoch in the decision fingerprint evidence', async () => {
+    const audit = auditSink()
+    const result = await evaluateToolCallGate(base({ audit, lane: 'desktop', policyBinding: {
+      domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 12, epoch: 4
+    } }))
+    const event = audit.events.find((entry) => entry.event === 'policy.decision')
+    expect(event).toMatchObject({ policyDomain: 'desktop', policyBehaviorVersion: 'desktop-v1', policyRevision: 12, policyEpoch: 4 })
+    expect(result.policyDecision).toMatchObject({ policyDomain: 'desktop', policyVersion: 'desktop-v1', policyRevision: 12 })
   })
 
   it('records reported completeness from extracted MCP facts instead of assuming completeness', async () => {
@@ -329,6 +369,124 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
   })
 })
 
+describe('Wiki schema change confirmation policy', () => {
+  it('hard-denies automation page writes instead of sending them to the approval agent', async () => {
+    for (const toolName of ['memory.wiki_save_page', 'memory.wiki_move_page']) {
+      const result = await evaluateToolCallGate(base({ lane: 'automation', toolName, toolInput: {} }))
+      expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'wiki-page-write-automation-deny' })
+    }
+  })
+
+  it('requires a user confirmation for apply and rejects unattended automation', async () => {
+    const desktop = await evaluateToolCallGate(base({ toolName: 'memory.wiki_update_schema', toolInput: { proposalId: 'proposal-1', expectedSchemaVersion: 1 } }))
+    expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'wiki-schema-update-human-confirm', answerer: 'user' })
+    const automation = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'memory.wiki_update_schema', toolInput: { proposalId: 'proposal-1', expectedSchemaVersion: 1 } }))
+    expect(automation.decision).toMatchObject({ type: 'deny', ruleId: 'wiki-schema-update-automation-deny' })
+  })
+
+  it('locks generic file and shell access to the managed Wiki only after domain_enabled', async () => {
+    const root = await fs.mkdtemp('/tmp/wiki-bypass-gate-')
+    const workDir = path.join(root, 'work')
+    const userDataDir = path.join(root, 'userdata')
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.mkdir(path.join(wikiRoot, 'wiki'), { recursive: true })
+    await fs.writeFile(path.join(wikiRoot, 'wiki', 'secret.md'), '# Secret')
+    const lifecycle = (await import('../wiki/wikiLifecycle')).createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    const args = { workDir, userDataDir, wikiConfig: { ...DEFAULT_WIKI_CONFIG, legacyRootAliases: ['old-wiki'] } }
+    try {
+      const ready = await evaluateToolCallGate(base({ ...args, toolName: 'read_file', toolInput: { path: 'llm-wiki/wiki/secret.md' } }))
+      expect(ready.decision.ruleId).not.toBe('wiki-domain-file-bypass-deny')
+      await lifecycle.enable()
+      for (const [toolName, toolInput] of [
+        ['read_file', { path: 'llm-wiki/wiki/secret.md' }],
+        ['read_file', { path: 'LLM-WIKI/wiki/secret.md' }],
+        ['read_file', { path: 'old-wiki/wiki/secret.md' }],
+        ['read_file', { path: 'llm-wiki/wiki/../wiki/secret.md' }],
+        ['read_file', { path: path.join(wikiRoot, 'wiki', 'secret.md') }],
+        ['list_directory', { path: 'llm-wiki/wiki' }],
+        ['grep', { pattern: 'Secret', path: 'llm-wiki/wiki' }],
+        ['write_file', { path: 'llm-wiki/wiki/secret.md', content: 'overwrite' }],
+        ['edit_file', { path: 'llm-wiki/wiki/secret.md', oldText: 'Secret', newText: 'Other' }],
+        ['run_shell', { command: 'cat llm-wiki/wiki/secret.md' }],
+        ['run_shell', { command: 'cat old-wiki/wiki/secret.md' }],
+      ] as const) {
+        const gate = await evaluateToolCallGate(base({ ...args, toolName, toolInput }))
+        expect(gate.facts.signals, toolName).toContainEqual({ kind: 'wiki-managed-target' })
+        expect(gate.facts.signals, toolName).toContainEqual({ kind: 'wiki-domain-enabled' })
+        expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'wiki-domain-file-bypass-deny' })
+      }
+      const outside = path.join(root, 'outside.md')
+      await fs.writeFile(outside, 'outside target')
+      if (canCreateSymlinks()) {
+        await fs.symlink(outside, path.join(wikiRoot, 'wiki', 'linked.md'))
+        const symlinkGate = await evaluateToolCallGate(base({ ...args, toolName: 'read_file', toolInput: { path: 'llm-wiki/wiki/linked.md' } }))
+        expect(symlinkGate.facts.signals).toContainEqual({ kind: 'wiki-managed-target' })
+        expect(symlinkGate.decision).toMatchObject({ type: 'deny', ruleId: 'wiki-domain-file-bypass-deny' })
+      }
+      const normalFile = await evaluateToolCallGate(base({ ...args, toolName: 'read_file', toolInput: { path: 'note.txt' } }))
+      expect(normalFile.decision.ruleId).not.toBe('wiki-domain-file-bypass-deny')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('denies a generic Wiki file read before the executor is entered', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wiki-bypass-executor-'))
+    const workDir = path.join(root, 'work')
+    const userDataDir = path.join(root, 'userdata')
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.mkdir(path.join(wikiRoot, 'wiki'), { recursive: true })
+    await fs.writeFile(path.join(wikiRoot, 'wiki', 'secret.md'), '# Secret')
+    const lifecycle = (await import('../wiki/wikiLifecycle')).createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
+
+    const invocationId = `wiki-bypass-${Date.now()}`
+    const callInput = { path: 'llm-wiki/wiki/secret.md' }
+    const inputSnapshotHash = createHash('sha256').update(JSON.stringify(callInput)).digest('hex')
+    const route = { routeId: 'wiki-bypass-test', protocol: 'anthropic-messages' as const, dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }
+    const registry = new ModelProviderRegistry()
+    async function* modelStream(...chunks: StreamChunk[]) { yield* chunks }
+    registry.register(route, { providerId: invocationId, stream: () => modelStream(
+      { type: 'tool-call', toolCallId: 'wiki-read-1', toolName: 'read_file', input: callInput },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['read_file'])
+    const permits = new InMemorySafetyPermitStore()
+    const execute = vi.fn(async () => ({ output: '# Secret' }))
+    const bindingBase = { requestId: 'wiki-bypass-request', turnId: invocationId, invocationId, toolCallId: 'wiki-read-1', capabilityId: 'read_file', inputSnapshotHash,
+      planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth-v1' }
+    const safetyPolicy = createAgentSdkSafetyPolicy({
+      resolveToolCall: () => ({ invocationId, toolCallId: 'wiki-read-1', toolName: 'read_file', input: callInput }),
+      resolveGateArgs: async (binding) => ({
+        ...base({ workDir, userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, toolName: 'read_file', toolInput: callInput, requestId: binding.requestId, toolUseId: binding.toolCallId }),
+        phase: binding.phase === 'recheck' ? 'recheck' : 'initial',
+        ...(binding.phase === 'recheck' ? { previouslyConfirmed: true } : {})
+      })
+    })
+    const gate = new SafetyGate({ capabilities, permitStore: permits, policy: safetyPolicy })
+    const toolExecution = createPermitBoundToolExecutionPort({
+      permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+      resolveExpected: async (call) => ({ ...bindingBase, toolCallId: call.toolCallId, phase: 'recheck' }),
+      execute
+    })
+
+    try {
+      await expect(runAgentTurn({ registry, routeId: route.routeId, invocationId, request: { messages: [], maxTokens: 10 }, safetyGate: gate,
+        prepareTool: async (_call, stage) => ({ ...bindingBase, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+        toolExecution, maxModelTurns: 2 })).rejects.toMatchObject({ code: 'TOOL_DENIED', reasonCode: 'POLICY_DENY' })
+      expect(execute).not.toHaveBeenCalled()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('evaluateToolCallGate MCP 载荷（R3）', () => {
   function mcpEntry(overrides: Record<string, unknown> = {}) {
     const value = {
@@ -399,7 +557,7 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
     expect(ev?.reason).toContain('construction')
   })
 
-  it('T-R3-3：注解安全 → actionClass=read + annotations-readonly（ask/deny 结论不变：desktop 落 mcp-readonly-allow）', async () => {
+  it('T-R3-3：只读注解与默认 MCP ask 同时命中时仍需确认', async () => {
     const r = await evaluateToolCallGate(base({
       toolName: 'mcp_example_fetch_url',
       toolInput: { url: 'https://example.com' },
@@ -407,7 +565,7 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
       mcpAccountAuthorization: 'authorized',
       mcpEntry: mcpEntry({ annotations: { readOnlyHint: true, destructiveHint: false } })
     }))
-    expect(r.decision.type).toBe('auto-allow')
+    expect(r.decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask' })
     expect(r.facts.signals).toContainEqual({ kind: 'mcp-readonly', serverId: 'srv1', toolName: 'fetch_url' })
     const sig = r.facts.signals.find((x) => x.kind === 'mcp-invocation')
     if (sig?.kind === 'mcp-invocation') {
@@ -1413,7 +1571,7 @@ describe('evaluateToolCallGate', () => {
       toolName: 'run_script',
       toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)' }
     }))
-    expect(declaredWhenEnabled.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-declared-path-scope-allow-desktop' })
+    expect(declaredWhenEnabled.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
 
     const declaredWithSensitivePath = await evaluateToolCallGate(base({
       appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
@@ -1467,6 +1625,23 @@ describe('evaluateToolCallGate', () => {
     expect(unsupported.facts.signals).toContainEqual({ kind: 'script-language-analysis', language: 'unknown', status: 'unverified' })
     expect(unsupported.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: expect.any(String) }))
     expect(unsupported.decision).toMatchObject({ type: 'require-confirm', answerer: 'user' })
+  })
+
+  it.each([
+    { action: 'deny' as const, expected: { type: 'deny', ruleId: 'script-unverified-language-confirm' } },
+    { action: 'allow' as const, expected: { type: 'auto-allow', ruleId: 'script-unverified-language-confirm' } },
+    { action: 'ask' as const, expected: { type: 'require-confirm', ruleId: 'script-unverified-language-confirm', answerer: 'user' } }
+  ])('custom desktop override $action replaces the unverified-language default confirmation', async ({ action, expected }) => {
+    const effectiveRules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'script-unverified-language-confirm'
+      ? { ...rule, action, userOverride: true as const }
+      : rule)
+    const gate = await evaluateToolCallGate(base({
+      toolName: 'run_script',
+      toolInput: { language: 'javascript', code: "console.log('hello')" },
+      lanePackage: 'custom',
+      effectiveRules
+    }))
+    expect(gate.decision).toMatchObject(expected)
   })
 
   it('T4-1 自定义敏感前缀由 gate facts 和策略环境读取同一 shellConfig', async () => {
@@ -2273,12 +2448,12 @@ describe('evaluateToolCallGate', () => {
       remoteContext: remoteContext({ authOwner: 'ou_owner' }),
       imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } }
     }))
-    const self = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner'])
-    const other = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other'])
+    const self = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner', '--text', 'hello'])
+    const other = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other', '--text', 'hello'])
     const group = await run(['message', 'send', '--chat-type', 'group', '--receive-id', 'oc_group'])
     const unknown = await run(['message', 'send', '--receive-id-type', 'user_id', '--receive-id', 'user_owner'])
-    expect(self.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
-    expect(other.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-direct-review', answerer: 'agent' })
+    expect(self.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-write-ask', answerer: 'user' })
+    expect(other.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-write-ask', answerer: 'user' })
     expect(group.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-group-human', answerer: 'user' })
     expect(unknown.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-target-unknown-human', answerer: 'user' })
   })
@@ -2301,7 +2476,7 @@ describe('evaluateToolCallGate', () => {
     }))
     expect(missing.facts.actionClass).toBe('outbound')
     expect(missing.facts.signals).toContainEqual({ kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: [] })
-    expect(missing.decision, JSON.stringify(missing.facts)).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
+    expect(missing.decision, JSON.stringify(missing.facts)).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-incomplete-standard-review', answerer: 'agent' })
   })
 
   it('standard Feishu mail send with sensitive text requires human confirmation', async () => {
@@ -2508,7 +2683,7 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('MCP 需确认工具 → require-confirm(mcp-tool-ask)；缓存命中后 → auto-allow(cache-hit)', async () => {
+  it('MCP 需确认工具的旧会话 allow 缓存不能跳过默认 ask', async () => {
     const db = openDb()
     const mcpEntry = {
       serverId: 'srv1',
@@ -2548,12 +2723,11 @@ describe('evaluateToolCallGate', () => {
     const r2 = await evaluateToolCallGate(
       base({ toolName: mcpEntry.mappedName, toolInput: {}, mcpEntry, appDb: db, audit })
     )
-    expect(r2.decision.type).toBe('auto-allow')
-    expect(r2.decision.ruleId).toBe('cache-hit')
+    expect(r2.decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask' })
     expect(audit.events.some((e) => e.event === 'cache.hit')).toBe(true)
   })
 
-  it('MCP 安全注解工具 → auto-allow(mcp-readonly-allow)；无注解 → require-confirm(mcp-tool-ask)', async () => {
+  it('MCP 只读注解仍受通用 ask 规则约束；无注解同样需要确认', async () => {
     const db = openDb()
     const readonlyEntry = {
       serverId: 'srv1',
@@ -2567,12 +2741,11 @@ describe('evaluateToolCallGate', () => {
       descriptorHash: hashMcpToolDescription({ serverId: 'srv1', originalName: 'list_issues', description: '', inputSchema: {},
         annotations: { readOnlyHint: true, destructiveHint: false } })
     }
-    // 注解安全：额外产 mcp-readonly 信号 → 命中 mcp-readonly-allow 放行，actionClass 降 read
+    // 注解安全：额外产 mcp-readonly 信号并降低 actionClass，但通用 MCP ask 仍覆盖其原匹配域。
     const r1 = await evaluateToolCallGate(
       base({ toolName: readonlyEntry.mappedName, toolInput: {}, mcpQuerySource: 'public', mcpAccountAuthorization: 'authorized', mcpEntry: readonlyEntry, appDb: db })
     )
-    expect(r1.decision.type).toBe('auto-allow')
-    expect(r1.decision.ruleId).toBe('mcp-readonly-allow')
+    expect(r1.decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask' })
 
     // destructiveHint:true 不算安全注解 → 仍确认
     const r2 = await evaluateToolCallGate(

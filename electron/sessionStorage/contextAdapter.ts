@@ -18,7 +18,8 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
   workDir: string
   userDataDir: string
   replay: CompactionReplay
-  sink: SessionEventSink
+  sink?: SessionEventSink
+  canPersist: boolean
   commitCanonicalCompaction(input: { operationId: string; compactionId: string; output: ContextFrame; historyPayload: Record<string, unknown> }): Promise<void>
   isBusy(): boolean
 }>): Promise<Readonly<{ adapter: SessionContextAdapter; messages: SessionContextSurfaceMessage[]; windowId: string }>> {
@@ -69,6 +70,7 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
     persist: async ({ operationId, expectedSurfaceFingerprint, outputFingerprint, output, historyPayload }) => {
       if (input.isBusy()) return { status: 'busy' as const }
       if (await latestFingerprint() !== expectedSurfaceFingerprint) return { status: 'stale' as const }
+      if (!input.canPersist || !input.sink) return { status: 'uncompressible' as const }
       const transaction = historyPayload as { start?: Record<string, unknown>; summary?: Record<string, unknown> }
       if (!transaction.start || !transaction.summary) throw new Error('SESSION_CONTEXT_TRANSACTION_REQUIRED')
       await input.commitCanonicalCompaction({ operationId, compactionId: String(transaction.start.compactionId ?? operationId), output, historyPayload: historyPayload as Record<string, unknown> })

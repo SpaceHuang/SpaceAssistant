@@ -3,8 +3,11 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
+import { createSession } from '../database/operations'
 import { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'
+import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
 import { createDeferredApprovalRuntime } from './deferredApprovalRuntime'
+import { readDeferredCompletionWake } from './deferredCompletionWake'
 import { getDbConnection } from '../database/sqliteStore'
 import { releaseRemoteSession, resetRunningRemoteAgentRegistryForTests, tryClaimRemoteSession } from './remoteAgentRegistry'
 import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
@@ -14,6 +17,61 @@ function seedImPolicy(db: ReturnType<typeof createMemoryAppDb>, eventId: string)
 }
 
 describe('production deferred approval runtime composition', () => {
+  it('rejects a trusted deferred approval, invalidates it, records a failed completion, and never dispatches', async () => {
+    const db = createMemoryAppDb()
+    const now = Date.now()
+    const rule = { ruleId: 'write-rule', factsHash: 'a'.repeat(64) }
+    const session = createSession(db, { name: 'rejected-deferred-approval' })
+    const todoStore = createDeferredTodoStore(db)
+    const todo = todoStore.create({ todoId: 'todo-rejected-runtime', invocationId: 'inv-rejected-runtime', channel: 'feishu',
+      identityKey: 'chat-reject', ownerId: 'owner-reject', authorizationEpoch: 7, rule, workflowId: 'workflow-reject',
+      taskId: 'task-reject', stepId: 'step-reject', planRevision: 1, originSessionId: session.id, createdAt: now,
+      expiresAt: now + 60_000 }).todo
+    const envelopeStore = createDeferredEnvelopeStore(db)
+    envelopeStore.put({ invocationId: todo.invocationId, requestId: 'request-reject', turnId: 'turn-reject', toolCallId: 'tool-reject',
+      toolName: 'memory_wiki_propose_schema_change', canonicalArgs: {}, contentVersions: {}, now,
+      executionContext: { sessionId: todo.originSessionId, channel: 'feishu', ownerId: todo.ownerId, identityKey: todo.identityKey,
+        authorizationEpoch: todo.authorizationEpoch, invocationId: todo.invocationId, toolName: 'memory_wiki_propose_schema_change',
+        toolInput: {}, requestId: 'request-reject', turnId: 'turn-reject', toolCallId: 'tool-reject', providerRouteId: 'route-reject',
+        messageId: 'source-message-reject', ruleId: rule.ruleId, factsHash: rule.factsHash } })
+    const notificationDelivery = { resolveCurrent: vi.fn(() => ({ channel: 'feishu', identityKey: todo.identityKey,
+      ownerId: todo.ownerId, todoId: todo.todoId, originSessionId: todo.originSessionId, notificationVersion: 1,
+      currentNotificationVersion: 1, trustedMessageId: 'trusted-reject-notice', shortCode: '07', expiresAt: todo.expiresAt,
+      authorizationEpoch: todo.authorizationEpoch, rule })) } as never
+    const execute = vi.fn(async () => ({ dispatched: true }))
+    const recoverCompletionWake = vi.fn()
+    const audit = vi.fn()
+    const runtime = createDeferredApprovalRuntime({ db, channel: 'feishu', todoStore,
+      envelopeStore, notificationDelivery,
+      isEnabled: () => true, getAuthorizationEpoch: () => todo.authorizationEpoch, maxParallel: 1,
+      recheck: async () => ({ allowed: true }), dispatch: execute, audit, recoverCompletionWake })
+
+    await expect(runtime.handleReply({ channel: 'feishu', identityKey: todo.identityKey, ownerId: todo.ownerId,
+      messageId: 'untrusted-reject-reply', replyToMessageId: 'different-notice', text: '拒绝 07', now: now + 1 }))
+      .resolves.toMatchObject({ status: 'rejected' })
+    expect(todoStore.get(todo.todoId, { channel: 'feishu', identityKey: todo.identityKey, ownerId: todo.ownerId,
+      authorizationEpoch: todo.authorizationEpoch, originSessionId: todo.originSessionId, rule })?.status).toBe('pending')
+    expect(createDeferredExecutionResultStore(db).getByTodo(todo.todoId)).toBeNull()
+
+    await expect(runtime.handleReply({ channel: 'feishu', identityKey: todo.identityKey, ownerId: todo.ownerId,
+      messageId: 'reject-reply-1', replyToMessageId: 'trusted-reject-notice', text: '拒绝 07', now: now + 1 }))
+      .resolves.toMatchObject({ status: 'denied', sessionId: todo.originSessionId })
+
+    expect(todoStore.get(todo.todoId, { channel: 'feishu', identityKey: todo.identityKey, ownerId: todo.ownerId,
+      authorizationEpoch: todo.authorizationEpoch, originSessionId: todo.originSessionId, rule })?.status).toBe('invalidated')
+    expect(createDeferredExecutionResultStore(db).getByTodo(todo.todoId)).toMatchObject({ state: 'completion_outboxed',
+      result: { kind: 'failed', value: { code: 'USER_REJECTED' } } })
+    expect(createDeferredExecutionResultStore(db).listCompletionOutbox(todo.todoId)).toMatchObject([{ state: 'pending' }])
+    expect(readDeferredCompletionWake(db, todo.todoId)?.execution).toMatchObject({ state: 'completion_outboxed',
+      result: { kind: 'failed', value: { code: 'USER_REJECTED' } } })
+    expect(runtime.resume.listResumeRequests(todo.originSessionId)).toHaveLength(0)
+    expect(execute).not.toHaveBeenCalled()
+    expect(recoverCompletionWake).toHaveBeenCalledWith(todo.originSessionId)
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ event: 'deferred-approval.rejected', actor: 'user',
+      todoId: todo.todoId, invocationId: todo.invocationId }))
+    db.close()
+  })
+
   it('binds a real SQLite notification to an approved resume and dispatches the same envelope for its origin session', async () => {
     const db = createMemoryAppDb()
     seedImPolicy(db, 'runtime-policy-1')

@@ -20,6 +20,12 @@ const EXPECTED_RULE_IDS = [
   'outbound-incomplete-standard-review',
   'outbound-incomplete-loose-review',
   'wiki-raw-write-deny',
+  'wiki-domain-file-bypass-deny',
+  'wiki-schema-update-automation-deny',
+  'wiki-schema-update-human-confirm',
+  'wiki-page-restore-automation-deny',
+  'wiki-page-write-automation-deny',
+  'wiki-page-restore-human-confirm',
   'remote-outside-write-deny',
   'remote-write-scope-unknown-deny',
   'remote-outside-read-deny',
@@ -128,6 +134,14 @@ describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {
     expect(wikiRaw.action).toBe('deny')
     expect(JSON.stringify(wikiRaw.match)).toContain('wiki-raw-target')
     expect(JSON.stringify(wikiRaw.match)).toContain('write_file')
+
+    expect(byId.get('wiki-domain-file-bypass-deny')).toMatchObject({ locked: true, action: 'deny', match: { signals: ['wiki-managed-target', 'wiki-domain-enabled'] } })
+
+    expect(byId.get('wiki-schema-update-automation-deny')).toMatchObject({ locked: true, action: 'deny', match: { lane: ['automation'], toolName: 'memory.wiki_update_schema' } })
+    expect(byId.get('wiki-schema-update-human-confirm')).toMatchObject({ locked: true, action: 'ask', answerer: 'user', humanRequired: true, match: { toolName: 'memory.wiki_update_schema' } })
+    expect(byId.get('wiki-page-restore-automation-deny')).toMatchObject({ locked: true, action: 'deny', match: { lane: ['automation'], toolName: 'memory.wiki_apply_restore' } })
+    expect(byId.get('wiki-page-write-automation-deny')).toMatchObject({ locked: true, action: 'deny', match: { lane: ['automation'], toolName: ['memory.wiki_save_page', 'memory.wiki_move_page'] } })
+    expect(byId.get('wiki-page-restore-human-confirm')).toMatchObject({ locked: true, action: 'ask', answerer: 'user', humanRequired: true, match: { toolName: 'memory.wiki_apply_restore' } })
 
     const remoteWrite = byId.get('remote-outside-write-deny')!
     expect(remoteWrite.locked).toBe(true)

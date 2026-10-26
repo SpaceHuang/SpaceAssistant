@@ -9,9 +9,13 @@ import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initWikiStructure, isWikiInitialized, renameWikiRoot } from './wikiInit'
 import { getWikiStatus } from './wikiStatus'
+import { createWikiLifecycleController } from './wikiLifecycle'
 import { openDatabase } from '../database'
 import { insertWikiProject, markWikiProjectOrphan } from './wikiProjectStore'
 import { DEFAULT_WIKI_CONFIG, type WikiConfig } from '../../src/shared/domainTypes'
+import { DEFAULT_SCHEMA_MD } from './wikiTemplates'
+import { serializeWikiPageMarker } from './wikiReconciler'
+import { buildWikiIndex, buildWikiLog } from './wikiProjection'
 
 const dirs: string[] = []
 
@@ -49,6 +53,7 @@ describe('initWikiStructure 共享根（T1.12a）', () => {
     const meta = JSON.parse(fs.readFileSync(path.join(root, '.wiki-meta.json'), 'utf8'))
     expect(meta.schemaVersion).toBe(2)
     expect(meta.storage).toBe('shared')
+    expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'domain_ready', initialization: 'empty' })
     // workDir 侧不建骨架
     expect(fs.existsSync(path.join(workDir, 'llm-wiki'))).toBe(false)
   })
@@ -79,6 +84,29 @@ describe('initWikiStructure 共享根（T1.12a）', () => {
     expect(isWikiInitialized(workDir, wikiConfig(), userData)).toBe(false)
     await initWikiStructure(workDir, wikiConfig(), { userDataPath: userData })
     expect(isWikiInitialized(workDir, wikiConfig(), userData)).toBe(true)
+  })
+
+  it('存量部分 Wiki 初始化后进入 preflight 状态，不当作空库', async () => {
+    const userData = tmpdir('wiki-init-legacy-')
+    const workDir = tmpdir('wiki-init-legacy-wd-')
+    const root = path.join(userData, 'llm-wiki')
+    fs.mkdirSync(path.join(root, 'raw', 'legacy'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'raw', 'legacy', 'note.md'), 'legacy content', 'utf8')
+    await initWikiStructure(workDir, wikiConfig(), { userDataPath: userData })
+    expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'initializing', initialization: 'existing-content' })
+  })
+
+  it('已符合领域格式且预检无写入的存量 Wiki 完成 bootstrap 并进入 domain_ready', async () => {
+    const userData = tmpdir('wiki-init-ready-')
+    const workDir = tmpdir('wiki-init-ready-wd-')
+    const root = path.join(userData, 'llm-wiki')
+    fs.mkdirSync(path.join(root, 'wiki', 'topics'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'SCHEMA.md'), DEFAULT_SCHEMA_MD)
+    fs.writeFileSync(path.join(root, 'wiki', 'index.md'), buildWikiIndex([{ pageId: 'known-page', title: 'Known', categoryId: 'topic', path: 'wiki/topics/known.md', revision: 1 }]))
+    fs.writeFileSync(path.join(root, 'wiki', 'log.md'), buildWikiLog([]))
+    fs.writeFileSync(path.join(root, 'wiki', 'topics', 'known.md'), `${serializeWikiPageMarker({ pageId: 'known-page', categoryId: 'topic', summary: '', parentPageId: null, sourceRefs: [], revision: 1 })}\n# Known\n\nBody\n`)
+    await initWikiStructure(workDir, wikiConfig(), { userDataPath: userData })
+    expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'domain_ready', initialization: 'existing-content' })
   })
 })
 
@@ -143,5 +171,10 @@ describe('模板内容（T1.13③）', () => {
     expect(t.DEFAULT_SCHEMA_MD).toContain('raw/<projectId>/')
     expect(t.DEFAULT_SCHEMA_MD).toContain('wiki/projects/<projectId>/')
     expect(t.DEFAULT_SCHEMA_MD).toContain('不要用 shell')
+    expect(t.DEFAULT_SCHEMA_MD).toContain('memory.wiki_search')
+    expect(t.DEFAULT_SCHEMA_MD).toContain('memory.wiki_read_source')
+    expect(t.DEFAULT_SCHEMA_MD).not.toContain('read_file')
+    expect(t.DEFAULT_SCHEMA_MD).not.toContain('grep(pattern')
+    expect(t.DEFAULT_SCHEMA_MD).not.toContain('更新 `wiki/index.md`')
   })
 })

@@ -5,7 +5,7 @@ import type { SessionEventInput } from './sessionEvents'
 import type { HistoryEvent } from '../packages/agent-sdk/src/history'
 import { ensureLegacyLedgerReadiness } from './sessionLedgerReadiness'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
-import { toolCallProjectionPayloadMatches } from './sessionLedgerProjectionCompatibility'
+import { sessionEventProjectionMatches, sessionEventProjectionSchemasCompatible, toolCallProjectionPayloadMatches, toolResultProjectionPayloadMatches } from './sessionLedgerProjectionCompatibility'
 
 export type CanonicalLedgerProjectionTarget = {
   ledgerLocationKey: string
@@ -46,6 +46,7 @@ function isCanonicalToolCallAttributionEnrichment(input: {
   const previousEvent = previousEvents[0]
   const nextEvent = target.expectedEvents[0]
   if (!previousEvent || !nextEvent || previousEvent.type !== 'tool_call' || nextEvent.type !== 'tool_call') return false
+  if ((previousEvent.schemaVersion ?? 1) >= (nextEvent.schemaVersion ?? 1)) return false
   const previousPayload = previousEvent.payload
   const nextPayload = nextEvent.payload
   const toolUseId = nextPayload.toolUseId
@@ -54,7 +55,8 @@ function isCanonicalToolCallAttributionEnrichment(input: {
     input.canonicalTurnId !== nextPayload.turnId || !toolCallProjectionPayloadMatches(previousPayload, nextPayload)) return false
   const addedAttribution = (['requestId', 'invocationRequestId', 'lane'] as const).filter((key) =>
     typeof nextPayload[key] === 'string' && previousPayload[key] === undefined)
-  if (addedAttribution.length === 0 || input.canonicalKind !== 'model-response-committed') return false
+  if (addedAttribution.length === 0 && stableJson(previousPayload) !== stableJson(nextPayload)) return false
+  if (input.canonicalKind !== 'model-response-committed') return false
 
   const envelope = record(input.canonicalPayload)
   const sidecar = record(envelope?.sessionLedger)
@@ -73,6 +75,43 @@ function isCanonicalToolCallAttributionEnrichment(input: {
   const canonicalCall = matchingCalls.length === 1 ? matchingCalls[0] : undefined
   if (!canonicalCall || canonicalCall.name !== nextPayload.name || stableJson(canonicalCall.args) !== stableJson(nextPayload.args)) return false
   return addedAttribution.every((key) => canonicalCall[key] === nextPayload[key])
+}
+
+function isCanonicalToolResultSchemaUpgrade(input: {
+  target: CanonicalLedgerProjectionTarget
+  previousEvents: readonly SessionEventInput[]
+  previousEventIds: readonly string[]
+  canonicalKind: string
+  canonicalPayload: unknown
+}): boolean {
+  const { target, previousEvents, previousEventIds } = input
+  if (target.projectionKind !== 'tool-result' || previousEvents.length !== 1 || target.expectedEvents.length !== 1 ||
+    stableJson(previousEventIds) !== stableJson(target.expectedEventIds)) return false
+  const previousEvent = previousEvents[0]
+  const nextEvent = target.expectedEvents[0]
+  if (!previousEvent || !nextEvent || previousEvent.type !== 'tool_result' || nextEvent.type !== 'tool_result' ||
+    (previousEvent.schemaVersion ?? 1) >= (nextEvent.schemaVersion ?? 1) || !sessionEventProjectionMatches(previousEvent, nextEvent)) return false
+  const toolUseId = nextEvent.payload.toolUseId
+  if (typeof toolUseId !== 'string' || stableJson(target.expectedEventIds) !== stableJson([`tool_result:${toolUseId}`])) return false
+
+  const envelope = record(input.canonicalPayload)
+  const sidecar = record(envelope?.sessionLedger)
+  const location = record(sidecar?.location)
+  const canonicalResult = sidecar?.result
+  if (!location || typeof location.workDir !== 'string' || location.sessionId !== target.sessionId ||
+    !Number.isSafeInteger(location.createdAt) ||
+    typeof sidecar?.stepId !== 'string' || sidecar.stepId !== nextEvent.payload.stepId ||
+    payloadToolCallId(envelope) !== toolUseId || (input.canonicalKind !== 'tool-call-finished' && input.canonicalKind !== 'tool-call-not-dispatched') ||
+    stableJson(canonicalResult) !== stableJson(nextEvent.payload.result)) return false
+  try {
+    return sessionLedgerLocationIdentity({ workDir: location.workDir, sessionId: target.sessionId, createdAt: location.createdAt as number }).key === target.ledgerLocationKey
+  } catch {
+    return false
+  }
+}
+
+function payloadToolCallId(envelope: Record<string, unknown> | undefined): unknown {
+  return envelope?.toolCallId
 }
 
 export function canonicalLedgerProjectionTargetId(target: Pick<CanonicalLedgerProjectionTarget,
@@ -112,17 +151,17 @@ export function buildCanonicalToolResultProjectionTargets(conn: DatabaseSync, ev
         for (const key of ['requestId', 'invocationRequestId', 'lane'] as const) {
           if (typeof call[key] === 'string') projection[key] = call[key]
         }
-        add(`tool-call:${call.toolUseId}`, [{ type: 'tool_call', payload: projection }], [`tool_call:${call.toolUseId}`])
+        add(`tool-call:${call.toolUseId}`, [{ type: 'tool_call', schemaVersion: 2, payload: projection }], [`tool_call:${call.toolUseId}`])
       }
     }
     if (event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') {
       if (typeof payload.toolCallId === 'string' && typeof sidecar.stepId === 'string' && sidecar.stepId && sidecar.result &&
         typeof sidecar.result === 'object' && !Array.isArray(sidecar.result)) {
-        const projection: Record<string, unknown> = { toolUseId: payload.toolCallId, stepId: sidecar.stepId, result: sidecar.result }
+        const projection: Record<string, unknown> = { toolUseId: payload.toolCallId, stepId: sidecar.stepId, result: sidecar.result, turnId: event.turnId }
         for (const key of ['turnId', 'requestId', 'invocationRequestId', 'lane'] as const) {
           if (typeof sidecar[key] === 'string') projection[key] = sidecar[key]
         }
-        add('tool-result', [{ type: 'tool_result', payload: projection }], [`tool_result:${payload.toolCallId}`])
+        add('tool-result', [{ type: 'tool_result', schemaVersion: 2, payload: projection }], [`tool_result:${payload.toolCallId}`])
       }
     }
     if (event.kind === 'model-request-started') {
@@ -231,8 +270,12 @@ export function enqueueCanonicalLedgerProjectionTargetInTransaction(conn: Databa
         target, previousEvents, previousEventIds, canonicalKind: canonical.kind,
         canonicalTurnId: canonical.turn_id, canonicalPayload: JSON.parse(canonical.payload_json)
       })
-      if (!compatibleEnrichment) throw new Error('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT')
-      // Target identity predates attribution fields. Upgrade only a canonical-proven additive change.
+      const compatibleToolResultUpgrade = isCanonicalToolResultSchemaUpgrade({
+        target, previousEvents, previousEventIds, canonicalKind: canonical.kind,
+        canonicalPayload: JSON.parse(canonical.payload_json)
+      })
+      if (!compatibleEnrichment && !compatibleToolResultUpgrade) throw new Error('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT')
+      // Target identity predates the event schema update. Upgrade only a canonical-proven compatible projection.
       const upgraded = conn.prepare(`UPDATE session_ledger_projection_outbox SET expected_events_json=?,expected_event_ids_json=?,payload_sha256=?
         WHERE target_id=? AND payload_sha256=?`).run(eventsJson, eventIdsJson, digest, id, existing.payload_sha256) as { changes: number | bigint }
       if (Number(upgraded.changes) !== 1) throw new Error('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT')
@@ -283,17 +326,34 @@ export function acknowledgeCanonicalLedgerProjectionTarget(conn: DatabaseSync, t
 }
 
 function projectionEventsMatch(kind: string, expected: readonly SessionEventInput[], observed: readonly SessionEventInput[]): boolean {
+  if (kind === 'tool-result') {
+    return expected.length === observed.length && expected.every((expectedEvent, index) => {
+      const actual = observed[index]
+      return expectedEvent?.type === 'tool_result' && actual?.type === 'tool_result' &&
+        toolResultProjectionPayloadMatches(actual.payload, expectedEvent.payload)
+    })
+  }
   if (kind.startsWith('tool-call:')) {
     return expected.length === observed.length && expected.every((expectedEvent, index) => {
       const actual = observed[index]
       return expectedEvent?.type === 'tool_call' && actual?.type === 'tool_call' &&
-        toolCallProjectionPayloadMatches(actual.payload, expectedEvent.payload)
+        sessionEventProjectionMatches(actual, expectedEvent)
     })
   }
-  if (kind !== 'invocation-terminal' || expected.length !== observed.length) return stableJson(expected) === stableJson(observed)
+  if (kind === 'tool-result') {
+    return expected.length === observed.length && expected.every((expectedEvent, index) => {
+      const actual = observed[index]
+      return expectedEvent?.type === 'tool_result' && actual?.type === 'tool_result' &&
+        sessionEventProjectionMatches(actual, expectedEvent)
+    })
+  }
+  if (kind !== 'invocation-terminal' || expected.length !== observed.length) {
+    return expected.length === observed.length && expected.every((expectedEvent, index) => sessionEventProjectionMatches(observed[index]!, expectedEvent))
+  }
   return expected.every((expectedEvent, index) => {
     const actual = observed[index]
-    if (!actual || expectedEvent.type !== 'turn_end' || actual.type !== 'turn_end') return stableJson(expectedEvent) === stableJson(actual)
+    if (!actual || expectedEvent.type !== 'turn_end' || actual.type !== 'turn_end') return sessionEventProjectionMatches(actual!, expectedEvent)
+    if (!sessionEventProjectionSchemasCompatible(actual, expectedEvent)) return false
     const { turnId, reason, ...additionalPayload } = actual.payload
     const valid = Object.keys(additionalPayload).every((key) => key === 'error' || key === 'errorCode' || key === 'finalSurfaceSnapshot') &&
       (additionalPayload.error === undefined || typeof additionalPayload.error === 'string') &&

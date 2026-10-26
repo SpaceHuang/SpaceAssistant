@@ -10,6 +10,7 @@ import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG } fro
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { createAgentRuntime } from './agentRuntime'
 import { resetDefaultAgentRuntimeForTests, setDefaultAgentRuntime } from './agentRuntimeDefaults'
+import { createDesktopAgentRuntime } from './desktopAgentRuntime'
 import { assembleInvocation } from '../testSupport/invocationAssembler'
 import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 import type { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
@@ -28,11 +29,12 @@ import { ImChannel } from '../confirmation/imChannel'
 import { getToolCache, saveProfiles, saveToolCache } from '../mcp/mcpConfigStore'
 import { buildMappedToolDescriptors, hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 import { executeToolSearch } from '../tools/toolSearchTool'
-import { commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { commitDesktopPolicySnapshot, commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { AgentChannel } from '../confirmation/agentChannel'
 import { RunShellPlanError } from '../tools/runShellPlan'
 import { PlanRejectedError } from '../../packages/agent-sdk/src/turn'
+import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 
 const TEST_USER_DATA_DIR = path.join(os.tmpdir(), 'spaceassistant-invocation-test-user-data')
 
@@ -509,7 +511,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const db = createMemoryAppDb(`im-policy-assembly-${lane}`)
     const conn = getDbConnection(db)
     commitImPolicySnapshot(conn, {
-      policyBehaviorVersion: 'im-standard-v2', snapshot: { denyOutbound: true, selectedPackage: 'strict' }, updatedAt: 1, eventId: `assembly-${lane}`
+      policyBehaviorVersion: 'im-standard-v2', snapshot: { denyOutbound: true, selectedPackage: 'custom' }, updatedAt: 1, eventId: `assembly-${lane}`
     })
     const { agentSdk } = assembleInvocation({
       requestId: `assembly-${lane}`, sessionId: `session-${lane}`, lane, model: 'test-model', locale: 'zh-CN',
@@ -521,8 +523,59 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       capabilityId: 'probe-tool', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' as const }
     const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: 'tool', toolName: 'probe-tool', input: {} })
     expect(args.imPolicySnapshot).toEqual(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] }))
-    expect(args.lanePackage).toBe('strict')
+    expect(args.lanePackage).toBe('custom')
     db.close()
+  })
+
+  it('binds the live desktop snapshot revision and epoch into Hosted gate args', async () => {
+    const db = createMemoryAppDb('desktop-policy-assembly')
+    const conn = getDbConnection(db)
+    commitDesktopPolicySnapshot(conn, { expectedRevision: 0, policyBehaviorVersion: 'desktop-v1',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: {} }, updatedAt: 1, eventId: 'desktop-policy-seed' })
+    const { agentSdk } = assembleInvocation({ requestId: 'desktop-policy-assembly', sessionId: 'desktop-policy-session',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const binding = { requestId: 'desktop-policy-assembly', turnId: 'desktop-policy-turn', invocationId: 'desktop-policy-assembly',
+      toolCallId: 'probe', capabilityId: 'probe-tool', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
+      authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: 'probe', toolName: 'probe-tool', input: {} })
+    expect(args.policyBinding).toEqual({ domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 1, epoch: 1 })
+    db.close()
+  })
+
+  it.each([
+    { override: 'ask' as const, expected: { type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'user' } },
+    { override: 'allow' as const, expected: { type: 'auto-allow', ruleId: 'mcp-tool-ask' } },
+    { override: 'deny' as const, expected: { type: 'deny', ruleId: 'mcp-tool-ask' } }
+  ])('applies persisted desktop MCP $override override from snapshot through assembler into the real gate', async ({ override, expected }) => {
+    const db = createMemoryAppDb(`desktop-policy-mcp-${override}-override`)
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `desktop-mcp-${override}-override-`))
+    const schema = { type: 'object', properties: { body: { type: 'string' } } }
+    const entry = buildMappedToolDescriptors(`desktop-mcp-${override}-server`, 'Desktop MCP Server', [{
+      name: 'create_record', description: 'Create a record', inputSchema: schema
+    }]).descriptors[0]!
+    commitDesktopPolicySnapshot(getDbConnection(db), { expectedRevision: 0, policyBehaviorVersion: 'desktop-v1',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': override } }, updatedAt: 1,
+      eventId: `desktop-policy-mcp-${override}-override` })
+    const { agentSdk } = assembleInvocation({ requestId: `desktop-policy-mcp-${override}-override`,
+      sessionId: `desktop-mcp-${override}-session`, model: 'test-model', locale: 'zh-CN', messages: [],
+      toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: path.join(workDir, '.userdata'),
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const binding = { requestId: `desktop-policy-mcp-${override}-override`, turnId: `desktop-mcp-${override}-turn`,
+      invocationId: `desktop-policy-mcp-${override}-override`, toolCallId: `desktop-mcp-${override}-call`,
+      capabilityId: entry.mappedName, inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
+      authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    try {
+      const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+        toolName: entry.mappedName, input: { body: 'record' } })
+      args.mcpEntry = { ...entry, serverName: 'Desktop MCP Server' }
+      expect(args.effectiveRules.find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe(override)
+      expect(args.effectiveRules.find((rule) => rule.id === 'mcp-tool-ask')?.userOverride).toBe(true)
+      await expect(evaluateToolCallGate(args)).resolves.toMatchObject({ decision: expected })
+    } finally {
+      db.close()
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
   })
 
   it('carries the current versioned IM package from assembler into the real gate decision without a release switch', async () => {
@@ -669,7 +722,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const db = createImPolicyTestDb('im-standard-v2-user-ask-override')
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-user-ask-override-'))
     commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
-      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'im-time-query-review': 'ask' } },
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'im-time-query-review': 'ask' } },
       updatedAt: 1, eventId: 'im-standard-v2-user-ask-override' })
     const { agentSdk } = assembleInvocation({ requestId: 'im-standard-v2-user-ask-override', sessionId: 'im-user-ask-session', lane: 'wechat',
       model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
@@ -687,6 +740,53 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     await fs.rm(workDir, { recursive: true, force: true })
   })
 
+  it('refreshes a nested parent rule floor action after a persisted policy revision', async () => {
+    const db = createImPolicyTestDb('nested-parent-policy-floor-refresh')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nested-parent-policy-floor-'))
+    const originalRule = DEFAULT_POLICY_RULES.find(({ id }) => id === 'mcp-tool-ask')!
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'ask' } }, updatedAt: 2,
+      eventId: 'nested-parent-policy-floor-old' })
+    let parentFloorAction: 'ask' | 'allow' = 'ask'
+    const { agentSdk } = assembleInvocation({ requestId: 'nested-parent-policy-floor', sessionId: 'nested-parent-session', lane: 'wechat',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      resolvePolicyRuleFloor: () => [{ ...originalRule, action: parentFloorAction, userOverride: true }] })
+    commitImPolicySnapshot(getDbConnection(db), { expectedRevision: 2, policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'allow' } }, updatedAt: 3,
+      eventId: 'nested-parent-policy-floor-new' })
+    parentFloorAction = 'allow'
+    const binding = { requestId: 'nested-parent-policy-floor', turnId: 'nested-parent-turn', invocationId: 'nested-parent-policy-floor',
+      toolCallId: 'nested-parent-tool', capabilityId: 'mcp.test.create_record', inputSnapshotHash: 'hash', planDigest: 'plan',
+      factsDigest: 'facts', authorizationVersion: 'old', phase: 'initial-compat' as const }
+    const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+      toolName: 'mcp.test.create_record', input: { body: 'record' } })
+    expect(args.effectiveRules.find(({ id }) => id === 'mcp-tool-ask')).toMatchObject({ action: 'allow', userOverride: true })
+    db.close()
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
+
+  it('keeps an explicit structural parent deny when persisted policy allows the same rule', async () => {
+    const db = createImPolicyTestDb('nested-parent-structural-deny')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nested-parent-structural-deny-'))
+    const originalRule = DEFAULT_POLICY_RULES.find(({ id }) => id === 'mcp-tool-ask')!
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'allow' } }, updatedAt: 2,
+      eventId: 'nested-parent-structural-deny-revision' })
+    const { agentSdk } = assembleInvocation({ requestId: 'nested-parent-structural-deny', sessionId: 'nested-parent-session', lane: 'wechat',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      policyRuleFloor: [{ ...originalRule, action: 'deny', userOverride: true }] })
+    const binding = { requestId: 'nested-parent-structural-deny', turnId: 'nested-parent-turn', invocationId: 'nested-parent-structural-deny',
+      toolCallId: 'nested-parent-tool', capabilityId: 'mcp.test.create_record', inputSnapshotHash: 'hash', planDigest: 'plan',
+      factsDigest: 'facts', authorizationVersion: 'old', phase: 'initial-compat' as const }
+    const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+      toolName: 'mcp.test.create_record', input: { body: 'record' } })
+    expect(args.effectiveRules.find(({ id }) => id === 'mcp-tool-ask')).toMatchObject({ action: 'deny' })
+    db.close()
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
+
   it.each([
     { override: 'ask' as const, expected: { type: 'require-confirm', answerer: 'user', ruleId: 'mcp-tool-ask', disposition: 'human-required' } },
     { override: 'deny' as const, expected: { type: 'deny', ruleId: 'mcp-tool-ask' } }
@@ -698,7 +798,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       name: 'create_record', description: 'Create a record', inputSchema: schema
     }]).descriptors[0]!
     commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
-      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'mcp-tool-ask': override } }, updatedAt: 1,
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': override } }, updatedAt: 1,
       eventId: `im-standard-v2-mcp-${override}-override` })
     const { agentSdk } = assembleInvocation({ requestId: `im-standard-v2-mcp-${override}-override`,
       sessionId: `im-mcp-${override}-session`, lane: 'wechat', model: 'test-model', locale: 'zh-CN', messages: [],
@@ -938,6 +1038,27 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     expect(supplement).toHaveBeenCalledWith({ binding, toolName: 'probe-tool', toolInput: { value: 7 } })
   })
 
+  it('passes the registered action class for a discovered Wiki tool into the security gate', async () => {
+    setDefaultAgentRuntime(createDesktopAgentRuntime())
+    const { agentSdk } = assembleInvocation({
+      requestId: 'req-wiki-read-gate', sessionId: 'session-wiki-read-gate', turnId: 'turn-wiki-read-gate',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    const binding = {
+      requestId: 'req-wiki-read-gate', turnId: 'turn-wiki-read-gate', invocationId: 'req-wiki-read-gate', toolCallId: 'tool-wiki-read-gate',
+      capabilityId: 'memory.wiki_search', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
+      authorizationVersion: 'auth', phase: 'initial-compat' as const
+    }
+    const args = await agentSdk.resolveGateArgs(binding, {
+      invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+      toolName: 'memory.wiki_search', input: { query: 'runtime' }
+    })
+
+    expect(args.registeredActionClass).toBe('read')
+  })
+
   it('binds Hosted confirmation approval back to the exact SafetyPolicy tool call', async () => {
     const { agentSdk } = assembleInvocation({
       requestId: 'req-confirm-bind', sessionId: 'session-confirm-bind', turnId: 'turn-confirm-bind',
@@ -1148,7 +1269,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['write_file']) })
     try {
       await expect(composed.executeDeferred({ invocationId: turnId, toolCallId: 'persisted-tool-call', toolName: 'write_file',
-        input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-1')).resolves.toMatchObject({
+        input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-1', 'im-v1.6:1:1')).resolves.toMatchObject({
         output: { success: true, data: 'executed without a model' }, isError: false
       })
       expect(execute).toHaveBeenCalledOnce()
@@ -1175,7 +1296,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['write_file']) })
     try {
       await expect(composed.executeDeferred({ invocationId: 'request-origin', toolCallId: 'persisted-tool-call', toolName: 'write_file',
-        input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-2')).resolves.toMatchObject({ isError: false })
+        input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-2', 'im-v1.6:1:1')).resolves.toMatchObject({ isError: false })
     } finally { await composed.dispose(); appDb.close() }
     expect(execute).toHaveBeenCalledOnce()
   })
@@ -2077,6 +2198,12 @@ describe('P0-A：计划期失败降级为可回传拒绝（T-3，断言打在生
   })
 })
 describe('wikiConfig passthrough (W3 lane parity)', () => {
+  beforeEach(() => {
+    setDefaultAgentRuntime(createDesktopAgentRuntime())
+  })
+
+  afterEach(() => resetDefaultAgentRuntimeForTests())
+
   it('propagates the assembled wikiConfig into the invocation tools profile', () => {
     const wikiConfig = { ...DEFAULT_WIKI_CONFIG }
     const { invocation } = assembleInvocation({
@@ -2086,5 +2213,32 @@ describe('wikiConfig passthrough (W3 lane parity)', () => {
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
     })
     expect(invocation.profile.tools.wikiConfig).toMatchObject({ rootPath: 'llm-wiki' })
+  })
+
+  it('propagates Wiki config into the registered tool execution context for IM discovery', async () => {
+    const wikiConfig = { ...DEFAULT_WIKI_CONFIG }
+    let executionContext: Record<string, unknown> | undefined
+    const runtime = createDesktopAgentRuntime()
+    setDefaultAgentRuntime(runtime)
+    runtime.modelProviders.register({ routeId: 'wiki-context-route', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, {
+      providerId: 'wiki-context-probe', stream: async function* () { yield { type: 'finish' as const, reason: 'stop' as const } }
+    })
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({
+      name: 'wiki-context-probe', parseInput: (raw) => raw as Record<string, unknown>,
+      plan: async (_input, context) => { executionContext = context.executionContext as Record<string, unknown>; return {} },
+      execute: async () => ({ success: true })
+    }))
+    const { agentSdk } = assembleInvocation({
+      requestId: 'req-wiki-context', sessionId: 'session-wiki-context', model: 'test-model', providerRouteId: 'wiki-context-route', lane: 'wechat',
+      locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, wikiConfig, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', agentSdkHistory: new MemoryHistory(), emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    const hosted = await agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['wiki-context-probe']) })
+    try {
+      const ports = await hosted.host.createPorts({ invocationId: 'req-wiki-context', turnId: 'req-wiki-context', routeId: 'wiki-context-route', request: { messages: [], maxTokens: 10 } })
+      await ports.prepareTool({ invocationId: 'req-wiki-context', toolCallId: 'wiki-context-call', toolName: 'wiki-context-probe', input: {} }, { kind: 'initial' })
+      expect(executionContext?.wikiConfig).toMatchObject({ rootPath: 'llm-wiki' })
+    } finally { await hosted.dispose() }
   })
 })

@@ -21,6 +21,7 @@ import {
 } from './sessionLedgerOutbox'
 import { getSessionEventSink, readSessionEvents, type SessionEventSink } from './sessionEvents'
 import { projectCanonicalSessionLedgerTarget } from './runtime/sessionLedgerOutboxProjector'
+import { toolResultProjectionPayloadMatches } from './sessionLedgerProjectionCompatibility'
 
 function appendCanonicalEvent(conn: ReturnType<typeof getDbConnection>, sessionId: string, eventId: string) {
   runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, [{
@@ -95,6 +96,28 @@ describe('canonical session ledger outbox', () => {
     expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 60)).toBe(true)
     expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toEqual([])
     expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 61)).toBe(true)
+  })
+
+  it('acks an older tool-call outbox payload against an already enriched JSONL projection', () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: '/tmp/outbox-attribution-compat', isDefault: true }]))
+    const session = createSession(db, { name: 'outbox attribution compatibility', workDirProfileId: 'p' })
+    const conn = getDbConnection(db)
+    const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?')
+      .get(session.id) as { ledger_location_key: string }
+    const toolCall = { toolUseId: 'compat-tool', stepId: 'compat-step', name: 'read_file', args: {}, turnId: 'compat-turn' }
+    const target: CanonicalLedgerProjectionTarget = { ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id,
+      sessionGeneration: session.generation, canonicalEventId: 'compat-canonical', projectionKind: 'tool-call:compat-tool',
+      expectedEvents: [{ type: 'tool_call', payload: toolCall }], expectedEventIds: ['tool_call:compat-tool'] }
+    appendCanonicalEvent(conn, session.id, 'compat-canonical')
+    runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))
+    const pending = listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)[0]!
+    const enriched = { ...toolCall, requestId: 'request-1', invocationRequestId: 'invocation-1', lane: 'desktop' }
+
+    expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending.target_id, {
+      eventIds: target.expectedEventIds, events: [{ type: 'tool_call', payload: enriched }]
+    })).toBe(true)
   })
 
   it('acks an older tool-call outbox payload against an already enriched JSONL projection', () => {
@@ -257,6 +280,50 @@ describe('canonical session ledger outbox', () => {
     }
   })
 
+  it('acknowledges a canonical tool result when the ledger already has additive execution diagnostics', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-result-diagnostics-'))
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'tool result execution diagnostics', workDirProfileId: 'p' })
+    const conn = getDbConnection(db)
+    const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?')
+      .get(session.id) as { ledger_location_key: string }
+    appendCanonicalEvent(conn, session.id, 'result-diagnostics-canonical-event')
+    const target: CanonicalLedgerProjectionTarget = {
+      ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id, sessionGeneration: session.generation,
+      canonicalEventId: 'result-diagnostics-canonical-event', projectionKind: 'tool-result',
+      expectedEvents: [{ type: 'tool_result', payload: {
+        toolUseId: 'diagnostic-tool', stepId: 'diagnostic-step', result: { success: true, data: { marker: 'kept' } }
+      } }],
+      expectedEventIds: ['tool_result:diagnostic-tool']
+    }
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    try {
+      await sink.appendCritical({ type: 'tool_result', payload: {
+        toolUseId: 'diagnostic-tool', stepId: 'diagnostic-step',
+        result: { success: true, data: { marker: 'kept' }, executionOutcome: 'succeeded', executorEntry: 'entered' }
+      } })
+      runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))
+
+      const drained = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key,
+        (pending) => projectCanonicalSessionLedgerTarget(sink, pending))
+
+      expect(drained).toEqual({ projected: 1 })
+      expect(conn.prepare('SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id=?')
+        .get('result-diagnostics-canonical-event')).toEqual({ status: 'acked' })
+      expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'tool_result'))
+        .toMatchObject([{ payload: { result: { executionOutcome: 'succeeded', executorEntry: 'entered' } } }])
+      expect(toolResultProjectionPayloadMatches({
+        toolUseId: 'diagnostic-tool', stepId: 'diagnostic-step',
+        result: { success: true, data: { marker: 'kept' }, executorEntry: 'unrecognized' }
+      }, target.expectedEvents[0]!.payload)).toBe(false)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('accepts legal terminal diagnostics and snapshot during projection and ack comparison', async () => {
     const db = createMemoryAppDb()
     databases.push(db)
@@ -326,6 +393,92 @@ describe('canonical session ledger outbox', () => {
       await sink.close()
       await fs.rm(tempRoot, { recursive: true, force: true })
     }
+  })
+
+  it('repairs and acknowledges a legacy tool result missing only its canonical raw artifact id', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-tool-result-artifact-compat-'))
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'tool result artifact compatibility', workDirProfileId: 'p' })
+    const conn = getDbConnection(db)
+    const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?')
+      .get(session.id) as { ledger_location_key: string }
+    const canonicalEventId = 'tool-result-artifact-compat-canonical'
+    appendCanonicalEvent(conn, session.id, canonicalEventId)
+    const artifactId = `artifact-${'a'.repeat(64)}`
+    const legacyResult = { success: true, data: { rawArtifact: { bytes: 8, sha256: 'b'.repeat(64), truncated: true } } }
+    const canonicalResult = { success: true, data: { rawArtifact: { bytes: 8, sha256: 'b'.repeat(64), truncated: true, artifactId } } }
+    const toolUseId = 'artifact-compat-tool'
+    const target: CanonicalLedgerProjectionTarget = {
+      ledgerLocationKey: readiness.ledger_location_key,
+      sessionId: session.id,
+      sessionGeneration: session.generation,
+      canonicalEventId,
+      projectionKind: 'tool-result',
+      expectedEvents: [{ type: 'tool_result', payload: { toolUseId, stepId: 'artifact-compat-step', result: canonicalResult } }],
+      expectedEventIds: [`tool_result:${toolUseId}`]
+    }
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    try {
+      await sink.appendCritical({ type: 'tool_result', payload: { toolUseId, stepId: 'artifact-compat-step', result: legacyResult } })
+      runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))
+      const pending = listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)
+      expect(pending).toHaveLength(1)
+      const unexpectedDrift = { success: true, data: { rawArtifact: { bytes: 9, sha256: 'b'.repeat(64), truncated: true } } }
+      expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0]!.target_id, {
+        eventIds: target.expectedEventIds,
+        events: [{ type: 'tool_result', payload: { toolUseId, stepId: 'artifact-compat-step', result: unexpectedDrift } }]
+      })).toBe(false)
+
+      await expect(drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key,
+        (projectionTarget) => projectCanonicalSessionLedgerTarget(sink, projectionTarget))).resolves.toEqual({ projected: 1 })
+      expect(conn.prepare('SELECT status FROM session_ledger_projection_outbox WHERE target_id=?').get(pending[0]!.target_id))
+        .toEqual({ status: 'acked' })
+      expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'tool_result')).toHaveLength(1)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('upgrades a pending outbox target only through a canonical, versioned additive-field adapter', () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = '/tmp/session-ledger-outbox-schema-upgrade'
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'tool result schema upgrade', workDirProfileId: 'p' })
+    const conn = getDbConnection(db)
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const readiness = ensureLegacyLedgerReadiness(conn, location, session.generation)
+    const toolUseId = 'schema-upgrade-tool'
+    const eventId = 'schema-upgrade-canonical-event'
+    const artifactId = `artifact-${'c'.repeat(64)}`
+    const legacyResult = { success: true, data: { rawArtifact: { bytes: 8, truncated: true } } }
+    const canonicalResult = { success: true, data: { rawArtifact: { bytes: 8, truncated: true, artifactId } } }
+    const canonicalEvent: HistoryEvent = {
+      invocationId: 'schema-upgrade-invocation', turnId: 'schema-upgrade-turn', sequence: 1, schemaVersion: 1,
+      eventId, idempotencyKey: eventId, kind: 'tool-call-finished',
+      payload: { toolCallId: toolUseId, sessionLedger: { location, stepId: 'schema-upgrade-step', result: canonicalResult } }
+    }
+    runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, [canonicalEvent], 0, { sessionId: session.id }))
+    const legacyTarget: CanonicalLedgerProjectionTarget = {
+      ledgerLocationKey: readiness.ledgerLocationKey, sessionId: session.id, sessionGeneration: session.generation,
+      canonicalEventId: eventId, projectionKind: 'tool-result',
+      expectedEvents: [{ type: 'tool_result', schemaVersion: 1, payload: { toolUseId, stepId: 'schema-upgrade-step', result: legacyResult } }],
+      expectedEventIds: [`tool_result:${toolUseId}`]
+    }
+    runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, legacyTarget))
+
+    const currentTarget: CanonicalLedgerProjectionTarget = {
+      ...legacyTarget,
+      expectedEvents: [{ type: 'tool_result', schemaVersion: 2, payload: { toolUseId, stepId: 'schema-upgrade-step', result: canonicalResult } }]
+    }
+    runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, currentTarget))
+
+    const pending = listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledgerLocationKey)
+    expect(pending).toHaveLength(1)
+    expect(JSON.parse(pending[0]!.expected_events_json)).toEqual(currentTarget.expectedEvents)
   })
 
   it('projects and acknowledges a paired request header/context target only after both events match', async () => {

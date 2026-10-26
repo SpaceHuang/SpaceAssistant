@@ -117,6 +117,12 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
   const queries: SessionQueries = {
     continuationSources: inspectContinuationSources(db),
     readSession: (sessionId) => getSession(db, sessionId),
+    readSessionIdForPlatformMessage: ({ channel, platformMessageId }) => {
+      const rows = getDbConnection(db).prepare(`SELECT m.session_id FROM im_inbox_message_context AS c
+        JOIN messages AS m ON m.id=c.message_id
+        WHERE c.channel=? AND c.platform_message_id=? LIMIT 2`).all(channel, platformMessageId) as Array<{ session_id: string }>
+      return rows.length === 1 ? rows[0]!.session_id : undefined
+    },
     readSessionUsage: (sessionId) => getSessionUsage(db, sessionId),
     listSessions: (options) => listSessions(db, options),
     readMessage: ({ sessionId, messageId }: MessageRef) => {

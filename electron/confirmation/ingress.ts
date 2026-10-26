@@ -24,7 +24,8 @@ export function classifyImOrigin(args: {
 export function evaluateIngress(
   facts: IngressFacts,
   rules: PolicyRule[] = DEFAULT_POLICY_RULES
-): { allow: boolean; ruleId: string; reason: string } {
+): { allow: boolean; action: 'allow' | 'deny' | 'ask'; ruleId: string; reason: string; approvalRequired?: true } {
   const r = decideIngress(facts, rules)
-  return { allow: r.action === 'allow', ruleId: r.ruleId, reason: r.reason }
+  if (r.action === 'ask') return { allow: false, action: 'ask', approvalRequired: true, ruleId: r.ruleId, reason: r.reason }
+  return { allow: r.action === 'allow', action: r.action, ruleId: r.ruleId, reason: r.reason }
 }

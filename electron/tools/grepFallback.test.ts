@@ -119,7 +119,7 @@ describe('JavaScript grep fallback', () => {
   it('returns partial results with an explicit timeout boundary', async () => {
     const root = fixture({ 'a.txt': 'needle' })
     let calls = 0
-    const now = (): number => (++calls > 4 ? 100_000 : 0)
+    const now = (): number => (++calls > 5 ? 100_000 : 0)
     const out = await grepFallbackJs(root, root, 'needle', args(), new AbortController().signal, () => {}, 60_000, undefined, { now })
     expect(out).toContain('搜索超时')
     expect(out).toContain('[边界摘要]')

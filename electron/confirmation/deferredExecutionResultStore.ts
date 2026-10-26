@@ -112,6 +112,39 @@ export function createDeferredExecutionResultStore(db: AppDatabase, options: { a
       return persistResult(todoId, structuredClone(result), now).result
     },
 
+    commitRejection(input: { todoId: string; invocationId: string; dispatchKey: string; now?: number }): DeferredExecutionResult {
+      if (![input.todoId, input.invocationId, input.dispatchKey].every((value) => typeof value === 'string' && value.trim())) {
+        throw new TypeError('DEFERRED_EXECUTION_IDENTITY_REQUIRED')
+      }
+      const now = input.now ?? Date.now()
+      const result = { kind: 'failed', outputRef: `deferred-result:${input.invocationId}`,
+        value: { success: false, code: 'USER_REJECTED', error: '用户拒绝了该操作，因此没有执行。' } }
+      return runInTransaction(liveConn(), () => {
+        const todo = liveConn().prepare('SELECT invocation_id,origin_session_id FROM deferred_todos WHERE todo_id=?')
+          .get(input.todoId) as { invocation_id: string; origin_session_id: string } | undefined
+        if (!todo || todo.invocation_id !== input.invocationId) throw new Error('DEFERRED_EXECUTION_BINDING_CONFLICT')
+        const existing = getByTodo(input.todoId)
+        if (existing) {
+          if (existing.invocationId !== input.invocationId || existing.dispatchKey !== input.dispatchKey ||
+            existing.state === 'outcome_unknown' || JSON.stringify(existing.result) !== JSON.stringify(result)) {
+            throw new Error('DEFERRED_EXECUTION_BINDING_CONFLICT')
+          }
+          return existing
+        }
+        liveConn().prepare(`INSERT INTO deferred_execution_results(todo_id,invocation_id,dispatch_key,state,result_json,dispatch_started_at,updated_at)
+          VALUES(?,?,?,'completion_outboxed',?,?,?)`).run(input.todoId, input.invocationId, input.dispatchKey,
+          JSON.stringify(result), now, now)
+        liveConn().prepare(`INSERT INTO deferred_completion_outbox(
+          outbox_id,todo_id,invocation_id,dispatch_key,result_json,state,created_at,updated_at
+        ) VALUES(?,?,?,?,?,'pending',?,?)`).run(randomUUID(), input.todoId, input.invocationId, input.dispatchKey,
+          JSON.stringify(result), now, now)
+        appendWakeEvent(db, { sessionId: todo.origin_session_id, type: 'safety-recovery',
+          reasonKey: `deferred-completion:${input.dispatchKey}`, payloadRef: { kind: 'safety-approval', approvalId: input.todoId } })
+        db.save()
+        return getByTodo(input.todoId)!
+      })
+    },
+
     async recover(dispatchKey: string, queryResult: (key: string) => Promise<
       { status: 'found'; dispatchKey: string; result: Record<string, unknown> } | { status: 'unknown' }
     >): Promise<{ state: DeferredExecutionState; duplicate?: boolean; replayAllowed?: boolean }> {
@@ -153,6 +186,19 @@ export function createDeferredExecutionResultStore(db: AppDatabase, options: { a
         .run(now, todoId)
       if (Number(changed.changes) === 1) db.save()
       return Number(changed.changes) === 1
+    },
+
+    /** Remove only the empty reservation for a caller-proven pre-dispatch policy rejection. */
+    abandonKnownNotDispatched(todoId: string, dispatchKey: string, now = Date.now()): boolean {
+      return runInTransaction(liveConn(), () => {
+        const outbox = liveConn().prepare('SELECT 1 FROM deferred_completion_outbox WHERE todo_id=? LIMIT 1').get(todoId)
+        if (outbox) return false
+        const changed = liveConn().prepare(`DELETE FROM deferred_execution_results
+          WHERE todo_id=? AND dispatch_key=? AND state='dispatching' AND result_json IS NULL`).run(todoId, dispatchKey)
+        if (Number(changed.changes) !== 1) return false
+        db.save()
+        return true
+      })
     },
 
     getByTodo,

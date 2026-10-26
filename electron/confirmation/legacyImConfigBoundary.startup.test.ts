@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getConfigValue, getDbConnection, setConfigValue } from '../database'
-import { commitImPolicySnapshot, readImPolicySnapshot } from './imPolicyStore'
+import { commitDesktopPolicySnapshot, commitImPolicySnapshot, readImPolicySnapshot, readPolicyBehaviorSnapshot } from './imPolicyStore'
 import { ensureImPolicySnapshotAtStartup } from './legacyImConfigBoundary'
 import { PolicyRuleStore } from './policyRuleStore'
-import { resolveEffectivePolicyRulesWithOrigin, writePolicyPackages } from './policyRulesRuntime'
+import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin, writePolicyPackages } from './policyRulesRuntime'
 import { registerPolicyIpc } from '../ipc/policyIpc'
 import { DEFAULT_POLICY_PACKAGES } from '../../src/shared/policy/policyPackages'
 import { decide } from '../../src/shared/policy/policyEngine'
@@ -135,6 +135,126 @@ describe('legacy IM policy migration at startup', () => {
       legacyPolicyDataMigrated: true,
       legacyPolicyMigrationVersion: 2
     })
+    db.close()
+  })
+
+  it('migrates legacy IM disabled IDs to allow overrides and atomically clears their legacy storage', () => {
+    const db = createMemoryAppDb('legacy-im-disabled-action-migration')
+    setConfigValue(db, 'config.wechat', JSON.stringify({ enabled: true, remoteEnabled: true }))
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-v1.6', snapshot: {
+      selectedPackage: 'custom', ruleOverrides: { 'remote-shell-disabled': 'ask' }, disabledRuleIds: ['remote-shell-disabled', 'script-network-deny-remote']
+    }, updatedAt: 1, eventId: 'disabled-migration-seed' })
+
+    ensureImPolicySnapshotAtStartup(db)
+
+    const snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
+    expect(snapshot.snapshot.ruleOverrides).toMatchObject({
+      'remote-shell-disabled': 'allow', 'script-network-deny-remote': 'allow'
+    })
+    expect(snapshot.snapshot.migratedLegacyDisabledRuleIds).toEqual(['remote-shell-disabled', 'script-network-deny-remote'])
+    expect(snapshot.snapshot.disabledRuleIds).toEqual([])
+    expect(JSON.parse(getConfigValue(db, 'config.disabledPolicyRuleIds') ?? '[]')).toEqual([])
+    db.close()
+  })
+
+  it('rejects unknown legacy desktop disabled IDs without clearing the source value', () => {
+    const db = createMemoryAppDb('legacy-desktop-disabled-unknown')
+    setConfigValue(db, 'config.disabledPolicyRuleIds', JSON.stringify(['future-rule-id']))
+    expect(() => ensureImPolicySnapshotAtStartup(db)).toThrow('unknown disabled policy rule')
+    expect(JSON.parse(getConfigValue(db, 'config.disabledPolicyRuleIds') ?? '[]')).toEqual(['future-rule-id'])
+    expect(getDbConnection(db).prepare("SELECT 1 FROM policy_behavior_snapshots WHERE domain='desktop'").get()).toBeUndefined()
+    db.close()
+  })
+
+  it('gives a legacy desktop disabled ID precedence over a partial rule override', () => {
+    const db = createMemoryAppDb('legacy-desktop-disabled-precedence')
+    setConfigValue(db, 'config.disabledPolicyRuleIds', JSON.stringify(['remote-shell-disabled']))
+    const conn = getDbConnection(db)
+    commitDesktopPolicySnapshot(conn, { expectedRevision: 0, policyBehaviorVersion: 'desktop-v1', snapshot: {
+      selectedPackage: 'custom', ruleOverrides: { 'remote-shell-disabled': 'ask' }
+    }, updatedAt: 1, eventId: 'desktop-partial-seed' })
+
+    ensureImPolicySnapshotAtStartup(db)
+
+    expect(readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }).snapshot.ruleOverrides)
+      .toEqual({ 'remote-shell-disabled': 'allow' })
+    expect(readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }).snapshot.migratedLegacyDisabledRuleIds)
+      .toEqual(['remote-shell-disabled'])
+    expect(JSON.parse(getConfigValue(db, 'config.disabledPolicyRuleIds') ?? '[]')).toEqual([])
+    db.close()
+  })
+
+  it('imports old desktop overrides and package before creating the first snapshot', () => {
+    const db = createMemoryAppDb('legacy-desktop-first-snapshot-import')
+    writePolicyPackages(db, { ...DEFAULT_POLICY_PACKAGES, desktop: 'custom' })
+    new PolicyRuleStore(getDbConnection(db)).setOverride({ ruleId: 'mcp-tool-ask', action: 'deny', params: {} })
+
+    ensureImPolicySnapshotAtStartup(db)
+
+    const snapshot = readPolicyBehaviorSnapshot(getDbConnection(db), 'desktop', { supportedBehaviorVersions: ['desktop-v1'] })
+    expect(snapshot.snapshot).toMatchObject({ selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'deny' } })
+    expect(loadEffectivePolicyRules(db, 'desktop').find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe('deny')
+    db.close()
+  })
+
+  it('keeps shared disabled migration material until IM migration commits and retries atomically', () => {
+    const db = createMemoryAppDb('legacy-shared-disabled-retry')
+    const conn = getDbConnection(db)
+    setConfigValue(db, 'config.wechat', JSON.stringify({ enabled: true, remoteEnabled: true }))
+    setConfigValue(db, 'config.disabledPolicyRuleIds', JSON.stringify(['remote-shell-disabled']))
+    conn.exec(`CREATE TRIGGER fail_im_snapshot BEFORE INSERT ON policy_behavior_snapshots
+      WHEN NEW.domain='im' BEGIN SELECT RAISE(ABORT, 'IM snapshot failure'); END`)
+
+    expect(() => ensureImPolicySnapshotAtStartup(db)).toThrow('IM snapshot failure')
+    expect(JSON.parse(getConfigValue(db, 'config.disabledPolicyRuleIds') ?? '[]')).toEqual(['remote-shell-disabled'])
+    expect(conn.prepare("SELECT 1 FROM policy_behavior_snapshots WHERE domain='desktop'").get()).toBeUndefined()
+    expect(conn.prepare("SELECT 1 FROM policy_behavior_snapshots WHERE domain='im'").get()).toBeUndefined()
+
+    conn.exec('DROP TRIGGER fail_im_snapshot')
+    ensureImPolicySnapshotAtStartup(db)
+    const desktop = readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] })
+    const im = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
+    expect(desktop.snapshot).toMatchObject({ ruleOverrides: { 'remote-shell-disabled': 'allow' }, migratedLegacyDisabledRuleIds: ['remote-shell-disabled'] })
+    expect(im.snapshot).toMatchObject({ ruleOverrides: { 'remote-shell-disabled': 'allow' }, migratedLegacyDisabledRuleIds: ['remote-shell-disabled'] })
+    expect(JSON.parse(getConfigValue(db, 'config.disabledPolicyRuleIds') ?? '[]')).toEqual([])
+    db.close()
+  })
+
+  it('keeps migrated actions dormant outside custom and restores them when switching back', () => {
+    const db = createMemoryAppDb('legacy-desktop-disabled-standard')
+    setConfigValue(db, 'config.disabledPolicyRuleIds', JSON.stringify(['remote-shell-disabled']))
+
+    ensureImPolicySnapshotAtStartup(db)
+
+    const snapshot = readPolicyBehaviorSnapshot(getDbConnection(db), 'desktop', { supportedBehaviorVersions: ['desktop-v1'] })
+    expect(snapshot.snapshot.selectedPackage).toBe('standard')
+    expect(snapshot.snapshot.ruleOverrides).toMatchObject({ 'remote-shell-disabled': 'allow' })
+    expect(readPolicyPackages(db).desktop).toBe('standard')
+    expect(loadEffectivePolicyRules(db, 'desktop').find((rule) => rule.id === 'remote-shell-disabled'))
+      .toMatchObject({ action: 'deny' })
+
+    commitDesktopPolicySnapshot(getDbConnection(db), {
+      expectedRevision: snapshot.revision,
+      policyBehaviorVersion: 'desktop-v1',
+      snapshot: { ...snapshot.snapshot, selectedPackage: 'custom' },
+      updatedAt: 2,
+      eventId: 'legacy-disabled-return-to-custom'
+    })
+    expect(loadEffectivePolicyRules(db, 'desktop').find((rule) => rule.id === 'remote-shell-disabled'))
+      .toMatchObject({ action: 'allow', userOverride: true })
+    db.close()
+  })
+
+  it('rolls back legacy desktop disabled IDs when snapshot persistence fails', () => {
+    const db = createMemoryAppDb('legacy-desktop-disabled-rollback')
+    setConfigValue(db, 'config.disabledPolicyRuleIds', JSON.stringify(['remote-shell-disabled']))
+    const conn = getDbConnection(db)
+    conn.exec(`CREATE TRIGGER fail_desktop_snapshot BEFORE INSERT ON policy_behavior_snapshots
+      WHEN NEW.domain='desktop' BEGIN SELECT RAISE(ABORT, 'snapshot failure'); END`)
+    expect(() => ensureImPolicySnapshotAtStartup(db)).toThrow('snapshot failure')
+    expect(JSON.parse(getConfigValue(db, 'config.disabledPolicyRuleIds') ?? '[]')).toEqual(['remote-shell-disabled'])
+    expect(conn.prepare("SELECT 1 FROM policy_behavior_snapshots WHERE domain='desktop'").get()).toBeUndefined()
     db.close()
   })
 

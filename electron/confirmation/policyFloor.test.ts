@@ -79,28 +79,27 @@ describe('validatePolicyRulesFloor（locked 底线校验，纯函数）', () => 
     expect(validatePolicyRulesFloor(DEFAULT_POLICY_RULES)).toEqual({ ok: true })
   })
 
-  it('locked 条目动作被放宽 → 违规（列出条目 id）', () => {
+  it('用户可选择 locked 条目的动作，规则身份与匹配条件仍保持不变', () => {
     const relaxed = DEFAULT_POLICY_RULES.map((r) =>
-      r.id === 'remote-shell-disabled' ? { ...r, action: 'allow' as const } : r
+      r.id === 'remote-shell-disabled' ? { ...r, action: 'allow' as const, userOverride: true as const } : r
     )
     const res = validatePolicyRulesFloor(relaxed)
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.violations).toContain('remote-shell-disabled')
+    expect(res).toEqual({ ok: true })
   })
 
-  it('locked 条目缺失 → 违规（移除保护等价放宽）', () => {
+  it('规则身份与匹配条件缺失仍违规', () => {
     const dropped = DEFAULT_POLICY_RULES.filter((r) => r.id !== 'remote-shell-disabled')
     const res = validatePolicyRulesFloor(dropped)
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.violations).toContain('remote-shell-disabled')
   })
 
-  it('只有显式停用设置允许移除 locked deny；locked ask 仍不能移除', () => {
+  it('兼容期只有显式停用设置允许移除旧 locked deny；locked ask 仍不能移除', () => {
     const toggleable = DEFAULT_POLICY_RULES.filter((r) => r.id !== 'automation-sensitive-path-deny')
     expect(validatePolicyRulesFloor(toggleable).ok).toBe(false)
     expect(validatePolicyRulesFloor(toggleable, undefined, ['automation-sensitive-path-deny'])).toEqual({ ok: true })
-    const softened = DEFAULT_POLICY_RULES.map((r) => r.id === 'automation-sensitive-path-deny' ? { ...r, action: 'allow' as const } : r)
-    expect(validatePolicyRulesFloor(softened, undefined, ['automation-sensitive-path-deny']).ok).toBe(false)
+    const softened = DEFAULT_POLICY_RULES.map((r) => r.id === 'automation-sensitive-path-deny' ? { ...r, action: 'allow' as const, userOverride: true as const } : r)
+    expect(validatePolicyRulesFloor(softened, undefined, ['automation-sensitive-path-deny']).ok).toBe(true)
 
     const missingAsk = DEFAULT_POLICY_RULES.filter((r) => r.id !== 'automation-default-confirm')
     expect(validatePolicyRulesFloor(missingAsk, undefined, ['automation-default-confirm']).ok).toBe(false)
@@ -115,11 +114,11 @@ describe('validatePolicyRulesFloor（locked 底线校验，纯函数）', () => 
 })
 
 describe('evaluateToolCallGate 底线违规拒绝（cause 可区分）', () => {
-  it('传入放宽 locked 的规则集 → deny(rules-violated) + cause=rules-violated 审计', async () => {
+  it('传入显式用户动作后的 locked 规则集可进入策略引擎', async () => {
     const db = openDb()
     const m = gateMaterials(db)
     const relaxed = m.effectiveRules.map((r) =>
-      r.locked ? { ...r, action: 'allow' as const } : r
+      r.locked ? { ...r, action: 'allow' as const, userOverride: true as const } : r
     )
     const r = await evaluateToolCallGate(base(db, {
       audit: m.audit,
@@ -129,10 +128,7 @@ describe('evaluateToolCallGate 底线违规拒绝（cause 可区分）', () => {
       toolName: 'run_shell',
       toolInput: { command: 'echo hi' }
     }))
-    expect(r.decision.type).toBe('deny')
-    if (r.decision.type === 'deny') expect(r.decision.ruleId).toBe('rules-violated')
-    const evt = m.audit.events.find((e) => e.event === 'policy.decision')
-    expect(evt).toMatchObject({ cause: 'rules-violated', decision: 'deny' })
+    expect(r.decision.ruleId).not.toBe('rules-violated')
   })
 })
 
@@ -216,6 +212,7 @@ describe('P0-1 评审回归：来源标注装配 → 门控审计全链路（键
       decisionCache: (ports.policy as { decisionCache: { lookup: (k: unknown) => null } }).decisionCache
     }))
     expect(r.decision.type).toBe('require-confirm')
+    expect(r.decision.type === 'require-confirm' && r.decision.ruleId).toBe('mcp-readonly-allow')
     const evt = audit.events.find((e) => e.event === 'policy.decision')
     expect(evt).toMatchObject({ ruleOrigin: 'user-override', ruleId: 'mcp-readonly-allow' })
   })

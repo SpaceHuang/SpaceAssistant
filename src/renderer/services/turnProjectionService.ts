@@ -95,10 +95,9 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
           : tool) }
       : payload.turn.assistantMessage
     routePatchMessage(payload.turn.sessionId, assistantMessage.id, assistantMessage)
-    const hasConfirmation = (assistantMessage.toolCalls ?? []).some((tool) => tool.status === 'confirming')
-    if (hasConfirmation || isTerminal) {
-      pendingConfirmStore.syncFromProjection({ sessionId: payload.turn.sessionId, requestId: payload.turn.requestId, turnId: payload.turn.turnId, turnVersion: payload.turn.version, terminal: isTerminal, message: assistantMessage })
-    }
+    // 所有快照都送入 store：确认响应后需观测到 confirming → executing/terminal，
+    // 才能清除本地响应抑制标记并正确处理之后的新一轮确认。
+    pendingConfirmStore.syncFromProjection({ sessionId: payload.turn.sessionId, requestId: payload.turn.requestId, turnId: payload.turn.turnId, turnVersion: payload.turn.version, terminal: isTerminal, message: assistantMessage })
     applyTerminalStatus(payload)
     if (payload.event.type === 'usage-updated') {
       const usage = (payload.event as { usage?: unknown }).usage
@@ -123,9 +122,7 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
     if (retry && display.version !== previous) return
     versions.set(display.turnId, display.version)
     // bounded display 只能进入 renderer 展示层；不能伪装成 Message 写入 Redux/API context。
-    if (display.lifecycle === 'awaiting-confirmation' || display.lifecycle === 'completed' || display.lifecycle === 'failed') {
-      pendingConfirmStore.syncFromProjection({ sessionId: display.sessionId, requestId: display.requestId, turnId: display.turnId, turnVersion: display.version, terminal: display.lifecycle === 'completed' || display.lifecycle === 'failed', message: turnDisplayToMessage(display) })
-    }
+    pendingConfirmStore.syncFromProjection({ sessionId: display.sessionId, requestId: display.requestId, turnId: display.turnId, turnVersion: display.version, terminal: display.lifecycle === 'completed' || display.lifecycle === 'failed', message: turnDisplayToMessage(display) })
     if (display.lifecycle === 'running' || display.lifecycle === 'awaiting-confirmation') {
       const identity = `${display.requestId}:${display.lifecycle}`
       if (statusIdentity.get(display.turnId) !== identity) {

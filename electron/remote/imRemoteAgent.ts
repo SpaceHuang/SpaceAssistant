@@ -54,6 +54,7 @@ import { recordTrackModelMessage } from './trackModelInputViewStore'
 import { readRemoteTrackFeatureGates } from './remoteTrackFeatureGates'
 import { recordRemoteTrackRuntimeDiagnostic } from '../database/remoteTrackRuntimeDiagnosticStore'
 import { readImPromptPolicySnapshot } from './imPromptPolicySnapshot'
+import { estimateTokensFromUtf8Text } from '../../src/shared/contextUsageEstimate'
 
 export function extractTextFromContent(content: unknown[]): string {
   let s = ''
@@ -322,10 +323,29 @@ export async function runImRemoteAgent(args: {
     const paired = ensureToolResultPairing(trimmed, { requiredUserMessageId: currentUserMessageId })
     const deferredContinuation = args.remoteContext.deferredContinuation
     const messages = deferredContinuation ? [...paired.messages,
-      { role: 'assistant' as const, content: '', toolCalls: [{ id: deferredContinuation.toolCallId, name: deferredContinuation.toolName, input: deferredContinuation.canonicalArgs }] },
-      { role: 'tool' as const, toolCallId: deferredContinuation.toolCallId,
-        content: JSON.stringify(deferredContinuation.result.value ?? deferredContinuation.result), isError: deferredContinuation.result.kind === 'failed' }
+      { role: 'assistant' as const, content: [{ type: 'tool_use' as const, id: deferredContinuation.toolCallId,
+        name: deferredContinuation.toolName, input: deferredContinuation.canonicalArgs }] },
+      { role: 'user' as const, content: [{ type: 'tool_result' as const, tool_use_id: deferredContinuation.toolCallId,
+        content: JSON.stringify(deferredContinuation.result.value ?? deferredContinuation.result), is_error: deferredContinuation.result.kind === 'failed' }] }
     ] : paired.messages
+    // `history.read` is a bounded lookup over persisted conversation facts. Remote
+    // invocations used to omit this capability entirely, so a valid prior IM turn
+    // looked like missing context whenever no compaction checkpoint existed.
+    const historyFacts = rawMessages
+      .filter((message) => message.status !== 'streaming' && message.status !== 'sending' && message.status !== 'queued')
+      .map((message) => {
+        const details = { toolCalls: message.toolCalls, toolUse: message.toolUse, attachments: message.attachments }
+        const serializedDetails = JSON.stringify(details)
+        const boundedDetails = serializedDetails.length > 8_000 ? `${serializedDetails.slice(0, 7_999)}…` : serializedDetails
+        const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content) ?? ''
+        const detailText = message.toolCalls?.length || message.toolUse || message.attachments?.length ? `\n[结构化详情] ${boundedDetails}` : ''
+        const text = `${content}${detailText}`
+        return {
+          id: message.id, sessionId: message.sessionId, windowId: `remote-session:${message.sessionId}`,
+          role: message.role === 'assistant' ? 'assistant' as const : 'user' as const,
+          text, tokens: estimateTokensFromUtf8Text(text), details
+        }
+      })
     const remoteContext = args.remoteContext
     const currentUserMessage = currentUserMessageId ? rawMessages.find((message) => message.id === currentUserMessageId && message.role === 'user') : undefined
     if ((remoteContext.source === 'feishu' || remoteContext.source === 'wechat') && remoteContext.authOwner && currentUserMessageId) {
@@ -453,6 +473,7 @@ export async function runImRemoteAgent(args: {
       appDb: args.db,
       sessionStorage: storage,
       historyForSession,
+      historyFacts,
       ...(sessionEventLocation ? { sessionEventLocation } : {}),
       remoteContext,
       ...(currentUserMessage?.content ? { approvalTaskDigest: currentUserMessage.content } : {}),

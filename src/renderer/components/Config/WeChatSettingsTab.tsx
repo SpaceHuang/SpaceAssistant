@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { Dispatch, SetStateAction } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { App, Badge, Button, Input, Space } from 'antd'
 import type { WeChatConfig, WeChatConnectionStatus, WeChatLoginProgress } from '../../../shared/wechatTypes'
@@ -16,7 +17,7 @@ import {
 
 type Props = {
   wechat: WeChatConfig
-  onChange: (next: WeChatConfig) => void
+  onChange: Dispatch<SetStateAction<WeChatConfig>>
 }
 
 function loginProgressLabel(
@@ -60,7 +61,9 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
   const [showQr, setShowQr] = useState(false)
   const [pollActionLoading, setPollActionLoading] = useState(false)
 
-  const patch = useCallback((p: Partial<WeChatConfig>) => onChange({ ...wechat, ...p }), [wechat, onChange])
+  const patch = useCallback((p: Partial<WeChatConfig>) => {
+    onChange((current) => ({ ...current, ...p }))
+  }, [onChange])
 
   const applyPollStatus = useCallback(
     (status: WeChatConnectionStatus, opts?: { notify?: boolean }) => {
@@ -270,7 +273,7 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
         </div>
 
         <div className="config-field">
-          {bound ? (
+          {bound && !showQr ? (
             <Space direction="vertical" size="small">
               <span className="config-status-text">
                 ● {t('settings.wechat.boundStatus', { displayName: wechat.displayName ?? connection?.displayName ?? '' })}
@@ -284,7 +287,7 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
             </Space>
           ) : (
             <Space direction="vertical" size="middle">
-              {!showQr ? (
+              {!bound && !showQr ? (
                 <Button type="primary" loading={binding} onClick={() => void startBind({ force: true })}>
                   {t('settings.wechat.bindButton')}
                 </Button>

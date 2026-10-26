@@ -98,7 +98,7 @@ export function maskOpenId(openId: string | undefined): string | undefined {
 export function parseFeishuBindProtocol(text: string): { code: string } | null {
   if (typeof text !== 'string') return null
   const trimmed = text.trim()
-  const m = /^(?:绑定|bind)[ \t]+(\S+)$/i.exec(trimmed)
+  const m = /^(?:绑定[ \t]*|bind[ \t]+)(\S+)$/i.exec(trimmed)
   if (!m) return null
   return { code: m[1]! }
 }

@@ -118,7 +118,7 @@ describe('manual context compaction IPC ContextPort integration', () => {
     expect(summarizeSessionContext).not.toHaveBeenCalled()
   })
 
-  it('reports a blocked ledger instead of presenting missing compaction markers as an empty history', async () => {
+  it('returns no markers when a blocked ledger cannot safely supply compaction replay', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'blocked compaction markers', model: 'test-model', maxTokens: 2_000, fixedWorkDir: '/tmp' })
     const storage = createSqliteSessionStorage(db, {
@@ -136,6 +136,6 @@ describe('manual context compaction IPC ContextPort integration', () => {
     })
 
     await expect(handlers.get('chat:get-session-compaction-markers')!({ sender: window.webContents }, session.id))
-      .rejects.toThrow('SESSION_LEDGER_BLOCKED')
+      .resolves.toEqual([])
   })
 })

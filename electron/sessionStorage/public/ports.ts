@@ -114,6 +114,7 @@ export interface ContinuationSourceQueries {
 export interface SessionQueries {
   readonly continuationSources: ContinuationSourceQueries
   readSession(sessionId: string): Session | undefined
+  readSessionIdForPlatformMessage(input: { channel: 'feishu' | 'wechat'; platformMessageId: string }): string | undefined
   readSessionUsage(sessionId: string): SessionUsage | undefined
   listSessions(options?: { view?: 'all' | 'user-visible' }): Session[]
   readMessage(ref: MessageRef): Message | undefined

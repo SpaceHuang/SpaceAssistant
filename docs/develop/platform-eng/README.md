@@ -13,6 +13,12 @@
 | [testing-guide.md](./testing-guide.md) | 指南 | 测试基建：Vitest projects 配置、测试文件位置、不变量测试要求 |
 | [tech_design.md](./tech_design.md) | 技术设计总纲 | 早期设计说明；与现役架构文档冲突处以 `architect/` 与代码为准 |
 
+## 在途方案
+
+| 文档 | 类型 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| [ci-reliability-improvement-technical-plan.md](./in-flight/ci-reliability-improvement-technical-plan.md) | 技术方案 | 草稿（未实施） | 近期 CI 失败复盘、required check 门禁、跨平台测试契约与 Electron 串行初始化 |
+
 ## 归档（10 件）
 
 见 [`../archive/platform-eng/`](../archive/platform-eng/)：

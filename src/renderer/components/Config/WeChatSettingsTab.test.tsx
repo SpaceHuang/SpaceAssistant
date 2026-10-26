@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import { App, ConfigProvider } from 'antd'
 import { WeChatSettingsTab } from './WeChatSettingsTab'
@@ -61,9 +61,18 @@ describe('WeChatSettingsTab', () => {
       pollState: 'polling'
     })
     const onChange = vi.fn()
+    let currentConfig = { ...DEFAULT_WECHAT_CONFIG, loggedIn: true, remoteEnabled: true }
     const Harness = () => {
-      const [wechat, setWechat] = useState({ ...DEFAULT_WECHAT_CONFIG, loggedIn: true, remoteEnabled: true })
-      return <WeChatSettingsTab wechat={wechat} onChange={(next) => { onChange(next); setWechat(next) }} />
+      const [wechat, setWechat] = useState(currentConfig)
+      const updateWechat = (update: Parameters<typeof setWechat>[0]) => {
+        onChange(update)
+        setWechat((previous) => {
+          const next = typeof update === 'function' ? update(previous) : update
+          currentConfig = next
+          return next
+        })
+      }
+      return <WeChatSettingsTab wechat={wechat} onChange={updateWechat} />
     }
 
     render(
@@ -75,9 +84,7 @@ describe('WeChatSettingsTab', () => {
     )
 
     await waitFor(() => {
-      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-        remoteSenderAllowlist: ['bound-user@wechat']
-      }))
+      expect(currentConfig.remoteSenderAllowlist).toEqual(['bound-user@wechat'])
     })
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(window.api.wechatDetectSdk).toHaveBeenCalledTimes(2)
@@ -106,5 +113,108 @@ describe('WeChatSettingsTab', () => {
     })
 
     expect(pollStart).not.toHaveBeenCalled()
+  })
+
+  it('preserves the confirmed enabled flags when an older status refresh resolves late', async () => {
+    let resolveInitialStatus: ((status: Awaited<ReturnType<typeof window.api.wechatConnectionStatus>>) => void) | undefined
+    const initialStatus = new Promise<Awaited<ReturnType<typeof window.api.wechatConnectionStatus>>>((resolve) => {
+      resolveInitialStatus = resolve
+    })
+    window.api.wechatConnectionStatus = vi.fn()
+      .mockReturnValueOnce(initialStatus)
+      .mockResolvedValue({
+        loggedIn: true,
+        boundUserId: 'bound-user@wechat',
+        pollState: 'polling'
+      })
+    window.api.wechatLoginStart = vi.fn().mockResolvedValue({ ok: true })
+
+    let emitProgress: Parameters<typeof window.api.wechatOnLoginProgress>[0] | undefined
+    window.api.wechatOnLoginProgress = vi.fn((callback) => {
+      emitProgress = callback
+      return () => undefined
+    })
+
+    let currentConfig = { ...DEFAULT_WECHAT_CONFIG }
+    const Harness = () => {
+      const [wechat, setWechat] = useState(currentConfig)
+      const updateWechat = (update: typeof setWechat extends (value: infer T) => void ? T : never) => {
+        setWechat((previous) => {
+          const next = typeof update === 'function' ? update(previous) : update
+          currentConfig = next
+          return next
+        })
+      }
+      return <WeChatSettingsTab wechat={wechat} onChange={updateWechat} />
+    }
+
+    render(
+      <ConfigProvider>
+        <App>
+          <Harness />
+        </App>
+      </ConfigProvider>
+    )
+    const bindButton = await screen.findByRole('button', { name: '绑定微信' })
+
+    await act(async () => {
+      fireEvent.click(bindButton)
+    })
+    await waitFor(() => expect(window.api.wechatLoginStart).toHaveBeenCalled())
+    await act(async () => {
+      emitProgress?.({ stage: 'confirmed' })
+    })
+    await waitFor(() => expect(currentConfig.remoteEnabled).toBe(true))
+
+    await act(async () => {
+      resolveInitialStatus?.({
+        loggedIn: true,
+        boundUserId: 'bound-user@wechat',
+        pollState: 'polling'
+      })
+    })
+
+    await waitFor(() => {
+      expect(currentConfig.loggedIn).toBe(true)
+      expect(currentConfig.remoteSenderAllowlist).toEqual(['bound-user@wechat'])
+    })
+    expect(currentConfig.enabled).toBe(true)
+    expect(currentConfig.remoteEnabled).toBe(true)
+  })
+
+  it('shows a new QR panel during rebind while the previous account remains authenticated', async () => {
+    window.api.wechatConnectionStatus = vi.fn().mockResolvedValue({
+      loggedIn: true,
+      boundUserId: 'bound-user@wechat',
+      pollState: 'stopped'
+    })
+    window.api.wechatLoginStop = vi.fn().mockResolvedValue({ ok: true })
+    window.api.wechatLoginStart = vi.fn().mockResolvedValue({ ok: true })
+    let emitQr: Parameters<typeof window.api.wechatOnQrUrl>[0] | undefined
+    window.api.wechatOnQrUrl = vi.fn((callback) => {
+      emitQr = callback
+      return () => undefined
+    })
+
+    render(
+      <ConfigProvider>
+        <App>
+          <WeChatSettingsTab
+            wechat={{ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true }}
+            onChange={vi.fn()}
+          />
+        </App>
+      </ConfigProvider>
+    )
+
+    await screen.findByText(/已绑定/)
+    fireEvent.click(screen.getByRole('button', { name: '重新绑定' }))
+    await waitFor(() => expect(window.api.wechatLoginStart).toHaveBeenCalledWith({ force: true }))
+
+    await act(async () => {
+      emitQr?.({ url: 'https://example.test/wechat-qr', expired: false })
+    })
+
+    expect(await screen.findByText('等待扫描')).toBeTruthy()
   })
 })

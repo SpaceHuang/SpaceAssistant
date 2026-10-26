@@ -24,6 +24,37 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'deny', locked: true, reason: 'raw/ 为只读源，不可通过工具修改 (WIKI_RAW_READONLY)'
   },
   {
+    id: 'wiki-domain-file-bypass-deny', when: 'invocation',
+    match: { toolName: ['read_file', 'list_directory', 'grep', 'write_file', 'edit_file', 'run_shell'], signals: ['wiki-managed-target', 'wiki-domain-enabled'] },
+    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'domain_enabled Wiki data must use Wiki domain tools'
+  },
+  {
+    id: 'wiki-schema-update-automation-deny', when: 'invocation',
+    match: { lane: ['automation'], toolName: 'memory.wiki_update_schema' },
+    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'automation lane cannot apply Wiki schema changes'
+  },
+  {
+    id: 'wiki-page-restore-automation-deny', when: 'invocation',
+    match: { lane: ['automation'], toolName: 'memory.wiki_apply_restore' },
+    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'automation lane cannot restore Wiki pages'
+  },
+  {
+    id: 'wiki-page-write-automation-deny', when: 'invocation',
+    match: { lane: ['automation'], toolName: ['memory.wiki_save_page', 'memory.wiki_move_page'] },
+    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'automation lane cannot write Wiki pages'
+  },
+  {
+    id: 'wiki-page-restore-human-confirm', when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'memory.wiki_apply_restore' },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'user', humanRequired: true, locked: true, reason: 'Wiki page restores require user confirmation'
+  },
+  // policy: stable locked rule requires a real user answer; the executor final-check binds it to this proposal invocation.
+  {
+    id: 'wiki-schema-update-human-confirm', when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'memory.wiki_update_schema' },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'user', humanRequired: true, locked: true, reason: 'Wiki schema changes require user confirmation'
+  },
+  {
     id: 'remote-outside-write-deny',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:outside-workdir'] },
@@ -87,7 +118,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
   {
     id: 'outbound-incomplete-standard-review', when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-inspection-incomplete', 'policy-tier:standard'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-inspection-incomplete', 'policy-tier:standard'], excludeSignals: ['outbound-evidence-present'] },
     denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '标准档出站检查不完整，交由安全审核 Agent'
   },
   {
@@ -346,7 +377,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'script-unmodeled-path-ask',
     when: 'invocation',
     match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unmodeled-call'] },
-    action: 'ask', denyClass: 'insufficient-info', reason: '脚本含未建模调用；可选择仅在本会话信任相同脚本'
+    action: 'ask', denyClass: 'insufficient-info', cacheableAsk: true, reason: '脚本含未建模调用；可选择仅在本会话信任相同脚本'
   },
   {
     id: 'script-unverified-language-confirm',
@@ -490,14 +521,17 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     denyClass: 'insufficient-info',
     action: 'ask',
     configRequires: { config: 'actRequiresConfirm', equals: true },
+    askUnless: { config: 'remoteActSkipConfirm', equals: true },
     reason: '低影响浏览器读取/导航动作进入 standard 审核候选'
   },
   {
     id: 'browser-act-ask-desktop',
     when: 'invocation',
-    match: { lane: ['desktop'], toolName: 'browser', signals: ['browser-act'] },
+    match: { lane: ['desktop'], toolName: 'browser', signals: ['browser-act'], excludeSignals: ['browser-act-dangerous'] },
     denyClass: 'insufficient-info',
     action: 'ask',
+    configRequires: { config: 'actRequiresConfirm', equals: true },
+    cacheableAsk: true,
     reason: '浏览器 act 需确认'
   },
   // navigate（open 模式）：远程仅在桌面与远程开关都要求时确认（等价现基线+跳过覆写叠加语义）；
@@ -512,6 +546,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
       { config: 'navigateRequiresConfirm', equals: true },
       { config: 'remoteNavigateRequiresConfirm', equals: true }
     ],
+    cacheableAsk: true,
     reason: '远程浏览器打开网页需确认'
   },
   {
@@ -521,6 +556,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     denyClass: 'insufficient-info',
     action: 'ask',
     askUnless: { config: 'navigateRequiresConfirm', equals: false },
+    cacheableAsk: true,
     reason: '浏览器打开网页需确认'
   },
   // lark-cli 高影响/未知子命令无条件确认（fail-closed，等价现 larkCliWriteNeedsConfirm：
@@ -712,8 +748,12 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'im-write-ask',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], actionClass: 'write', excludeSignals: ['write-target-new', 'write-target-existing'] },
+    // Classified Feishu CLI writes have a dedicated default rule family. Keep
+    // them out of this default fallback while preserving the original override
+    // match domain for user deny/ask/allow actions.
+    defaultActionExcludeSignals: ['lark-standard-low-write', 'lark-message-target:self', 'lark-message-target:direct-other'],
     denyClass: 'insufficient-info',
-    action: 'ask',
+    action: 'ask', cacheableAsk: true,
     reason: '未被低风险分类或人工确认底线覆盖的 IM 写入，交由标准档审核 Agent 评估'
   },
 

@@ -15,7 +15,10 @@ describe('history.read tool', () => {
   })
 
   it('rejects access when no authorized history snapshot is available', async () => {
-    await expect(readHistoryToolExecutor({}, context())).resolves.toMatchObject({ success: false })
+    await expect(readHistoryToolExecutor({}, context())).resolves.toEqual({
+      success: false,
+      error: '没有可回查的压缩历史；这只表示缺少压缩检查点，请检查本次请求已提供的消息，不要据此判断对话上下文缺失。'
+    })
   })
 
   it('rejects an authorized History facts snapshot when it changes before dispatch', async () => {

@@ -28,8 +28,9 @@ describe('pairing code helpers', () => {
     expect(normalizePairingCode('OIL')).toBe('011')
   })
 
-  it('parseFeishuBindProtocol accepts only exact 绑定/bind <code>', () => {
+  it('parseFeishuBindProtocol accepts exact 绑定/bind commands with or without the Chinese separator', () => {
     expect(parseFeishuBindProtocol('绑定 ABCD1234')).toEqual({ code: 'ABCD1234' })
+    expect(parseFeishuBindProtocol('绑定ABCD1234')).toEqual({ code: 'ABCD1234' })
     expect(parseFeishuBindProtocol('bind abcd1234')).toEqual({ code: 'abcd1234' })
     expect(parseFeishuBindProtocol('  BIND   XY9Z  ')).toEqual({ code: 'XY9Z' })
     expect(parseFeishuBindProtocol('绑定')).toBeNull()

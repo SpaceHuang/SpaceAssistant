@@ -50,6 +50,24 @@ describe('deferred IM production dispatch ports', () => {
     expect(dispatch).toHaveBeenCalledOnce()
   })
 
+  it('dispatches an already claimed policy recheck only while the approval scope is not closing', async () => {
+    const db = createMemoryAppDb()
+    const dispatch = vi.fn(async () => ({ dispatched: true }))
+    const ports = createDeferredImDispatchPorts({ db, channel: 'feishu', getAuthorizationEpoch: () => 9, isEnabled: () => true,
+      isOwnerAuthorized: () => true, recheckTask: () => true, dispatch })
+    const request = { requestId: 'policy-recheck', todoId: 'todo', invocationId: 'invocation', sessionId: 'session',
+      channel: 'feishu', identityKey: 'chat', ownerId: 'owner', authorizationEpoch: 9 } as never
+    const todo = { channel: 'feishu', originSessionId: 'session', ownerId: 'owner', identityKey: 'chat', authorizationEpoch: 9,
+      invocationId: 'invocation' } as never
+    const envelope = { invocationId: 'invocation' } as never
+    await expect(ports.dispatchClaimed(request, todo, envelope)).resolves.toEqual({ dispatched: true })
+    getDbConnection(db).prepare(`INSERT INTO deferred_approval_closures(channel,identity_key,owner_id,session_id,authorization_epoch,tombstone,state,updated_at)
+      VALUES('feishu','chat','owner','session',9,'close','closing',1)`).run()
+    await expect(ports.dispatchClaimed(request, todo, envelope)).resolves.toMatchObject({ dispatched: false })
+    expect(dispatch).toHaveBeenCalledOnce()
+    db.close()
+  })
+
   it('blocks a deferred WeChat dispatch when the approved attachment bytes changed after approval', async () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'deferred-wechat-attachment-'))
     try {

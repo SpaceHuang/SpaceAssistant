@@ -116,6 +116,8 @@ export type FactSignal =
   | { kind: 'script-path-declaration'; scope: 'workdir-readonly'; consistent: boolean }
   | { kind: 'script-language-analysis'; language: 'javascript' | 'typescript' | 'powershell' | 'unknown'; status: 'unverified' }
   | { kind: 'wiki-raw-target' }
+  | { kind: 'wiki-managed-target' }
+  | { kind: 'wiki-domain-enabled' }
   | { kind: 'feishu-media-target'; boundary: 'inside' | 'outside' | 'unknown' }
   | { kind: 'wechat-media-target'; boundary: 'inside-workdir' | 'outside-workdir' | 'unknown'; zone?: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown' }
   /** Host-measured exact attachment version, included in confirmation and deferred-approval facts. */
@@ -367,6 +369,8 @@ export interface ApprovalCluePack {
   taskDigest?: string
   /** taskDigest 是否因长度限制截断；截断时不得作为 medium/high 授权依据。 */
   taskDigestTruncated?: boolean
+  /** 前序 user/assistant 摘录：仅用于解析当前任务的代词或选项指代，始终作为不可信材料呈现。 */
+  conversationContext?: string
   /** Main-process verified authorization receipt copied from the immutable scheduled-task run snapshot. */
   taskAuthorizationRecord?: AutomationTaskAuthorizationRecord
 }
@@ -591,6 +595,7 @@ export interface SecurityAuditEvent {
 export type SecurityAuditEventKind =
   | 'deferred-approval.pending'
   | 'deferred-approval.approved'
+  | 'deferred-approval.rejected'
   | 'deferred-approval.dispatch'
   | 'deferred-approval.notification'
   | 'deferred-approval.result'
@@ -642,8 +647,12 @@ export interface PolicyRule {
   when: PolicyWhen
   match?: PolicyRuleMatch
   action: PolicyAction
+  /** 仅默认动作适用的信号排除；显式用户覆盖仍沿用规则原匹配域。 */
+  defaultActionExcludeSignals?: string[]
   /** Trusted main-process marker: this action came from a validated persisted user override. */
   userOverride?: true
+  /** This ask explicitly supports its declared user memory tier (for example exact script trust). */
+  cacheableAsk?: true
   /** 安全语义标记：即使 rule.action 被档位映射为 auto-evaluator，也必须原渠道逐次人工确认。 */
   humanRequired?: boolean
   /** Explicit reviewer for an ask rule; defaults to the lane's established reviewer. */

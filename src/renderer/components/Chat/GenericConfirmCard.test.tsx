@@ -54,4 +54,46 @@ describe('GenericConfirmCard（confirming 批准入口兜底，全工具守卫�
     render(<GenericConfirmCard record={record} onConfirm={vi.fn()} />)
     expect(screen.getByText(/…$/)).toBeDefined()
   })
+
+  it('页面恢复确认展示完整最终正文，不截断用户需要核对的材料', () => {
+    const markdown = `# 最终页面\n\n${'恢复正文。'.repeat(100)}`
+    const record = {
+      id: 'restore-call', toolName: 'memory.wiki_apply_restore', status: 'confirming',
+      input: { proposalId: 'proposal-1', finalPage: { title: '最终页面', categoryId: 'topic', summary: '摘要', markdown, parentPageId: null, sourceRefs: [] } }
+    } as unknown as ToolCallRecord
+    render(<GenericConfirmCard record={record} onConfirm={vi.fn()} />)
+    const preview = screen.getByText((content) => content.includes('"proposalId"'))
+    expect(JSON.parse(preview.textContent ?? '')).toMatchObject({ finalPage: { markdown } })
+  })
+
+  it.each(['memory_wiki_apply_restore', 'memory_wiki_update_schema'])(
+    '%s provider 名称仍展示完整确认材料',
+    (toolName) => {
+      const markdown = `# 最终页面\n\n${'provider 工具名长正文。'.repeat(1_000)}`
+      const record = {
+        id: `call-${toolName}`, toolName, status: 'confirming',
+        input: toolName === 'memory_wiki_apply_restore'
+          ? { proposalId: 'proposal-1', finalPage: { title: '最终页面', categoryId: 'topic', summary: '摘要', markdown, parentPageId: null, sourceRefs: [] } }
+          : { proposalId: 'proposal-2', proposalDiff: { before: '# Rules', after: markdown } }
+      } as unknown as ToolCallRecord
+      render(<GenericConfirmCard record={record} onConfirm={vi.fn()} />)
+      const preview = screen.getByText((content) => content.includes('"proposalId"'))
+      const displayed = JSON.parse(preview.textContent ?? '')
+      expect(preview.textContent).not.toContain('…')
+      if (toolName === 'memory_wiki_apply_restore') expect(displayed.finalPage.markdown).toBe(markdown)
+      else expect(displayed.proposalDiff.after).toBe(markdown)
+    }
+  )
+
+  it('SCHEMA 确认展示完整修改前后内容', () => {
+    const before = `# Rules\n\n${'旧规则。'.repeat(100)}`
+    const after = `# Rules\n\n${'新规则。'.repeat(100)}`
+    const record = {
+      id: 'schema-call', toolName: 'memory.wiki_update_schema', status: 'confirming',
+      input: { proposalId: 'proposal-schema', expectedSchemaVersion: 1, proposalDiff: { before, after } }
+    } as unknown as ToolCallRecord
+    render(<GenericConfirmCard record={record} onConfirm={vi.fn()} />)
+    const preview = screen.getByText((content) => content.includes('"proposalDiff"'))
+    expect(JSON.parse(preview.textContent ?? '')).toMatchObject({ proposalDiff: { before, after } })
+  })
 })

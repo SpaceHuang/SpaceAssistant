@@ -15,6 +15,7 @@ import { FeishuEventService } from './feishuEventService'
 import { prepareInboundFeishuAttachments } from './feishuInboundAttachmentDownload'
 import { sendFeishuApprovalTextToTarget } from './feishuReply'
 import { RemoteCommandRouter, type RemoteCommandRouterDeps } from './remoteCommandRouter'
+import { resolveFeishuQuotedReplyContext } from './feishuQuotedReplyContext'
 import { resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
 import { getMainWindow } from '../windowRef'
 import type { AppConfig } from '../../src/shared/domainTypes'
@@ -76,6 +77,8 @@ let clarificationRecoveryTimer: ReturnType<typeof setInterval> | null = null
 let unregisterFeishuTodoInvalidator: (() => void) | null = null
 let unregisterFeishuPendingCancel: (() => void) | null = null
 let unregisterFeishuCacheClearer: (() => void) | null = null
+let unregisterFeishuAuditAppender: (() => void) | null = null
+const pendingFeishuAuditWrites = new Set<Promise<void>>()
 
 function notifyFeishuConfigChanged(cfg: FeishuConfig): void {
   getMainWindow()?.webContents?.send('feishu:config-changed', { feishu: cfg })
@@ -161,6 +164,33 @@ export function createFeishuBundle(deps: {
         readOwnerOpenIdFromAllowlist(allowlist) === todo.ownerId
     },
     recheckTask: (todo, envelope) => recheckDeferredTaskControl(deps.db, todo, envelope),
+    reauthorizePolicy: async (todo, envelope) => {
+      const context = envelope.executionContext
+      const storage = deps.sessionStorage
+      if (!storage || typeof context.messageId !== 'string' || typeof context.providerRouteId !== 'string' || typeof context.model !== 'string') {
+        throw new Error('DEFERRED_POLICY_RECHECK_MATERIAL_MISSING')
+      }
+      const resolved = resolveWorkDirForSession(storage.queries, todo.originSessionId,
+        () => deps.workDirManager.listProfiles(), () => deps.workDirManager.getActiveProfileId(), () => deps.workDirManager.getActiveWorkDir())
+      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) throw new Error('DEFERRED_POLICY_RECHECK_WORKDIR_CHANGED')
+      const config = readCfg()
+      const result = await executeDeferredImTool({ db: deps.db, sessionStorage: storage, sessionId: todo.originSessionId,
+        requestId: envelope.requestId, turnId: envelope.turnId, invocationId: envelope.invocationId,
+        toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs, policyOnly: true,
+        lane: 'feishu', providerRouteId: context.providerRouteId,
+        remoteContext: { source: 'feishu', messageId: context.messageId, chatId: todo.identityKey, userId: todo.ownerId,
+          authOwner: todo.ownerId, originSessionId: todo.originSessionId, workDirProfileId: resolved.profileId,
+          requestId: envelope.requestId, authorizationGeneration: remoteAuthorizationRegistry.getGeneration('feishu'),
+          feishuConfig: config, larkCliRunner: runner },
+        model: context.model, toolsConfig: deps.getToolsConfig(), workDir: resolved.workDir,
+        userDataDir: deps.getUserDataPath(), getApiKey: deps.getApiKey, getBaseUrl: deps.getBaseUrl,
+        workDirManager: deps.workDirManager, getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
+        getShellConfig: () => readShellConfigFromDb(deps.db), toolChatExtras: { feishuConfig: config, larkCliRunner: runner }
+      }) as { decision?: { kind?: string; reasonCode?: string }; policy?: { ruleId: string; factsHash: string } }
+      if (!result.decision || !result.policy || !['allow', 'ask', 'deny'].includes(result.decision.kind ?? '')) throw new Error('DEFERRED_POLICY_RECHECK_RESULT_INVALID')
+      return { decision: result.decision.kind as 'allow' | 'ask' | 'deny', rule: result.policy,
+        ...(result.decision.reasonCode ? { reasonSummary: result.decision.reasonCode } : {}) }
+    },
     dispatch: async ({ todo, envelope }) => {
       const context = envelope.executionContext
       const storage = deps.sessionStorage
@@ -178,7 +208,10 @@ export function createFeishuBundle(deps: {
         db: deps.db, sessionStorage: storage, sessionId: todo.originSessionId,
         requestId: envelope.requestId, turnId: envelope.turnId, invocationId: envelope.invocationId,
         toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs,
-        confirmationReceipt: context.confirmationReceipt, lane: 'feishu', providerRouteId: context.providerRouteId,
+        confirmationReceipt: context.confirmationReceipt,
+        confirmationPolicyRevision: typeof context.policyBehaviorVersion === 'string' && Number.isSafeInteger(context.policyRevision) && Number.isSafeInteger(context.policyEpoch)
+          ? `${context.policyBehaviorVersion}:${context.policyRevision}:${context.policyEpoch}` : undefined,
+        lane: 'feishu', providerRouteId: context.providerRouteId,
         remoteContext: {
           source: 'feishu', messageId: context.messageId,
           chatId: todo.identityKey, userId: todo.ownerId, authOwner: todo.ownerId, originSessionId: todo.originSessionId,
@@ -192,7 +225,7 @@ export function createFeishuBundle(deps: {
       })
       } catch (error) {
         if (error instanceof DeferredToolPreDispatchError) {
-          return { dispatched: false, failureReason: '审批后的执行检查未通过，本次操作未执行。' }
+          return { dispatched: false, failureCode: error.failureCode, failureReason: '审批后的执行检查未通过，本次操作未执行。' }
         }
         throw error
       }
@@ -238,8 +271,11 @@ export function createFeishuBundle(deps: {
         ? new SqliteDecisionCache(getDbConnection(deps.db)).clearLane('feishu', 'session')
         : 0
   }, 'feishu-decision-cache')
-  remoteAuthorizationRegistry.registerAuditAppender((event) => {
-    void auditLogger.append(event as { type: string })
+  unregisterFeishuAuditAppender?.()
+  unregisterFeishuAuditAppender = remoteAuthorizationRegistry.registerAuditAppender((event) => {
+    const write = auditLogger.append(event as { type: string })
+    pendingFeishuAuditWrites.add(write)
+    void write.then(() => pendingFeishuAuditWrites.delete(write), () => pendingFeishuAuditWrites.delete(write))
   })
 
   const ownerBind = new FeishuOwnerBindController({
@@ -301,6 +337,10 @@ export function createFeishuBundle(deps: {
       channel: 'feishu', identityKey: message.chatId, ownerId: message.senderOpenId, messageId: message.messageId,
       replyToMessageId, text
     }).then(() => undefined),
+    isDeferredApprovalReplyTarget: ({ identityKey, ownerId, messageId }) => deferredNotificationDelivery.isTrustedReplyTarget({
+      channel: 'feishu', identityKey, ownerId, messageId
+    }),
+    resolveQuotedReplyContext: ({ message }) => resolveFeishuQuotedReplyContext({ runner, queries: deps.sessionStorage!.queries, message }),
     classifyDeferredApprovalReplyTarget: ({ identityKey, messageId }) => {
       try {
         return deferredNotificationDelivery.classifyReplyTarget({ channel: 'feishu', identityKey, messageId })
@@ -416,6 +456,9 @@ export async function shutdownFeishuServices(): Promise<void> {
   unregisterFeishuPendingCancel = null
   unregisterFeishuCacheClearer?.()
   unregisterFeishuCacheClearer = null
+  unregisterFeishuAuditAppender?.()
+  unregisterFeishuAuditAppender = null
+  while (pendingFeishuAuditWrites.size) await Promise.allSettled([...pendingFeishuAuditWrites])
   logFeishuCliEvent('info', 'feishu.service.shutdown', {})
   await flushFeishuCliLogger()
 }

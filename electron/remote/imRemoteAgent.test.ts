@@ -13,6 +13,7 @@ import { ensureImTurnTaskControl, getTaskControlRecord, putTaskControlRecord, co
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { buildTrackModelInputViewRef as buildTrackModelInputView, recordTrackModelMessage as persistTrackModelMessage } from './trackModelInputViewStore'
+import { toCanonicalModelMessages } from '../runtime/canonicalHistory'
 
 function recordTrackModelMessage(db: AppDatabase, input: Parameters<typeof persistTrackModelMessage>[1]) {
   return persistTrackModelMessage(db, input, createSqliteSessionStorage(db).queries)
@@ -457,10 +458,20 @@ describe('runImRemoteAgent', () => {
     } })
     const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, args.requestId, 'deferred-continuation-turn')
     await runImRemoteAgent({ ...args, turnId: acceptedTurn.turnId, acceptedTurn })
-    const materials = invocationMaterialsCapture.last as { messages: Array<{ role: string; toolCallId?: string; content?: unknown; toolCalls?: Array<{ id: string }> }> } | null
-    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'assistant', toolCalls: [expect.objectContaining({ id: 'tool-1', name: 'send_message' })] }))
-    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'tool-1', isError: false, content: expect.stringContaining('TOOL_RESULT_4321') }))
+    const materials = invocationMaterialsCapture.last as { messages: Array<{ role: string; toolCallId?: string; content?: unknown }> } | null
+    expect(materials?.messages.filter((message) => message.role === 'assistant').flatMap((message) => Array.isArray(message.content) ? message.content : []).filter((block) =>
+      block && typeof block === 'object' && (block as { type?: string; id?: string }).type === 'tool_use' && (block as { id?: string }).id === 'tool-1')).toHaveLength(1)
+    expect(materials?.messages.filter((message) => message.role === 'user').flatMap((message) => Array.isArray(message.content) ? message.content : []).filter((block) =>
+      block && typeof block === 'object' && (block as { type?: string; tool_use_id?: string }).type === 'tool_result' && (block as { tool_use_id?: string }).tool_use_id === 'tool-1')).toHaveLength(1)
+    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'assistant', content: [expect.objectContaining({ type: 'tool_use', id: 'tool-1', name: 'send_message' })] }))
+    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'user', content: [expect.objectContaining({ type: 'tool_result', tool_use_id: 'tool-1', is_error: false, content: expect.stringContaining('TOOL_RESULT_4321') })] }))
     expect(JSON.stringify(materials?.messages)).toContain('TOOL_RESULT_4321')
+    // toolChatLoop keeps only role/content on the Anthropic request surface; assert that this boundary
+    // still carries the deferred result's call identity through canonical persistence.
+    const apiMessages = materials?.messages.map(({ role, content }) => ({ role, content })) ?? []
+    const canonical = toCanonicalModelMessages(apiMessages as never)
+    expect(canonical).toContainEqual(expect.objectContaining({ role: 'assistant', toolCalls: [expect.objectContaining({ id: 'tool-1' })] }))
+    expect(canonical).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'tool-1' }))
     db.close()
   })
 
@@ -1079,9 +1090,11 @@ describe('runImRemoteAgent', () => {
     const db = makeDb()
     const session = createSession(db, { name: 'remote-current-turn-input' })
     setConfigValue(db, 'config.models', JSON.stringify([{ id: 'test-remote-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
-    const { prepareTurnAtomically, appendMessage } = await import('../database/operations')
+    const { prepareTurnAtomically } = await import('../database/operations')
+    appendMessage(db, { id: 'remote-prior-user', sessionId: session.id, role: 'user', content: '生成提案', timestamp: 0, status: 'sent' })
+    appendMessage(db, { id: 'remote-prior-assistant', sessionId: session.id, role: 'assistant', content: '提案 ID：proposal-from-prior-turn', timestamp: 0, status: 'sent' })
     prepareTurnAtomically(db, {
-      user: { id: 'remote-accepted-user', sessionId: session.id, role: 'user', content: 'accepted remote input', timestamp: 1, status: 'sent' },
+      user: { id: 'remote-accepted-user', sessionId: session.id, role: 'user', content: '批准并应用该提案', timestamp: 1, status: 'sent' },
       assistant: { id: 'remote-accepted-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
       turn: { turnId: 'remote-accepted-turn', requestId: 'remote-accepted-request', sessionId: session.id, assistantMessageId: 'remote-accepted-assistant', state: 'prepared', startToken: 'remote-accepted-token' }
     })
@@ -1106,6 +1119,7 @@ describe('runImRemoteAgent', () => {
 
     expect(captured?.messages.list.map((message) => message.id)).toContain('remote-accepted-user')
     expect(captured?.messages.currentUserMessageId).toBe('remote-accepted-user')
+    expect(captured?.messages.list.map((message) => message.content)).toContain('提案 ID：proposal-from-prior-turn')
     expect(captured?.messages.list.map((message) => message.content)).not.toContain('unrelated session tail')
     expect(captured?.acceptedTurn).toBe(acceptedTurn)
     expect(mockGetMessages).not.toHaveBeenCalled()
@@ -1695,20 +1709,29 @@ describe('runImRemoteAgent', () => {
           runtime.chatCancels.signalChatCancel(requestId)
         }
         releaseClaim()
-        await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
-
-        expect(providerCalls).toBe(1)
-        expect(execute).not.toHaveBeenCalled()
+        if (termination === 'authorization-change') {
+          await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: 'Authorization changed; read stopped.' })
+          expect(providerCalls).toBe(2)
+          expect(execute).toHaveBeenCalledOnce()
+        } else {
+          await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
+          expect(providerCalls).toBe(1)
+          expect(execute).not.toHaveBeenCalled()
+        }
         const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
-        expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-          toolCallId: toolUseId,
-          reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
-        })
-        expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
-        expect(history.events.at(-1)).toMatchObject({
-          kind: 'invocation-interrupted',
-          payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
-        })
+        if (termination === 'authorization-change') {
+          expect(history.events.some((event) => event.kind === 'tool-call-not-dispatched')).toBe(false)
+          expect(history.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ toolCallId: toolUseId, success: true }) }))
+          expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
+        } else {
+          expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
+            toolCallId: toolUseId, reason: termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+          })
+          expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+          expect(history.events.at(-1)).toMatchObject({
+            kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
+          })
+        }
       } finally {
         releaseClaim()
         execute.mockRestore()
@@ -2015,19 +2038,23 @@ describe('runImRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('feishu', 'run_lark_cli')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
-      expect(providerCalls).toBe(1)
+      if (termination === 'authorization-change') {
+        await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: 'CLI 授权变化后命令未执行。' })
+        expect(providerCalls).toBe(2)
+      } else {
+        await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
+        expect(providerCalls).toBe(1)
+      }
       expect(runner.run).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'approval-resolved')?.payload).toMatchObject({ toolCallId, approved: true })
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId, reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        toolCallId, reason: termination === 'authorization-change' ? 'POLICY_DENY' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted',
-        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
-      })
+      expect(history.events.at(-1)).toMatchObject(termination === 'authorization-change'
+        ? { kind: 'invocation-completed', payload: { status: 'completed' } }
+        : { kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
     } finally {
       releaseClaim()
       runtime.chatCancels.clear(requestId)
@@ -2137,9 +2164,13 @@ describe('runImRemoteAgent', () => {
         runtime.chatCancels.signalChatCancel(requestId)
       }
       releaseClaim()
-      await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
-
-      expect(providerCalls).toBe(1)
+      if (termination === 'authorization-change') {
+        await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: '写入授权已变化，操作未执行。' })
+        expect(providerCalls).toBe(2)
+      } else {
+        await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
+        expect(providerCalls).toBe(1)
+      }
       expect(executeWrite).not.toHaveBeenCalled()
       if (toolName === 'edit_file') await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('original edit target')
       else await expect(fs.access(targetPath)).rejects.toThrow()
@@ -2149,13 +2180,12 @@ describe('runImRemoteAgent', () => {
       })
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
         toolCallId,
-        reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        reason: termination === 'authorization-change' ? 'POLICY_DENY' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted',
-        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
-      })
+      expect(history.events.at(-1)).toMatchObject(termination === 'authorization-change'
+        ? { kind: 'invocation-completed', payload: { status: 'completed' } }
+        : { kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
     } finally {
       releaseClaim()
       executeWrite.mockRestore()
@@ -2374,8 +2404,13 @@ describe('runImRemoteAgent', () => {
         runtime.chatCancels.signalChatCancel(requestId)
       }
       releaseClaim()
-      await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
-      expect(providerCalls).toBe(1)
+      if (termination === 'authorization-change') {
+        await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: '浏览器授权已变化，操作未执行。' })
+        expect(providerCalls).toBe(2)
+      } else {
+        await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
+        expect(providerCalls).toBe(1)
+      }
       expect(executeBrowser).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'approval-resolved')?.payload).toMatchObject({
@@ -2383,13 +2418,12 @@ describe('runImRemoteAgent', () => {
       })
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
         toolCallId,
-        reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        reason: termination === 'authorization-change' ? 'POLICY_DENY' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted',
-        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
-      })
+      expect(history.events.at(-1)).toMatchObject(termination === 'authorization-change'
+        ? { kind: 'invocation-completed', payload: { status: 'completed' } }
+        : { kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
     } finally {
       releaseClaim()
       executeBrowser.mockRestore()
@@ -3093,9 +3127,14 @@ describe('runImRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('feishu', 'run_script')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(args.requestId)
       releaseClaim()
-      if (termination === 'cancel') await expect(running).rejects.toThrow(/cancelled/i)
-      else await expect(running).rejects.toThrow(/lifecycle invalidated/i)
-      expect(providerCalls).toBe(1)
+      if (termination === 'authorization-change') {
+        await expect(running).resolves.toMatchObject({ ok: true, summary: '授权变化后脚本未执行。' })
+        expect(providerCalls).toBe(2)
+      } else {
+        if (termination === 'cancel') await expect(running).rejects.toThrow(/cancelled/i)
+        else await expect(running).rejects.toThrow(/lifecycle invalidated/i)
+        expect(providerCalls).toBe(1)
+      }
       expect(executeScript).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'approval-resolved')?.payload).toMatchObject({
@@ -3103,7 +3142,7 @@ describe('runImRemoteAgent', () => {
       })
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
         toolCallId: `feishu-run-script-${termination}`,
-        reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        reason: termination === 'authorization-change' ? 'POLICY_DENY' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -3516,16 +3555,29 @@ describe('runImRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('feishu', 'switch_work_dir')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      await expect(running).rejects.toThrow(/cancelled|lifecycle invalidated/i)
-      expect(providerCalls).toBe(1)
-      expect(executeSwitch).not.toHaveBeenCalled()
-      expect(getSession(args.db, session.id)?.workDirProfileId).toBe('current-profile')
+      if (termination === 'authorization-change') {
+        await expect(running).resolves.toMatchObject({ ok: true, summary: '准入变化后未切换工作目录。' })
+        expect(providerCalls).toBe(2)
+        expect(executeSwitch).toHaveBeenCalledOnce()
+        expect(getSession(args.db, session.id)?.workDirProfileId).toBe('target-profile')
+      } else {
+        await expect(running).rejects.toThrow(/cancelled|lifecycle invalidated/i)
+        expect(providerCalls).toBe(1)
+        expect(executeSwitch).not.toHaveBeenCalled()
+        expect(getSession(args.db, session.id)?.workDirProfileId).toBe('current-profile')
+      }
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
-      expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: `feishu-workdir-${termination}`,
-        reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
-      })
-      expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      if (termination === 'authorization-change') {
+        expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({
+          toolCallId: `feishu-workdir-${termination}`, success: true, executionOutcome: 'succeeded'
+        })
+        expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
+      } else {
+        expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
+          toolCallId: `feishu-workdir-${termination}`, reason: termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        })
+        expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      }
     } finally {
       releaseClaim()
       runtime.chatCancels.clear(requestId)
@@ -3786,13 +3838,15 @@ describe('runImRemoteAgent', () => {
     }
   })
 
-  it('Feishu Hosted history.read preserves the existing unavailable result when Remote history facts are absent', async () => {
+  it('Feishu Hosted history.read can recover prior committed Remote conversation messages', async () => {
     const previousRuntime = getDefaultAgentRuntime()
     const runtime = createDesktopAgentRuntime()
     setDefaultAgentRuntime(runtime)
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'feishu-hosted-history-read-unavailable-'))
     const args = baseArgs()
     const session = createSession(args.db, { name: 'feishu-hosted-history-read-unavailable', model: SUPPORTED_ANTHROPIC_MODEL })
+    appendMessage(args.db, { id: 'history-prior-user', sessionId: session.id, role: 'user', content: 'Schema proposal id is proposal-context-42', timestamp: 1, status: 'sent' })
+    appendMessage(args.db, { id: 'history-current-user', sessionId: session.id, role: 'user', content: 'Please apply my saved schema proposal', timestamp: 2, status: 'sent' })
     const sessionArgs = {
       ...args, sessionId: session.id, workDir,
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
@@ -3807,7 +3861,7 @@ describe('runImRemoteAgent', () => {
       runtime.modelProviders.register(route.profile, { providerId: 'feishu-history-read-unavailable-fixture', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
-          yield { type: 'tool-call', toolCallId: 'feishu-history-read-unavailable', toolName: 'history.read', input: { limit: 1 } } as const
+          yield { type: 'tool-call', toolCallId: 'feishu-history-read-unavailable', toolName: 'history.read', input: { query: 'proposal-context-42', limit: 5 } } as const
           yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
           yield { type: 'finish', reason: 'tool-calls' } as const
           return
@@ -3833,14 +3887,14 @@ describe('runImRemoteAgent', () => {
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({
         toolCallId: 'feishu-history-read-unavailable',
-        result: { success: false, error: 'History is unavailable for this session' }
+        result: { success: true, data: { entries: [expect.objectContaining({ id: 'history-prior-user', text: expect.stringContaining('proposal-context-42') })] } }
       })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
         expect(projected.find((event) => event.type === 'tool_result')?.payload).toMatchObject({
           toolUseId: 'feishu-history-read-unavailable',
-          result: { success: false, error: 'History is unavailable for this session' }
+          result: { success: true, data: { entries: [expect.objectContaining({ id: 'history-prior-user', text: expect.stringContaining('proposal-context-42') })] } }
         })
       } finally { await sink.close() }
     } finally {
@@ -4323,7 +4377,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
     }
   })
 
-  it.each(['authorization-change', 'revoke', 'cancel'] as const)('Feishu Hosted read_feishu_attachment rejects %s before dispatch claim', async (termination) => {
+  it.each(['authorization-change', 'revoke', 'cancel'] as const)('Feishu Hosted read_feishu_attachment rechecks authorization changes before dispatch claim', async (termination) => {
     const previousRuntime = getDefaultAgentRuntime()
     const runtime = createDesktopAgentRuntime()
     setDefaultAgentRuntime(runtime)
@@ -4371,7 +4425,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
           yield { type: 'finish', reason: 'tool-calls' } as const
           return
         }
-        yield { type: 'text-delta', text: '附件读取已被安全拦截。' } as const
+        yield { type: 'text-delta', text: '策略重判后允许读取。' } as const
         yield { type: 'usage', inputTokens: 1, outputTokens: 1 } as const
         yield { type: 'finish', reason: 'stop' } as const
       } })
@@ -4400,15 +4454,26 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
         expect(runtime.toolRevocations.revokeToolForLane('feishu', 'read_feishu_attachment')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
-      expect(providerCalls).toBe(1)
-      expect(executeAttachment).not.toHaveBeenCalled()
+      if (termination === 'authorization-change') {
+        await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: '策略重判后允许读取。' })
+        expect(providerCalls).toBe(2)
+        expect(executeAttachment).toHaveBeenCalledOnce()
+      } else {
+        await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
+        expect(providerCalls).toBe(1)
+        expect(executeAttachment).not.toHaveBeenCalled()
+      }
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
-      expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: `attachment-${termination}`,
-        reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
-      })
-      expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      if (termination === 'authorization-change') {
+        expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({
+          toolCallId: `attachment-${termination}`, success: true, executionOutcome: 'succeeded'
+        })
+      } else {
+        expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
+          toolCallId: `attachment-${termination}`, reason: termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        })
+        expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      }
     } finally {
       releaseClaim()
       executeAttachment.mockRestore()
@@ -4756,19 +4821,26 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
       const outcome = await observedAgent
-      expect(outcome).toHaveProperty('error')
-      expect(executeSwitch).not.toHaveBeenCalled()
-      expect(providerCalls).toBe(1)
+      if (termination === 'authorization-change') {
+        expect(outcome).toHaveProperty('value')
+        expect(providerCalls).toBe(2)
+      } else {
+        expect(outcome).toHaveProperty('error')
+        expect(providerCalls).toBe(1)
+      }
+      if (termination === 'authorization-change') expect(executeSwitch).toHaveBeenCalledOnce()
+      else expect(executeSwitch).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
-      expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: `switch-session-${termination}`,
-        reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
-      })
-      expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted',
-        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
-      })
+      if (termination === 'authorization-change') {
+        expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ success: true })
+        expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
+      } else {
+        expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
+          toolCallId: `switch-session-${termination}`, reason: termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        })
+        expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+        expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
+      }
     } finally {
       releaseClaim()
       executeSwitch.mockRestore()

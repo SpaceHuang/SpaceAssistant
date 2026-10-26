@@ -71,6 +71,8 @@ import { createListWorkDirsRegisteredTool } from './listWorkDirsRegisteredTool'
 import { skillsReadTool } from './skillsReadTool'
 import { historyReadTool } from './historyTool'
 import { toolSearchTool } from './toolSearchTool'
+import { wikiDiscoveryTool } from '../wiki/wikiToolDiscovery'
+import { createWikiDomainTools } from '../wiki/wikiDomainTools'
 import { toolkitFindTool, toolkitCallTool } from '../capabilities/toolkitTool'
 import '../capabilities/registerBuiltinCapabilities'
 
@@ -1566,6 +1568,7 @@ export async function grepFallbackJs(
   const now = deps.now ?? Date.now
   const deadline = now() + Math.max(1, timeoutMs)
   let regexWorker: Worker | undefined
+  let regexWorkerReady: Promise<Worker> | undefined
   let nextRegexJobId = 0
   let pendingRegexJob: {
     id: number
@@ -1577,6 +1580,7 @@ export async function grepFallbackJs(
   const terminateRegexWorker = (): void => {
     const worker = regexWorker
     regexWorker = undefined
+    regexWorkerReady = undefined
     if (pendingRegexJob) {
       clearTimeout(pendingRegexJob.timer)
       signal.removeEventListener('abort', pendingRegexJob.abort)
@@ -1584,12 +1588,40 @@ export async function grepFallbackJs(
     }
     if (worker) void worker.terminate()
   }
-  const scanText = (text: string, matchLimit: number, validateOnly = false): Promise<{ count: number; matches: Array<{ index: number; text: string; lineIndex?: number }> }> => {
+  const getReadyRegexWorker = (startupTimeoutMs: number): Promise<Worker> => {
+    if (regexWorker && regexWorkerReady) return regexWorkerReady
+    const worker = new Worker(GREP_REGEX_WORKER_SOURCE, { eval: true })
+    regexWorker = worker
+    regexWorkerReady = new Promise<Worker>((resolve, reject) => {
+      const startupTimer = setTimeout(() => {
+        terminateRegexWorker()
+        reject(new Error('正则搜索总时间已超时'))
+      }, startupTimeoutMs)
+      const onError = (error: Error): void => {
+        clearTimeout(startupTimer)
+        if (regexWorker === worker) {
+          regexWorker = undefined
+          regexWorkerReady = undefined
+        }
+        reject(error)
+      }
+      worker.once('error', onError)
+      worker.once('online', () => {
+        clearTimeout(startupTimer)
+        worker.off('error', onError)
+        resolve(worker)
+      })
+    })
+    return regexWorkerReady
+  }
+  const scanText = async (text: string, matchLimit: number, validateOnly = false): Promise<{ count: number; matches: Array<{ index: number; text: string; lineIndex?: number }> }> => {
     if (signal.aborted) return Promise.resolve({ count: 0, matches: [] })
     const remainingMs = deadline - now()
     if (remainingMs <= 0) return Promise.reject(new Error('正则搜索总时间已超时'))
-    regexWorker ??= new Worker(GREP_REGEX_WORKER_SOURCE, { eval: true })
-    const worker = regexWorker
+    const worker = await getReadyRegexWorker(remainingMs)
+    if (signal.aborted) return { count: 0, matches: [] }
+    const executionRemainingMs = deadline - now()
+    if (executionRemainingMs <= 0) return Promise.reject(new Error('正则搜索总时间已超时'))
     const id = ++nextRegexJobId
     return new Promise((resolve, reject) => {
       const settle = (action: () => void): void => {
@@ -1602,7 +1634,7 @@ export async function grepFallbackJs(
       const timer = setTimeout(() => {
         terminateRegexWorker()
         reject(new Error('单文件正则执行超时，已终止隔离扫描'))
-      }, Math.min(GREP_REGEX_FILE_TIMEOUT_MS, remainingMs))
+      }, Math.min(GREP_REGEX_FILE_TIMEOUT_MS, executionRemainingMs))
       const abort = (): void => {
         terminateRegexWorker()
         resolve({ count: 0, matches: [] })
@@ -2579,6 +2611,8 @@ export function createBuiltinToolRegistry(): TypedToolRegistry {
   registry.register(historyReadTool)
   // MCP 延迟加载检索元工具（只读自动放行；广告面注入由 toolsConfigRuntime 桌面 lane 门控）
   registry.register(toolSearchTool)
+  registry.register(wikiDiscoveryTool)
+  for (const tool of createWikiDomainTools()) registry.register(tool)
   // toolkit 网关：能力集合的两个稳定工具（browser_detect 已收编为 env.browserDetect 能力）
   registry.register(toolkitFindTool)
   registry.register(toolkitCallTool)

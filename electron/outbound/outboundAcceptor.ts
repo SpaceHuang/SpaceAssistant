@@ -66,6 +66,7 @@ export type OutboundClassifierIo = {
   wikiImportRaw: (payload: {
     srcRelPath: string
   }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
+  wikiImportAllRaw?: () => Promise<{ ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> } | { ok: false; error: string }>
 }
 
 /**
@@ -130,7 +131,8 @@ export async function decideOutbound(
   const wikiCmd = await parseWikiCommand(trimmed, skillsState, {
     wikiInit: io.wikiInit,
     wikiStatus: io.wikiStatus,
-    wikiImportRaw: io.wikiImportRaw
+    wikiImportRaw: io.wikiImportRaw,
+    wikiImportAllRaw: io.wikiImportAllRaw
   })
   if (wikiCmd.type === 'command') {
     return { action: 'hint-only', hint: wikiCmd.hint, ...(wikiCmd.skillsState ? { skillsState: wikiCmd.skillsState } : {}) }
@@ -195,6 +197,7 @@ export type OutboundAcceptorDeps = {
   wikiImportRaw: (payload: {
     srcRelPath: string
   }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
+  wikiImportAllRaw?: () => Promise<{ ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> } | { ok: false; error: string }>
   appendHintMessage: (sessionId: string, hint: string) => Promise<{ messageId: string; sequence: number } | void> | { messageId: string; sequence: number } | void
   updateSessionState: (
     sessionId: string,
@@ -235,7 +238,8 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
     getSkill: deps.getSkill,
     wikiInit: deps.wikiInit,
     wikiStatus: deps.wikiStatus,
-    wikiImportRaw: deps.wikiImportRaw
+    wikiImportRaw: deps.wikiImportRaw,
+    wikiImportAllRaw: deps.wikiImportAllRaw
   }
 
   const countQueued = (sessionId: string): number => sessionQueries.countQueuedMessages?.(sessionId) ??

@@ -8,6 +8,11 @@
 
 - [技能与知识-现状.md](./技能与知识-现状.md) —— **现状文档**（本次梳理时按代码新写）：Skills 安装/缓存/扫描/解析/匹配/路由、LLM Wiki 存储与挂载、项目记忆。
 
+## 在途（in-flight）
+
+- [Wiki 专属能力接口技术方案](./in-flight/wiki-domain-tools-technical-plan.md) —— Wiki 服务、工具契约、安全边界、版本/外部编辑协调、迁移与回退设计；D-TP-01 至 D-TP-05 已决定，复用现有文件存储机制。
+- [Wiki 专属能力接口执行计划](./in-flight/wiki-domain-tools-execution-plan.md) —— 对应需求 AC 的实现 DAG、阶段门禁、验证证据和发布回退顺序；尚未开始。
+
 ## 说明
 
 本主题的文档主要在**需求侧**（原 109 篇需求里有 10 篇属于此主题，全部归档），develop 侧**原先无独立文档**（原 `docs/develop/` 下无 skills/wiki 专题件）。

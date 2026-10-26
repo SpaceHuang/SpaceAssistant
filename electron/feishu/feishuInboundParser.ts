@@ -99,7 +99,9 @@ export function parseCompactInboundEvent(raw: unknown): FeishuInboundMessage | n
 
   return {
     messageId,
-    replyToMessageId: typeof r.parent_id === 'string' ? r.parent_id : typeof r.parentId === 'string' ? r.parentId : undefined,
+    replyToMessageId: typeof r.reply_to === 'string' ? r.reply_to
+      : typeof r.replyTo === 'string' ? r.replyTo
+        : typeof r.parent_id === 'string' ? r.parent_id : typeof r.parentId === 'string' ? r.parentId : undefined,
     chatId,
     chatType: String(r.chat_type ?? r.chatType ?? 'p2p'),
     senderOpenId: String(r.sender_id ?? r.sender_open_id ?? r.senderOpenId ?? ''),

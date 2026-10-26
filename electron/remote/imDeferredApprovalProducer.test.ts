@@ -519,7 +519,7 @@ describe('production IM deferred approval producer', () => {
 
   it.each([
     { label: 'sensitive script path', language: 'python', code: 'open("/etc/hosts", "r").read()', ruleId: 'script-system-dir-confirm' },
-    { label: 'dynamic execution', language: 'python', code: 'exec("print(1)")', ruleId: 'script-path-unknown-confirm' }
+    { label: 'dynamic execution', language: 'python', code: 'exec("print(1)")', ruleId: 'script-dynamic-execution-confirm' }
   ])('closes the real assembler → human-required producer → trusted reply → fenced dispatcher path for $label', async ({ label, language, code, ruleId }) => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
@@ -747,10 +747,10 @@ describe('production IM deferred approval producer', () => {
     try {
       const initialBinding = await registered.prepareTool(call, { kind: 'initial' })
       const initialGate = await evaluateToolCallGate(await agentSdk.resolveGateArgs(initialBinding, call))
-      expect(initialGate).toMatchObject({ decision: { ruleId: 'script-clean-certified-remote', answerer: 'agent' } })
+      expect(initialGate).toMatchObject({ decision: { ruleId: 'script-unmodeled-path-ask', answerer: 'agent' } })
       expect(initialGate.facts.signals).not.toContainEqual({ kind: 'script-uncertified' })
       const initialDecision = await safetyGate.evaluate(initialBinding)
-      expect(initialDecision).toMatchObject({ kind: 'ask', answerer: 'agent', reasonCode: 'script-clean-certified-remote' })
+      expect(initialDecision).toMatchObject({ kind: 'ask', answerer: 'agent', reasonCode: 'script-unmodeled-path-ask' })
       if (initialDecision.kind !== 'ask') throw new Error('EXPECTED_CERTIFIED_SCRIPT_AGENT_CANDIDATE')
       await expect(confirmation({ call, confirmationId: initialDecision.confirmationId, answerer: initialDecision.answerer,
         reasonCode: initialDecision.reasonCode, context: initialDecision.context })).resolves.toMatchObject({ kind: 'approved', answerer: 'agent' })

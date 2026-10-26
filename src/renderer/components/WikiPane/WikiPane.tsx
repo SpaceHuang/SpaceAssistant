@@ -6,6 +6,7 @@ import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { projectDisplayMap, summarizeMigrationReport } from './wikiMigrationUi'
 import { LegacyRootChips, MigrationConflictSection, MigrationFailureSection, MigrationSummary } from './wikiMigrationShared'
 import type { WikiMigrationReport } from '../../../shared/domainTypes'
+import type { WikiBootstrapMigrationPreview } from '../../../shared/domainTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './wikiPane.css'
 import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
@@ -42,6 +43,10 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
   const [extraRootsInput, setExtraRootsInput] = useState('')
   const [migrationReport, setMigrationReport] = useState<WikiMigrationReport | null>(null)
   const [projectNames, setProjectNames] = useState<ReturnType<typeof projectDisplayMap>>(new Map())
+  const [domainLifecycle, setDomainLifecycle] = useState<import('../../../shared/domainTypes').WikiStatus['domainLifecycle']>()
+  const [domainPreview, setDomainPreview] = useState<WikiBootstrapMigrationPreview | null>(null)
+  const [domainMigrationBusy, setDomainMigrationBusy] = useState(false)
+  const [domainMigrationComplete, setDomainMigrationComplete] = useState(false)
 
   const wikiIndexPath = `${wikiRoot}/wiki/index.md`
   const highlightPaths = useMemo(() => [wikiIndexPath], [wikiIndexPath])
@@ -49,6 +54,7 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
   const refreshWikiStatus = useCallback(async () => {
     const status = (await window.api.wikiStatus()) as import('../../../shared/domainTypes').WikiStatus
     setWikiInitialized(status.initialized)
+    setDomainLifecycle(status.domainLifecycle)
     setPendingMigration(
       status.pendingLegacyMigration ? { legacyRoots: status.legacyRoots ?? [] } : null
     )
@@ -128,9 +134,58 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
     void wikiTreeRef.current?.refresh()
   }
 
+  const reviewDomainMigration = async () => {
+    setDomainMigrationBusy(true)
+    try {
+      const preview = await window.api.wikiDomainMigrationPreview()
+      setDomainPreview(preview)
+    } catch (e) {
+      message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
+    } finally {
+      setDomainMigrationBusy(false)
+    }
+  }
+
+  const applyDomainMigration = async () => {
+    if (!domainPreview) return
+    setDomainMigrationBusy(true)
+    try {
+      const result = await window.api.wikiDomainMigrationApply({ manifestHash: domainPreview.manifestHash })
+      setDomainPreview(null)
+      if (result.status === 'completed') {
+        setDomainMigrationComplete(true)
+        await refreshWikiStatus()
+        void wikiTreeRef.current?.refresh()
+      }
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e)
+      if (error.includes('preflight-stale')) {
+        setDomainPreview(null)
+        message.warning(t('domainMigration.staleReview'))
+      } else {
+        message.error(formatUserFacingError(error))
+      }
+      await refreshWikiStatus()
+    } finally {
+      setDomainMigrationBusy(false)
+    }
+  }
+
   return (
     <div className="wiki-pane">
       <div className="wiki-pane-body">
+        {domainLifecycle === 'initializing' && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 8 }}
+            message={t('domainMigration.pending')}
+            action={<Button size="small" type="primary" loading={domainMigrationBusy} onClick={() => void reviewDomainMigration()}>{t('domainMigration.review')}</Button>}
+          />
+        )}
+        {domainLifecycle === 'recovery_required' && <Alert type="error" showIcon style={{ marginBottom: 8 }} message={t('domainMigration.recoveryRequired')} />}
+        {domainLifecycle === 'domain_enabled' && <Alert type="info" showIcon style={{ marginBottom: 8 }} message={t('domainEnabledNotice')} />}
+        {domainMigrationComplete && <Alert type="success" showIcon style={{ marginBottom: 8 }} message={t('domainMigration.complete')} />}
         {pendingMigration && (
           <Alert
             type="warning"
@@ -157,6 +212,7 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
             ))}
           </div>
         )}
+        {(window as Window & { api?: { wikiStatus: () => Promise<import('../../../shared/domainTypes').WikiStatus> } }).api && null}
         {wikiInitialized === false ? (
           <div className="wiki-pane-empty">
             <p className="wiki-pane-empty-title">{t('empty.title')}</p>
@@ -203,6 +259,35 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
           onChange={(e) => setExtraRootsInput(e.target.value)}
           placeholder={t('migration.extraRootsPlaceholder')}
         />
+      </Modal>
+      <Modal
+        open={domainPreview !== null}
+        title={t('domainMigration.title')}
+        confirmLoading={domainMigrationBusy}
+        onOk={() => void applyDomainMigration()}
+        onCancel={() => { if (!domainMigrationBusy) setDomainPreview(null) }}
+        okText={t('domainMigration.confirm')}
+        cancelText={t('domainMigration.cancel')}
+        okButtonProps={{ disabled: Boolean(domainPreview?.diagnostics.length) }}
+        cancelButtonProps={{ disabled: domainMigrationBusy }}
+        closable={!domainMigrationBusy}
+        maskClosable={!domainMigrationBusy}
+        width={680}
+      >
+        {domainPreview && (
+          <div style={{ maxHeight: '60vh', overflowY: 'auto', paddingRight: 8 }}>
+            <Typography.Paragraph>{t('domainMigration.summary', { files: domainPreview.files.length, changes: domainPreview.changes.length })}</Typography.Paragraph>
+            {domainPreview.resumeRequired && <Alert type="info" showIcon message={t('domainMigration.resume')} style={{ marginBottom: 12 }} />}
+            {domainPreview.files.length > 0 && <><Typography.Text strong>{t('domainMigration.files')}</Typography.Text><ul>{domainPreview.files.map(file => <li key={`${file.path}:${file.sha256}`} style={{ overflowWrap: 'anywhere' }}>{file.path} <Typography.Text type="secondary">({file.kind})</Typography.Text></li>)}</ul></>}
+            {domainPreview.changes.length > 0 && <><Typography.Text strong>{t('domainMigration.changes')}</Typography.Text><ul>{domainPreview.changes.map(change => <li key={change.relativePath} style={{ overflowWrap: 'anywhere' }}>{change.relativePath}: {change.oldHash || t('domainMigration.newFile')} → {change.newHash}</li>)}</ul></>}
+            {domainPreview.review.categories.length > 0 && <><Typography.Text strong>{t('domainMigration.categories')}</Typography.Text><ul>{domainPreview.review.categories.map(category => <li key={category.categoryId}>{category.legacyName} → {category.categoryId} ({category.status})</li>)}</ul></>}
+            {domainPreview.review.indexNotes.length > 0 && <><Typography.Text strong>{t('domainMigration.indexNotes')}</Typography.Text><ul>{domainPreview.review.indexNotes.map(note => <li key={`${note.sourcePath}:${note.targetTitle}`}>{note.sourcePath} → {note.targetTitle}</li>)}</ul></>}
+            {domainPreview.review.unclassifiedIndexContent.length > 0 && <Alert type="warning" showIcon style={{ marginTop: 8 }} message={t('domainMigration.diagnostics')} description={<ul>{domainPreview.review.unclassifiedIndexContent.map((item, index) => <li key={`${item.sourcePath}:${index}`}>{item.sourcePath}</li>)}</ul>} />}
+            {domainPreview.review.readonlyLogArchives.length > 0 && <><Typography.Text strong>{t('domainMigration.archives')}</Typography.Text><ul>{domainPreview.review.readonlyLogArchives.map(item => <li key={item.archivePath}>{item.sourcePath} → {item.archivePath}</li>)}</ul></>}
+            {domainPreview.diagnostics.length > 0 && <Alert type="error" showIcon message={t('domainMigration.diagnostics')} description={<ul>{domainPreview.diagnostics.map((diagnostic, index) => <li key={`${diagnostic.code}:${index}`}>{diagnostic.message} ({diagnostic.paths.join(', ')})</li>)}</ul>} />}
+            {!domainPreview.changes.length && !domainPreview.diagnostics.length && <Typography.Paragraph>{t('domainMigration.noChanges')}</Typography.Paragraph>}
+          </div>
+        )}
       </Modal>
       <Modal
         open={migrationReport !== null}

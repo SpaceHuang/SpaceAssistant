@@ -13,6 +13,7 @@ export interface CommitImPolicySnapshotInput {
   eventKind?: 'policy-snapshot-updated' | 'policy-snapshot-restored' | 'legacy-policy-migrated' | 'policy-behavior-version-switched'
   actor?: 'user' | 'system' | 'migration'
   auditMetadata?: Record<string, unknown>
+  onCommitted?: (domain: 'desktop' | 'im', revision: number) => void
 }
 
 export type CommitImPolicySnapshotResult =
@@ -69,6 +70,36 @@ export function readImPolicySnapshot(db: DatabaseSync, options: ReadImPolicySnap
   return readPolicyBehaviorSnapshot(db, 'im', options) as ImPolicySnapshot
 }
 
+export function commitDesktopPolicySnapshot(db: DatabaseSync, input: Omit<CommitImPolicySnapshotInput, 'eventKind'>): CommitImPolicySnapshotResult {
+  if (!input.policyBehaviorVersion.trim()) throw new Error('policyBehaviorVersion is required')
+  if (!Number.isSafeInteger(input.updatedAt) || input.updatedAt < 0) throw new Error('updatedAt must be a non-negative integer')
+  const result = runInTransaction(db, () => {
+    const current = db.prepare("SELECT revision FROM policy_behavior_snapshots WHERE domain='desktop'").get() as { revision: number } | undefined
+    const currentRevision = current?.revision ?? 0
+    if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) return { status: 'conflict', currentRevision } as const
+    input.beforeSnapshot?.()
+    const nextRevision = currentRevision + 1
+    const previous = db.prepare("SELECT policy_behavior_version,snapshot_json,updated_at FROM policy_behavior_snapshots WHERE domain='desktop'")
+      .get() as { policy_behavior_version: string; snapshot_json: string; updated_at: number } | undefined
+    if (previous) db.prepare(`INSERT OR IGNORE INTO policy_behavior_snapshot_history(history_id,domain,policy_behavior_version,snapshot_json,archived_at)
+      VALUES(?,?,?,?,?)`).run(`desktop:${currentRevision}`, 'desktop', previous.policy_behavior_version, previous.snapshot_json, previous.updated_at)
+    db.prepare(`INSERT INTO policy_behavior_snapshots(domain,policy_behavior_version,revision,snapshot_json,updated_at)
+      VALUES('desktop',?,?,?,?) ON CONFLICT(domain) DO UPDATE SET policy_behavior_version=excluded.policy_behavior_version,
+      revision=excluded.revision,snapshot_json=excluded.snapshot_json,updated_at=excluded.updated_at`)
+      .run(input.policyBehaviorVersion, nextRevision, JSON.stringify(input.snapshot), input.updatedAt)
+    db.prepare(`INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('desktop',1)
+      ON CONFLICT(domain) DO UPDATE SET epoch=policy_authorization_epochs.epoch+1`).run()
+    input.beforeAudit?.()
+    db.prepare('INSERT INTO policy_audit_events(event_id,domain,event_json) VALUES(?,?,?)')
+      .run(input.eventId, 'desktop', JSON.stringify({ kind: 'policy-snapshot-updated', policyDomain: 'desktop',
+        actor: input.actor ?? 'user', policyBehaviorVersion: input.policyBehaviorVersion,
+        previousRevision: currentRevision, policyRevision: nextRevision, updatedAt: input.updatedAt, ...input.auditMetadata }))
+    return { status: 'committed', revision: nextRevision } as const
+  })
+  if (result.status === 'committed') input.onCommitted?.('desktop', result.revision)
+  return result
+}
+
 function tableExists(db: DatabaseSync, tableName: string): boolean {
   return db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(tableName) !== undefined
 }
@@ -76,7 +107,7 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
 export function commitImPolicySnapshot(db: DatabaseSync, input: CommitImPolicySnapshotInput): CommitImPolicySnapshotResult {
   if (!input.policyBehaviorVersion.trim()) throw new Error('policyBehaviorVersion is required')
   if (!Number.isSafeInteger(input.updatedAt) || input.updatedAt < 0) throw new Error('updatedAt must be a non-negative integer')
-  return runInTransaction(db, () => {
+  const result = runInTransaction(db, () => {
     const current = db.prepare("SELECT revision FROM policy_behavior_snapshots WHERE domain='im'").get() as { revision: number } | undefined
     const currentRevision = current?.revision ?? 0
     if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) {
@@ -106,10 +137,19 @@ export function commitImPolicySnapshot(db: DatabaseSync, input: CommitImPolicySn
     // Fence the production durable approval path in the same transaction. The policy_* helper
     // tables remain a compact audit index; deferred_todos is the dispatcher source of truth.
     if (tableExists(db, 'deferred_resume_requests') && tableExists(db, 'deferred_todos')) {
+      const pendingTodos = db.prepare("SELECT todo_id FROM deferred_todos WHERE channel IN ('wechat','feishu') AND state='pending'")
+        .all() as Array<{ todo_id: string }>
+      for (const { todo_id } of pendingTodos) {
+        db.prepare(`INSERT INTO policy_deferred_todos(todo_id,domain,status) VALUES(?,'im','active')
+          ON CONFLICT(todo_id) DO UPDATE SET domain='im'`).run(todo_id)
+      }
       db.prepare(`UPDATE deferred_resume_requests SET state='invalidated',updated_at=? WHERE state='pending' AND todo_id IN (
         SELECT t.todo_id FROM deferred_todos t WHERE t.channel IN ('wechat','feishu') AND t.state='pending'
       )`).run(input.updatedAt)
       db.prepare("UPDATE deferred_todos SET state='invalidated',updated_at=? WHERE channel IN ('wechat','feishu') AND state='pending'").run(input.updatedAt)
+      db.prepare(`UPDATE policy_deferred_todos SET status='invalidated' WHERE domain='im' AND todo_id IN (
+        SELECT todo_id FROM deferred_todos WHERE channel IN ('wechat','feishu') AND state='invalidated'
+      )`).run()
     }
     input.beforeAudit?.()
     const invalidatedTodos = db.prepare("SELECT todo_id FROM policy_deferred_todos WHERE domain='im' AND status='invalidated' ORDER BY todo_id").all() as Array<{ todo_id: string }>
@@ -120,6 +160,8 @@ export function commitImPolicySnapshot(db: DatabaseSync, input: CommitImPolicySn
         invalidatedTodoIds: invalidatedTodos.map(({ todo_id }) => todo_id), updatedAt: input.updatedAt, ...input.auditMetadata }))
     return { status: 'committed', revision: nextRevision } as const
   })
+  if (result.status === 'committed') input.onCommitted?.('im', result.revision)
+  return result
 }
 
 export interface MigrateLegacyImPolicySnapshotInput {

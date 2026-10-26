@@ -93,8 +93,13 @@ import {
 import {
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
-import { computeDeferredPlan, computeEffectiveTools } from './effectiveTools'
+import { computeDeferredPlan, computeEffectiveToolsWithExposureApproval } from './effectiveTools'
+import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { requestImExposureApproval } from './remote/imIngressApprovalPrompt'
 import { requireAutomationShellWorkingDirectory } from './toolsConfigRuntime'
+import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
+import { WIKI_DOMAIN_TOOL_DEFINITIONS } from './wiki/wikiToolDiscovery'
+import type { DynamicModelTool } from './runtime/dynamicToolRequest'
 import { clearToolRevocationRequest, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildCommandRetryKey, normalizeFileToolIdentity, normalizeToolErrorClass, SemanticToolRetryTracker } from './toolErrorRetryPolicy'
 import type { ContextMeter } from '../src/shared/contextMeterService'
@@ -157,6 +162,7 @@ export type RunToolChatSessionArgs = {
     deferredUnsurfacedCheck?: (toolName: string) => boolean
     /** FR12②：广告面层被裁工具名（被拒文案区分用）。 */
     eagerBudgetDroppedNames?: ReadonlySet<string>
+    dynamicToolsForNextRequest?: () => readonly DynamicModelTool[]
     resolveRegisteredToolName: (providerToolName: string) => string
     windowId?: string
     maxToolRounds?: number
@@ -276,6 +282,8 @@ export type RunToolChatSessionArgs = {
   hostSessionMetadata?: Readonly<Record<string, unknown>>
   hostTitleSuggestions?: { schedule(input: Record<string, unknown>): void }
   hostExposureRules?: readonly import('../src/shared/confirmation/types').PolicyRule[]
+  hostResolveExposureRules?: () => import('../src/shared/confirmation/types').PolicyRule[]
+  hostResolveExposureAuthorizationVersion?: () => string
   hostMcp?: {
     snapshot: McpToolSnapshot
     resolveExecutor?(toolName: string, manager: McpConnectionManager): import('./tools/types').ToolExecutor | undefined
@@ -482,6 +490,8 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     hostSessionMetadata: ports.sessionMetadata,
     hostTitleSuggestions: ports.titleSuggestions,
     hostExposureRules: ports.exposure?.rules,
+    hostResolveExposureRules: ports.resolveExposureRules,
+    hostResolveExposureAuthorizationVersion: ports.resolveExposureAuthorizationVersion,
     hostMcp: ports.mcp as RunToolChatSessionArgs['hostMcp'],
     hostAnswerer: ports.answerer as RunToolChatSessionArgs['hostAnswerer'],
     toolsTrim: invocation.profile.tools.trim
@@ -658,6 +668,8 @@ async function runToolChatSessionInner(
     hostSessionMetadata,
     hostTitleSuggestions,
     hostExposureRules,
+    hostResolveExposureRules,
+    hostResolveExposureAuthorizationVersion,
     hostMcp,
     toolsTrim,
     reasoningEffort,
@@ -730,6 +742,23 @@ async function runToolChatSessionInner(
     const processData = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
       ? output.data as Record<string, unknown>
       : undefined
+    if (call.toolName === 'memory' && !resultIsError && Array.isArray(processData?.matches)) {
+      const definitionsByName = new Map(WIKI_DOMAIN_TOOL_DEFINITIONS.map((tool) => [tool.name, tool]))
+      for (const match of processData.matches) {
+        if (!match || typeof match !== 'object' || Array.isArray(match)) continue
+        const internalName = (match as { name?: unknown }).name
+        if (typeof internalName !== 'string') continue
+        const definition = definitionsByName.get(internalName)
+        if (!definition) continue
+        const apiName = toolIdToOpenAiCompatibleApiToolName(definition.name)
+        if (!wikiDeferredToolNames.has(apiName)) continue
+        surfacedWikiTools.set(apiName, {
+          name: apiName,
+          description: definition.description,
+          inputSchema: definition.input_schema
+        })
+      }
+    }
     // FR8/§6.4：tool_search 成功后并入命中名（surfacedNames）；延迟工具未浮现直调 → deferredUnsurfaced 观测
     if (call.toolName === 'tool_search' && !(result.isError ?? output?.success === false)) {
       const data = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
@@ -906,7 +935,7 @@ async function runToolChatSessionInner(
     mode: deferredMode,
     thresholdBytes: deferredThresholdBytes
   })
-  const effectiveTools = computeEffectiveTools({
+  const effectiveTools = await computeEffectiveToolsWithExposureApproval({
     builtinConfig: toolsConfig,
     feishuConfig,
     browserConfig,
@@ -914,14 +943,28 @@ async function runToolChatSessionInner(
     wechatConfig,
     remoteContext,
     exposureRules,
+    resolveExposureRules: hostResolveExposureRules,
+    resolveExposureAuthorizationVersion: hostResolveExposureAuthorizationVersion,
+    subscribeExposurePolicyChanges: remoteContext?.source === 'wechat' || remoteContext?.source === 'feishu'
+      ? (listener) => getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(args.requestId, remoteContext.source, listener)
+      : undefined,
     mcpSnapshot,
     trim: toolsTrim,
     deferredPlan
-  })
+  }, (request, signal) => requestImExposureApproval({ ...request, locale: payloadLocale, signal }))
   const tools = effectiveLane === 'automation'
     ? requireAutomationShellWorkingDirectory(effectiveTools.tools)
     : effectiveTools.tools
   const { toolNames, authorizedToolNames, compatToInternal, deferredToolNames } = effectiveTools
+  const wikiDeferredToolNames = new Set(toolNames.includes('memory') ? WIKI_DOMAIN_TOOL_DEFINITIONS.map((tool) => toolIdToOpenAiCompatibleApiToolName(tool.name)) : [])
+  const hostedAuthorizedToolNames = new Set([...authorizedToolNames, ...wikiDeferredToolNames])
+  const hostedDeferredToolNames = new Set([...deferredToolNames, ...wikiDeferredToolNames])
+  const hostedCompatToInternal = new Map(compatToInternal)
+  for (const tool of WIKI_DOMAIN_TOOL_DEFINITIONS) {
+    const apiName = toolIdToOpenAiCompatibleApiToolName(tool.name)
+    if (wikiDeferredToolNames.has(apiName)) hostedCompatToInternal.set(apiName, tool.name)
+  }
+  const surfacedWikiTools = new Map<string, DynamicModelTool>()
   if (effectiveTools.deferredDegradedToEager && deferredPlan.mode === 'deferred') {
     // O4（边界 11）：tool_search 被裁出广告面，延迟计划整体失效回退 eager（agentLogger warn，不进 wire 面与会话事件流）
     logAgentEvent('warn', 'mcp.deferredDegradedToEager', {
@@ -1050,13 +1093,14 @@ async function runToolChatSessionInner(
         try {
           const handoff = await args.onHostedTurnHandoff({
             request: canonicalRequest,
-            authorizedToolNames,
-            resolveRegisteredToolName: (providerToolName) => compatToInternal.get(providerToolName) ?? providerToolName,
+            authorizedToolNames: hostedAuthorizedToolNames,
+            deferredToolNames: hostedDeferredToolNames,
+            dynamicToolsForNextRequest: () => [...surfacedWikiTools.values()],
+            resolveRegisteredToolName: (providerToolName) => hostedCompatToInternal.get(providerToolName) ?? providerToolName,
             afterToolResult,
             beforeToolDispatch,
             beforeDispatchLease,
-            // FR3/A 方案：延迟名随依赖传入，capabilities.define 并入 known + authorized（门禁簿记，零上下文成本）
-            deferredToolNames,
+            // FR3/A 方案：MCP 与已准入 Wiki 延迟名进入 capabilities 的 known/authorized 投影。
             deferredUnsurfacedCheck,
             // FR8：延迟维度（turn 计量；索引每轮重发，节省量按轮落日志）
             ...(deferredToolNames.size > 0 && mcpCatalog && deferredPlan.mode === 'deferred'

@@ -47,6 +47,7 @@ import { SYSTEM_INVARIANT_ID_BY_GATE_RULE } from '../../src/shared/security/syst
 import type { AutomationRunOutputScope, TargetBinding } from '../../src/shared/automationTaskTypes'
 import { matchesAutomationRunOutputWriteTarget, matchesBoundOutputWriteTarget } from '../butler/taskOutputDirectory'
 import { matchAutomationResultWritePermission } from '../butler/automationTaskPermissionMatch'
+import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
 
 /**
  * T1.2/T1.3：以 resolveWikiMount 为本次路径入参构造探测锚点与敏感根豁免。
@@ -165,11 +166,15 @@ export interface ToolCallGateArgs {
   wechatConfig?: WeChatConfig
   /** Canonical shared IM policy snapshot loaded from the main-process policy store. */
   imPolicySnapshot?: import('../remote/remoteToolPolicy').RemoteSecurityPolicyConfig['policySnapshot']
+  /** Versioned authorization identity for the lane's persisted policy domain. */
+  policyBinding?: { domain: 'desktop' | 'im' | 'automation'; policyBehaviorVersion: string; revision: number; epoch: number }
   /** Host-resolved provenance for the MCP query/data scope; never read from model arguments. */
   mcpQuerySource?: 'public' | 'local-sensitive' | 'unknown'
   /** Host-resolved permission for the configured MCP account and referenced data scope. */
   mcpAccountAuthorization?: 'authorized' | 'unauthorized' | 'unknown'
   wikiConfig?: WikiConfig
+  /** Action class from the host's registered tool contract for dynamically discovered tools. */
+  registeredActionClass?: import('../../src/shared/confirmation/types').ActionClass
   /** 装配期解析的生效规则集（B1：必填，缺料 fail-loud，不回退内置默认规则）。 */
   effectiveRules: PolicyRule[]
   /** Trusted disabled locked-deny IDs loaded from persisted security settings. */
@@ -354,7 +359,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
 
   // ===== P3 底线校验（§7.1 判据 2）：传入规则集相对 locked 底线可收紧不可放宽 =====
   // 违规 → 拒绝本次工具调用 + cause=rules-violated 审计（与正常拒绝、缺料失败互斥不混计）
-  const floorCheck = validatePolicyRulesFloor(args.effectiveRules, undefined, args.disabledPolicyRuleIds)
+  const floorCheck = validatePolicyRulesFloor(args.effectiveRules)
   if (!floorCheck.ok) {
     result.decision = {
       type: 'deny',
@@ -407,10 +412,13 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     for (const literal of pathLiterals) {
       const expanded = literal.replace(/^~(?=$|[\\/])/, home).replace(/\$\{?HOME\}?/g, home).replace(/%USERPROFILE%/ig, home)
       try {
-        const fact = await probeWritePathFact({ rawPath: expanded, workDir: args.workDir, workDirs: args.taskWorkDirs, userDataDir: args.userDataDir, homeDir: home, customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [] })
+        const wikiProbe = wikiProbeContext(args, expanded)
+        const fact = await probeWritePathFact({ rawPath: expanded, workDir: args.workDir, workDirs: args.taskWorkDirs, userDataDir: args.userDataDir, homeDir: home,
+          customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [], mountAnchors: wikiProbe.mountAnchors,
+          sensitiveRootExemptions: wikiProbe.sensitiveRootExemptions })
         if (uniquePaths.has(fact.normalizedPath)) continue
         uniquePaths.add(fact.normalizedPath)
-        shellPathSignals.push({ kind: 'path-target', path: fact.normalizedPath, zone: fact.zone })
+        shellPathSignals.push({ kind: 'path-target', path: fact.vocabularyPath ?? fact.normalizedPath, zone: fact.zone })
       } catch {
         shellPathProbeFailed = true
       }
@@ -895,6 +903,14 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           ...(lane === 'feishu' && args.remoteContext?.authOwner ? { trustedFeishuActorOpenId: args.remoteContext.authOwner } : {})
         })
       }
+    } else if (args.registeredActionClass) {
+      facts = {
+        toolName: args.toolName,
+        actionClass: args.registeredActionClass,
+        baseRiskLevel: args.registeredActionClass === 'read' ? 'low' : args.registeredActionClass === 'write' ? 'medium' : 'high',
+        signals: [],
+        summary: { text: `${args.toolName} 已由注册契约声明为 ${args.registeredActionClass}` }
+      }
     } else {
       // 未注册工具：信息不足，默认表兜底（execute/write → ask）
       facts = {
@@ -936,6 +952,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   if (args.toolName === 'run_script' && facts && lane === 'automation') {
     const observedPaths = facts.signals.flatMap((signal) => signal.kind === 'path-target' ? [signal.path] : [])
     facts.signals.push({ kind: 'automation-script-permission', status: matchAutomationScriptPermission(args.taskAccessPermissions, args.workDir, observedPaths) ? 'matched' : 'missing' })
+  }
+  // facts: report whether this generic filesystem invocation targets the mounted Wiki and whether its lifecycle is enabled.
+  if (facts && args.wikiConfig && ['read_file', 'list_directory', 'grep', 'write_file', 'edit_file', 'run_shell'].includes(args.toolName)) {
+    const rawPaths = args.toolName === 'run_shell'
+      ? shellPathSignals.flatMap((signal) => signal.kind === 'path-target' ? [signal.path] : [])
+      : [extractPathField(args.toolInput)].filter((value): value is string => typeof value === 'string' && value.length > 0)
+    const mounts = rawPaths.map((rawPath) => resolveWikiMount(args.workDir, args.wikiConfig!, args.userDataDir, rawPath)).filter((mount) => mount.mounted)
+    if (mounts.length) {
+      facts.signals.push({ kind: 'wiki-managed-target' })
+      const lifecycle = await createWikiLifecycleController(mounts[0]!.realBase).read().catch(() => undefined)
+      if (lifecycle?.lifecycle === 'domain_enabled') facts.signals.push({ kind: 'wiki-domain-enabled' })
+    }
   }
   // ===== R5：shell unsupported 事实下传（gate 层零特例——不派发 desktop 规则，照常进引擎）=====
   if (args.toolName === 'run_shell' && result.shellPrecheck) {
@@ -1185,14 +1213,16 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     })
   } else if (args.phase !== 'recheck' && readPathFact && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
-    const registered = registry.register({
+    const registration = {
       requestId: args.requestId ?? args.sessionId,
       toolUseId: args.toolUseId ?? args.toolName,
       inputDigest: readInputDigest(args.toolInput),
       factIds: [`fact-${readPathFact.normalizedPath}`],
       ruleId: decision.ruleId,
       expiresAt: Date.now() + (decision.timeoutMs ?? DEFAULT_USER_CONFIRMATION_TIMEOUT_MS)
-    })
+    }
+    // policy: deferred re-evaluation may reuse the original live registration only when every bound fact is unchanged.
+    const registered = registry.register(registration) || registry.matchesPending(registration)
     if (!registered) decision = { type: 'deny', ruleId: 'read-confirmation-registration-failed', reason: '无法建立本次读取确认登记，已阻止执行' }
   }
 
@@ -1203,14 +1233,16 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     if (decision.type === 'auto-allow') result.approvedFactIds = [readTarget]
     else if (decision.type === 'require-confirm') {
       const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
-      const registered = registry.register({
+      const registration = {
         requestId: args.requestId ?? args.sessionId,
         toolUseId: args.toolUseId ?? args.toolName,
         inputDigest: readInputDigest(args.toolInput),
         factIds: [factId],
         ruleId: decision.ruleId,
         expiresAt: Date.now() + (decision.timeoutMs ?? DEFAULT_USER_CONFIRMATION_TIMEOUT_MS)
-      })
+      }
+      // policy: attachment confirmation follows the same exact-registration rule as file reads.
+      const registered = registry.register(registration) || registry.matchesPending(registration)
       if (!registered) decision = { type: 'deny', ruleId: 'read-confirmation-registration-failed', reason: '无法建立本次附件读取确认登记，已阻止执行' }
     }
   }
@@ -1292,7 +1324,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     completeness: reportedSnapshotCompleteness,
     evidenceReferences: [],
     environmentVersion: `${env.os}:${env.workDir}`,
-    policyVersion: args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
+    policyVersion: args.policyBinding?.policyBehaviorVersion ?? args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
     factsRevision: args.phase === 'recheck' ? 2 : 1,
     previousFactsRevision: 0
   })
@@ -1302,8 +1334,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     decision, invocationId: args.requestId ?? args.sessionId, toolUseId: args.toolUseId ?? args.requestId ?? args.sessionId,
     factsId: factsSnapshot.factId, factsDigest: factsSnapshot.factsHash, extractorVersion: factsSnapshot.extractorVersion,
     factsRevision: factsSnapshot.factsRevision, policyDomain, tier: lanePackage,
-    policyVersion: args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
-    policyRevision: args.imPolicySnapshot?.revision ?? 0, policyLane: lane, rules,
+    policyVersion: args.policyBinding?.policyBehaviorVersion ?? args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
+    policyRevision: args.policyBinding?.revision ?? args.imPolicySnapshot?.revision ?? 0, policyLane: lane, rules,
     dependencyRules: selectPolicyDependencyRules({
       rules,
       matchingRuleIds: rules.filter((rule) => rule.when === 'invocation' && ruleMatchesInvocation(rule,
@@ -1326,7 +1358,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         }
       } : {})
     }, migrationComplete: deps.migrationComplete,
-    disabledRuleIds: args.disabledPolicyRuleIds ?? []
+    disabledRuleIds: []
   })
   if (result.readExecutionPermit) {
     result.readExecutionPermit = buildReadExecutionPermit({
@@ -1341,7 +1373,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     event: 'policy.decision',
     lane,
     ...(lane === 'wechat' || lane === 'feishu' ? { policyDomain: 'im' as const } : { policyDomain: 'desktop' as const }),
-    ...(args.imPolicySnapshot ? { policyBehaviorVersion: args.imPolicySnapshot.policyBehaviorVersion, policyRevision: args.imPolicySnapshot.revision } : {}),
+    ...(args.policyBinding ? { policyDomain, policyBehaviorVersion: args.policyBinding.policyBehaviorVersion,
+      policyRevision: args.policyBinding.revision, policyEpoch: args.policyBinding.epoch } :
+      args.imPolicySnapshot ? { policyBehaviorVersion: args.imPolicySnapshot.policyBehaviorVersion, policyRevision: args.imPolicySnapshot.revision } : {}),
     factsCompleteness,
     factsSnapshotId: factsSnapshot.factId,
     extractorVersion: factsSnapshot.extractorVersion,

@@ -13,7 +13,7 @@ import { runToolChatSession, DESKTOP_TOOL_LOOP_MAX_ROUNDS } from './toolChatLoop
 import { assembleInvocation } from './runtime/invocationAssembler'
 import { createAgentSdkSessionEventProjector } from './runtime/agentSdkSessionEventProjection'
 import { isAppLocale } from '../src/shared/locale'
-import { buildApprovalTaskEvidence } from '../src/shared/approvalTaskDigest'
+import { buildApprovalConversationContext, buildApprovalTaskEvidence } from '../src/shared/approvalTaskDigest'
 import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
 import { MAX_CHAT_API_CONTENT_BLOCKS, MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
 import { trimClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
@@ -359,12 +359,16 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         eventTurnId = turnId
         const session = sessionStorage.queries.readSession(sessionId)
         if (session) {
-          if (sessionStorage.ensureLedgerReady && !(await sessionStorage.ensureLedgerReady(sessionId))) throw new Error('SESSION_LEDGER_BLOCKED')
-          eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt)
-          await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
-          // reset 后 marker 的 output window 不再等于 sessionId；台账读取必须消费完整提交链。
-          const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath)
-          for (const marker of committedMarkers) deps.turnRuntime.consumeForRequest(requestId, { type: 'compaction-committed', ...marker }, turnId)
+          const ledgerReady = !sessionStorage.ensureLedgerReady || await sessionStorage.ensureLedgerReady(sessionId)
+          // SQLite History is canonical. If its JSONL projection is degraded, keep the
+          // desktop turn on full canonical context and omit ledger-dependent compaction.
+          if (ledgerReady) {
+            eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt)
+            await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
+            // reset 后 marker 的 output window 不再等于 sessionId；台账读取必须消费完整提交链。
+            const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath)
+            for (const marker of committedMarkers) deps.turnRuntime.consumeForRequest(requestId, { type: 'compaction-committed', ...marker }, turnId)
+          }
         }
         const frozen = authoritative.executionConfig
         if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')
@@ -484,6 +488,9 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         const approvalTaskEvidence = buildApprovalTaskEvidence(
           authoritative.messages.find((m) => m.id === authoritative.currentUserMessageId)?.content ?? ''
         )
+        // facts/context boundary: prior visible user/assistant text only helps resolve follow-up references;
+        // approvalAgent renders it inside the untrusted evidence fence and never treats it as authorization.
+        const approvalConversationContext = buildApprovalConversationContext(authoritative.messages, authoritative.currentUserMessageId)
 
         const { invocation: turnInvocation, ports: turnPorts, agentSdk } = assembleInvocation({
           requestId,
@@ -520,6 +527,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           // §6 桌面授权证据：当前 turn 用户消息摘要进审批线索包「已声明的任务」段
           approvalTaskDigest: approvalTaskEvidence.digest,
           approvalTaskDigestTruncated: approvalTaskEvidence.truncated,
+          ...(approvalConversationContext ? { approvalConversationContext } : {}),
           workDir: sessionWorkDir,
           ...(deps.getWorkDirManager ? { workDirManager: deps.getWorkDirManager() } : {}),
           userDataDir,

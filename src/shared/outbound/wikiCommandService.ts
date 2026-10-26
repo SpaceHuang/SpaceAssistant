@@ -16,7 +16,8 @@ export type WikiCommandDeps = {
   wikiStatus: () => Promise<WikiStatus>
   wikiImportRaw: (payload: {
     srcRelPath: string
-  }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
+  }) => Promise<{ ok: true; rawRelPath: string; copied: boolean; sourceId?: string; sourceRevision?: number } | { ok: false; error: string }>
+  wikiImportAllRaw?: () => Promise<{ ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }>; remainingCount?: number } | { ok: false; error: string }>
 }
 
 const WIKI_SKILL = WIKI_VOCABULARY_PREFIX
@@ -92,10 +93,14 @@ export async function parseWikiCommand(
       return { type: 'command', hint: '[Wiki] 用法: /wiki ingest|摄取|提取 <workDir内路径> 或 /wiki ingest --all' }
     }
     if (target === '--all') {
+      if (!deps.wikiImportAllRaw) return { type: 'command', hint: '[Wiki] 批量来源导入不可用，请升级应用后重试' }
+      const imported = await deps.wikiImportAllRaw()
+      if (!imported.ok) return { type: 'command', hint: `[Wiki] 批量来源导入失败: ${imported.error}` }
+      if (!imported.sources.length) return { type: 'command', hint: '[Wiki] 当前工作目录没有可导入的文本来源' }
       return {
         type: 'run',
-        text: '请对 raw/ 下尚未 ingest 的文件执行 Wiki Ingest 工作流（批量上限见配置）。',
-        hint: '[Wiki] Ingest 已开始：--all',
+        text: `请通过 memory.wiki_read_source 读取并整理以下已绑定来源，再通过 memory.wiki_save_page 保存知识页面。\n${imported.sources.map(source => `- sourceId=${source.sourceId} sourceRevision=${source.sourceRevision} displayName=${source.displayName}`).join('\n')}`,
+        hint: `[Wiki] 已绑定 ${imported.sources.length} 个知识来源${imported.remainingCount ? `，还有 ${imported.remainingCount} 个待后续批次导入` : ''}，Ingest 已开始`,
         skillsState,
         wikiModeActive: true
       }
@@ -105,14 +110,15 @@ export async function parseWikiCommand(
     if (!importResult.ok) {
       return { type: 'command', hint: `[Wiki] ${importResult.error}` }
     }
+    if (!importResult.sourceId || !importResult.sourceRevision) return { type: 'command', hint: '[Wiki] 来源绑定未完成，无法启动领域 Ingest；请检查 Wiki 服务状态后重试' }
 
-    const rawPath = importResult.rawRelPath
+    const sourceId = importResult.sourceId
     return {
       type: 'run',
-      text: `请对 raw 文件「${rawPath}」执行 Wiki Ingest 工作流。`,
+      text: `请通过 memory.wiki_read_source 读取并整理来源 sourceId=${sourceId}，再通过 memory.wiki_save_page 保存知识页面。来源版本为 ${importResult.sourceRevision}。`,
       hint: importResult.copied
-        ? `[Wiki] 已导入 raw：${rawPath}，Ingest 已开始`
-        : `[Wiki] Ingest 已开始：${rawPath}`,
+        ? `[Wiki] 已绑定知识来源，Ingest 已开始：${sourceId}`
+        : `[Wiki] 已绑定现有知识来源，Ingest 已开始：${sourceId}`,
       skillsState,
       wikiModeActive: true
     }

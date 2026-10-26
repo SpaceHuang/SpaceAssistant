@@ -342,6 +342,9 @@ describe('run_lark_cli planned registration', () => {
     const responses = [chunks(
       { type: 'tool-call', toolCallId: 'lark-auth-change', toolName: 'run_lark_cli', input: { args: ['doc', 'get'] } },
       { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ), chunks(
+      { type: 'text-delta', text: '授权已变化，命令未执行。' },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
     )]
     let providerCalls = 0
     providers.register(route, { providerId: 'feishu-auth-fake', stream: () => { providerCalls += 1; return responses.shift()! } })
@@ -357,10 +360,10 @@ describe('run_lark_cli planned registration', () => {
     expect(run).not.toHaveBeenCalled()
     authorizationVersion = 'rule-v2'
     releaseClaim()
-    await expect(turn).rejects.toThrow('AUTHORIZATION_STALE')
+    await expect(turn).resolves.toMatchObject({ text: '授权已变化，命令未执行。' })
     expect(run).not.toHaveBeenCalled()
-    expect(providerCalls).toBe(1)
+    expect(providerCalls).toBe(2)
     expect(admission.activeLeaseCount('r')).toBe(0)
-    expect((await history.read('inv-feishu-auth-change')).events).toContainEqual(expect.objectContaining({ kind: 'invocation-failed' }))
+    expect((await history.read('inv-feishu-auth-change')).events).toContainEqual(expect.objectContaining({ kind: 'invocation-completed' }))
   })
 })

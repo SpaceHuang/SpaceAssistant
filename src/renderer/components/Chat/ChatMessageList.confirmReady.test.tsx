@@ -8,6 +8,7 @@ import { completedAssistantMessage, streamingAssistantMessage } from './testUtil
 import { toTurnDisplay } from '../../../shared/turnDisplayProtocol'
 import { useTurnDisplay } from '../../hooks/useTurnDisplay'
 import type { AssistantActivityItem } from '../../../shared/assistantActivityTimeline'
+import { resolveMessageToolsInteractive } from '../../services/resolveMessageToolsInteractive'
 
 /**
  * J-03（docs/develop/chat-message-list-streaming-jitter-fix-plan.md）：
@@ -20,6 +21,7 @@ type BubbleProps = {
   message: Message
   displayActivity?: AssistantActivityItem[]
   confirmationReadyByToolId?: Record<string, boolean | undefined>
+  toolsInteractive?: { requestId: string }
 }
 
 const bubblePropsLog: BubbleProps[] = []
@@ -172,6 +174,36 @@ describe('ChatMessageList confirmationReadyByToolId stability', () => {
     expect('tool-1' in (received ?? {})).toBe(true)
     expect(received?.['tool-1']).toBeUndefined()
     expect(received?.['tool-1']).not.toBe(false)
+  })
+
+  it('终态消息即使残留 pending item 也不渲染可交互确认卡', () => {
+    const cancelled = streamingAssistantMessage({
+      id: 'm-cancelled',
+      status: 'cancelled',
+      toolCalls: [{ id: 'tool-1', toolName: 'memory_wiki_restore_page', input: {}, status: 'confirming', riskLevel: 'medium' }]
+    })
+    const stalePending = makeItem({ requestId: 'r1', assistantMessageId: cancelled.id })
+
+    render(
+      <ChatMessageList
+        messages={[cancelled]}
+        pendingConfirmItems={[stalePending]}
+        confirmationReadyBySession={{}}
+        actions={undefined}
+        resolveToolsInteractive={(message) => resolveMessageToolsInteractive({
+          message,
+          sessionId: message.sessionId,
+          pendingItems: [stalePending],
+          streamingRequestId: null
+        })}
+        showArchiveToWiki={() => false}
+        canRetry={() => false}
+        canCancelQueued={() => false}
+      />
+    )
+
+    expect(lastBubbleProps().message.toolCalls?.[0]?.status).toBe('failed')
+    expect(lastBubbleProps().toolsInteractive).toBeUndefined()
   })
 
   it('bounded display 更新已有工具记录时保留审批 Agent 标记', () => {

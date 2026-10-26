@@ -7,6 +7,7 @@ import type {
   AgentNotifyEvent
 } from '../../src/shared/agent/invocation'
 import type { AgentHostPorts } from '../../packages/agent-sdk/src/invocation'
+import { withDynamicToolsObserver, type DynamicModelTool } from './dynamicToolRequest'
 import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../../src/shared/agent/invocation'
 import type { FloatingNotificationManager } from '../floatingNotificationManager'
 import { readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
@@ -18,7 +19,7 @@ import { readStoredModels } from '../llmServiceResolver'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { AppDatabase } from '../database'
 import { readRemoteTrackFeatureGates } from '../remote/remoteTrackFeatureGates'
-import { readImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { readImPolicySnapshot, readPolicyBehaviorSnapshot } from '../confirmation/imPolicyStore'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { recordStepUsage, recordTurnSummary } from '../usageStats/usageStatsRecorder'
 import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
@@ -141,6 +142,8 @@ export interface AgentInvocationMaterials {
   maxToolLoopRounds?: number
   approvalTaskDigest?: string
   approvalTaskDigestTruncated?: boolean
+  /** 有界前序会话摘录，仅供安全审批解析 follow-up 指代；不形成授权。 */
+  approvalConversationContext?: string
   remoteContext?: import('../tools/types').RemoteContext
   /** Generic remote activity signal; generated answer text remains staged until terminal acceptance. */
   onRemoteTextActivity?: (text: string) => void
@@ -177,6 +180,8 @@ export interface AgentInvocationMaterials {
   getBrowserDetectContext?: () => import('../../src/shared/browserTypes').BrowserDetectContext
   /** P3：父调用的规则集上界（嵌套调用取交集；放行集合只收窄，授权不继承）。 */
   policyRuleFloor?: import('../../src/shared/confirmation/types').PolicyRule[]
+  /** Live parent policy floor; unlike policyRuleFloor this may refresh after a policy revision. */
+  resolvePolicyRuleFloor?: () => import('../../src/shared/confirmation/types').PolicyRule[]
   /** P7（偏差 16）：本次调用的工具裁剪声明（allow 封闭集 / deny）。 */
   toolsTrim?: { allow?: readonly string[]; deny?: readonly string[] }
   /** P7：父调用的工具裁剪上界（嵌套取交集；违规 = 装配期拒绝）。 */
@@ -343,7 +348,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       policy: ReturnType<typeof createAgentSdkSafetyPolicy>
       confirmation: ReturnType<typeof createAgentSdkConfirmationPort>
       host: ReturnType<typeof createHostedAgentTurnHost>
-      executeDeferred(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string): Promise<unknown>
+      executeDeferred(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string, confirmationPolicyRevision?: string): Promise<unknown>
       dispose(): Promise<void>
     }
   }
@@ -533,8 +538,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const withOrigin = db
     ? resolveEffectivePolicyRulesWithOrigin(db, materialsLane)
     : { rules: DEFAULT_POLICY_RULES as import('../../src/shared/confirmation/types').PolicyRule[], origins: {} as Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>, disabledRuleIds: [] }
-  const effectiveRules = materials.policyRuleFloor
-    ? intersectPolicyRulesWithFloor(withOrigin.rules, materials.policyRuleFloor)
+  const initialPolicyRuleFloor = materials.resolvePolicyRuleFloor?.() ?? materials.policyRuleFloor
+  const effectiveRules = initialPolicyRuleFloor
+    ? intersectPolicyRulesWithFloor(withOrigin.rules, initialPolicyRuleFloor)
     : withOrigin.rules
   // 档位来源：显式声明（无库宿主 / 测试收紧）优先；有库宿主读实际配置；否则 standard
   const explicitLanePackage = (materials as { policyLanePackage?: import('../../src/shared/policy/policyPackages').PolicyPackage })
@@ -547,6 +553,19 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     } catch {
       return { invalid: true as const }
     }
+  }
+  const currentPolicyBinding = (): { domain: 'desktop' | 'im'; policyBehaviorVersion: string; revision: number; epoch: number } | undefined => {
+    if (!db) return undefined
+    if (materialsLane === 'automation') return undefined
+    const domain: 'desktop' | 'im' = materialsLane === 'wechat' || materialsLane === 'feishu' ? 'im' : 'desktop'
+    try {
+      const snapshot = readPolicyBehaviorSnapshot(getDbConnection(db), domain, {
+        supportedBehaviorVersions: domain === 'im' ? ['im-v1.6', 'im-standard-v2'] : ['desktop-v1']
+      })
+      const epochRow = getDbConnection(db).prepare('SELECT epoch FROM policy_authorization_epochs WHERE domain=?').get(domain) as { epoch: number } | undefined
+      if (!epochRow || !Number.isSafeInteger(epochRow.epoch)) return undefined
+      return { domain, policyBehaviorVersion: snapshot.policyBehaviorVersion, revision: snapshot.revision, epoch: epochRow.epoch }
+    } catch { return undefined }
   }
   const resolveLanePackage = () => {
     const legacyPackage = db ? readPolicyPackages(db)[materialsLane] ?? 'standard' : 'standard'
@@ -562,20 +581,21 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     const currentOrigin = db
       ? resolveEffectivePolicyRulesWithOrigin(db, materialsLane)
       : { rules: DEFAULT_POLICY_RULES as import('../../src/shared/confirmation/types').PolicyRule[], origins: {} as Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>, disabledRuleIds: [] }
-    const currentRules = materials.policyRuleFloor
-      ? intersectPolicyRulesWithFloor(currentOrigin.rules, materials.policyRuleFloor)
+    const currentParentFloor = materials.resolvePolicyRuleFloor?.() ?? materials.policyRuleFloor
+    const currentRules = currentParentFloor
+      ? intersectPolicyRulesWithFloor(currentOrigin.rules, currentParentFloor)
       : currentOrigin.rules
     const currentLanePackage = explicitLanePackage ?? resolveLanePackage()
     const version = createHash('sha256').update(JSON.stringify({
       effectiveRules: currentRules,
       lanePackage: currentLanePackage,
       policyOrigins: currentOrigin.origins,
-      imPolicyBinding: currentImPolicyBinding()
+      policyBinding: currentPolicyBinding()
     })).digest('hex')
     return { effectiveRules: currentRules, lanePackage: currentLanePackage, policyOrigins: currentOrigin.origins, disabledRuleIds: currentOrigin.disabledRuleIds, authorizationVersion: version }
   }
   const currentAuthorization = resolveCurrentAuthorization()
-  const authorizationVersion = currentAuthorization.authorizationVersion
+  let authorizationVersion = currentAuthorization.authorizationVersion
   const policy = db
     ? {
         effectiveRules,
@@ -622,6 +642,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     }
   }
   // 暴露面规则与门控同源同判（P3：带来源解析；嵌套交集同样适用）
+  // Host-only live policy readers are attached outside the serializable SDK contract.
   const exposure = db ? { rules: effectiveRules } : undefined
   // FR11（评审 P1 修复）：装配器先读档位再建快照——auto/always 档按偏执上限（512/1 MiB）准入，
   // off 档走现状路径（64/96 KiB 裁剪，10.1.1 逐字节兼容）。档位与 toolChatLoop 的 plan 计算同源
@@ -749,7 +770,14 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     if (!call) throw new Error('AGENT_SDK_GATE_PREPARED_CALL_REQUIRED')
     if (call.invocationId !== binding.invocationId || call.toolCallId !== binding.toolCallId) throw new Error('AGENT_SDK_GATE_CALL_BINDING_MISMATCH')
     const toolName = resolveAgentSdkToolName(call.toolName)
+    const registeredTool = getDefaultAgentRuntime().builtinRegistry.get(toolName)
     const current = resolveCurrentAuthorization()
+    // Every hosted gate evaluation is a fresh policy checkpoint. If an old permit was
+    // invalidated before dispatch, the SDK may evaluate the same proposal again under
+    // the new rules; subsequent model turns must use that checkpoint as their baseline.
+    // A later change still invalidates the invocation because it will differ from this
+    // most recently evaluated policy version.
+    authorizationVersion = current.authorizationVersion
     const currentBrowserConfig = binding.phase === 'recheck' ? materials.resolveBrowserConfig?.() ?? materials.browserConfig : materials.browserConfig
     const browserFacts = await resolveHostedBrowserGateFacts({
       sessionId: materials.sessionId,
@@ -810,6 +838,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(materials.feishuConfig !== undefined ? { feishuConfig: materials.feishuConfig } : {}),
       ...(materials.wechatConfig !== undefined ? { wechatConfig: materials.wechatConfig } : {}),
       ...(imPolicySnapshot ? { imPolicySnapshot } : {}),
+      ...(currentPolicyBinding() ? { policyBinding: currentPolicyBinding() } : {}),
       ...(currentWikiConfig !== undefined ? { wikiConfig: currentWikiConfig } : {}),
       effectiveRules: current.effectiveRules,
       disabledPolicyRuleIds: current.disabledRuleIds,
@@ -837,6 +866,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         }, profiles)
         return [{ kind: 'workdir-profile-target', status: status ?? 'unknown' }]
       } } : {}),
+      ...(registeredTool && (registeredTool as { actionClass?: string }).actionClass
+        ? { registeredActionClass: (registeredTool as { actionClass: 'read' | 'write' | 'execute' | 'outbound' }).actionClass }
+        : {}),
       ...(supplement ?? {})
     }
   }
@@ -856,6 +888,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput } as const
           const metadata: Record<string, unknown> = {
             decisionRuleId: result.decision.ruleId,
+            policyFactsHash: createHash('sha256').update(JSON.stringify(result.facts)).digest('hex'),
             fileAutoApproved: result.fileAutoApproved === true,
             ...(result.fileAutoApproved === true && (args.toolName === 'write_file' || args.toolName === 'edit_file')
               ? { autoApprovedWrite: { path: typeof args.toolInput.path === 'string' ? args.toolInput.path : '', stats: 'pending' } }
@@ -1048,6 +1081,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(materials.deadlineAt !== undefined ? { deadlineAt: materials.deadlineAt } : {}),
         ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),
         ...(materials.approvalTaskDigestTruncated ? { taskDigestTruncated: true } : {}),
+        ...(materials.approvalConversationContext ? { conversationContext: materials.approvalConversationContext } : {}),
         ...(materials.taskAccessPermissions?.authorizationRecord ? { taskAuthorizationRecord: materials.taskAccessPermissions.authorizationRecord } : {}),
         invokeApproval: (invocation) => {
           if (!db) return Promise.resolve({ ok: false as const, cause: 'unavailable' as const })
@@ -1055,7 +1089,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             db,
             sessionStorage: sessionStorage!,
             ...(materials.historyForSession ? { historyForSession: materials.historyForSession } : {}),
-            policyRuleFloor: materials.policyRuleFloor ?? effectiveRules,
+            policyRuleFloor: resolveCurrentAuthorization().effectiveRules,
+            resolvePolicyRuleFloor: () => resolveCurrentAuthorization().effectiveRules,
             workDir: materials.resolveWorkDir?.() ?? materials.workDir,
             ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
             ...(materials.taskAccessPermissions !== undefined ? { taskAccessPermissions: materials.taskAccessPermissions } : {}),
@@ -1120,6 +1155,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       })
       return createAgentSdkConfirmationPort({
       ...confirmationAdapter,
+      subscribeAuthorizationChange: confirmationAdapter.subscribeAuthorizationChange ?? ((call, listener) =>
+        getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(call.invocationId, materialsLane, listener)),
+      currentAuthorizationVersion: confirmationAdapter.currentAuthorizationVersion ?? (() => resolveCurrentAuthorization().authorizationVersion),
       fallback: confirmationAdapter.fallback ?? (async (call, confirmation, context, primaryOutcome) => {
         if (!shouldFallbackToUser({
           lane: materialsLane,
@@ -1259,6 +1297,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       deferredUnsurfacedCheck?: (toolName: string) => boolean
       /** FR12②：广告面层被裁工具名（computeEffectiveTools.eagerBudgetDropped），与快照层合并进被拒文案区分。 */
       eagerBudgetDroppedNames?: ReadonlySet<string>
+      dynamicToolsForNextRequest?: () => readonly DynamicModelTool[]
       resolveRegisteredToolName?: (providerToolName: string) => string
     }) => {
       const currentMcpSnapshot = ports.mcp?.snapshot as McpToolSnapshot | undefined ?? mcpSnapshot
@@ -1321,7 +1360,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
         ...(input.beforeToolDispatch ? { beforeToolDispatch: input.beforeToolDispatch } : {}),
         ...(input.beforeDispatchLease ? { beforeDispatchLease: input.beforeDispatchLease } : {}),
-        observer: ports.observer,
+        observer: input.dynamicToolsForNextRequest
+          ? withDynamicToolsObserver(ports.observer, input.dynamicToolsForNextRequest)
+          : ports.observer,
         recordProviderAttemptUsage: ports.recordProviderAttemptUsage,
         recoverProviderAttempt: input.recoverProviderAttempt,
         recoverOutputLimit: createAgentSdkOutputRecovery({ location: materials.sessionEventLocation, turnId: runtimeTurnId, stepId: materials.requestId }),
@@ -1424,6 +1465,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       deferredUnsurfacedCheck?: (toolName: string) => boolean
       /** FR12②：广告面层被裁工具名（computeEffectiveTools.eagerBudgetDropped）。 */
       eagerBudgetDroppedNames?: ReadonlySet<string>
+      dynamicToolsForNextRequest?: () => readonly DynamicModelTool[]
       resolveRegisteredToolName?: (providerToolName: string) => string
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
       sessionTranscriptBaseVersion?: number
@@ -1528,6 +1570,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(input.deferredToolNames ? { deferredToolNames: input.deferredToolNames } : {}),
         // FR8：延迟工具未浮现判定（sessionLedgerForToolResult 持久化投影查询用）
         ...(input.deferredUnsurfacedCheck ? { deferredUnsurfacedCheck: input.deferredUnsurfacedCheck } : {}),
+        ...(input.dynamicToolsForNextRequest ? { dynamicToolsForNextRequest: input.dynamicToolsForNextRequest } : {}),
         ...(input.hostHistory ? { hostHistory: input.hostHistory } : {}),
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
         ...(input.beforeToolDispatch ? { beforeToolDispatch: input.beforeToolDispatch } : {}),
@@ -1544,21 +1587,39 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         }) } : {}),
         resolveRegisteredToolName: resolveToolName
       })
-      const executeDeferred = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string) => {
+      const executeDeferred = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string, confirmationPolicyRevision?: string) => {
         const capability = resolveToolName(call.toolName)
-        if (!registry.get(capability) || !input.authorizedToolNames.has(capability)) throw new Error('DEFERRED_TOOL_NOT_AUTHORIZED')
+        const authorized = [...input.authorizedToolNames].some((name) => resolveToolName(name) === capability)
+        if (!registry.get(capability) || !authorized) throw new Error('DEFERRED_TOOL_NOT_AUTHORIZED')
         const capabilities = new CapabilityRegistry()
-        capabilities.define(call.invocationId, [capability])
+        // Deferred envelopes preserve the API-visible tool name (e.g. memory_wiki_save_page),
+        // while RegisteredTool and authorization sets use the canonical dotted name.
+        capabilities.define(call.invocationId, [...new Set([capability, call.toolName])])
         const safetyGate = new SafetyGate({ capabilities, permitStore: runtime.safetyPermits, policy })
         const resourceKeys = registeredTools.toolResourceKeys(call) ?? [`unknown:${call.invocationId}:${call.toolCallId}`]
         const resourceLease = await (materials.resourceLocks ?? runtime.resourceLocks).acquire(resourceKeys)
         try {
           return await registeredTools.executeDeferred(call, {
             confirmationReceipt,
-            authorize: async (initial, recheck) => {
+            confirmationPolicyRevision,
+            authorizeInitial: async (initial) => {
               const initialDecision = await safetyGate.evaluate(initial)
-              if (initialDecision.kind === 'ask') policy.markConfirmed(call, 'user')
-              else if (initialDecision.kind !== 'allow') return { kind: 'deny', reasonCode: initialDecision.reasonCode }
+              if (initialDecision.kind === 'ask') {
+                const binding = currentPolicyBinding()
+                const currentRevision = binding && !('invalid' in binding) && binding.domain === 'im'
+                  ? `${binding.policyBehaviorVersion}:${binding.revision}:${binding.epoch}`
+                  : undefined
+                if (!currentRevision || confirmationPolicyRevision !== currentRevision || confirmationReceipt.startsWith('policy-recheck:')) {
+                  return { kind: 'deny', reasonCode: 'FRESH_APPROVAL_REQUIRED' }
+                }
+                policy.markConfirmed(call, 'user')
+                return { kind: 'allow' }
+              }
+              return initialDecision.kind === 'allow'
+                ? { kind: 'allow' }
+                : { kind: 'deny', reasonCode: initialDecision.kind === 'deny' ? initialDecision.reasonCode : 'POLICY_DENY' }
+            },
+            authorize: async (initial, recheck) => {
               const authorization = await safetyGate.authorize(recheck)
               return authorization.kind === 'allow'
                 ? authorization
@@ -1620,6 +1681,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       }
     } : {}),
     exposure,
+    ...(db ? {
+      resolveExposureRules: () => resolveCurrentAuthorization().effectiveRules,
+      resolveExposureAuthorizationVersion: () => resolveCurrentAuthorization().authorizationVersion
+    } : {}),
     mcp,
     usage,
     recordProviderAttemptUsage: createAgentSdkUsageRecorder({

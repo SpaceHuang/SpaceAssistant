@@ -5,12 +5,14 @@ import { executeRegisteredTool } from './toolInvocationCoordinator'
 
 function makePermit(
   input: Record<string, unknown>, normalizedPath = '/tmp/read.txt',
-  toolName: ReadExecutionPermit['toolName'] = 'read_file', requestId = 'request-read', toolUseId = 'call-read'
+  toolName: ReadExecutionPermit['toolName'] = 'read_file', requestId = 'request-read', toolUseId = 'call-read',
+  decisionRuleId = 'read-group-workdir-allow', decisionId?: string, policyDependencyFingerprint?: string
 ): ReadExecutionPermit {
   return buildReadExecutionPermit({
-    requestId, toolUseId, toolName, input,
+    requestId, toolUseId, toolName, input, decisionRuleId, ...(decisionId ? { decisionId } : {}),
+    ...(policyDependencyFingerprint ? { policyDependencyFingerprint } : {}),
     facts: [{
-      factId: 'fact-read-1', decisionRuleId: 'read-group-workdir-allow', normalizedPath,
+      factId: 'fact-read-1', decisionRuleId, normalizedPath,
       zone: 'workdir-normal', targetKind: 'file',
       identity: { dev: 1, ino: 2, mode: 0o100644, size: 12, mtimeMs: 1 }
     }]
@@ -54,6 +56,31 @@ describe('read registered adapters', () => {
     })).rejects.toThrow('READ_PREPARED_PERMIT_CHANGED')
     expect(dispatchEntered).toBe(false)
     expect(executor).not.toHaveBeenCalled()
+  })
+
+  it('策略重判可更新同一读取目标的 permit 决策版本并继续执行', async () => {
+    const input = { path: '/tmp/read.txt' }
+    const runtime = { readExecutionPermit: makePermit(input, '/tmp/read.txt', 'read_file', 'request-read', 'call-read', 'read-old') }
+    const execute = vi.fn(async () => ({ success: true, data: 'fresh policy permit' }))
+    const tool = createReadRegisteredTools({
+      readFile: { name: 'read_file', execute } as never,
+      listDirectory: { name: 'list_directory', execute: vi.fn() } as never,
+      grep: { name: 'grep', execute: vi.fn() } as never,
+      readFeishuAttachment: { name: 'read_feishu_attachment', execute: vi.fn() } as never
+    }).find((entry) => entry.name === 'read_file')!
+
+    await expect(executeRegisteredTool(tool, input, {
+      requestId: 'request-read', toolUseId: 'call-read', signal: new AbortController().signal,
+      executionContext: runtime as never
+    }, {
+      confirm: async () => {
+        runtime.readExecutionPermit = makePermit(input, '/tmp/read.txt', 'read_file', 'request-read', 'call-read',
+          'read-new', 'decision-new', 'fingerprint-new')
+        return true
+      },
+      dispatch: async (_handle, _context, run) => run(new AbortController().signal)
+    })).resolves.toMatchObject({ success: true, data: 'fresh policy permit' })
+    expect(execute).toHaveBeenCalledOnce()
   })
 
   it.each(['read_file', 'list_directory', 'grep', 'read_feishu_attachment'] as const)('%s 将 admission lease signal 交给原 read executor', async (toolName) => {

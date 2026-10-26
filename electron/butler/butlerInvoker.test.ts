@@ -317,19 +317,6 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     return turn?.turnId ?? requestId
   }
 
-  function makePolicySettingsInvoker() {
-    const handlers = new Map<string, (...args: unknown[]) => unknown>()
-    registerAppIpcHandlers({ handle: (channel, handler) => { handlers.set(channel, handler) } } as unknown as import('electron').IpcMain, withSessionRuntime({
-      db,
-      backup: {} as AppIpcContext['backup'],
-      workDirManager: {} as AppIpcContext['workDirManager'],
-      getWorkDir: () => testWorkDir, setWorkDir: () => undefined, getUserDataPath: () => '/tmp/ud',
-      getApiKey: async () => null, setApiKey: async () => undefined,
-      getBrowserDetectContext: () => ({ isPackaged: false, appPath: '/tmp', devRoot: '/tmp' })
-    } as AppIpcContext))
-    return handlers.get('security:set-rule-enabled')!
-  }
-
   it('显式任务工作区在桌面 Profile 改变后固定绑定到 run snapshot 和 session', async () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-task-root-'))
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
@@ -1703,7 +1690,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
   it.each([
     { toolName: 'list_directory', callId: 'butler-directory-late-result', input: { path: '.' } },
     { toolName: 'grep', callId: 'butler-grep-late-result', input: { pattern: 'authorized', path: 'note.txt', output_mode: 'content' } }
-  ].flatMap((tool) => (['revoke', 'cancel', 'authorization-change'] as const).map((termination) => ({ ...tool, termination }))))(
+  ].flatMap((tool) => (['revoke', 'cancel'] as const).map((termination) => ({ ...tool, termination }))))(
     'Automation Hosted $toolName does not project a late result after claimed $termination', async ({ toolName, callId, input, termination }) => {
       const requestId = `req-butler-${toolName}-late-${termination}`
       const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `butler-${toolName}-late-${termination}-`))
@@ -1728,10 +1715,6 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
           ? { success: true, data: { entries: [{ name: 'late-secret.txt' }] } }
           : { success: true, data: { output: 'late-secret' } }
       })
-      if (termination === 'authorization-change') {
-        writeDisabledPolicyRuleIds(db, ['automation-sensitive-path-deny'])
-        expect(readDisabledPolicyRuleIds(db)).toContain('automation-sensitive-path-deny')
-      }
       let providerCalls = 0
       mockCreateAnthropicClient.mockReturnValue({
         messages: { stream: vi.fn(() => ({
@@ -1758,8 +1741,6 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
           expect(runtime.toolRevocations.revokeToolForLane('automation', toolName)).toBe(1)
         } else if (termination === 'cancel') {
           runtime.chatCancels.signalChatCancel(cancellationIdForRequest(requestId))
-        } else {
-          await makePolicySettingsInvoker()(null, { ruleId: 'automation-sensitive-path-deny', enabled: true })
         }
         expect(signal?.aborted).toBe(true)
         const result = await runningTask
@@ -1770,7 +1751,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(true)
         expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: termination === 'cancel'
           ? { status: 'cancelled' }
-          : { status: 'interrupted', reason: termination === 'revoke' ? 'authorization-revoked' : 'authorization-changed' } })
+          : { status: 'interrupted', reason: 'authorization-revoked' } })
         expect(JSON.stringify(history.events)).not.toContain('late-secret')
         expect((runtime.executionAdmission as unknown as { activeLeaseCount(requestId: string): number }).activeLeaseCount(requestId)).toBe(0)
         const session = createdSessionId ? getSession(db, createdSessionId) : undefined
@@ -1791,98 +1772,19 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     }
   )
 
-  it('Automation Hosted aborts an active sensitive read when its protection rule is enabled', async () => {
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-hosted-policy-change-'))
-    const originalExecute = readFileExecutor.execute
-    const task = createAutomationTask(db, {
-      name: 'sensitive read policy change', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: 'read .env', deliveryPref: 'none', workDirs: [workDir]
-    })
-    const runtime = getDefaultAgentRuntime()
+  it('automation runtime ignores legacy disabled IDs and keeps system protection rules active', () => {
     writeDisabledPolicyRuleIds(db, ['automation-sensitive-path-deny'])
     expect(readDisabledPolicyRuleIds(db)).toContain('automation-sensitive-path-deny')
-    expect(resolveEffectivePolicyRulesWithOrigin(db, 'automation').rules.some((rule) => rule.id === 'automation-sensitive-path-deny')).toBe(false)
-    try {
-      await fs.writeFile(path.join(workDir, '.env'), 'sensitive value')
-      const initialGate = await evaluateToolCallGate({
-        toolName: 'read_file', toolInput: { path: '.env' }, sessionId: 'probe', workDir,
-        userDataDir: '/tmp/butler-policy-probe', lane: 'automation', toolsConfig: DEFAULT_TOOLS_CONFIG,
-        effectiveRules: resolveEffectivePolicyRulesWithOrigin(db, 'automation').rules,
-        disabledPolicyRuleIds: readDisabledPolicyRuleIds(db),
-        decisionCache: { lookup: () => null } as never, shellPrecheck: { touchTrustedCommand: () => undefined }, workDirs: [workDir]
-      })
-      expect(initialGate.decision, JSON.stringify(initialGate)).toMatchObject({ type: 'auto-allow', ruleId: 'automation-readonly-allow' })
-      let providerCalls = 0
-      let executorSignal: AbortSignal | undefined
-      let markEntered!: () => void
-      const entered = new Promise<void>((resolve) => { markEntered = resolve })
-      const executeSpy = vi.spyOn(readFileExecutor, 'execute').mockImplementation(async (_input, execution) => {
-        executorSignal = execution.signal
-        execution.signal.addEventListener('abort', () => markEntered(), { once: true })
-        const interrupted = new Promise<never>((_resolve, reject) => {
-          execution.signal.addEventListener('abort', () => reject(new Error('sensitive read interrupted by policy update')), { once: true })
-        })
-        markEntered()
-        return await interrupted
-      })
-      mockCreateAnthropicClient.mockReturnValue({
-        messages: {
-          stream: vi.fn(() => ({
-            async *[Symbol.asyncIterator]() {},
-            finalMessage: vi.fn(async () => {
-              providerCalls += 1
-              return providerCalls === 1
-                ? {
-                    content: [{ type: 'tool_use', id: 'butler-sensitive-policy-read', name: 'read_file', input: { path: '.env' } }],
-                    stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 8 }
-                  }
-                : { content: [{ type: 'text', text: 'Read completed.' }], stop_reason: 'end_turn', usage: { input_tokens: 8, output_tokens: 2 } }
-            })
-          }))
-        }
-      })
-
-      const runningTask = runButlerTask(makeDeps({
-        getWorkDir: () => workDir,
-        resolveWorkDirForSession: () => workDir
-      }), task.id, { trigger: 'manual', requestId: 'req-butler-sensitive-policy-change' })
-      const entryOutcome = await Promise.race([
-        entered.then(() => 'entered' as const),
-        runningTask.then((result) => ({ completed: result }))
-      ])
-      if (entryOutcome !== 'entered') {
-        const snapshot = await new SqliteAgentHistory(getDbConnection(db)).read('req-butler-sensitive-policy-change')
-        throw new Error(`sensitive read was not dispatched: ${JSON.stringify({ result: entryOutcome, events: snapshot.events.filter((event) => ['tool-call-not-dispatched', 'approval-waiting'].includes(event.kind)).map((event) => ({ kind: event.kind, payload: event.payload })) })}`)
-      }
-      expect(entryOutcome).toBe('entered')
-      expect(executorSignal?.aborted).toBe(false)
-
-      const settingsHandler = makePolicySettingsInvoker()
-      await settingsHandler(null, { ruleId: 'automation-sensitive-path-deny', enabled: true })
-      const result = await runningTask
-
-      expect(result.ok).toBe(false)
-      expect(providerCalls).toBe(1)
-      expect(executorSignal?.aborted).toBe(true)
-      expect(executeSpy).toHaveBeenCalledOnce()
-      const history = await new SqliteAgentHistory(getDbConnection(db)).read('req-butler-sensitive-policy-change')
-      expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: 'butler-sensitive-policy-read' })
-      expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted', payload: expect.objectContaining({ status: 'interrupted' })
-      })
-      expect(history.events.map((event) => event.kind)).not.toContain('tool-call-not-dispatched')
-    } finally {
-      readFileExecutor.execute = originalExecute
-      vi.restoreAllMocks()
-      await fs.rm(workDir, { recursive: true, force: true })
-    }
+    const policy = resolveEffectivePolicyRulesWithOrigin(db, 'automation')
+    expect(policy.disabledRuleIds).toEqual([])
+    expect(policy.rules.find((rule) => rule.id === 'automation-sensitive-path-deny')?.action).toBe('deny')
   })
 
   it.each([
     { toolName: 'read_file', toolUseId: 'butler-read-claim-revoked', input: { path: 'note.txt' } },
     { toolName: 'list_directory', toolUseId: 'butler-directory-claim-revoked', input: { path: 'reports' } },
     { toolName: 'grep', toolUseId: 'butler-grep-claim-revoked', input: { pattern: 'needle', path: 'note.txt', output_mode: 'content' } }
-  ].flatMap((tool) => (['revoke', 'cancel', 'authorization-change'] as const).map((termination) => ({ ...tool, termination }))))(
+  ].flatMap((tool) => (['revoke', 'cancel'] as const).map((termination) => ({ ...tool, termination }))))(
     'Automation Hosted $toolName $termination before dispatch claim prevents executor entry', async ({ toolName, toolUseId, input, termination }) => {
     const requestId = `req-butler-hosted-${toolName}-claim-${termination}`
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `butler-hosted-${toolName}-claim-revoke-`))
@@ -1895,10 +1797,6 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       ? createAutomationTaskWithToolPermission(db, taskInput, { kind: 'grep', scopeRoots: [workDir] })
       : createAutomationTask(db, taskInput)
     const runtime = getDefaultAgentRuntime()
-    if (termination === 'authorization-change') {
-      writeDisabledPolicyRuleIds(db, ['automation-sensitive-path-deny'])
-      expect(readDisabledPolicyRuleIds(db)).toContain('automation-sensitive-path-deny')
-    }
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -1950,10 +1848,6 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         expect(runtime.toolRevocations.revokeToolForLane('automation', toolName)).toBe(1)
       } else if (termination === 'cancel') {
         runtime.chatCancels.signalChatCancel(cancellationIdForRequest(requestId))
-      } else {
-        const settingsHandler = makePolicySettingsInvoker()
-        await settingsHandler(null, { ruleId: 'automation-sensitive-path-deny', enabled: true })
-        expect(readDisabledPolicyRuleIds(db)).not.toContain('automation-sensitive-path-deny')
       }
       releaseClaim()
       const result = await runningTask
@@ -1963,7 +1857,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
         toolCallId: toolUseId,
-        reason: termination === 'revoke' ? 'REVOKED' : termination === 'cancel' ? 'REQUEST_CANCELLED' : 'AUTHORIZATION_STALE'
+        reason: termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
       })
       expect(history.events.map((event) => event.kind)).not.toContain('tool-call-started')
       expect(history.events.map((event) => event.kind)).not.toContain('tool-call-finished')

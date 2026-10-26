@@ -2,9 +2,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { runInTransaction } from '../database/transaction'
-import { commitImPolicySnapshot, readImPolicySnapshot, restoreImPolicySnapshot, migrateLegacyImPolicySnapshot, switchToCurrentImStandard } from './imPolicyStore'
+import { commitDesktopPolicySnapshot, commitImPolicySnapshot, readImPolicySnapshot, restoreImPolicySnapshot, migrateLegacyImPolicySnapshot, switchToCurrentImStandard } from './imPolicyStore'
 
 function makeDb(): DatabaseSync {
   const db = new DatabaseSync(':memory:')
@@ -26,6 +26,22 @@ function makeDb(): DatabaseSync {
 }
 
 describe('IM policy snapshot atomic transaction', () => {
+  it('publishes authorization changes only after a successful revision commit', () => {
+    const db = makeDb()
+    const onCommitted = vi.fn()
+    expect(commitDesktopPolicySnapshot(db, { expectedRevision: 1, policyBehaviorVersion: 'desktop-v1', snapshot: {},
+      updatedAt: 20, eventId: 'desktop-commit', onCommitted })).toMatchObject({ status: 'conflict', currentRevision: 0 })
+    expect(onCommitted).not.toHaveBeenCalled()
+    expect(() => commitDesktopPolicySnapshot(db, { expectedRevision: 0, policyBehaviorVersion: 'desktop-v1', snapshot: {},
+      updatedAt: 20, eventId: 'desktop-rollback', beforeAudit: () => { throw new Error('rollback') }, onCommitted })).toThrow('rollback')
+    expect(onCommitted).not.toHaveBeenCalled()
+    expect(commitDesktopPolicySnapshot(db, { expectedRevision: 0, policyBehaviorVersion: 'desktop-v1', snapshot: {},
+      updatedAt: 20, eventId: 'desktop-success', onCommitted })).toMatchObject({ status: 'committed', revision: 1 })
+    expect(onCommitted).toHaveBeenCalledOnce()
+    expect(onCommitted).toHaveBeenCalledWith('desktop', 1)
+    db.close()
+  })
+
   it('commits snapshot, revision, epoch, invalidations, and audit together', () => {
     const db = makeDb()
     commitImPolicySnapshot(db, { policyBehaviorVersion: 'v2', snapshot: { allow: false }, updatedAt: 20, eventId: 'e1' })
@@ -34,6 +50,8 @@ describe('IM policy snapshot atomic transaction', () => {
     })
     expect(db.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='im'").get()).toEqual({ epoch: 2 })
     expect(db.prepare("SELECT status FROM policy_deferred_todos WHERE todo_id='todo-1'").get()).toEqual({ status: 'invalidated' })
+    expect(db.prepare("SELECT domain,status FROM policy_deferred_todos WHERE todo_id='real-todo-1'").get())
+      .toEqual({ domain: 'im', status: 'invalidated' })
     expect(db.prepare("SELECT status FROM policy_authorizations WHERE authorization_id='auth-1'").get()).toEqual({ status: 'revoked' })
     expect(db.prepare("SELECT state FROM deferred_todos WHERE todo_id='real-todo-1'").get()).toEqual({ state: 'invalidated' })
     expect(db.prepare("SELECT state FROM deferred_resume_requests WHERE request_id='real-request-1'").get()).toEqual({ state: 'invalidated' })
@@ -41,7 +59,7 @@ describe('IM policy snapshot atomic transaction', () => {
     expect(db.prepare("SELECT event_id FROM policy_audit_events").get()).toEqual({ event_id: 'e1' })
     const audit = JSON.parse((db.prepare("SELECT event_json FROM policy_audit_events WHERE event_id='e1'").get() as { event_json: string }).event_json)
     expect(audit).toMatchObject({ policyDomain: 'im', actor: 'user', eventKind: 'policy-snapshot-updated',
-      previousRevision: 1, policyRevision: 2, policyBehaviorVersion: 'v2', invalidatedTodoIds: ['todo-1'] })
+      previousRevision: 1, policyRevision: 2, policyBehaviorVersion: 'v2', invalidatedTodoIds: ['real-todo-1', 'todo-1'] })
     expect(db.prepare("SELECT history_id,policy_behavior_version,snapshot_json FROM policy_behavior_snapshot_history").get()).toEqual({ history_id: 'im:1', policy_behavior_version: 'v1', snapshot_json: '{}' })
     db.close()
   })

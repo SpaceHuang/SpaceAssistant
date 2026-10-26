@@ -139,6 +139,8 @@ export class AgentChannel implements ConfirmationChannel {
       /** 已声明的任务（D，可信证据）：装配方从外层任务上下文透传；缺省 = 无任务上下文。 */
       taskDigest?: string
       taskDigestTruncated?: boolean
+      /** 前序对话只解析当前任务指代；审批器必须视为不可信材料。 */
+      conversationContext?: string
       /** Confirmed permission receipt frozen by the host in this automation run snapshot. */
       taskAuthorizationRecord?: import('../../src/shared/automationTaskTypes').AutomationTaskAuthorizationRecord
       audit?: AuditSink
@@ -194,6 +196,7 @@ export class AgentChannel implements ConfirmationChannel {
         taskDigest: this.deps.taskDigest,
         ...(this.deps.taskDigestTruncated ? { taskDigestTruncated: true } : {})
       } : {}),
+      ...(this.deps.conversationContext ? { conversationContext: this.deps.conversationContext } : {}),
       ...(this.deps.taskAuthorizationRecord ? { taskAuthorizationRecord: this.deps.taskAuthorizationRecord } : {})
     }
     // confirm.request 先于 effectiveTimeoutMs 提前返回记录（§5.4 附带缺口补审计）：

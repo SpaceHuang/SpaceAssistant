@@ -93,7 +93,7 @@ describe('pendingConfirmStore', () => {
       requestId: 'shared-request', toolUseId: 'shared-tool', approved: false, sessionId: 'session-b'
     }))
     expect(pendingConfirmStore.find('session-a', 'shared-tool')?.input).toEqual({ path: 'a' })
-    expect(pendingConfirmStore.find('session-b', 'shared-tool')).toBeUndefined()
+    expect(pendingConfirmStore.find('session-b', 'shared-tool')?.confirmationReady).toBe(false)
   })
 
   it('不把审批 Agent 的 confirming 项暴露为人工待确认', () => {
@@ -158,7 +158,7 @@ describe('pendingConfirmStore', () => {
     expect(window.api.chatGetPendingConfirmation).toBeUndefined()
   })
 
-  it('respond sends ipc and removes item', () => {
+  it('respond sends ipc and keeps a hidden placeholder until the next projection', () => {
     registerRunRequest('sess-a', 'req-1')
     seedConfirm({
       requestId: 'req-1',
@@ -178,7 +178,7 @@ describe('pendingConfirmStore', () => {
       trustDomain: undefined,
       trustActDomain: undefined
     })
-    expect(pendingConfirmStore.getItems()).toHaveLength(0)
+    expect(pendingConfirmStore.find('s1', 'tool-1')?.confirmationReady).toBe(false)
   })
 
   it('rejectAllForSession rejects all pending for session', () => {
@@ -414,6 +414,29 @@ describe('pendingConfirmStore', () => {
     // 快照版本(1)不超前 item 已知版本(2)：快照未过期，批准门禁放行
     pendingConfirmStore.respond('r-flicker', 'tool-flicker', true)
     expect(window.api.toolConfirmResponse).toHaveBeenCalled()
+  })
+
+  it('点击确认后忽略旧 confirming 投影，等执行状态到达后才接受新的确认', async () => {
+    const response = vi.fn().mockResolvedValue({ accepted: true, outcome: 'approved' })
+    vi.stubGlobal('window', { api: { chatGetPendingConfirmation: vi.fn().mockResolvedValue(flickerConfirmation()), toolConfirmResponse: response } })
+    pendingConfirmStore.syncFromProjection(flickerArgs())
+    await flushMicrotasks()
+
+    pendingConfirmStore.respond('r-flicker', 'tool-flicker', true)
+    expect(pendingConfirmStore.find('s-flicker', 'tool-flicker')?.confirmationReady).toBe(false)
+
+    // 确认响应与主进程投影之间可能先收到旧的 confirming 快照。
+    pendingConfirmStore.syncFromProjection(flickerArgs({ turnVersion: 2 }))
+    expect(pendingConfirmStore.find('s-flicker', 'tool-flicker')?.confirmationReady).toBe(false)
+
+    const executing = flickerArgs({ turnVersion: 3 })
+    executing.message.toolCalls![0]!.status = 'executing'
+    pendingConfirmStore.syncFromProjection(executing)
+    expect(pendingConfirmStore.getItems()).toHaveLength(0)
+
+    // 执行阶段之后若确实产生了新一轮确认，同一工具可以重新显示卡片。
+    pendingConfirmStore.syncFromProjection(flickerArgs({ turnVersion: 4 }))
+    expect(pendingConfirmStore.getItems()).toHaveLength(1)
   })
 
   it('确认 payload 变化时重置就绪态并重新拉取快照（旧快照不可信）', async () => {

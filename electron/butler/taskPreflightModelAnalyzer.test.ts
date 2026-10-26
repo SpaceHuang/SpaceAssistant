@@ -106,8 +106,10 @@ describe('createTaskPreflightModelAnalyzer', () => {
     const failure = warn.mock.calls.find(([message]) => message === '[taskPreflight] model request failed')
     expect(failure?.[1]).toMatchObject({
       phase: 'summary-request', failureKind: 'timeout', rehearsalStatus: 'complete',
-      rehearsalModelRounds: 1, rehearsalToolCalls: 0, summaryTimeoutMs: 20_000, factsEntryCount: 0
+      rehearsalModelRounds: 1, rehearsalToolCalls: 0, factsEntryCount: 0
     })
+    expect(failure?.[1].summaryTimeoutMs).toBeGreaterThan(0)
+    expect(failure?.[1].summaryTimeoutMs).toBeLessThanOrEqual(20_000)
     expect(failure?.[1]).toHaveProperty('summaryContextChars', expect.any(Number))
   })
 

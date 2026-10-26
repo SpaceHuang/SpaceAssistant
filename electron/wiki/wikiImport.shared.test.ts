@@ -31,6 +31,14 @@ afterEach(() => {
 function wikiConfig(): typeof DEFAULT_WIKI_CONFIG {
   return { ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki' }
 }
+async function initializeReadyWiki(userDataPath: string, config = wikiConfig()): Promise<void> {
+  const { createWikiLifecycleController } = await import('./wikiLifecycle')
+  const root = path.join(userDataPath, config.rootPath)
+  fs.mkdirSync(root, { recursive: true })
+  const lifecycle = createWikiLifecycleController(root)
+  await lifecycle.initialize({ fresh: true })
+  await lifecycle.enable()
+}
 
 describe('importRawFromWorkDir 共享根（T1.12c）', () => {
   it('①ingest 目标 raw/<projectId>/<basename>，返回词汇路径', async () => {
@@ -38,6 +46,7 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     const userData = tmpdir('wiki-imp-ud-')
     fs.writeFileSync(path.join(workDir, 'notes.md'), 'raw content', 'utf8')
     const db = openDatabase(':memory:')
+    await initializeReadyWiki(userData)
 
     const res = await importRawFromWorkDir(workDir, wikiConfig(), 'notes.md', { userDataPath: userData, db })
     expect(res.ok).toBe(true)
@@ -45,8 +54,28 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     const projectId = computeProjectId(workDir)
     expect(res.rawRelPath).toBe(`llm-wiki/raw/${projectId}/notes.md`)
     expect(res.copied).toBe(true)
+    expect(res.sourceId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(res.sourceRevision).toBe(1)
     const realBase = path.join(userData, 'llm-wiki')
     expect(fs.readFileSync(path.join(realBase, 'raw', projectId, 'notes.md'), 'utf8')).toBe('raw content')
+    expect(fs.readFileSync(path.join(realBase, '.wiki-service', 'source-history', res.sourceId!, '1.md'), 'utf8')).toBe('raw content')
+    db.close()
+  })
+
+  it('文件列表收录后，用返回的词汇 raw 路径启动 Ingest 时从共享根读取', async () => {
+    const workDir = tmpdir('wiki-imp-collect-wd-')
+    const userData = tmpdir('wiki-imp-collect-ud-')
+    fs.writeFileSync(path.join(workDir, 'AGENTS.md'), 'project instructions', 'utf8')
+    const db = openDatabase(':memory:')
+    const shared = { userDataPath: userData, db } as const
+    await initializeReadyWiki(userData)
+
+    const collected = await importRawFromWorkDir(workDir, wikiConfig(), 'AGENTS.md', shared)
+    expect(collected).toMatchObject({ ok: true, copied: true, rawRelPath: expect.stringMatching(/^llm-wiki\/raw\//) })
+    if (!collected.ok) return
+
+    const ingested = await importRawFromWorkDir(workDir, wikiConfig(), collected.rawRelPath, shared)
+    expect(ingested).toMatchObject({ ok: true, copied: false, sourceRevision: 1 })
     db.close()
   })
 
@@ -56,6 +85,7 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     fs.writeFileSync(path.join(workDir, 'doc.md'), 'v1', 'utf8')
     const db = openDatabase(':memory:')
     const opts = { userDataPath: userData, db } as const
+    await initializeReadyWiki(userData)
     const r1 = await importRawFromWorkDir(workDir, wikiConfig(), 'doc.md', opts)
     fs.writeFileSync(path.join(workDir, 'doc.md'), 'v2', 'utf8')
     const r2 = await importRawFromWorkDir(workDir, wikiConfig(), 'doc.md', opts)
@@ -71,6 +101,7 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     const userData = tmpdir('wiki-imp-hint-ud-')
     fs.writeFileSync(path.join(workDir, 'note.md'), 'x', 'utf8')
     const db = openDatabase(':memory:')
+    await initializeReadyWiki(userData)
     const res = await importRawFromWorkDir(workDir, wikiConfig(), 'note.md', { userDataPath: userData, db })
     expect(res.ok).toBe(true)
     if (!res.ok) return
@@ -87,6 +118,7 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     const userData = tmpdir('wiki-imp-mx-ud-')
     fs.writeFileSync(path.join(workDir, 'seq.md'), 'x', 'utf8')
     const db = openDatabase(':memory:')
+    await initializeReadyWiki(userData)
     const mutex = await import('./wikiWriteMutex')
     const spy = vi.spyOn(mutex, 'withWikiWriteMutex')
     const res = await importRawFromWorkDir(workDir, wikiConfig(), 'seq.md', { userDataPath: userData, db })
@@ -102,6 +134,7 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     fs.writeFileSync(path.join(workDir, 'note2.md'), 'x', 'utf8')
     const db = openDatabase(':memory:')
     const cfg = { ...DEFAULT_WIKI_CONFIG, rootPath: 'my-lib' }
+    await initializeReadyWiki(userData, cfg)
     const res = await importRawFromWorkDir(workDir, cfg, 'note2.md', { userDataPath: userData, db })
     expect(res.ok).toBe(true)
     if (!res.ok) return
@@ -109,6 +142,25 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     // 物理落盘在配置目录（my-lib）下
     const projectId = computeProjectId(workDir)
     expect(fs.existsSync(path.join(userData, 'my-lib', 'raw', projectId, 'note2.md'))).toBe(true)
+    db.close()
+  })
+
+  it('拒绝在 recovery_required 下导入，且 raw 与 source binding 均无副作用', async () => {
+    const workDir = tmpdir('wiki-imp-recovery-wd-')
+    const userData = tmpdir('wiki-imp-recovery-ud-')
+    fs.writeFileSync(path.join(workDir, 'blocked.md'), 'must not be imported', 'utf8')
+    const wikiRoot = path.join(userData, 'llm-wiki')
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    const lifecycle = await import('./wikiLifecycle').then(({ createWikiLifecycleController }) => createWikiLifecycleController(wikiRoot))
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.markRecoveryRequired()
+    const db = openDatabase(':memory:')
+
+    const result = await importRawFromWorkDir(workDir, wikiConfig(), 'blocked.md', { userDataPath: userData, db })
+
+    expect(result).toMatchObject({ ok: false })
+    expect(fs.existsSync(path.join(wikiRoot, 'raw'))).toBe(false)
+    expect(fs.existsSync(path.join(wikiRoot, '.wiki-service', 'sources'))).toBe(false)
     db.close()
   })
 })

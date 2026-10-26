@@ -93,6 +93,8 @@ class PendingConfirmStore {
   private listeners = new Set<Listener>()
   private readonly latestProjections = new Map<string, Parameters<PendingConfirmStore['syncFromProjection']>[0]>()
   private readonly inFlightSnapshots = new Set<string>()
+  /** 用户已响应的确认，等权威投影离开 confirming 后才允许同一工具再次出现。 */
+  private readonly respondedConfirmations = new Set<string>()
   private initialized = false
 
   init(): void {
@@ -106,6 +108,7 @@ class PendingConfirmStore {
     this.listeners.clear()
     this.latestProjections.clear()
     this.inFlightSnapshots.clear()
+    this.respondedConfirmations.clear()
   }
 
   getItems(): PendingConfirmItem[] {
@@ -114,12 +117,29 @@ class PendingConfirmStore {
 
   /** 从 Core 的完整 assistant snapshot 重建确认展示，不依赖旧 tool IPC。 */
   syncFromProjection(args: { sessionId: string; requestId: string; message: Message; turnId?: string; turnVersion?: number; retryAttempt?: number; terminal?: boolean }): void {
-    const confirming = args.terminal ? [] : (args.message.toolCalls ?? []).filter((tool) =>
+    const keyFor = (toolUseId: string): string => JSON.stringify([args.sessionId, args.requestId, toolUseId])
+    const allTools = args.message.toolCalls ?? []
+    if (args.terminal) {
+      for (const key of this.respondedConfirmations) {
+        try {
+          const [sessionId, requestId] = JSON.parse(key) as [string, string, string]
+          if (sessionId === args.sessionId && requestId === args.requestId) this.respondedConfirmations.delete(key)
+        } catch { /* malformed internal keys are ignored */ }
+      }
+    } else {
+      for (const tool of allTools) {
+        if (tool.status !== 'confirming') this.respondedConfirmations.delete(keyFor(tool.id))
+      }
+    }
+    const confirming = args.terminal ? [] : allTools.filter((tool) =>
       tool.status === 'confirming' && !tool.autoAnswerer && !tool.remoteConfirmation
+      && !this.respondedConfirmations.has(keyFor(tool.id))
     )
     if (args.turnId && (args.terminal || confirming.length === 0)) this.latestProjections.delete(args.turnId)
     else if (args.turnId) this.latestProjections.set(args.turnId, args)
-    const keep = this.items.filter((item) => item.sessionId !== args.sessionId || item.requestId !== args.requestId)
+    const stillConfirmingIds = new Set(allTools.filter((tool) => tool.status === 'confirming').map((tool) => tool.id))
+    const keep = this.items.filter((item) => item.sessionId !== args.sessionId || item.requestId !== args.requestId
+      || (this.respondedConfirmations.has(keyFor(item.toolUseId)) && stillConfirmingIds.has(item.toolUseId)))
     const next = confirming.map((tool) => {
       const toolIndex = args.message.toolCalls?.findIndex((candidate) => candidate.id === tool.id) ?? -1
       const activityIndex = args.message.activity?.findIndex((item) => item.kind === 'tool' && item.toolId === tool.id) ?? -1
@@ -270,6 +290,12 @@ class PendingConfirmStore {
     // 且 payload 未变的投影推进不使快照失效），此处只做归属校验防错卡；
     // 不比较 turnVersion：渲染端已知版本可能短暂落后于在途投影，比较会造成「就绪但批不了」。
     if (approved && current?.confirmationReady !== undefined && (!current.confirmationReady || !current.confirmationSnapshot || current.confirmationSnapshot.sessionId !== current.sessionId || current.confirmationSnapshot.requestId !== current.requestId || current.confirmationSnapshot.toolCallId !== current.toolUseId || (current.turnId !== undefined && current.confirmationSnapshot.turnId !== current.turnId))) return
+    if (current) {
+      const key = JSON.stringify([current.sessionId, requestId, toolUseId])
+      this.respondedConfirmations.add(key)
+      current.confirmationReady = false
+      delete current.confirmationSnapshot
+    }
     void window.api.toolConfirmResponse({
       requestId,
       toolUseId,
@@ -282,7 +308,8 @@ class PendingConfirmStore {
       ,...(options?.memoryTierOptionId !== undefined ? { memoryTierOptionId: options.memoryTierOptionId } : {}),
       ...(current?.sessionId ?? sessionId ? { sessionId: current?.sessionId ?? sessionId } : {})
     })
-    this.remove(requestId, toolUseId, current?.sessionId ?? sessionId)
+    if (current) this.notify()
+    else this.remove(requestId, toolUseId, sessionId)
   }
 
   rejectAllForSession(sessionId: string): void {
@@ -326,6 +353,7 @@ class PendingConfirmStore {
     this.items = []
     this.latestProjections.clear()
     this.inFlightSnapshots.clear()
+    this.respondedConfirmations.clear()
     this.notify()
   }
 

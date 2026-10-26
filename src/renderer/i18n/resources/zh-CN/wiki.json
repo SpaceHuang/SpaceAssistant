@@ -25,5 +25,28 @@
     "conflictsTitle": "冲突双保留清单（待人工合并）",
     "failedTitle": "迁移失败项（可重试，旧目录未动）",
     "reportClose": "知道了"
+  },
+  "domainEnabledNotice": "当前 Wiki 使用领域工具管理知识内容；此处可继续浏览和打开页面。",
+  "domainMigration": {
+    "pending": "此 Wiki 需要完成领域格式迁移后才能使用领域工具。迁移前请先检查变更清单。",
+    "review": "检查领域迁移",
+    "title": "审阅 Wiki 领域迁移",
+    "summary": "预检扫描 {{files}} 个文件，计划变更 {{changes}} 个对象。",
+    "resume": "发现已确认但中断的迁移。继续将按原始清单逐项核验，不会重新计算或扩大迁移范围。",
+    "files": "扫描到的文件",
+    "changes": "计划变更",
+    "categories": "分类映射",
+    "indexNotes": "索引说明转为普通页面",
+    "archives": "日志只读归档",
+    "diagnostics": "迁移冲突",
+    "noChanges": "文件无需改动；确认后仅完成生命周期初始化。",
+    "confirm": "确认迁移",
+    "cancel": "取消",
+    "complete": "领域迁移已完成",
+    "recoveryRequired": "迁移控制状态需要恢复，请先联系管理员检查 Wiki 文件。",
+    "staleReview": "预检期间文件发生变化。新清单已刷新，请重新检查后确认。",
+    "kind": "类型",
+    "hashChange": "内容指纹变化",
+    "newFile": "新建"
   }
 }

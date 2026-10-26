@@ -12,7 +12,7 @@ describe('storage session context adapter', () => {
       queries: { readApiBaseline: vi.fn(() => { events.push('authority-baseline'); return { sessionId: 'context-session', entries: [] } }),
         readPreparedApiBaseline } as never,
       ensureChatBodyV1, workDir: '/tmp', userDataDir: '/tmp', replay: { committed: [] } as never,
-      sink: {} as never, commitCanonicalCompaction: vi.fn(async () => undefined), isBusy: () => false
+      sink: {} as never, canPersist: true, commitCanonicalCompaction: vi.fn(async () => undefined), isBusy: () => false
     })
 
     expect(bound.messages).toEqual([])

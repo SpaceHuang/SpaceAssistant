@@ -133,6 +133,25 @@ export function createDeferredEnvelopeStore(db: AppDatabase) {
       }
     },
 
+    /** Rebind only the policy projection after a fresh gate decision; immutable call materials stay byte-for-byte bound. */
+    updatePolicy(invocationId: string, policy: { ruleId: string; factsHash: string; policyBehaviorVersion: string; policyRevision: number; policyEpoch: number; confirmationReceipt?: string }): DeferredCallEnvelope | null {
+      const current = this.get(invocationId)
+      if (!current || !policy.ruleId.trim() || !policy.factsHash.trim() || !policy.policyBehaviorVersion ||
+        !Number.isSafeInteger(policy.policyRevision) || !Number.isSafeInteger(policy.policyEpoch)) return null
+      const executionContext = { ...current.executionContext, ruleId: policy.ruleId, factsHash: policy.factsHash,
+        policyBehaviorVersion: policy.policyBehaviorVersion, policyRevision: policy.policyRevision, policyEpoch: policy.policyEpoch,
+        ...(policy.confirmationReceipt ? { confirmationReceipt: policy.confirmationReceipt } : {}) }
+      const { integrityHash: _priorIntegrityHash, ...unsignedCurrent } = current
+      const unsigned = { ...unsignedCurrent, executionContext, executionContextHash: hash(executionContext) }
+      const updated: DeferredCallEnvelope = { ...unsigned, integrityHash: hash(unsigned) }
+      const conn = liveConn()
+      const result = conn.prepare(`UPDATE deferred_call_envelopes SET envelope_json=?,integrity_hash=?
+        WHERE invocation_id=? AND integrity_hash=?`).run(JSON.stringify(updated), updated.integrityHash, invocationId, current.integrityHash)
+      if (Number(result.changes ?? 0) !== 1) return null
+      db.save()
+      return structuredClone(updated)
+    },
+
     verify(envelope: DeferredCallEnvelope, current: {
       requestId?: string
       turnId?: string

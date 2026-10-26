@@ -18,6 +18,7 @@ import { runInTransaction } from '../database/transaction'
 import { currentProcessGeneration } from '../database/processGeneration'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { buildCanonicalToolResultProjectionTargets } from '../sessionLedgerOutbox'
+import { projectChatBodyV1 } from '../sessionStorage/domain/projectionSpec'
 import { commitSessionTranscriptInTransaction } from '../database/sessionTranscript'
 import type { SessionTranscriptCommitIntent } from '../../packages/agent-sdk/src/history'
 import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityParamSanitize'
@@ -33,7 +34,6 @@ import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
 import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { withSessionLedgerLifecycleLocks } from '../sessionLedgerLifecycle'
-import { projectChatBodyV1 } from '../sessionStorage/domain/projectionSpec'
 import type { SessionHistoryLedgerLocation, SessionHistoryRecoveryOptions } from '../sessionStorage/public/ports'
 import type { CanonicalContextMeterEvent } from '../sessionStorage/public/model'
 
@@ -49,50 +49,54 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-function validateCanonicalInvocationMessages(value: unknown): value is unknown[] {
-  if (!Array.isArray(value)) return false
+function canonicalInvocationMessagesValidationError(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return 'messages-not-array'
   const pendingToolCalls = new Set<string>()
   for (const rawMessage of value) {
-    if (!isRecord(rawMessage)) return false
+    if (!isRecord(rawMessage)) return 'message-not-object'
     const role = rawMessage.role
     if ((rawMessage.id !== undefined && (typeof rawMessage.id !== 'string' || !rawMessage.id.trim())) ||
-      (rawMessage.timestamp !== undefined && (typeof rawMessage.timestamp !== 'number' || !Number.isFinite(rawMessage.timestamp)))) return false
+      (rawMessage.timestamp !== undefined && (typeof rawMessage.timestamp !== 'number' || !Number.isFinite(rawMessage.timestamp)))) return 'message-identity-invalid'
     if (role === 'system' || role === 'user' || role === 'assistant') {
       const content = rawMessage.content
       const toolCalls = rawMessage.toolCalls
-      if (role === 'system' && (typeof content !== 'string' || toolCalls !== undefined)) return false
-      if (role === 'user' && toolCalls !== undefined) return false
-      if (role === 'assistant' && content === undefined && (!Array.isArray(toolCalls) || toolCalls.length === 0)) return false
-      if (content !== undefined && typeof content !== 'string' && !Array.isArray(content)) return false
+      if (role === 'system' && (typeof content !== 'string' || toolCalls !== undefined)) return 'system-message-invalid'
+      if (role === 'user' && toolCalls !== undefined) return 'user-message-has-tool-calls'
+      if (role === 'assistant' && content === undefined && (!Array.isArray(toolCalls) || toolCalls.length === 0)) return 'empty-assistant-message'
+      if (content !== undefined && typeof content !== 'string' && !Array.isArray(content)) return 'message-content-invalid'
       if (Array.isArray(content)) {
         for (const rawBlock of content) {
-          if (!isRecord(rawBlock)) return false
+          if (!isRecord(rawBlock)) return 'content-block-invalid'
           if (rawBlock.type === 'text' && typeof rawBlock.text === 'string') continue
           if (rawBlock.type === 'thinking' && typeof rawBlock.thinking === 'string' &&
             (rawBlock.thinkingSignature === undefined || typeof rawBlock.thinkingSignature === 'string') &&
             (rawBlock.redacted === undefined || typeof rawBlock.redacted === 'boolean')) continue
           if (rawBlock.type === 'image' && typeof rawBlock.data === 'string' &&
             ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(String(rawBlock.mimeType))) continue
-          return false
+          return 'content-block-unsupported'
         }
       }
       if (role === 'assistant' && toolCalls !== undefined) {
-        if (!Array.isArray(toolCalls)) return false
+        if (!Array.isArray(toolCalls)) return 'assistant-tool-calls-invalid'
         for (const rawTool of toolCalls) {
           if (!isRecord(rawTool) || typeof rawTool.id !== 'string' || !rawTool.id.trim() ||
             typeof rawTool.name !== 'string' || !rawTool.name.trim() || !isRecord(rawTool.input) ||
-            (rawTool.thoughtSignature !== undefined && typeof rawTool.thoughtSignature !== 'string') ||
-            pendingToolCalls.has(rawTool.id)) return false
+            (rawTool.thoughtSignature !== undefined && typeof rawTool.thoughtSignature !== 'string')) return 'assistant-tool-call-invalid'
+          if (pendingToolCalls.has(rawTool.id)) return 'duplicate-tool-call-id'
           pendingToolCalls.add(rawTool.id)
         }
-      } else if (rawMessage.toolCalls !== undefined) return false
+      } else if (rawMessage.toolCalls !== undefined) return 'non-assistant-message-has-tool-calls'
       continue
     }
     if (role === 'tool' && typeof rawMessage.toolCallId === 'string' && rawMessage.toolCallId.trim() &&
       typeof rawMessage.isError === 'boolean' && Object.hasOwn(rawMessage, 'content') && pendingToolCalls.delete(rawMessage.toolCallId)) continue
-    return false
+    return role === 'tool' ? 'tool-result-unpaired-or-invalid' : 'message-role-unsupported'
   }
-  return true
+  return undefined
+}
+
+function validateCanonicalInvocationMessages(value: unknown): value is unknown[] {
+  return canonicalInvocationMessagesValidationError(value) === undefined
 }
 
 function assistantLegacyTextProjection(content: unknown): string | undefined {
@@ -187,6 +191,7 @@ type CanonicalToolTransitionState = {
   toolApproval: Map<string, { approvalId: string; approved?: boolean }>
   unboundApprovalIds: Set<string>
   seenApprovalIds: Set<string>
+  invalidatedApprovalIds: Map<string, string>
   pendingApprovals: Set<string>
   approvalIdentity: Map<string, string>
   terminalSeen: boolean
@@ -567,10 +572,11 @@ export class SqliteAgentHistory implements HistoryPort {
           }
           const payload = event.payload as Record<string, unknown>
           if (event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted') {
-            if (!validateCanonicalInvocationMessages(payload.messages)) {
+            const messagesError = canonicalInvocationMessagesValidationError(payload.messages)
+            if (messagesError) {
               throw new HistoryBatchError(event.kind === 'transcript-compacted'
-                ? 'canonical transcript snapshot payload is invalid'
-                : 'canonical invocation context payload is invalid')
+                ? `canonical transcript snapshot payload is invalid (${messagesError})`
+                : `canonical invocation context payload is invalid (${messagesError})`)
             }
             if (event.kind === 'transcript-compacted') continue
             if (!('requiredUserMessage' in payload)) {
@@ -904,6 +910,7 @@ export class SqliteAgentHistory implements HistoryPort {
   private replayCanonicalSessionToolTransitions(events: readonly HistoryEvent[]): CanonicalToolTransitionState {
     const state: CanonicalToolTransitionState = {
       pending: new Map(), toolApproval: new Map(), unboundApprovalIds: new Set(), seenApprovalIds: new Set(),
+      invalidatedApprovalIds: new Map(),
       pendingApprovals: new Set(), approvalIdentity: new Map(), terminalSeen: false, turnId: null
     }
     const { pending, toolApproval, unboundApprovalIds, seenApprovalIds } = state
@@ -942,7 +949,7 @@ export class SqliteAgentHistory implements HistoryPort {
           throw new HistoryCorruptionError(event.invocationId, 'approval resolution requires an approved boolean')
         }
         if (payload.outcome !== undefined) {
-          const outcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled']
+          const outcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled', 'invalidated']
           if (typeof payload.outcome !== 'string' || !outcomes.includes(payload.outcome) || payload.approved !== (payload.outcome === 'approved')) {
             throw new HistoryCorruptionError(event.invocationId, 'approval outcome conflicts with approved boolean')
           }
@@ -1036,10 +1043,12 @@ export class SqliteAgentHistory implements HistoryPort {
           unboundApprovalIds.add(payload.approvalId)
         }
         if (typeof payload?.toolCallId === 'string' && payload.toolCallId.trim()) {
+          const canReuseInvalidatedId = typeof payload.approvalId === 'string' && state.invalidatedApprovalIds.get(payload.approvalId) === payload.toolCallId
           if (pending.get(payload.toolCallId) !== 'proposed' || typeof payload.approvalId !== 'string' || !payload.approvalId.trim() ||
-            toolApproval.has(payload.toolCallId) || seenApprovalIds.has(payload.approvalId)) {
+            toolApproval.has(payload.toolCallId) || (seenApprovalIds.has(payload.approvalId) && !canReuseInvalidatedId)) {
             throw new HistoryCorruptionError(event.invocationId, `canonical approval has no unique tool identity: ${event.eventId}`)
           }
+          if (canReuseInvalidatedId) state.invalidatedApprovalIds.delete(payload.approvalId)
           seenApprovalIds.add(payload.approvalId)
           toolApproval.set(payload.toolCallId, { approvalId: payload.approvalId })
         }
@@ -1048,7 +1057,11 @@ export class SqliteAgentHistory implements HistoryPort {
         if (payload.approvalId !== approval.approvalId || typeof payload.approved !== 'boolean') {
           throw new HistoryCorruptionError(event.invocationId, `canonical approval resolution identity or outcome is invalid: ${event.eventId}`)
         }
-        approval.approved = payload.approved
+        if (payload.outcome === 'invalidated') {
+          toolApproval.delete(payload.toolCallId)
+          state.invalidatedApprovalIds.set(approval.approvalId, payload.toolCallId)
+        }
+        else approval.approved = payload.approved
       }
     }
     return state
@@ -1623,7 +1636,7 @@ export class SqliteAgentHistory implements HistoryPort {
         } else if (event.kind === 'approval-resolved' && typeof payload?.toolCallId === 'string') {
           const waiting = approvalWaits.get(payload.toolCallId)
           if (!waiting) continue // Legacy approval lifecycle has no card metadata to rebuild.
-          const validOutcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled']
+          const validOutcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled', 'invalidated']
           if (typeof payload.approved !== 'boolean' || typeof payload.outcome !== 'string' || !validOutcomes.includes(payload.outcome) ||
             typeof payload.settledAt !== 'number' || !Number.isFinite(payload.settledAt) ||
             payload.approved !== (payload.outcome === 'approved') ||
@@ -1634,7 +1647,7 @@ export class SqliteAgentHistory implements HistoryPort {
           approval.status = payload.outcome === 'approved' ? 'approved'
             : payload.outcome === 'timeout' ? 'timed-out'
               : payload.outcome === 'unavailable' ? 'unavailable'
-                : payload.outcome === 'cancelled' ? 'cancelled' : 'denied'
+                : payload.outcome === 'cancelled' || payload.outcome === 'invalidated' ? 'cancelled' : 'denied'
           approval.settledAt = payload.settledAt
           approval.revision = 2
           if (typeof payload.cause === 'string') approval.cause = payload.cause as NonNullable<typeof approval.cause>
@@ -2151,6 +2164,12 @@ export class SqliteAgentHistory implements HistoryPort {
           flushRepairOutcomes()
           continue
         }
+        // Parked invocations retain durable deferred-approval state; restart recovery must not
+        // append an additional interrupted terminal event for them.
+        if (snapshot.events.at(-1)?.kind === 'invocation-parked') {
+          flushRepairOutcomes()
+          continue
+        }
         if (snapshot.events.at(-1)?.kind !== 'invocation-interrupted') {
           const lastEvent = snapshot.events.at(-1)
           if (!lastEvent) continue
@@ -2213,7 +2232,7 @@ export class SqliteAgentHistory implements HistoryPort {
           snapshot = await this.read(invocationId)
           state = rebuildInvocationStates(snapshot).get(invocationId)
         }
-        if (state?.state === 'interrupted') recovered.push(state)
+        if (state?.state === 'interrupted' && snapshot.events.at(-1)?.kind !== 'invocation-parked') recovered.push(state)
         flushRepairOutcomes()
       } catch (error) {
         if (!(error instanceof HistoryCorruptionError)) throw error

@@ -13,6 +13,7 @@ import { openDatabase } from '../database'
 import { DEFAULT_WIKI_CONFIG, type WikiConfig } from '../../src/shared/domainTypes'
 import { CONFIG_KEYS } from './ipcShared'
 import { setConfigValue } from '../database/operations'
+import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
 
 const startContentWatchMock = vi.fn()
 const stopContentWatchMock = vi.fn()
@@ -49,7 +50,7 @@ interface World {
   handlers: Map<string, (...args: never[]) => unknown>
 }
 
-async function setupWorld(opts: { hideWiki?: boolean; withResidue?: boolean; legacyRootAliases?: string[] } = {}): Promise<World> {
+async function setupWorld(opts: { hideWiki?: boolean; withResidue?: boolean; legacyRootAliases?: string[]; enabled?: boolean } = {}): Promise<World> {
   const root = tmpdir('wiki-fipc-')
   const workDir = path.join(root, 'proj')
   const userData = path.join(root, 'ud')
@@ -57,6 +58,10 @@ async function setupWorld(opts: { hideWiki?: boolean; withResidue?: boolean; leg
   fs.mkdirSync(workDir, { recursive: true })
   fs.mkdirSync(path.join(realBase, 'wiki'), { recursive: true })
   fs.writeFileSync(path.join(realBase, 'wiki', 'index.md'), 'shared index', 'utf8')
+  if (opts.enabled) {
+    await createWikiLifecycleController(realBase).initialize({ fresh: true })
+    await createWikiLifecycleController(realBase).enable()
+  }
   fs.writeFileSync(path.join(workDir, 'plain.txt'), 'plain', 'utf8')
   if (opts.withResidue) {
     fs.mkdirSync(path.join(workDir, 'llm-wiki'), { recursive: true })
@@ -107,6 +112,35 @@ describe('file:read-file / show-in-explorer 挂载（T1.15）', () => {
     spy.mockRestore()
   })
 
+  it('opens the current page when a historical chat link uses an external rename alias', async () => {
+    const { handlers, realBase } = await setupWorld()
+    fs.mkdirSync(path.join(realBase, 'wiki', 'topics'), { recursive: true })
+    fs.writeFileSync(path.join(realBase, 'wiki', 'topics', 'new-name.md'), 'current renamed page', 'utf8')
+    fs.mkdirSync(path.join(realBase, '.wiki-service'), { recursive: true })
+    fs.writeFileSync(path.join(realBase, '.wiki-service', 'catalog.json'), JSON.stringify({ formatVersion: 1,
+      pages: [{ pageId: 'page-a', path: 'wiki/topics/new-name.md', revision: 2, title: 'A', categoryId: 'topic' }],
+      pathAliases: [{ path: 'wiki/topics/old-name.md', pageId: 'page-a' }] }))
+    const read = (await import('../fileReadHelpers')) as unknown as { readFileForViewer: (p: string) => Promise<unknown> }
+    const spy = vi.spyOn(read, 'readFileForViewer')
+
+    await handlers.get('file:read-file')!(null as never, 'llm-wiki/wiki/topics/old-name.md' as never)
+
+    expect(spy).toHaveBeenCalledWith(path.join(realBase, 'wiki', 'topics', 'new-name.md'))
+    spy.mockRestore()
+  })
+
+  it('returns a conflict when an old path alias points to multiple page identities', async () => {
+    const { handlers, realBase } = await setupWorld()
+    fs.mkdirSync(path.join(realBase, '.wiki-service'), { recursive: true })
+    fs.writeFileSync(path.join(realBase, '.wiki-service', 'catalog.json'), JSON.stringify({ formatVersion: 1,
+      pages: [{ pageId: 'page-a', path: 'wiki/a.md' }, { pageId: 'page-b', path: 'wiki/b.md' }],
+      pathAliases: [{ path: 'wiki/old.md', pageId: 'page-a' }, { path: 'wiki/old.md', pageId: 'page-b' }] }))
+
+    const result = await handlers.get('file:read-file')!(null as never, 'llm-wiki/wiki/old.md' as never) as { kind?: string; error?: string }
+
+    expect(result).toMatchObject({ kind: 'error', error: 'wiki_path_alias_conflict' })
+  })
+
   it('⑤show-in-explorer 与 read-file 同一挂载解析入口（行为验证属 manual M5 真机走查）', async () => {
     const { handlers, realBase } = await setupWorld()
     // show-in-explorer 的 shell 调用在测试 electron mock 下不可观察；同一 wikiMountOf 入口
@@ -137,6 +171,29 @@ describe('file:delete/rename/move/copy（T1.15）', () => {
 
     await expect(handlers.get('file:move')!(null as never, 'llm-wiki/wiki/index.md', '.' as never)).rejects.toThrow(/跨.*边界|共享库/)
     void realBase
+  })
+})
+
+describe('domain_enabled file IPC boundary', () => {
+  it.each([
+    ['file:delete', ['llm-wiki/wiki/index.md']],
+    ['file:rename', ['llm-wiki/wiki/index.md', 'renamed.md']],
+    ['file:move', ['llm-wiki/wiki/index.md', 'llm-wiki/wiki']],
+    ['file:copy', [{ srcRelPath: 'plain.txt', destRelPath: 'llm-wiki/wiki/copied.txt' }]],
+    ['file:copy', [{ srcRelPath: 'llm-wiki/wiki/index.md', destRelPath: 'copied.txt' }]],
+  ] as const)('拒绝启用态操作 %s', async (channel, args) => {
+    const { handlers, realBase, workDir } = await setupWorld({ enabled: true })
+    const targetBefore = fs.readFileSync(path.join(realBase, 'wiki', 'index.md'), 'utf8')
+    await expect((handlers.get(channel)! as (...args: unknown[]) => unknown)(null, ...args)).rejects.toThrow('Wiki 已启用领域工具')
+    expect(fs.readFileSync(path.join(realBase, 'wiki', 'index.md'), 'utf8')).toBe(targetBefore)
+    expect(fs.existsSync(path.join(workDir, 'copied.txt'))).toBe(false)
+    expect(fs.existsSync(path.join(realBase, 'wiki', 'copied.txt'))).toBe(false)
+  })
+
+  it('domain_ready 下仍允许文件树操作，保留既有迁移期兼容', async () => {
+    const { handlers, realBase } = await setupWorld()
+    await (handlers.get('file:rename')! as (...args: unknown[]) => unknown)(null, 'llm-wiki/wiki/index.md', 'renamed.md')
+    expect(fs.existsSync(path.join(realBase, 'wiki', 'renamed.md'))).toBe(true)
   })
 })
 

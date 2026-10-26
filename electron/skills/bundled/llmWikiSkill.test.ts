@@ -18,12 +18,12 @@ describe('llmWikiSkill', () => {
     expect(skill.meta.triggers).toContain('llm wiki')
   })
 
-  it('正文给出 llm-wiki/ 词汇路径约定并禁止文件系统盲搜与旧别名绕行', () => {
+  it('正文使用 Wiki 专属领域工具并禁止通用文件工具绕行', () => {
     const skill = getBundledLlmWikiSkill()
-    expect(skill.content).toContain('`llm-wiki/`')
-    expect(skill.content).toMatch(/禁止.*list_directory/)
-    expect(skill.content).toContain('wiki-readonly-alias')
-    expect(skill.content).toMatch(/未启用/)
+    expect(skill.content).toContain('`memory.wiki_search`')
+    expect(skill.content).toContain('`memory.wiki_save_page`')
+    expect(skill.content).toContain('`sourceId`')
+    expect(skill.content).toMatch(/不得改用通用文件工具绕过/)
   })
 
   it('skillScanner 合并后包含 llm-wiki', () => {

@@ -63,6 +63,20 @@ describe('toRuleViews（规则合并视图）', () => {
     expect(views[2]).toMatchObject({ id: 'automation-default-confirm', enabled: true, locked: true })
   })
 
+  it('显式 user override 的 locked deny 保持启用并展示 allow 动作', async () => {
+    const { toRuleViews } = await import('./settingsSecurityModel')
+    const rules = [{ id: 'remote-shell-disabled', when: 'invocation' as const, action: 'deny' as const, locked: true, reason: 'r' }]
+    expect(toRuleViews(rules, [{ ruleId: 'remote-shell-disabled', action: 'allow' }])[0])
+      .toMatchObject({ action: 'allow', enabled: true, overridden: true })
+  })
+
+  it('即使覆盖动作等于默认动作，也保留覆盖标记以便恢复默认', async () => {
+    const { toRuleViews } = await import('./settingsSecurityModel')
+    const rules = [{ id: 'same-action', when: 'invocation' as const, action: 'ask' as const, reason: 'r' }]
+    expect(toRuleViews(rules, [{ ruleId: 'same-action', action: 'ask' }])[0])
+      .toMatchObject({ action: 'ask', defaultAction: 'ask', overridden: true })
+  })
+
   it('projects matched tools and explicit toolkit capability ids for settings display', async () => {
     const { toRuleViews } = await import('./settingsSecurityModel')
     const rules = [{
@@ -70,6 +84,12 @@ describe('toRuleViews（规则合并视图）', () => {
       match: { toolName: ['toolkit.call', 'run_lark_cli'], signals: ['toolkit-capability:action.mcp.add'] }
     }]
     expect(toRuleViews(rules, [])[0]?.capabilities).toEqual(['toolkit.call', 'run_lark_cli', 'action.mcp.add'])
+  })
+
+  it('marks rules migrated from the legacy disabled list', async () => {
+    const { toRuleViews } = await import('./settingsSecurityModel')
+    const rules = [{ id: 'legacy-rule', when: 'invocation' as const, action: 'deny' as const, reason: 'r' }]
+    expect(toRuleViews(rules, [], [], ['legacy-rule'])[0]).toMatchObject({ migratedFromLegacyDisabled: true })
   })
 
   it('lanes 透传 match.lane（无 lane 限定的规则保持缺省=全链路通用）', async () => {

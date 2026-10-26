@@ -107,13 +107,13 @@ describe('SqliteAgentHistory', () => {
     expect(target).toMatchObject({ projection_kind: 'tool-result', canonical_event_id: 'outbox-result', origin: 'legacy', state: 'dirty' })
     expect(JSON.parse((target as { expected_event_ids_json: string }).expected_event_ids_json)).toEqual(['tool_result:outbox-tool'])
     expect(JSON.parse((target as { expected_events_json: string }).expected_events_json)).toEqual([{
-      type: 'tool_result', payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } }
+      type: 'tool_result', schemaVersion: 2, payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } }
     }])
     const proposalTarget = conn.prepare(`SELECT projection_kind,canonical_event_id,expected_events_json FROM session_ledger_projection_outbox
       WHERE canonical_event_id='outbox-proposal'`).get() as { projection_kind: string; canonical_event_id: string; expected_events_json: string }
     expect(proposalTarget).toMatchObject({ projection_kind: 'tool-call:outbox-tool', canonical_event_id: 'outbox-proposal' })
     expect(JSON.parse(proposalTarget.expected_events_json)).toEqual([{
-      type: 'tool_call', payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', name: 'read_file', args: { path: 'a.txt' }, turnId: 'turn-1' }
+      type: 'tool_call', schemaVersion: 2, payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', name: 'read_file', args: { path: 'a.txt' }, turnId: 'turn-1' }
     }])
     await fs.rm(workDir, { recursive: true, force: true })
     conn.close()
@@ -195,6 +195,36 @@ describe('SqliteAgentHistory', () => {
 
     expect(history.listStartupRecoveryWorkset()).toEqual([])
     await expect(history.recoverInterruptedInvocations()).resolves.toEqual([])
+    conn.close()
+  })
+
+  it('repairs parked invocation projections without appending a second terminal event', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const location = { workDir: '/tmp/parked-projection-recovery', sessionId: 'parked-projection-session', createdAt: 1000 }
+    await history.appendBatch([
+      { ...event('parked-projection-response', 1), kind: 'model-response-committed', payload: {
+        message: { role: 'assistant', toolCalls: [{ id: 'parked-projection-tool', name: 'read_file', input: { path: 'a.txt' } }] },
+        sessionLedger: { location, stepId: 'parked-projection-step', toolCalls: [
+          { toolUseId: 'parked-projection-tool', name: 'read_file', args: { path: 'a.txt' } }
+        ] }
+      } },
+      { ...event('parked-projection-terminal', 2), kind: 'invocation-parked', payload: { status: 'parked' } }
+    ], 0)
+    conn.prepare(`UPDATE canonical_projection_repairs SET status='pending',attempts=0,terminal_failed=0,last_error=NULL,updated_at=1
+      WHERE invocation_id=? AND repair_kind='invocation-projections' AND target_key=?`)
+      .run('inv-1', 'parked-projection-response')
+    const repairToolCallLedger = vi.fn(async () => undefined)
+
+    await expect(history.recoverInterruptedInvocations({ repairToolCallLedger })).resolves.toEqual([])
+
+    expect(repairToolCallLedger).toHaveBeenCalledOnce()
+    await expect(history.read('inv-1')).resolves.toMatchObject({
+      version: 2, events: [expect.objectContaining({ kind: 'model-response-committed' }), expect.objectContaining({ kind: 'invocation-parked' })]
+    })
+    expect(conn.prepare(`SELECT status FROM canonical_projection_repairs
+      WHERE invocation_id=? AND target_key=?`).get('inv-1', 'parked-projection-response'))
+      .toEqual({ status: 'completed' })
     conn.close()
   })
 
@@ -1178,7 +1208,7 @@ describe('SqliteAgentHistory', () => {
       ] }], requiredUserMessage: { id: 'atomic-required-user-unsupported', message: { role: 'user', content: [
         { type: 'text', text: 'same visible text' }, { type: 'audio', data: 'different unsupported payload' }
       ] } } } }], 0))
-      .rejects.toThrow('canonical invocation context payload is invalid')
+      .rejects.toThrow('canonical invocation context payload is invalid (content-block-unsupported)')
     expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-user-context-unsupported-event'))
       .toEqual({ count: 0 })
     db.close()
@@ -1809,6 +1839,68 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('folds canonical provider snapshots from real session history in session order and fails closed when legacy identity differs', async () => {
+    const conn = createDb()
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES('session-fold','s','m',0.7,1,1,1,'{}','{}',1,'generation-fold')`).run()
+    const history = new SqliteAgentHistory(conn, 1, () => 100, 'session-fold')
+    await history.appendBatch([{
+      ...event('snapshot-a', 1), invocationId: 'snapshot-inv-a', turnId: 'turn-a', kind: 'invocation-context-committed',
+      payload: { messages: [
+        { role: 'user', content: 'first', id: 'user-1', timestamp: 1 },
+        { role: 'assistant', content: 'answer', id: 'assistant-1', timestamp: 2 }
+      ] }
+    }], 0)
+    await new SqliteAgentHistory(conn, 1, () => 101, 'session-fold').appendBatch([{
+      ...event('snapshot-b', 1), invocationId: 'snapshot-inv-b', turnId: 'turn-b', kind: 'invocation-context-committed',
+      payload: { messages: [
+        { role: 'assistant', content: 'answer revised', id: 'assistant-1', timestamp: 2 },
+        { role: 'user', content: 'second', id: 'user-2', timestamp: 3 }
+      ] }
+    }], 0)
+
+    const folded = history.readCanonicalSessionTranscript('session-fold', [
+      { id: 'user-1', role: 'user', content: 'first', timestamp: 1 },
+      { id: 'assistant-1', role: 'assistant', content: 'answer revised', timestamp: 2 },
+      { id: 'user-2', role: 'user', content: 'second', timestamp: 3 }
+    ])
+    expect(folded).toEqual({
+      kind: 'matched',
+      messages: [
+        { role: 'user', content: 'first', timestamp: 1, id: 'user-1' },
+        { role: 'assistant', content: 'answer revised', timestamp: 2, id: 'assistant-1' },
+        { role: 'user', content: 'second', timestamp: 3, id: 'user-2' }
+      ],
+      sessionId: 'session-fold', sessionGeneration: 'generation-fold',
+      sessionSeq: 2, commitOrder: 2, watermarkEventId: 'snapshot-b', watermarkInvocationId: 'snapshot-inv-b', eventCount: 2
+    })
+    expect(history.readCanonicalSessionTranscript('session-fold', [
+      { id: 'user-1', role: 'user', content: 'first', timestamp: 1 },
+      { id: 'wrong-id', role: 'assistant', content: 'answer revised', timestamp: 2 },
+      { id: 'user-2', role: 'user', content: 'second', timestamp: 3 }
+    ])).toEqual({ kind: 'unavailable', reason: 'legacy-mismatch' })
+    expect(history.readCanonicalSessionTranscript('session-fold', [
+      { id: 'user-1', role: 'user', content: 'first', timestamp: 1 },
+      { id: 'assistant-1', role: 'assistant', content: 'answer revised', timestamp: 2, attachments: [{ name: 'not-canonical' }] },
+      { id: 'user-2', role: 'user', content: 'second', timestamp: 3 }
+    ])).toMatchObject({ kind: 'matched' })
+    for (const displayOrExecutionMetadata of [
+      { thinking: { content: 'thinking', isVisible: false, startTime: 1 } },
+      { contentSegments: [{ type: 'text', text: 'first', startTime: 1 }] },
+      { toolCalls: [{ id: 'tool', toolName: 'read_file', input: {}, status: 'completed' }] },
+      { toolUse: { toolUseId: 'tool', toolName: 'read_file' } },
+      { status: 'streaming' }, { sequence: 1 }, { imagesDeliveredToApi: true }, { skillHints: [{ id: 'hint' }] }
+    ]) {
+      expect(history.readCanonicalSessionTranscript('session-fold', [
+        { id: 'user-1', role: 'user', content: 'first', timestamp: 1 },
+        { id: 'assistant-1', role: 'assistant', content: 'answer revised', timestamp: 2, ...displayOrExecutionMetadata },
+        { id: 'user-2', role: 'user', content: 'second', timestamp: 3 }
+      ])).toMatchObject({ kind: 'matched' })
+    }
+    expect(history.readCanonicalSessionTranscript('other-session', [])).toEqual({ kind: 'unavailable', reason: 'session-missing' })
+    conn.close()
+  })
+
   it('folds committed responses after a context snapshot into the DB session transcript', async () => {
     const conn = createDb()
     conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
@@ -1898,6 +1990,34 @@ describe('SqliteAgentHistory', () => {
     await history.classifyLegacyProjectionRepairs(10)
     await history.recoverInterruptedInvocations({ repairInvocationTerminal: async () => undefined })
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='inv-1'").get()).toEqual({ status: 'completed', attempts: 1 })
+    conn.close()
+  })
+
+  it('repairs pending projections for a parked invocation without appending after its terminal event', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const location = { workDir: '/workspace', sessionId: 'parked-session', createdAt: 1 }
+    await history.appendBatch([
+      { ...event('parked-proposal', 1), kind: 'model-response-committed', payload: {
+        message: { role: 'assistant', toolCalls: [{ id: 'parked-tool', name: 'read_file', input: { path: 'a.txt' } }] },
+        sessionLedger: { location, stepId: 'parked-step', toolCalls: [{ toolUseId: 'parked-tool', name: 'read_file', args: { path: 'a.txt' } }] }
+      } },
+      { ...event('parked-approval-waiting', 2), kind: 'approval-waiting', payload: {
+        toolCallId: 'parked-tool', approvalId: 'parked-approval', answerer: 'user', reasonCode: 'script-confirm', requestedAt: 1
+      } },
+      { ...event('parked-approval-deferred', 3), kind: 'approval-deferred', payload: {
+        toolCallId: 'parked-tool', approvalId: 'parked-approval', todoId: 'parked-todo', invocationId: 'inv-1', checkpointId: 'parked-checkpoint', workflowRevision: 1
+      } },
+      { ...event('parked-terminal', 4), kind: 'invocation-parked', payload: { status: 'parked', reason: 'deferred-approval', todoId: 'parked-todo' } }
+    ], 0)
+
+    await expect(history.recoverInterruptedInvocations({ repairToolCallLedger: async () => undefined })).resolves.toEqual([])
+
+    expect((await history.read('inv-1')).events.map(({ kind }) => kind)).toEqual([
+      'model-response-committed', 'approval-waiting', 'approval-deferred', 'invocation-parked'
+    ])
+    expect(conn.prepare("SELECT status FROM canonical_projection_repairs WHERE repair_kind='invocation-projections'").get())
+      .toEqual({ status: 'completed' })
     conn.close()
   })
 

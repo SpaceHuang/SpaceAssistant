@@ -1,0 +1,9 @@
+{
+  "domainMigrationConfirmTitle": "Confirm Wiki domain migration",
+  "domainMigrationConfirmMessage": "Wiki files will be migrated using the reviewed manifest.",
+  "domainMigrationResumeMessage": "The previously confirmed, interrupted Wiki migration will continue.",
+  "domainMigrationConfirmDetail": "Files scanned: {{files}}; objects changed: {{changes}}; manifest fingerprint: {{manifestHash}}",
+  "domainMigrationCancel": "Cancel",
+  "domainMigrationConfirm": "Migrate",
+  "domainMigrationResume": "Continue migration"
+}

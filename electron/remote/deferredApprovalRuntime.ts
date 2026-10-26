@@ -1,7 +1,10 @@
 import type { AppDatabase } from '../database/sqliteStore'
+import { getDbConnection } from '../database/sqliteStore'
+import { runInTransaction } from '../database/transaction'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import type { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import type { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
+import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
 import type { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'
 import { createDeferredApprovalIngress } from './deferredApprovalIngress'
 import { createDeferredResumeCoordinator } from './deferredResumeCoordinator'
@@ -26,12 +29,15 @@ export function createDeferredApprovalRuntime(input: {
   scheduleRetry?: (delayMs: number, callback: () => void) => void
   recoverDispatchingExecutions?: Parameters<ReturnType<typeof createDeferredResumeCoordinator>['recoverDispatchingExecutions']>[0]
   recoverCompletionWake?: (sessionId: string) => void | Promise<void>
+  onFreshApprovalRequired?: Parameters<typeof createDeferredResumeCoordinator>[0]['onFreshApprovalRequired']
 }) {
   const scheduledSessions = new Set<string>()
   const scheduledCompletionSessions = new Set<string>()
+  const executionResults = createDeferredExecutionResultStore(input.db)
   const resume = createDeferredResumeCoordinator({
     db: input.db, channel: input.channel, todoStore: input.todoStore, envelopeStore: input.envelopeStore,
-    maxParallel: input.maxParallel, requirePolicyFence: true, recheck: input.recheck, dispatch: input.dispatch, audit: input.audit
+    maxParallel: input.maxParallel, requirePolicyFence: true, recheck: input.recheck, dispatch: input.dispatch, audit: input.audit,
+    ...(input.onFreshApprovalRequired ? { onFreshApprovalRequired: input.onFreshApprovalRequired } : {})
   })
   const ingress = createDeferredApprovalIngress({
     db: input.db,
@@ -55,6 +61,26 @@ export function createDeferredApprovalRuntime(input: {
         authorizationEpoch: binding.authorizationEpoch, originSessionId: binding.originSessionId, rule: binding.rule
       })
       return todo
+    },
+    rejectTodo: (request, commitReceipt) => {
+      if (input.getAuthorizationEpoch() !== request.authorizationEpoch) return false
+      const context = { channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
+        authorizationEpoch: request.authorizationEpoch, originSessionId: request.sessionId, rule: request.rule }
+      const rejectReceiptConflict = 'DEFERRED_APPROVAL_REJECT_RECEIPT_CONFLICT'
+      try {
+        return runInTransaction(getDbConnection(input.db), () => {
+          const todo = input.todoStore.get(request.todoId, context, request.now)
+          if (!todo || todo.status !== 'pending' || todo.invocationId !== request.invocationId) return false
+          if (!commitReceipt()) return false
+          if (!input.todoStore.invalidate(request.todoId, request.now)) throw new Error(rejectReceiptConflict)
+          executionResults.commitRejection({ todoId: request.todoId, invocationId: request.invocationId,
+            dispatchKey: `rejection:${request.todoId}:${request.notificationVersion}`, now: request.now })
+          return true
+        })
+      } catch (error) {
+        if (error instanceof Error && error.message === rejectReceiptConflict) return false
+        throw error
+      }
     },
     requestResume: (request, commitReceipt) => resume.requestResume(request, commitReceipt),
     audit: input.audit
@@ -116,6 +142,14 @@ export function createDeferredApprovalRuntime(input: {
     }) {
       if (request.channel !== input.channel) return { status: 'rejected' as const }
       const accepted = await ingress.handle(request)
+      if (accepted.status === 'denied') {
+        try {
+          await input.recoverCompletionWake?.(accepted.sessionId)
+        } catch {
+          scheduleCompletionWake(accepted.sessionId, 500)
+        }
+        return accepted
+      }
       if (accepted.status !== 'resume_requested') return accepted
       const dispatched = await dispatchPending(accepted.sessionId)
       return { ...accepted, dispatch: dispatched }

@@ -53,6 +53,29 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask', context: { factsProvenance: { factId: snapshot.factId, extractorVersion: snapshot.extractorVersion, completeness: snapshot.completeness, factsRevision: snapshot.factsRevision, policyVersion: snapshot.policyVersion } } })
   })
 
+  it.each([
+    ['new allow', { type: 'auto-allow', ruleId: 'new-policy-allow', reason: 'newly allowed' } as Decision, 'allow'],
+    ['new ask', { type: 'require-confirm', ruleId: 'new-policy-ask', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 } as Decision, 'ask']
+  ])('rejudges an unconfirmed pending ask after a policy revision to %s', async (_label, nextDecision, expectedKind) => {
+    const initial = result({ type: 'require-confirm', ruleId: 'old-ask', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 })
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(result(nextDecision))
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
+    await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask', reasonCode: 'old-ask' })
+    await expect(policy.evaluate({ ...binding, phase: 'recheck', authorizationVersion: 'policy-v2' })).resolves.toMatchObject({ kind: expectedKind })
+    expect(evaluateGate).toHaveBeenCalledTimes(2)
+  })
+
+  it('保留新版本 allow 的最终复核材料，旧 ask 不确认也可完成同版本 recheck', async () => {
+    const initial = result({ type: 'require-confirm', ruleId: 'old-ask', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 })
+    const freshAllow = result({ type: 'auto-allow', ruleId: 'new-allow', reason: 'new policy allows' })
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(freshAllow)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
+    await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask' })
+    await expect(policy.evaluate({ ...binding, phase: 'recheck', authorizationVersion: 'policy-v2' })).resolves.toMatchObject({ kind: 'allow' })
+    await expect(policy.evaluate({ ...binding, phase: 'recheck', authorizationVersion: 'policy-v2' })).resolves.toMatchObject({ kind: 'allow' })
+    expect(evaluateGate).toHaveBeenCalledTimes(3)
+  })
+
   it('projects prepared Feishu outbound content facts into the policy gate', async () => {
     const toolInput = { args: ['message', 'send', '--text', 'password=supersecret'] }
     const larkBinding = { ...binding, capabilityId: 'run_lark_cli', capability: { state: 'known-authorized' as const, id: 'run_lark_cli' },
@@ -282,7 +305,7 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toEqual({ kind: 'allow', authorizationVersion: 'policy-v1' })
   })
 
-  it('rejects a cache-hit recheck when the policy dependency fingerprint changed', async () => {
+  it('applies a newly allowing action when the policy dependency fingerprint changed', async () => {
     const initial = result({ type: 'require-confirm', ruleId: 'browser-navigate-ask-desktop', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 })
     initial.policyDecision = { dependencyFingerprint: 'policy-before', verdict: 'require-confirm', reasonCode: 'browser-navigate-ask-desktop', answerer: 'user' } as never
     const cached = result({ type: 'auto-allow', ruleId: 'cache-hit', reason: 'approval cache hit' })
@@ -293,8 +316,8 @@ describe('createAgentSdkSafetyPolicy', () => {
 
     await expect(policy.evaluate(confirmedBinding)).resolves.toMatchObject({ kind: 'ask' })
     markAgentSdkSafetyDecisionConfirmed(policy, confirmedBinding)
-    await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' }))
-      .resolves.toEqual({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+    await expect(policy.evaluate({ ...confirmedBinding, authorizationVersion: 'policy-v2', phase: 'recheck' }))
+      .resolves.toEqual({ kind: 'allow', authorizationVersion: 'policy-v2' })
   })
 
   it('discards the approved initial snapshot when fresh recheck material is unavailable', async () => {
@@ -423,7 +446,7 @@ describe('createAgentSdkSafetyPolicy', () => {
     }
   })
 
-  it('rejects a confirmed call if the authorization version changes before recheck', async () => {
+  it('requests a fresh decision if the authorization version changes before recheck', async () => {
     const evaluateGate = vi.fn(async () => result({ type: 'require-confirm', ruleId: 'same-rule', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }))
     const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
     const initialBinding = { ...binding, authorizationVersion: 'policy-before-confirm' }
@@ -432,8 +455,38 @@ describe('createAgentSdkSafetyPolicy', () => {
     markAgentSdkSafetyDecisionConfirmed(policy, { invocationId: binding.invocationId, toolCallId: binding.toolCallId })
 
     await expect(policy.evaluate({ ...initialBinding, authorizationVersion: 'policy-after-confirm', phase: 'recheck' }))
-      .resolves.toEqual({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+      .resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'same-rule' })
     expect(evaluateGate).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-enters the gate with changed policy actions after approval instead of reusing the old result', async () => {
+    const before = { dependencyFingerprint: 'sha256:policy-before', verdict: 'require-confirm', reasonCode: 'old-rule', answerer: 'user' } as const
+    const askAfter = { dependencyFingerprint: 'sha256:policy-after-ask', verdict: 'require-confirm', reasonCode: 'new-human-rule', answerer: 'user' } as const
+    const initial = { ...result({ type: 'require-confirm', ruleId: 'old-rule', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }), policyDecision: before }
+    const updatedAsk = { ...result({ type: 'require-confirm', ruleId: 'new-human-rule', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }), policyDecision: askAfter }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(updatedAsk)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
+    const initialBinding = { ...binding, authorizationVersion: 'revision-1' }
+    expect(await policy.evaluate(initialBinding)).toMatchObject({ kind: 'ask', reasonCode: 'old-rule' })
+    markAgentSdkSafetyDecisionConfirmed(policy, initialBinding)
+
+    await expect(policy.evaluate({ ...initialBinding, authorizationVersion: 'revision-2', phase: 'recheck' }))
+      .resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'new-human-rule' })
+  })
+
+  it('uses a newly allowing policy directly after the old approval is fenced', async () => {
+    const before = { dependencyFingerprint: 'sha256:policy-before', verdict: 'require-confirm', reasonCode: 'old-rule', answerer: 'user' } as const
+    const after = { dependencyFingerprint: 'sha256:policy-after-allow', verdict: 'auto-allow', reasonCode: 'new-allow-rule' } as const
+    const initial = { ...result({ type: 'require-confirm', ruleId: 'old-rule', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }), policyDecision: before }
+    const updatedAllow = { ...result({ type: 'auto-allow', ruleId: 'new-allow-rule', facts }), policyDecision: after }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(updatedAllow)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
+    const initialBinding = { ...binding, authorizationVersion: 'revision-1' }
+    expect(await policy.evaluate(initialBinding)).toMatchObject({ kind: 'ask' })
+    markAgentSdkSafetyDecisionConfirmed(policy, initialBinding)
+
+    await expect(policy.evaluate({ ...initialBinding, authorizationVersion: 'revision-2', phase: 'recheck' }))
+      .resolves.toEqual({ kind: 'allow', authorizationVersion: 'revision-2' })
   })
 
   it('allows an approved recheck when only an unrelated policy rule changes', async () => {

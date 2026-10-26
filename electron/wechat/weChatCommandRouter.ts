@@ -17,7 +17,10 @@ import { resolveWeChatSession } from './weChatSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { resolveClarificationControlMessage, type ClarificationResolverInput, type ClarificationResolverResult } from '../remote/clarificationInbound'
 import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSession, getRemoteAgentLease } from '../remote/remoteAgentRegistry'
-import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
+import { authorizeImInboundMessage, evaluateImInboundGuard, readImPolicyAuthorizationRevision, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
+import { requestImIngressApproval } from '../remote/imIngressApprovalPrompt'
+import { loadEffectivePolicyRules } from '../confirmation/policyRulesRuntime'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import { inboundSummaryForLog, previewText, quoteWireSummaryForLog, WECHAT_CLI_LINE_PREVIEW_MAX } from './weChatCliLogFields'
 import { logWeChatCliEvent } from './weChatCliLogger'
@@ -184,12 +187,14 @@ export class WeChatCommandRouter {
     if (!session || metadata?.source !== 'wechat' || typeof metadata.wechatMeta?.userId !== 'string') throw new Error('WECHAT_WAKE_SESSION_IDENTITY_INVALID')
     const config = mergeWeChatConfig(this.deps.getWeChatConfig())
     const guard = evaluateImInboundGuard({ channel: 'wechat', senderId: metadata.wechatMeta.userId,
-      getConfig: () => config, isLoggedIn: () => Boolean(config.loggedIn) })
+      getConfig: () => config, isLoggedIn: () => Boolean(config.loggedIn),
+      getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'wechat'), skipIngressPolicy: true })
     if (!guard.ok) throw new Error(`WECHAT_WAKE_AUTH_REJECTED:${guard.reason}`)
     const assertAuthorized = () => {
       const current = mergeWeChatConfig(this.deps.getWeChatConfig())
       const revalidated = revalidateImInboundGuard(guard.snapshot, {
-        getConfig: () => current, isLoggedIn: () => Boolean(current.loggedIn)
+        getConfig: () => current, isLoggedIn: () => Boolean(current.loggedIn),
+        getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'wechat')
       })
       if (!revalidated.ok) throw new Error(`WECHAT_WAKE_AUTH_REVOKED:${revalidated.reason}`)
     }
@@ -578,11 +583,16 @@ export class WeChatCommandRouter {
         remoteSenderAllowlist: c.remoteSenderAllowlist
       }
     }
-    const guard = evaluateImInboundGuard({
+    const guard = await authorizeImInboundMessage({
       channel: 'wechat',
       senderId: msg.userId,
+      messageId: msg.messageId,
       getConfig: getGuardConfig,
-      isLoggedIn: () => Boolean(mergeWeChatConfig(this.deps.getWeChatConfig()).loggedIn)
+      isLoggedIn: () => Boolean(mergeWeChatConfig(this.deps.getWeChatConfig()).loggedIn),
+      getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'wechat'),
+      getPolicyRevision: () => readImPolicyAuthorizationRevision(this.deps.db),
+      subscribePolicyChanges: (listener) => getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(msg.messageId, 'wechat', listener),
+      requestApproval: (request, signal) => requestImIngressApproval({ ...request, db: this.deps.db, messageText: msg.text, signal })
     })
     if (!guard.ok) {
       logWeChatCliEvent('warn', 'wechat.inbound.guard_reject', { reason: guard.reason, userId: msg.userId })

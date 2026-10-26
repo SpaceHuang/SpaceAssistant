@@ -86,6 +86,14 @@ describe('RemoteAuthorizationRegistry', () => {
     expect(audits[0]).toMatchObject({ clearedCacheEntries: 2 })
   })
 
+  it('unregisters an audit appender when its service shuts down', () => {
+    const append = vi.fn()
+    const unregister = registry.registerAuditAppender(append)
+    unregister()
+    registry.invalidate('wechat', 'service_stopped')
+    expect(append).not.toHaveBeenCalled()
+  })
+
   it('approve after invalidate cannot use old generation semantics', () => {
     const pending = new PendingRequestRegistry<{
       id: string

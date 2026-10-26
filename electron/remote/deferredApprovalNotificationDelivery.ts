@@ -157,6 +157,57 @@ export function createDeferredApprovalNotificationDelivery(input: {
       return { state, notificationVersion: created.dto.notificationVersion }
     },
 
+    /**
+     * Replace an approval notice after a fresh policy gate has produced a new ask.
+     * The caller must first rebind the still-pending todo to the new gate facts and
+     * policy revision. Only the exact current notification version may be replaced.
+     */
+    async replaceAndSend(request: {
+      todoId: string; invocationId: string; channel: Scope['channel']; identityKey: string; ownerId: string; authorizationEpoch: number
+      rule: { ruleId: string; factsHash: string }; replacesNotificationVersion: number
+      safeActionSummary: string; safeTargetSummary?: string; impactSummary?: string
+      reasonSummary?: string; userDelegation: string; untrustedMaterial: string; attachmentInfo?: DeferredApprovalAttachmentInfo; now?: number
+    }): Promise<{ state: 'not_ready' | 'undelivered' | 'delivered'; notificationVersion?: number }> {
+      const now = request.now ?? Date.now()
+      const todo = input.todoStore.get(request.todoId, {
+        channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
+        authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(request.todoId), rule: request.rule
+      }, now)
+      const intent = input.intentStore.get(request.invocationId)
+      const previous = list(request.todoId).at(-1)
+      if (!todo || todo.status !== 'pending' || todo.invocationId !== request.invocationId ||
+        !intent || intent.todoId !== request.todoId || !input.intentStore.authorizeResume(request.invocationId) ||
+        !previous || previous.notificationVersion !== request.replacesNotificationVersion ||
+        previous.state === 'invalidated') {
+        return { state: 'not_ready' }
+      }
+      const version = previous.notificationVersion + 1
+      const code = allocate({ channel: todo.channel, identityKey: todo.identityKey, ownerId: todo.ownerId })
+      if (!code) return { state: 'not_ready' }
+      const dto = buildDto(todo, version, code, request)
+      const created = runInTransaction(liveConn(), () => {
+        const latest = liveConn().prepare(`SELECT notification_version,state FROM deferred_approval_notifications
+          WHERE todo_id=? ORDER BY notification_version DESC LIMIT 1`).get(todo.todoId) as
+          { notification_version: number; state: NotificationRow['state'] } | undefined
+        const currentTodo = input.todoStore.get(todo.todoId, {
+          channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
+          authorizationEpoch: request.authorizationEpoch, originSessionId: todo.originSessionId, rule: request.rule
+        }, now)
+        if (!currentTodo || currentTodo.status !== 'pending' || latest?.notification_version !== request.replacesNotificationVersion ||
+          latest.state === 'invalidated') return false
+        liveConn().prepare(`UPDATE deferred_approval_notifications SET state='superseded',updated_at=?
+          WHERE todo_id=? AND notification_version=? AND state IN ('delivered','undelivered')`)
+          .run(now, todo.todoId, request.replacesNotificationVersion)
+        persist(currentTodo, dto, 'undelivered', now, null)
+        return true
+      })
+      if (!created) return { state: 'not_ready' }
+      input.audit(buildDeferredApprovalAuditEvent({ kind: 'pending', lane: todo.channel, sessionId: todo.originSessionId,
+        todoId: todo.todoId, invocationId: todo.invocationId, ts: now }))
+      const state = await sendCreated(todo, dto)
+      return { state, notificationVersion: version }
+    },
+
     async retryForAuthenticatedInbound(request: Scope & { now?: number }): Promise<Array<{ todoId: string; state: 'delivered' | 'undelivered'; notificationVersion: number; messageId?: string }>> {
       const now = request.now ?? Date.now()
       const rows = liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
@@ -216,6 +267,17 @@ export function createDeferredApprovalNotificationDelivery(input: {
     },
 
     list,
+    /**
+     * Routing fact only: confirms whether a platform reply target was previously delivered
+     * as a deferred-approval notice in this exact channel/identity/owner scope. The ingress
+     * still performs the final short-code, version, epoch, expiry, and todo checks.
+     */
+    isTrustedReplyTarget(request: { channel: Scope['channel']; identityKey: string; ownerId: string; messageId: string }): boolean {
+      if (![request.identityKey, request.ownerId, request.messageId].every((value) => value.trim())) return false
+      return Boolean(liveConn().prepare(`SELECT 1 FROM deferred_approval_notifications
+        WHERE channel=? AND identity_key=? AND owner_id=? AND trusted_message_id=? LIMIT 1`)
+        .get(request.channel, request.identityKey, request.ownerId, request.messageId))
+    },
     resolveCurrent(request: Scope & { shortCode: string; now?: number }) {
       const now = request.now ?? Date.now()
       const row = liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications WHERE channel=? AND identity_key=? AND owner_id=?

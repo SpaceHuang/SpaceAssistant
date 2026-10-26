@@ -4,10 +4,10 @@ import path from 'path'
 import type { AppIpcContext } from '../appIpc'
 import { validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
 import { approveOneTimeUnknownEffectRetry, hasPendingUnknownEffectRetryApproval, readUnknownEffectRecoveryState, recordUnknownEffectRiskAcceptance } from '../runtime/unknownEffectRecovery'
-import type { IpcMain } from 'electron'
+import { BrowserWindow, dialog, type IpcMain } from 'electron'
 import { AUTO_CONTRACT } from '../processOutput/contracts'
 import { AgentLogEventName, AgentLogFields } from '../agentLogger/types'
-import { CONFIG_KEYS, readSkillsConfig, readWikiConfig, readToolsConfig, scheduleBackup, flushBackup, backupAfterMessagePatch, readExposureInputsFromDb } from './ipcShared'
+import { CONFIG_KEYS, readAppLocale, readSkillsConfig, readWikiConfig, readToolsConfig, scheduleBackup, flushBackup, backupAfterMessagePatch, readExposureInputsFromDb } from './ipcShared'
 import { ChatImageAttachment } from '../../src/shared/domainTypes'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { Message, ModelEntry, SessionSkillsState, SkillDefinition, SkippedCandidate, SkillRouteRecentMessage, SkillRouteResult } from '../../src/shared/domainTypes'
@@ -39,7 +39,11 @@ import { existsSync } from 'fs'
 import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from '../projectMemory'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { getWikiStatus } from '../wiki/wikiStatus'
-import { importRawFromWorkDir, wikiImportFileTreeChange } from '../wiki/wikiImport'
+import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
+import { createWikiBootstrapMigrationService } from '../wiki/wikiBootstrapMigration'
+import { confirmAndApplyWikiBootstrapMigration } from '../wiki/wikiBootstrapMigrationApproval'
+import { createHostTranslator } from '../i18n/hostTranslate'
+import { importAllRawFromWorkDir, importRawFromWorkDir, wikiImportFileTreeChange } from '../wiki/wikiImport'
 import { initWikiStructure, readWikiSchema } from '../wiki/wikiInit'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { makeRecordTrustToCache } from './ipcShared'
@@ -1018,6 +1022,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       }),
     wikiStatus: async () => getWikiStatus(ctx.getWorkDir(), readWikiConfig(ctx.db), { userDataPath: ctx.getUserDataPath(), db: ctx.db }),
     wikiImportRaw: (payload) => importRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), payload.srcRelPath, { userDataPath: ctx.getUserDataPath(), db: ctx.db }),
+    wikiImportAllRaw: () => importAllRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), { userDataPath: ctx.getUserDataPath(), db: ctx.db }),
     appendHintMessage: async (sessionId, hint) => {
       const msg = createSkillHintSystemMessage(sessionId, hint)
       const { sequence } = sessionCommands.appendNonTurnMessage(msg)
@@ -1502,16 +1507,47 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     return result
   })
 
+  ipcMain.handle('wiki:domain-migration-preview', async () => {
+    const wikiConfig = readWikiConfig(ctx.db)
+    const root = path.join(ctx.getUserDataPath(), wikiConfig.rootPath)
+    return createWikiBootstrapMigrationService(root).preview()
+  })
+
+  ipcMain.handle('wiki:domain-migration-apply', async (event, payload: { manifestHash?: string }) => {
+    if (typeof payload?.manifestHash !== 'string') throw new Error('wiki-migration-confirmation-mismatch')
+    const wikiConfig = readWikiConfig(ctx.db)
+    const root = path.join(ctx.getUserDataPath(), wikiConfig.rootPath)
+    const service = createWikiBootstrapMigrationService(root)
+    const translate = createHostTranslator({ locale: readAppLocale(ctx.db) })
+    const result = await confirmAndApplyWikiBootstrapMigration(service, payload.manifestHash, async preview => {
+      const options = {
+        type: 'warning' as const,
+        title: translate({ key: 'wikiHost.domainMigrationConfirmTitle' }),
+        message: translate({ key: preview.resumeRequired ? 'wikiHost.domainMigrationResumeMessage' : 'wikiHost.domainMigrationConfirmMessage' }),
+        detail: translate({ key: 'wikiHost.domainMigrationConfirmDetail', params: { files: preview.files.length, changes: preview.changes.length, manifestHash: preview.manifestHash } }),
+        buttons: [translate({ key: 'wikiHost.domainMigrationCancel' }), translate({ key: preview.resumeRequired ? 'wikiHost.domainMigrationResume' : 'wikiHost.domainMigrationConfirm' })],
+        defaultId: 0,
+        cancelId: 0
+      }
+      const parent = BrowserWindow.fromWebContents(event.sender)
+      const confirmation = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+      return confirmation.response === 1
+    })
+    if (result.status === 'completed') skillManager.invalidateCache()
+    return result
+  })
+
   ipcMain.handle('wiki:status', async (): Promise<WikiStatus> => {
     // BLK-1（§10.1/§12.1）：wiki:status 同样携带迁移检测——WikiPane 提示条/向导门控的唯一数据源
     const wikiConfig = readWikiConfig(ctx.db)
     const status = getWikiStatus(ctx.getWorkDir(), wikiConfig, { userDataPath: ctx.getUserDataPath(), db: ctx.db })
+    const lifecycle = await createWikiLifecycleController(path.join(ctx.getUserDataPath(), wikiConfig.rootPath)).readIfUninitialized()
     const detection = detectLegacyWikiRoots({
       profiles: ctx.workDirManager.listProfiles().map((p) => ({ workDir: p.path })),
       storedRootPath: wikiConfig.rootPath,
       sharedRootInitialized: status.initialized === true
     })
-    return { ...status, pendingLegacyMigration: detection.pendingLegacyMigration, legacyRoots: detection.legacyRoots }
+    return { ...status, ...(lifecycle ? { domainLifecycle: lifecycle.lifecycle } : {}), pendingLegacyMigration: detection.pendingLegacyMigration, legacyRoots: detection.legacyRoots }
   })
 
   ipcMain.handle('wiki:get-schema', async (): Promise<{ content: string } | null> => {

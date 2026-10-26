@@ -8,6 +8,29 @@ const executionContext = { workDir: '/workspace/project', sessionId: 'origin-1',
 const canonicalArgs = { path: 'notes/plan.md', content: 'approved bytes' }
 
 describe('deferred immutable call envelope', () => {
+  it('rebinds only policy authorization metadata and recomputes envelope integrity', () => {
+    const db = createMemoryAppDb()
+    const store = createDeferredEnvelopeStore(db)
+    const args = { recipient: 'peer', text: 'hello' }
+    const versions = { taskRevision: 1 }
+    const context = { toolName: 'wechat_send', toolInput: { recipient: 'peer', text: 'hello' }, ruleId: 'old-rule', factsHash: 'old-facts',
+      policyBehaviorVersion: 'im-standard-v2', policyRevision: 1, policyEpoch: 1, confirmationReceipt: 'old-receipt' }
+    const original = store.put({ invocationId: 'policy-rebind', requestId: 'request', turnId: 'turn', toolCallId: 'call',
+      toolName: 'wechat_send', canonicalArgs: args, contentVersions: versions, executionContext: context })
+
+    const updated = store.updatePolicy('policy-rebind', { ruleId: 'new-rule', factsHash: 'new-facts',
+      policyBehaviorVersion: 'im-standard-v2', policyRevision: 2, policyEpoch: 2, confirmationReceipt: 'new-receipt' })
+
+    expect(updated).toMatchObject({ invocationId: original.invocationId, toolName: original.toolName,
+      canonicalArgs: original.canonicalArgs, contentVersions: original.contentVersions,
+      executionContext: { ruleId: 'new-rule', factsHash: 'new-facts', policyRevision: 2, policyEpoch: 2,
+        confirmationReceipt: 'new-receipt' } })
+    expect(store.get('policy-rebind')).toEqual(updated)
+    expect(store.verify(updated!, { requestId: 'request', turnId: 'turn', toolCallId: 'call', toolName: 'wechat_send',
+      canonicalArgs: args, contentVersions: versions, executionContext: updated!.executionContext })).toEqual({ ok: true })
+    db.close()
+  })
+
   it('binds canonical args, content versions, execution context, and format versions', () => {
     const db = createMemoryAppDb()
     const store = createDeferredEnvelopeStore(db)

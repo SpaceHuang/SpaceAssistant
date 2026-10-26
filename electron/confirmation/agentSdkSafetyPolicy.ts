@@ -76,9 +76,10 @@ export function createAgentSdkSafetyPolicy(input: {
       const key = callKey(binding)
       const previous = binding.phase === 'recheck' ? initial.get(key) : undefined
       if (binding.phase === 'recheck') {
-        if (!previous) return { kind: 'deny', reasonCode: 'MISSING_MATERIAL' }
-        // Claim before any asynchronous resolution so concurrent rechecks cannot reuse approval.
-        initial.delete(key)
+        if (!previous && !binding.policyChanged) return { kind: 'deny', reasonCode: 'MISSING_MATERIAL' }
+        // Claim the prior decision before asynchronous work; a policyChanged recheck
+        // without a prior baseline instead performs a completely fresh gate pass.
+        if (previous) initial.delete(key)
       }
       try {
         const call = input.resolveToolCall?.(binding)
@@ -110,7 +111,16 @@ export function createAgentSdkSafetyPolicy(input: {
         if (binding.signal?.aborted) return deny(binding, 'POLICY_DENY')
         const decision = result.decision
         if (binding.phase === 'recheck') {
-          if (!previous) return deny(binding, 'MISSING_MATERIAL')
+          if (!previous) {
+            if (!binding.policyChanged) return deny(binding, 'MISSING_MATERIAL')
+            await input.onInitialGateResult?.(structuredClone(binding), structuredClone(result), gateArgs)
+            if (decision.type === 'auto-allow') return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
+            if (decision.type === 'require-confirm') {
+              initial.set(key, { binding: structuredClone(binding), result: structuredClone(result), args: gateArgs, confirmed: false })
+              return ask(binding, result, gateArgs)
+            }
+            return { kind: 'deny', reasonCode: 'POLICY_DENY' }
+          }
           const sameFacts = createHash('sha256').update(JSON.stringify(previous.result.facts)).digest('hex') === createHash('sha256').update(JSON.stringify(result.facts)).digest('hex')
           const samePolicyDependencies = previous.result.policyDecision && result.policyDecision
             ? previous.result.policyDecision.dependencyFingerprint === result.policyDecision.dependencyFingerprint
@@ -126,6 +136,26 @@ export function createAgentSdkSafetyPolicy(input: {
           const sameConfirmedDecision = previous.confirmed &&
             (decision.type === 'auto-allow' || decision.type === 'require-confirm') &&
             sameConfirmedDecisionRule && sameFacts
+          const sameExecutionMaterials = sameFacts && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget &&
+            sameScriptApprovalBinding && sameWriteApprovalConfiguration
+          if (!samePolicyDependencies && sameExecutionMaterials) {
+            // A policy revision changes the decision authority, even when host facts and
+            // execution targets are identical. Apply the new action now; never carry the
+            // old confirmation across the changed dependency fingerprint.
+            initial.delete(key)
+            if (decision.type === 'auto-allow') {
+              await input.onInitialGateResult?.(structuredClone(binding), structuredClone(result), gateArgs)
+              // Keep a fresh, unconfirmed baseline for the SDK's final authorization
+              // after prepare/replan. It carries no prior receipt or approval.
+              initial.set(key, { binding: structuredClone(binding), result: structuredClone(result), args: gateArgs, confirmed: false })
+              return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
+            }
+            if (decision.type === 'require-confirm') {
+              initial.set(key, { binding: structuredClone(binding), result: structuredClone(result), args: gateArgs, confirmed: false })
+              return ask(binding, result, gateArgs)
+            }
+            return { kind: 'deny', reasonCode: 'POLICY_DENY' }
+          }
           const recheckAllowed = samePolicyDependencies && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget && sameScriptApprovalBinding && sameWriteApprovalConfiguration &&
             (previous.confirmed ? sameConfirmedDecision : decision.type === 'auto-allow')
           initial.delete(key)

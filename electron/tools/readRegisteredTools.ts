@@ -38,6 +38,14 @@ function validateBoundary(
   if (!result.ok) throw new Error(result.caseId)
 }
 
+function sameReadSubjectAcrossPolicyRevision(left: ReadExecutionPermit, right: ReadExecutionPermit): boolean {
+  const targetSubject = (permit: ReadExecutionPermit) => permit.targets.map(({ decisionRuleId: _decisionRuleId, ...target }) => target)
+  return left.requestId === right.requestId && left.invocationId === right.invocationId && left.toolUseId === right.toolUseId &&
+    left.toolName === right.toolName && left.schemaVersion === right.schemaVersion && left.inputDigest === right.inputDigest &&
+    JSON.stringify(left.input) === JSON.stringify(right.input) &&
+    JSON.stringify(targetSubject(left)) === JSON.stringify(targetSubject(right))
+}
+
 function registerReadTool(name: ReadToolName, executor: ToolExecutor): RegisteredTool {
   const boundPermits = new WeakMap<PreparedRead, ReadExecutionPermit>()
   return definePlannedTool<Record<string, unknown>, PreparedRead, ToolExecutorResult>({
@@ -63,7 +71,10 @@ function registerReadTool(name: ReadToolName, executor: ToolExecutor): Registere
       const bound = boundPermits.get(prepared) ?? prepared.permit
       if (!bound) boundPermits.set(prepared, permitSnapshot(permit)!)
       else if (JSON.stringify(permitSnapshot(permit)) !== JSON.stringify(bound)) {
-        throw new Error('READ_PREPARED_PERMIT_CHANGED')
+        if (!sameReadSubjectAcrossPolicyRevision(bound, permit)) throw new Error('READ_PREPARED_PERMIT_CHANGED')
+        // A fresh policy gate may issue a new rule/dependency-bound permit for the
+        // same immutable read subject. Adopt that trusted result before final-check.
+        boundPermits.set(prepared, permitSnapshot(permit)!)
       }
       validateBoundary(name, prepared.input, execution.requestId, execution.toolUseId, permit)
     },

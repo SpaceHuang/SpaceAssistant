@@ -15,9 +15,16 @@ import { resolveSharedWikiRoot } from './wikiInit'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import { withWikiWriteMutex } from './wikiWriteMutex'
 import type { AppDatabase } from '../database/sqliteStore'
+import { createWikiFileStore } from './wikiFileStore'
+import { createHash, randomUUID } from 'node:crypto'
+import { createWikiLifecycleController } from './wikiLifecycle'
 
 export type WikiImportRawResult =
-  | { ok: true; rawRelPath: string; copied: boolean }
+  | { ok: true; rawRelPath: string; copied: boolean; sourceId?: string; sourceRevision?: number }
+  | { ok: false; error: string }
+
+export type WikiImportAllRawResult =
+  | { ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }>; remainingCount: number }
   | { ok: false; error: string }
 
 export function wikiImportFileTreeChange(result: WikiImportRawResult): FileTreeChangeEvent | null {
@@ -56,9 +63,10 @@ export async function importRawFromWorkDir(
   workDir: string,
   wikiConfig: WikiConfig,
   srcRelPath: string,
-  shared?: WikiImportSharedOptions
+  shared?: WikiImportSharedOptions,
+  ingestOrigin?: { projectId: string; relativePath: string }
 ): Promise<WikiImportRawResult> {
-  if (shared?.userDataPath) return importRawToSharedRoot(workDir, wikiConfig, srcRelPath, shared)
+  if (shared?.userDataPath) return importRawToSharedRoot(workDir, wikiConfig, srcRelPath, shared, ingestOrigin)
 
   const normalized = normalizeRelPath(srcRelPath)
   if (!normalized) return { ok: false, error: '路径无效' }
@@ -100,13 +108,95 @@ export async function importRawFromWorkDir(
   }
 }
 
+/** Host-only bulk selection: enumerate regular Markdown/text files under workDir, never follow symlinks. */
+export async function importAllRawFromWorkDir(
+  workDir: string,
+  wikiConfig: WikiConfig,
+  shared: WikiImportSharedOptions
+): Promise<WikiImportAllRawResult> {
+  const supported = new Set(['.md', '.markdown', '.txt'])
+  const excluded = new Set(['.git', '.worktrees', 'node_modules', 'dist', 'build', 'target'])
+  const candidates: string[] = []
+  const pending = ['']
+  try {
+    while (pending.length) {
+      const relative = pending.pop()!
+      const absolute = resolveSafePath(workDir, relative || '.')
+      const entries = await fs.readdir(absolute, { withFileTypes: true })
+      for (const entry of entries) {
+        if (entry.name.startsWith('.') || excluded.has(entry.name)) continue
+        const child = relative ? `${relative}/${entry.name}` : entry.name
+        if (entry.isSymbolicLink()) continue
+        if (entry.isDirectory()) {
+          if (entry.name !== wikiConfig.rootPath) pending.push(child)
+          continue
+        }
+        if (entry.isFile() && supported.has(path.extname(entry.name).toLowerCase())) candidates.push(child)
+      }
+      if (candidates.length > 250) return { ok: false, error: '可导入文本超过 250 个，请改用单文件 ingest' }
+    }
+    candidates.sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    const candidateFiles: Array<{ relativePath: string; absolutePath: string }> = []
+    let scanBytes = 0
+    for (const relativePath of candidates) {
+      const absolutePath = resolveSafePath(workDir, relativePath)
+      const metadata = await getFileMetadata(absolutePath)
+      if (!metadata.isText || metadata.size > 10 * 1024 * 1024) return { ok: false, error: `${relativePath}: 仅支持 10 MiB 内的文本资料` }
+      scanBytes += metadata.size
+      if (scanBytes > 50 * 1024 * 1024) return { ok: false, error: '可导入文本总量超过 50 MiB，请改用单文件 ingest' }
+      candidateFiles.push({ relativePath, absolutePath })
+    }
+    const projectId = computeProjectId(workDir)
+    const imported = await readBulkImportOrigins(resolveSharedWikiRoot(shared.userDataPath!, wikiConfig), projectId)
+    const pendingCandidates: string[] = []
+    for (const candidate of candidateFiles) {
+      const bytes = await fs.readFile(candidate.absolutePath)
+      const contentHash = createHash('sha256').update(bytes).digest('hex')
+      if (!imported.get(candidate.relativePath)?.has(contentHash)) pendingCandidates.push(candidate.relativePath)
+    }
+    candidates.splice(0, candidates.length, ...pendingCandidates)
+    const maxBatch = Number.isSafeInteger(wikiConfig.maxBatchIngest) ? Math.max(1, Math.min(250, wikiConfig.maxBatchIngest)) : 10
+    const remainingCount = Math.max(0, candidates.length - maxBatch)
+    candidates.splice(maxBatch)
+    const sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> = []
+    for (const srcRelPath of candidates) {
+      const result = await importRawFromWorkDir(workDir, wikiConfig, srcRelPath, shared, { projectId, relativePath: srcRelPath })
+      if (!result.ok) return { ok: false, error: `${srcRelPath}: ${result.error}` }
+      if (!result.sourceId || !result.sourceRevision) return { ok: false, error: `${srcRelPath}: 来源绑定未完成` }
+      sources.push({ sourceId: result.sourceId, sourceRevision: result.sourceRevision, displayName: path.basename(srcRelPath) })
+    }
+    return { ok: true, sources, remainingCount }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 
 /** T1.12c：ingest 落共享根 raw/<projectId>/，落盘经 realBase 沙箱 + wikiWriteMutex（§9.4）。 */
 async function importRawToSharedRoot(
   workDir: string,
   wikiConfig: WikiConfig,
   srcRelPath: string,
-  shared: WikiImportSharedOptions
+  shared: WikiImportSharedOptions,
+  ingestOrigin?: { projectId: string; relativePath: string }
+): Promise<WikiImportRawResult> {
+  const realBase = resolveSharedWikiRoot(shared.userDataPath!, wikiConfig)
+  return withWikiWriteMutex(path.join(realBase, '.wiki-domain-lock'), async () => {
+    const lifecycle = await createWikiLifecycleController(realBase).read()
+    if (lifecycle.lifecycle !== 'domain_enabled') {
+      return { ok: false, error: `Wiki lifecycle blocks import: ${lifecycle.lifecycle}` }
+    }
+    return importRawToSharedRootUnderLock(workDir, wikiConfig, srcRelPath, shared, realBase, ingestOrigin)
+  })
+}
+
+async function importRawToSharedRootUnderLock(
+  workDir: string,
+  wikiConfig: WikiConfig,
+  srcRelPath: string,
+  shared: WikiImportSharedOptions,
+  realBase: string,
+  ingestOrigin?: { projectId: string; relativePath: string }
 ): Promise<WikiImportRawResult> {
   const normalized = normalizeRelPath(srcRelPath)
   if (!normalized) return { ok: false, error: '路径无效' }
@@ -119,8 +209,20 @@ async function importRawToSharedRoot(
     return { ok: false, error: '该路径不能收录到 Wiki' }
   }
 
-  const userDataPath = shared.userDataPath!
-  const realBase = resolveSharedWikiRoot(userDataPath, wikiConfig)
+  if (kind === 'raw') {
+    const relative = normalized.startsWith(`${WIKI_VOCABULARY_PREFIX}/`) ? normalized.slice(WIKI_VOCABULARY_PREFIX.length + 1) : normalized
+    try {
+      const sourceAbs = resolveSafePath(realBase, relative)
+      const stat = await fs.stat(sourceAbs)
+      if (stat.isDirectory()) return { ok: false, error: '目录不能收录到 Wiki' }
+      const meta = await getFileMetadata(sourceAbs)
+      if (!meta.isText) return { ok: false, error: '首版仅支持文本资料（.md / .txt）' }
+      const projectId = relative.split('/')[1] || computeProjectId(workDir)
+      const rawRelPath = `${WIKI_VOCABULARY_PREFIX}/${relative}`
+      const source = await registerSourceBinding(realBase, sourceAbs, relative, projectId)
+      return { ok: true, rawRelPath, copied: false, sourceId: source.sourceId, sourceRevision: source.sourceRevision }
+    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+  }
 
   let srcAbs: string
   try {
@@ -131,11 +233,6 @@ async function importRawToSharedRoot(
     if (!meta.isText) return { ok: false, error: '首版仅支持文本资料（.md / .txt）' }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
-  }
-
-  if (kind === 'raw') {
-    // 已在共享库 raw/ 内的显式路径：返回词汇形态
-    return { ok: true, rawRelPath: normalized, copied: false }
   }
 
   // 项目登记（projectId = workDir 哈希；同目录幂等收敛）
@@ -155,18 +252,51 @@ async function importRawToSharedRoot(
       const rawRelInRoot = await resolveAvailableRawPath(realBase, baseRawRelInRoot)
       if (!rawRelInRoot) throw new Error('无法生成 raw 目标路径')
       const dest = resolveSafePath(realBase, rawRelInRoot)
-      await fs.mkdir(path.dirname(dest), { recursive: true })
-      await fs.copyFile(srcAbs, dest)
+      const bytes = await fs.readFile(srcAbs)
+      await createWikiFileStore(realBase).write(rawRelInRoot, bytes, null)
       return dest
     })
     const finalRel = path.relative(realBase, destAbs).replace(/\\/g, '/')
     // 复审残余（BLK-4 延伸）：词汇前缀恒为常量——rootPath 改名后 my-lib/raw/... 不可挂载
     const rawRelPath = `${WIKI_VOCABULARY_PREFIX}/${finalRel}`
-    return { ok: true, rawRelPath, copied: true }
+    const source = await registerSourceBinding(realBase, destAbs, finalRel, projectId, ingestOrigin)
+    return { ok: true, rawRelPath, copied: true, sourceId: source.sourceId, sourceRevision: source.sourceRevision }
   } catch (e) {
     if (e instanceof Error && e.message === '无法生成 raw 目标路径') return { ok: false, error: e.message }
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+}
+
+async function registerSourceBinding(root: string, sourcePath: string, relativePath: string, projectId: string, ingestOrigin?: { projectId: string; relativePath: string }): Promise<{ sourceId: string; sourceRevision: number }> {
+  const bytes = await fs.readFile(sourcePath)
+  if (bytes.length > 10 * 1024 * 1024 || bytes.includes(0)) throw new Error('首版仅支持 10 MiB 内的文本资料')
+  const sourceId = randomUUID()
+  const sourceRevision = 1
+  const store = createWikiFileStore(root)
+  await store.writeImmutable(`.wiki-service/source-history/${sourceId}/${sourceRevision}.md`, bytes)
+  const contentHash = createHash('sha256').update(bytes).digest('hex')
+  await store.write(`.wiki-service/sources/${sourceId}.json`, `${JSON.stringify({ formatVersion: 1, sourceId, sourceRevision, displayName: path.basename(relativePath), projectId, rawPath: relativePath, contentHash, ...(ingestOrigin ? { originProjectId: ingestOrigin.projectId, originRelPath: ingestOrigin.relativePath } : {}) }, null, 2)}\n`)
+  return { sourceId, sourceRevision }
+}
+
+async function readBulkImportOrigins(root: string, projectId: string): Promise<Map<string, Set<string>>> {
+  const directory = path.join(root, '.wiki-service', 'sources')
+  const imported = new Map<string, Set<string>>()
+  let names: string[]
+  try { names = await fs.readdir(directory) }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return imported; throw error }
+  for (const name of names) {
+    if (!/^[0-9a-f-]{36}\.json$/i.test(name)) continue
+    try {
+      const binding = JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')) as { originProjectId?: unknown; originRelPath?: unknown; contentHash?: unknown }
+      if (binding.originProjectId === projectId && typeof binding.originRelPath === 'string' && typeof binding.contentHash === 'string') {
+        const hashes = imported.get(binding.originRelPath) ?? new Set<string>()
+        hashes.add(binding.contentHash)
+        imported.set(binding.originRelPath, hashes)
+      }
+    } catch { /* Ignore malformed, unrelated source records. */ }
+  }
+  return imported
 }
 
 export async function copyFileInWorkDir(

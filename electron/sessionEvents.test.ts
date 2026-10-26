@@ -239,6 +239,30 @@ describe('session events', () => {
     }
   })
 
+  it('accepts a legacy tool result missing only the canonical raw artifact id', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tool-result-artifact-compat-'))
+    const sink = getSessionEventSink(root, 'tool-result-artifact-compat', 1000)
+    const artifactId = `artifact-${'a'.repeat(64)}`
+    const legacyResult = { success: true, data: { rawArtifact: { bytes: 8, sha256: 'b'.repeat(64), truncated: true } } }
+    const canonicalResult = { success: true, data: { rawArtifact: { bytes: 8, sha256: 'b'.repeat(64), truncated: true, artifactId } } }
+    try {
+      await sink.appendCritical({ type: 'tool_result', schemaVersion: 1, payload: { toolUseId: 'artifact-tool', stepId: 'artifact-step', result: legacyResult } })
+
+      await expect(ensureToolResultEvent(sink, {
+        toolUseId: 'artifact-tool', stepId: 'artifact-step', result: canonicalResult
+      })).resolves.toMatchObject({ type: 'tool_result', payload: { result: legacyResult } })
+
+      await expect(ensureToolResultEvent(sink, {
+        toolUseId: 'artifact-tool', stepId: 'artifact-step',
+        result: { ...canonicalResult, data: { rawArtifact: { bytes: 9, sha256: 'b'.repeat(64), truncated: true, artifactId } } }
+      })).rejects.toThrow(/conflicting tool result ledger event/)
+      expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'tool_result')).toHaveLength(1)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects duplicate tool result identities even when the first projection matches canonical History', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tool-result-duplicate-'))
     const sink = getSessionEventSink(root, 'tool-result-duplicate', 1000)
@@ -630,12 +654,21 @@ describe('session events', () => {
     expect(computeSessionUsageFromEvents(events)).toMatchObject({ input_tokens: 8, output_tokens: 10, cache_read_input_tokens: 2 })
   })
 
-  it('rejects malformed or unknown event types', () => {
-    expect(() => parseSessionEvent({ seq: 1, time: 1, type: 'unknown', payload: {} })).toThrow()
+  it('preserves unknown event types as opaque records instead of treating them as damaged history', () => {
+    expect(parseSessionEvent({ schemaVersion: 1, seq: 1, time: 1, type: 'future_event', payload: { value: 1 } }))
+      .toMatchObject({ schemaVersion: 1, seq: 1, type: 'future_event', payload: { value: 1 }, unsupportedSchema: true })
   })
 
-  it('rejects unknown event schema versions so replay can degrade safely', () => {
-    expect(() => parseSessionEvent({ schemaVersion: 99, seq: 1, time: 1, type: 'request_header', payload: {} })).toThrow(/schema/i)
+  it('preserves future event schema versions opaquely without degrading or semantically replaying them', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-future-schema-'))
+    const eventsPath = path.join(root, 'events.jsonl')
+    await fs.writeFile(eventsPath, `${JSON.stringify({ schemaVersion: 99, seq: 1, time: 1, type: 'compaction_end', payload: {
+      compactionId: 'future', status: 'committed', startSeq: 1, summarySeq: 2
+    } })}\n`)
+    const read = await readSessionEventsDetailed(eventsPath)
+    expect(read).toMatchObject({ integrity: 'complete', issues: [], events: [{ schemaVersion: 99, unsupportedSchema: true, payload: { compactionId: 'future' } }] })
+    expect(replayCompactionEvents(read.events)).toEqual({ committed: [], rejected: [] })
+    await fs.rm(root, { recursive: true, force: true })
   })
 
   it('ignores a torn final JSONL line while retaining valid events', async () => {
@@ -870,11 +903,11 @@ describe('session events', () => {
   it('does not discard a complete but invalid final JSON line as a torn write', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-invalid-tail-'))
     const eventsPath = path.join(root, 'events.jsonl')
-    await fs.writeFile(eventsPath, JSON.stringify({ seq: 1, time: 1, type: 'not-a-real-event', payload: {} }))
+    await fs.writeFile(eventsPath, JSON.stringify({ schemaVersion: 0, seq: 1, time: 1, type: 'request_header', payload: {} }))
     const malformed: number[] = []
     await expect(readSessionEvents(eventsPath, { onMalformed: (_error, line) => malformed.push(line) })).resolves.toEqual([])
     expect(malformed).toEqual([1])
-    expect(await fs.readFile(eventsPath, 'utf8')).toContain('not-a-real-event')
+    expect(await fs.readFile(eventsPath, 'utf8')).toContain('"schemaVersion":0')
   })
 
   it('returns an explicit integrity report for malformed event lines', async () => {

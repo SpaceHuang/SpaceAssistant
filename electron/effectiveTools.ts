@@ -1,5 +1,6 @@
 import type { PolicyRule } from '../src/shared/confirmation/types'
-import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
+import { BUILTIN_TOOL_DEFINITIONS } from '../src/shared/builtinToolDefinitions'
+import { filterBuiltinToolsForApi, filterBuiltinToolsForApiWithApproval } from './toolsConfigRuntime'
 import { snapshotEntriesToAnthropicTools, type McpToolSnapshot, type McpToolSnapshotEntry } from './mcp/mcpToolRegistry'
 import { trimMcpToolsForBudget, MCP_TOOLS_PER_ROUND_MAX, MCP_TOOLS_TOTAL_BYTES_MAX, type McpServerProfile } from '../src/shared/mcpTypes'
 import type { BrowserConfig, ShellConfig, ToolsConfig } from '../src/shared/domainTypes'
@@ -108,8 +109,9 @@ export function computeEffectiveTools(args: {
   trim?: { allow?: readonly string[]; deny?: readonly string[] }
   /** FR5/§6.1：延迟加载计划（computeDeferredPlan 产出）。缺省 = 现状 eager 行为。 */
   deferredPlan?: DeferredPlan
+  resolvedBuiltinTools?: typeof BUILTIN_TOOL_DEFINITIONS
 }): EffectiveTools {
-  const builtin = filterBuiltinToolsForApi(
+  const builtin = args.resolvedBuiltinTools ?? filterBuiltinToolsForApi(
     args.builtinConfig,
     args.feishuConfig,
     args.browserConfig,
@@ -212,6 +214,30 @@ export function computeEffectiveTools(args: {
     eagerBudgetDropped,
     deferredDegradedToEager
   }
+}
+
+export async function computeEffectiveToolsWithExposureApproval(
+  args: Parameters<typeof computeEffectiveTools>[0] & {
+    resolveExposureRules?: () => PolicyRule[]
+    resolveExposureAuthorizationVersion?: () => string
+    subscribeExposurePolicyChanges?: (listener: () => void) => () => void
+  },
+  requestApproval: (request: { lane: import('../src/shared/confirmation/types').ExecutionLane; toolName: string; ruleId: string }, signal?: AbortSignal) => Promise<boolean>
+): Promise<EffectiveTools> {
+  const resolvedBuiltinTools = await filterBuiltinToolsForApiWithApproval({
+    cfg: args.builtinConfig,
+    feishu: args.feishuConfig,
+    browserConfig: args.browserConfig,
+    shellConfig: args.shellConfig,
+    wechat: args.wechatConfig,
+    remoteContext: args.remoteContext,
+    rules: args.exposureRules,
+    resolveRules: args.resolveExposureRules,
+    resolveAuthorizationVersion: args.resolveExposureAuthorizationVersion,
+    subscribePolicyChanges: args.subscribeExposurePolicyChanges,
+    requestApproval
+  })
+  return computeEffectiveTools({ ...args, resolvedBuiltinTools })
 }
 
 export function authorizeToolCall(toolName: string, authorizedToolNames: ReadonlySet<string>):

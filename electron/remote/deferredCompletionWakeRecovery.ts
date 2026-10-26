@@ -28,6 +28,33 @@ export function decideDeferredCompletionWakeRecovery(input: {
   return { kind: 'notify-interrupted', outcome: turn.outcome ?? 'unknown' }
 }
 
+/** Rejection is terminal: replaying the original prompt can cause an agent to request the same write again. */
+export function isRejectedDeferredCompletionResult(result: Record<string, unknown> | null): boolean {
+  if (!result || result.kind !== 'failed' || !result.value || typeof result.value !== 'object' || Array.isArray(result.value)) return false
+  return (result.value as { code?: unknown }).code === 'USER_REJECTED'
+}
+
+/** Delivers a fixed rejection receipt without asking the model to continue the rejected task. */
+export async function deliverDeferredApprovalRejectionNotice(db: AppDatabase, input: {
+  todoId: string
+  sessionId: string
+  now?: number
+  channel: 'wechat' | 'feishu'
+  identityKey: string
+  ownerId: string
+  recipient: string
+  send: (text: string) => Promise<void>
+}): Promise<void> {
+  const eventId = `deferred-approval-rejected:${input.todoId}`
+  const text = '该操作已拒绝，没有执行。'
+  await createImLifecycleOutbox(db).deliver({ eventId, sessionId: input.sessionId, stage: 'failed', text }, input.send,
+    () => createHostImOutboundFacts({ channel: input.channel, body: text, sessionId: input.sessionId,
+      identityKey: input.identityKey, ownerId: input.ownerId, recipient: input.recipient, chatType: 'p2p' }))
+  if (!markDeferredCompletionWakeDelivered(db, input.todoId, input.now)) {
+    throw new Error('DEFERRED_APPROVAL_REJECTION_ACK_FAILED')
+  }
+}
+
 /** User-visible failure receipt is durable; only a successful platform send consumes the completion outbox. */
 export async function deliverInterruptedDeferredCompletionNotice(db: AppDatabase, input: {
   todoId: string

@@ -572,6 +572,20 @@ export interface WikiProjectSummary {
   orphan: boolean
 }
 
+export interface WikiBootstrapMigrationPreview {
+  manifestHash: string
+  resumeRequired: boolean
+  files: Array<{ path: string; sha256: string; kind: 'page' | 'legacy-index' | 'legacy-log' | 'raw' }>
+  diagnostics: Array<{ code: string; paths: string[]; message: string }>
+  changes: Array<{ objectKind: string; relativePath: string; oldHash: string; newHash: string }>
+  review: {
+    categories: Array<{ legacyName: string; categoryId: string; description: string; status: 'active' | 'deprecated'; parentCategoryId?: string }>
+    indexNotes: Array<{ sourcePath: string; targetTitle: string }>
+    unclassifiedIndexContent: Array<{ sourcePath: string }>
+    readonlyLogArchives: Array<{ sourcePath: string; archivePath: string; sha256: string }>
+  }
+}
+
 export interface WikiStatus {
   rootPath: string
   initialized: boolean
@@ -590,6 +604,8 @@ export interface WikiStatus {
   projects?: WikiProjectSummary[]
   /** 迁移状态持久化镜像（T2.6 报告查看数据源 = config.wiki.migration） */
   migration?: WikiMigrationState
+  /** Current domain-tool lifecycle; omitted for legacy roots without a valid bootstrap control plane. */
+  domainLifecycle?: 'initializing' | 'domain_ready' | 'domain_enabled' | 'recovery_required'
 }
 
 export interface SessionWikiState {

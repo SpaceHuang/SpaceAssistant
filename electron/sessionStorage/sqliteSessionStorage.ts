@@ -84,14 +84,17 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   inspectMaintenance?: () => readonly MaintenanceState[]
   recoveryStages?: Partial<Pick<SessionRecoveryDependencies, 'history' | 'snapshots' | 'coordinator' | 'reconcile' | 'continuations' | 'ledgerRepairs'>>
 } = {}): SessionStorage {
-  const readCompactionReplayForLocation = async (sessionId: string, workDir: string): Promise<{ replay: CompactionReplay; sink: ReturnType<typeof getSessionEventSink> }> => {
+  const readCompactionReplayForLocation = async (sessionId: string, workDir: string): Promise<{
+    replay: CompactionReplay; sink?: ReturnType<typeof getSessionEventSink>; canPersist: boolean
+  }> => {
     const session = queries.readSession(sessionId)
     if (!session) throw new Error('SESSION_NOT_FOUND')
-    if (options.ensureSessionLedgerReady && !(await options.ensureSessionLedgerReady({ session, workDir }))) throw new Error('SESSION_LEDGER_BLOCKED')
+    const canPersist = !options.ensureSessionLedgerReady || await options.ensureSessionLedgerReady({ session, workDir })
+    if (!canPersist) return { replay: queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }, canPersist: false }
     const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
     const fileReplay = await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)
     const canonicalReplay = queries.readCanonicalCompactionReplay(sessionId)
-    if (!canonicalReplay) return { replay: fileReplay, sink }
+    if (!canonicalReplay) return { replay: fileReplay, sink, canPersist: true }
     const canonicalIds = new Set(canonicalReplay.committed.map(({ compactionId }) => compactionId))
     const rejectedIds = new Set(canonicalReplay.rejected.flatMap(({ compactionId }) => compactionId ? [compactionId] : []))
     const collidesWithRejectedCanonical = fileReplay.committed.some(({ compactionId }) => rejectedIds.has(compactionId))
@@ -99,7 +102,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     if (collidesWithRejectedCanonical) throw new Error('CANONICAL_COMPACTION_REPLAY_INVALID')
     // Keep the file replay as the ordered compatibility source while it contains pre-canonical facts.
     // Once every file fact has a canonical owner, History supplies the replay without a JSONL dependency.
-    return { replay: hasLegacyOnlyCompaction ? fileReplay : canonicalReplay, sink }
+    return { replay: hasLegacyOnlyCompaction ? fileReplay : canonicalReplay, sink, canPersist: true }
   }
   const readContextMeterEventsForLocation = async (sessionId: string, workDir: string): Promise<readonly CanonicalContextMeterEvent[]> => {
     const session = queries.readSession(sessionId)
@@ -213,8 +216,8 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     const workDir = options.getWorkDirForSession?.(sessionId)
     const userDataDir = options.getUserDataDir?.()
     if (!session || !workDir || !userDataDir) throw new Error('SESSION_CONTEXT_RESOURCES_UNAVAILABLE')
-    const { sink, replay } = await readCompactionReplayForLocation(sessionId, workDir)
-    return createStorageSessionContextAdapter({ sessionId, session, queries, ensureChatBodyV1, workDir, userDataDir, replay, sink, isBusy,
+    const { sink, replay, canPersist } = await readCompactionReplayForLocation(sessionId, workDir)
+    return createStorageSessionContextAdapter({ sessionId, session, queries, ensureChatBodyV1, workDir, userDataDir, replay, sink, canPersist, isBusy,
       commitCanonicalCompaction: async ({ operationId, compactionId, output, historyPayload }) => {
         const invocationId = operationId
         const turnId = operationId

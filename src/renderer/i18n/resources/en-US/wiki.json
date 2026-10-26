@@ -25,5 +25,28 @@
     "conflictsTitle": "Conflict duplicates (manual merge needed)",
     "failedTitle": "Failed items (retryable; legacy folders untouched)",
     "reportClose": "Got it"
+  },
+  "domainEnabledNotice": "Domain tools manage Wiki content. You can still browse and open pages here.",
+  "domainMigration": {
+    "pending": "This Wiki needs a domain format migration before domain tools can be used. Review the change list first.",
+    "review": "Review domain migration",
+    "title": "Review Wiki domain migration",
+    "summary": "Preflight scanned {{files}} files and plans to change {{changes}} objects.",
+    "resume": "A previously confirmed migration was interrupted. Continuing will verify each item against the original manifest without recalculating or expanding its scope.",
+    "files": "Scanned files",
+    "changes": "Planned changes",
+    "categories": "Category mapping",
+    "indexNotes": "Index notes converted to regular pages",
+    "archives": "Read-only log archives",
+    "diagnostics": "Migration conflicts",
+    "noChanges": "No files need changes. Confirmation will only complete lifecycle initialization.",
+    "confirm": "Confirm migration",
+    "cancel": "Cancel",
+    "complete": "Domain migration completed",
+    "recoveryRequired": "Migration control state needs recovery. Ask an administrator to inspect the Wiki files first.",
+    "staleReview": "Files changed during preflight. The change list was refreshed; review it again before confirming.",
+    "kind": "Type",
+    "hashChange": "Content fingerprint change",
+    "newFile": "New file"
   }
 }

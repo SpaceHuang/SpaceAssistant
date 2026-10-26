@@ -34,6 +34,14 @@ describe('feishuInboundParser', () => {
     expect(msg?.replyToMessageId).toBe('approval-notice-1')
   })
 
+  it('maps the current lark-cli reply_to field to the approval parent message id', () => {
+    const msg = parseCompactInboundEvent({
+      message_id: 'reply-current-cli', reply_to: 'approval-notice-current-cli', chat_id: 'c1', chat_type: 'p2p',
+      sender_id: 'u1', content: '批准 01'
+    })
+    expect(msg?.replyToMessageId).toBe('approval-notice-current-cli')
+  })
+
   it('retains previously supported compact field aliases', () => {
     const msg = parseCompactInboundEvent({
       messageId: 'm-legacy', chatId: 'c-legacy', chatType: 'p2p', sender_open_id: 'ou_legacy',

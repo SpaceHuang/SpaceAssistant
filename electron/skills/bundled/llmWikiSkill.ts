@@ -5,38 +5,39 @@ export const LLM_WIKI_SKILL_NAME = 'llm-wiki'
 
 export const BUNDLED_LLM_WIKI_SKILL_MD = `---
 name: llm-wiki
-description: "把内容存入/查询共享知识库（Wiki）：提及存入 wiki、llm-wiki、知识库时使用。直接读写 \`llm-wiki/\` 前缀路径即可，勿在文件系统搜索 wiki 目录"
+description: "把内容存入/查询共享知识库（Wiki）：通过 memory.wiki_* 专属能力查找、读取、导入和保存知识"
 triggers: [存入wiki, 存入 wiki, 存到wiki, 存到知识库, 写入知识库, 收藏到知识库, 录入知识库, 知识库, llm-wiki, llm wiki]
 version: "1.0.0"
 author: "SpaceAssistant"
 ---
 
-# 共享知识库（llm-wiki）读写
+# 共享知识库（Wiki）领域操作
 
 ## 核心约定（先读这里）
 
-- 共享知识库的**唯一接口是 \`llm-wiki/\` 路径前缀**（词汇前缀固定为 \`llm-wiki/\`，不随设置或存储位置变化；设置页管理的是物理存储位置，不影响词汇路径）：
-  - 写入：\`write_file { path: "llm-wiki/<分类>/<标题>.md", content: ... }\`
-  - 读取：\`read_file { path: "llm-wiki/..." }\`；检索：\`grep\` 带 \`llm-wiki/\` 前缀路径
-- 工具层会自动把 \`llm-wiki/...\` 挂载到共享知识库的实际存储位置（应用数据目录）。
-  **物理目录不在工作目录下，禁止用 \`list_directory\` / \`run_shell\` / \`grep\` 在文件系统里搜索 wiki 目录**——搜不到，也不需要。
-- \`llm-wiki/\` 下既有内容的路径就是知识库的「词汇路径」，直接读写即可。
+- 共享知识库通过 \`memory\` 发现入口提供 \`memory.wiki_*\` 领域操作。先按查询词发现需要的工具，再调用其完整 schema。
+- Wiki 工具参数和结果使用 pageId、sourceId 等领域标识；不得提供或推导 Wiki 文件路径。
+- 工具发现只披露 schema，不授予额外访问权限；每次操作仍经过当前会话的授权和确认规则。
 
 ## 流程
 
 ### 写入（存入 wiki / 存入知识库）
-1. 先 \`read_file\` 或 \`grep\` 检查目标主题是否已有条目，避免重复建页。
-2. 确定词汇路径：\`llm-wiki/<分类目录>/<标题>.md\`；分类沿用已有目录习惯（可先 \`list_directory { path: "llm-wiki" }\` 看顶层结构）。
-3. \`write_file\` 写入 Markdown；内容较长时组织好小节结构。
-4. 回执用户时给出**词汇路径**（如 \`llm-wiki/技术笔记/xxx.md\`），不要给出物理绝对路径。
+1. 使用 \`memory.wiki_get_schema\` 获取有效分类与规则。
+2. 使用 \`memory.wiki_search\` 查重，并读取候选页面。
+3. 使用 \`memory.wiki_save_page\` 创建或更新知识页面。
+4. 新资料先通过 \`memory.wiki_import_source\` 取得应用绑定的 \`sourceId\`，再用 \`memory.wiki_read_source\` 读取。
+5. 页面正文由 Agent 撰写；index、log 与 raw 内容由 Wiki 服务管理。
 
 ### 查询 / 整理
-1. \`list_directory { path: "llm-wiki" }\` 或 \`grep\`（路径 \`llm-wiki\`）定位条目。
-2. \`read_file\` 读取后按用户要求总结、改写或重组；整理结果同样以 \`write_file\` 写回 \`llm-wiki/\`。
+1. 使用 \`memory.wiki_search\` 定位条目。
+2. 用 \`memory.wiki_open_page\` 固定页面版本，再用 \`memory.wiki_read_page\` 读取有界片段。
+3. 用户要求改写时，用 \`memory.wiki_save_page\` 保存并提交当前 schemaVersion 与 expectedRevision。
 
 ### 异常处理（fail-closed，不要绕行）
-- 报「只读别名 / wiki-readonly-alias」：该路径是迁移保留的旧别名，改写到 \`llm-wiki/\` 下对应新路径（报错信息里已给出目标位置）。
-- 提示知识库未启用：告知用户在 设置 → Wiki 中开启后重试；不要把内容写到 workDir 其他位置冒充知识库。
+- 来源导入使用应用绑定的 sourceRef；拒绝模型提供的任意路径。
+- SCHEMA 更新先提案，再由用户通过现有确认界面批准；不得在普通页面保存中修改 SCHEMA。
+- 页面历史恢复先列出版本、完整展示最终页面，再请求用户确认；automation lane 拒绝恢复。
+- Wiki 服务未就绪、身份冲突或版本冲突时停止并报告，不得改用通用文件工具绕过。
 `
 
 let cachedBundledSkill: SkillDefinition | null = null
