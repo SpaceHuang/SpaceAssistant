@@ -26,7 +26,6 @@ type LargeContextEventCapture = Readonly<{
   messageCount: number
   requiredUserByteLength: number | null
   requiredUserMessageRef?: Readonly<{ id: string; messageIndex: number }>
-  messages: readonly Readonly<{ message_index: number; message_json: string }>[]
   requiredUserJson?: string
   extraPayloadJson: string
 }>
@@ -94,17 +93,27 @@ export function readProjectionHistoryChunk(
         if (row.session_seq !== nextSessionSequence + 1 || row.commit_order < 1) {
           return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence, reason: 'history-order-invalid' }
         }
+        if (input.staging && rawEvents.length === 0 &&
+          (row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')) {
+          const largeContext = conn.prepare(`SELECT json_type(payload_json,'$.messages') AS messages_type,
+            json_array_length(payload_json,'$.messages') AS message_count,
+            (SELECT COALESCE(SUM(CAST(json_extract(item.value,'$.__spaceassistant_spill_v1.byteLength') AS INTEGER)),0)
+              FROM json_each(agent_history_events.payload_json,'$.messages') item) AS spill_bytes
+            FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
+            { messages_type: string | null; message_count: number | null; spill_bytes: number | null } | undefined
+          const expandedBound = storedPayloadBytes + Number(largeContext?.spill_bytes ?? 0) * 6
+          if (largeContext?.messages_type === 'array' && Number.isSafeInteger(largeContext.message_count) &&
+            (largeContext.message_count ?? 0) > 0 && expandedBound > MAX_STAGED_SOURCE_CHUNK_BYTES &&
+            expandedBound <= MAX_SEGMENTED_HISTORY_EVENT_BYTES) return { kind: 'stage-large-context-event', row, watermark }
+        }
         if (storedPayloadBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) {
-          if (input.staging && (row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted') && rawEvents.length === 0) {
+          if (input.staging && (row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted') && rawEvents.length === 0 &&
+            storedPayloadBytes <= MAX_SEGMENTED_HISTORY_EVENT_BYTES) {
             return { kind: 'stage-large-context-event', row, watermark }
           }
           return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
             eventSequence: row.session_seq, observedByteLength: storedPayloadBytes, observedEventRows: 1,
             reason: 'oversized-event-exceeds-staging-budget' }
-        }
-        if (storedPayloadBytes > input.maxBytes && input.staging && rawEvents.length === 0 &&
-          (row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')) {
-          return { kind: 'stage-large-context-event', row, watermark }
         }
         if (storedPayloadBytes > input.maxBytes && !input.allowOversizedChunk) return { kind: 'deferred-large', permit,
           afterSessionSequence: input.afterSessionSequence, eventSequence: row.session_seq,
@@ -258,22 +267,17 @@ function readLargeContextEventCapture(
   if (!Number.isSafeInteger(row.payload_byte_length) || row.payload_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
   const shape = conn.prepare(`SELECT json_type(payload_json,'$.messages') AS messages_type,
     json_array_length(payload_json,'$.messages') AS message_count,
+    (SELECT COALESCE(SUM(length(CAST(item.value AS BLOB))),0) FROM json_each(agent_history_events.payload_json,'$.messages') item) AS message_json_byte_length,
     length(CAST(json_extract(payload_json,'$.requiredUserMessage') AS BLOB)) AS required_user_byte_length,
     json_extract(payload_json,'$.requiredUserMessage.id') AS required_user_id,
     json_remove(payload_json,'$.messages','$.requiredUserMessage') AS extra_payload_json
     FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
     { messages_type: string | null; message_count: number | null; required_user_byte_length: number | null;
-      required_user_id: string | null; extra_payload_json: string } | undefined
+      required_user_id: string | null; message_json_byte_length: number; extra_payload_json: string } | undefined
   if (shape?.messages_type !== 'array' || !Number.isSafeInteger(shape.message_count) || (shape.message_count ?? 0) < 1 ||
     Buffer.byteLength(shape.extra_payload_json, 'utf8') > MAX_STAGED_SOURCE_CHUNK_BYTES || (shape.required_user_byte_length !== null &&
       shape.required_user_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES)) return undefined
-  const messages = conn.prepare(`SELECT CAST(item.key AS INTEGER) AS message_index,item.value AS message_json
-    FROM agent_history_events event,json_each(event.payload_json,'$.messages') item
-    WHERE event.event_id=? AND event.session_id=? ORDER BY CAST(item.key AS INTEGER)`).all(row.event_id, permit.sessionId) as
-    Array<{ message_index: number; message_json: string }>
-  if (messages.length !== shape.message_count || messages.reduce((total, item) => total + Buffer.byteLength(item.message_json, 'utf8'), 0) > MAX_SEGMENTED_HISTORY_EVENT_BYTES) {
-    return undefined
-  }
+  if (!Number.isSafeInteger(shape.message_json_byte_length) || shape.message_json_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
   let requiredUserJson: string | undefined
   let requiredUserMessageRef: Readonly<{ id: string; messageIndex: number }> | undefined
   if (shape.required_user_byte_length !== null) {
@@ -299,9 +303,20 @@ function readLargeContextEventCapture(
     }
   }
   return Object.freeze({ messageCount: shape.message_count!, requiredUserByteLength: shape.required_user_byte_length,
-    messages: Object.freeze(messages.map((item) => Object.freeze(item))), extraPayloadJson: shape.extra_payload_json,
+    extraPayloadJson: shape.extra_payload_json,
     ...(requiredUserMessageRef ? { requiredUserMessageRef } : {}),
     ...(requiredUserJson !== undefined ? { requiredUserJson } : {}) })
+}
+
+function isCurrentLargeEvent(conn: ReturnType<typeof getDbConnection>, permit: ProjectionHistoryChunkPermit,
+  row: ProjectionHistoryEventRow): boolean {
+  const current = conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,
+    length(CAST(payload_json AS BLOB)) AS payload_byte_length,session_seq,commit_order,created_at
+    FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as ProjectionHistoryEventRow | undefined
+  return !!current && current.invocation_id === row.invocation_id && current.sequence === row.sequence &&
+    current.event_id === row.event_id && current.idempotency_key === row.idempotency_key && current.turn_id === row.turn_id &&
+    current.schema_version === row.schema_version && current.kind === row.kind && current.payload_byte_length === row.payload_byte_length &&
+    current.session_seq === row.session_seq && current.commit_order === row.commit_order && current.created_at === row.created_at
 }
 
 /** Stage a large canonical context event as bounded message/fact arrays without materializing its JSON array. */
@@ -319,20 +334,29 @@ function stageOversizedContextEvent(
       !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(locator) || path.basename(locator) !== locator)) return undefined
   const availableLocators = tempLocators.slice(1)
   const writtenSegments: SegmentedEventPart[] = []
-  const stagedFiles: Array<{ tempLocator: string; bytes: Buffer }> = []
-  let current: { kind: 'messages' | 'facts'; locator: string; tempLocator: string; parts: Buffer[]; hash: ReturnType<typeof createHash>;
+  const openedFiles = new Set<string>()
+  let current: { kind: 'messages' | 'facts'; locator: string; tempLocator: string; fd: number; hash: ReturnType<typeof createHash>;
     byteLength: number; itemCount: number; firstItemIndex: number } | undefined
   const itemCounts: Record<'messages' | 'facts', number> = { messages: 0, facts: 0 }
+  const openStagedFile = (tempLocator: string): number => {
+    const fd = fs.openSync(path.join(staging!.root, tempLocator), 'wx', 0o600)
+    openedFiles.add(tempLocator)
+    return fd
+  }
+  const writeStagedFile = (fd: number, bytes: Buffer) => {
+    let offset = 0
+    while (offset < bytes.byteLength) offset += fs.writeSync(fd, bytes, offset, bytes.byteLength - offset)
+  }
   const closeCurrent = () => {
     if (!current) return
     const closing = Buffer.from(']')
-    current.parts.push(closing)
+    writeStagedFile(current.fd, closing)
     current.hash.update(closing)
     current.byteLength += 1
-    const bytes = Buffer.concat(current.parts)
+    fs.fsyncSync(current.fd)
+    fs.closeSync(current.fd)
     writtenSegments.push({ kind: current.kind, tempLocator: current.tempLocator, locator: current.locator, byteLength: current.byteLength,
       payloadDigest: current.hash.digest('hex'), itemCount: current.itemCount, firstItemIndex: current.firstItemIndex })
-    stagedFiles.push({ tempLocator: current.tempLocator, bytes })
     current = undefined
   }
   const beginCurrent = (kind: 'messages' | 'facts') => {
@@ -342,7 +366,9 @@ function stageOversizedContextEvent(
     const hash = createHash('sha256')
     const opening = Buffer.from('[')
     hash.update(opening)
-    current = { kind, locator, tempLocator, parts: [opening], hash, byteLength: opening.byteLength, itemCount: 0, firstItemIndex: itemCounts[kind] }
+    const fd = openStagedFile(tempLocator)
+    writeStagedFile(fd, opening)
+    current = { kind, locator, tempLocator, fd, hash, byteLength: opening.byteLength, itemCount: 0, firstItemIndex: itemCounts[kind] }
   }
   const appendFragmentedItem = (bytes: Buffer, kind: SegmentedEventPart['kind'], itemIndex: number): boolean => {
     if (bytes.byteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return false
@@ -353,8 +379,11 @@ function stageOversizedContextEvent(
       if (!tempLocator) return false
       const locator = tempLocator.slice(1, -4) + '.blob'
       const start = fragmentIndex * MAX_HISTORY_EVENT_SEGMENT_BYTES
-      const fragment = Buffer.from(bytes.subarray(start, Math.min(bytes.byteLength, start + MAX_HISTORY_EVENT_SEGMENT_BYTES)))
-      stagedFiles.push({ tempLocator, bytes: fragment })
+      const fragment = bytes.subarray(start, Math.min(bytes.byteLength, start + MAX_HISTORY_EVENT_SEGMENT_BYTES))
+      const fd = openStagedFile(tempLocator)
+      writeStagedFile(fd, fragment)
+      fs.fsyncSync(fd)
+      fs.closeSync(fd)
       writtenSegments.push({ kind, encoding: 'json-item-fragment', tempLocator, locator,
         byteLength: fragment.byteLength, payloadDigest: createHash('sha256').update(fragment).digest('hex'),
         itemCount: 1, firstItemIndex: itemIndex, fragmentIndex, fragmentCount })
@@ -377,8 +406,8 @@ function stageOversizedContextEvent(
       try { beginCurrent(kind) } catch { return false }
     }
     const separator = current!.itemCount > 0 ? Buffer.from(',') : Buffer.alloc(0)
-    if (separator.byteLength) { current!.parts.push(separator); current!.hash.update(separator); current!.byteLength += 1 }
-    current!.parts.push(bytes)
+    if (separator.byteLength) { writeStagedFile(current!.fd, separator); current!.hash.update(separator); current!.byteLength += 1 }
+    writeStagedFile(current!.fd, bytes)
     current!.hash.update(bytes)
     current!.byteLength += bytes.byteLength
     current!.itemCount += 1
@@ -386,21 +415,38 @@ function stageOversizedContextEvent(
     return true
   }
 
+  let stageSucceeded = false
+  let stageReturned = false
   try {
     let messageCount = 0
     let messageByteLength = 0
     const ids: string[] = []
-    for (const item of capture.messages) {
-      if (item.message_index !== messageCount) return undefined
-      let message: unknown
-      try { message = JSON.parse(item.message_json) } catch { return undefined }
+    while (messageCount < capture.messageCount) {
+      const batch = runInTransaction(conn, () => {
+        if (readProjectionSourceIdentity(conn, permit.sessionId, permit.sessionGeneration) !== permit.sourceIdentityJson ||
+          !isCurrentLargeEvent(conn, permit, row)) return 'source-drift' as const
+        return conn.prepare(`SELECT CAST(item.key AS INTEGER) AS message_index,item.value AS message_json
+          FROM agent_history_events event,json_each(event.payload_json,'$.messages') item
+          WHERE event.event_id=? AND event.session_id=? AND CAST(item.key AS INTEGER)>=?
+          ORDER BY CAST(item.key AS INTEGER) LIMIT 16`).all(row.event_id, permit.sessionId, messageCount) as
+          Array<{ message_index: number; message_json: string }>
+      })
+      if (batch === 'source-drift') return { kind: 'source-drift', permit, afterSessionSequence: input.afterSessionSequence }
+      if (batch.length === 0) return undefined
+      for (const item of batch) {
+        if (item.message_index !== messageCount) return undefined
+        let message: unknown
+        try { message = JSON.parse(item.message_json) } catch { return undefined }
       const spillDescriptors = collectSpillDescriptorsStrict(message)
       const spillBytes = spillDescriptors.reduce((total, descriptor) => total + descriptor.byteLength, 0)
       if (spillBytes > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
-      let hydrated: unknown
-      try { hydrated = hydrateSourceTruthSpills(message, path.join(path.dirname(permit.dbPath), 'spill')) }
-      catch { return undefined }
-      const serialized = JSON.stringify(hydrated)
+      let hydrated: unknown = message
+      let serialized: string | undefined = item.message_json
+      if (spillDescriptors.length > 0) {
+        try { hydrated = hydrateSourceTruthSpills(message, path.join(path.dirname(permit.dbPath), 'spill')) }
+        catch { return undefined }
+        serialized = JSON.stringify(hydrated)
+      }
       if (typeof serialized !== 'string' || !appendJsonItem(serialized, 'messages')) return undefined
       messageByteLength += Buffer.byteLength(serialized, 'utf8') + 1
       if (messageByteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
@@ -408,7 +454,8 @@ function stageOversizedContextEvent(
         const id = (hydrated as { id?: unknown }).id
         if (typeof id === 'string' && id.trim()) ids.push(id)
       }
-      messageCount += 1
+        messageCount += 1
+      }
     }
     closeCurrent()
     if (messageCount !== capture.messageCount || messageCount < 1) return undefined
@@ -417,36 +464,44 @@ function stageOversizedContextEvent(
     let estimatedFactBytes = 0
     let factBytes = 0
     let factCount = 0
-    const factCapture = runInTransaction(conn, () => {
-      if (readProjectionSourceIdentity(conn, permit.sessionId, permit.sessionGeneration) !== permit.sourceIdentityJson) return 'source-drift' as const
-      const headers: ProjectionMessageFactHeaderRow[] = []
-      const contentRows: ProjectionMessageFactContentRow[] = []
-      for (let start = 0; start < uniqueIds.length; start += 64) {
-        const batch = uniqueIds.slice(start, start + 64)
-        headers.push(...conn.prepare(`SELECT messages.id,messages.role,messages.timestamp,messages.sequence,messages.queue_scope,
+    const seenFactIds = new Set<string>()
+    for (let start = 0; start < uniqueIds.length; start += 16) {
+      const batchIds = uniqueIds.slice(start, start + 16)
+      const factBatch = runInTransaction(conn, () => {
+        if (readProjectionSourceIdentity(conn, permit.sessionId, permit.sessionGeneration) !== permit.sourceIdentityJson ||
+          !isCurrentLargeEvent(conn, permit, row)) return 'source-drift' as const
+        const marks = batchIds.map(() => '?').join(',')
+        return conn.prepare(`SELECT messages.id,messages.role,messages.timestamp,messages.sequence,messages.queue_scope,
           messages.content_storage_state,length(CAST(messages.content AS BLOB)) AS stored_content_byte_length,cutover.write_mode
           FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
-          WHERE messages.session_id=? AND messages.id IN (${batch.map(() => '?').join(',')}) ORDER BY messages.sequence ASC`)
-          .all(permit.sessionId, ...batch) as ProjectionMessageFactHeaderRow[])
-        contentRows.push(...conn.prepare(`SELECT id,content FROM messages WHERE session_id=? AND id IN (${batch.map(() => '?').join(',')})`)
-          .all(permit.sessionId, ...batch) as ProjectionMessageFactContentRow[])
-      }
-      return { headers, contentRows }
-    })
-    if (factCapture === 'source-drift') return { kind: 'source-drift', permit, afterSessionSequence: input.afterSessionSequence }
-    const storedContentById = new Map(factCapture.contentRows.map(({ id, content }) => [id, content]))
-    for (let start = 0; start < factCapture.headers.length; start += 64) {
-      const headers = factCapture.headers.slice(start, start + 64)
-      const metadata = headers.map((fact) => ({ id: fact.id, role: fact.role, timestamp: fact.timestamp,
-        sequence: fact.sequence, queueScope: fact.queue_scope, contentStorageState: fact.content_storage_state,
-        writeMode: fact.write_mode, storedContent: '' }))
-      estimatedFactBytes += Buffer.byteLength(JSON.stringify(metadata), 'utf8') +
-        headers.reduce((total, fact) => total + Number(fact.stored_content_byte_length), 0)
-      if (estimatedFactBytes > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
-      const facts = headers.map((fact) => Object.freeze({ id: fact.id, role: fact.role, timestamp: fact.timestamp,
-        sequence: fact.sequence, queueScope: fact.queue_scope, contentStorageState: fact.content_storage_state,
-        writeMode: fact.write_mode, storedContent: storedContentById.get(fact.id) ?? '' }))
-      for (const fact of facts) {
+          WHERE messages.session_id=? AND messages.id IN (${marks}) ORDER BY messages.sequence ASC`)
+          .all(permit.sessionId, ...batchIds) as ProjectionMessageFactHeaderRow[]
+      })
+      if (factBatch === 'source-drift') return { kind: 'source-drift', permit, afterSessionSequence: input.afterSessionSequence }
+      for (const header of factBatch) {
+        if (seenFactIds.has(header.id) || !uniqueIds.includes(header.id)) return undefined
+        seenFactIds.add(header.id)
+        const metadata = { id: header.id, role: header.role, timestamp: header.timestamp,
+          sequence: header.sequence, queueScope: header.queue_scope, contentStorageState: header.content_storage_state,
+          writeMode: header.write_mode, storedContent: '' }
+        estimatedFactBytes += Buffer.byteLength(JSON.stringify(metadata), 'utf8') + Number(header.stored_content_byte_length)
+        if (estimatedFactBytes > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
+        const content = runInTransaction(conn, () => {
+          if (readProjectionSourceIdentity(conn, permit.sessionId, permit.sessionGeneration) !== permit.sourceIdentityJson ||
+            !isCurrentLargeEvent(conn, permit, row)) return 'source-drift' as const
+          const value = conn.prepare('SELECT content FROM messages WHERE session_id=? AND id=?').get(permit.sessionId, header.id) as
+            { content: string } | undefined
+          return typeof value?.content === 'string' ? value.content : undefined
+        })
+        if (content === 'source-drift') return { kind: 'source-drift', permit, afterSessionSequence: input.afterSessionSequence }
+        if (typeof content !== 'string') return undefined
+        const fact = Object.freeze({ id: header.id, role: header.role, timestamp: header.timestamp,
+          sequence: header.sequence, queueScope: header.queue_scope, contentStorageState: header.content_storage_state,
+          writeMode: header.write_mode,
+          ...(header.content_storage_state === 'canonical-backed-dual-write' && header.role !== 'assistant'
+            ? { storedContent: '', storedContentLength: content.length,
+                storedContentDigest: createHash('sha256').update(content, 'utf8').digest('hex') }
+            : { storedContent: content }) })
         const serialized = JSON.stringify(fact)
         if (!appendJsonItem(serialized, 'facts')) return undefined
         factBytes += Buffer.byteLength(serialized, 'utf8') + (factCount > 0 ? 1 : 0)
@@ -454,6 +509,7 @@ function stageOversizedContextEvent(
         factCount += 1
       }
     }
+    if (seenFactIds.size !== uniqueIds.length) return undefined
     closeCurrent()
     let requiredUserMessage: unknown
     let requiredUserByteLength = 0
@@ -506,13 +562,10 @@ function stageOversizedContextEvent(
       Buffer.byteLength(capture.extraPayloadJson, 'utf8')
     if (rootBytes.byteLength > MAX_STAGED_SOURCE_CHUNK_BYTES || sourceByteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
     const payloadDigest = createHash('sha256').update(rootBytes).digest('hex')
-    stagedFiles.push({ tempLocator: staging.tempLocator, bytes: rootBytes })
-    registerFinalizer(() => {
-      for (const file of stagedFiles) {
-        const fd = fs.openSync(path.join(staging.root, file.tempLocator), 'wx', 0o600)
-        try { fs.writeSync(fd, file.bytes); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
-      }
-    })
+    const rootFd = openStagedFile(staging.tempLocator)
+    try { writeStagedFile(rootFd, rootBytes); fs.fsyncSync(rootFd) } finally { fs.closeSync(rootFd) }
+    registerFinalizer(() => { stageSucceeded = true })
+    stageReturned = true
     return { kind: 'staged-chunk', permit, afterSessionSequence: input.afterSessionSequence,
       nextSessionSequence: row.session_seq, rowCount: 1, sourceByteLength,
       hasMore: row.session_seq < watermark,
@@ -520,7 +573,11 @@ function stageOversizedContextEvent(
       stagedSegments: Object.freeze(writtenSegments.map((segment) => Object.freeze(segment))) }
   } finally {
     if (current) {
-      try { closeCurrent() } catch { /* partial in-memory stage is discarded by the worker owner */ }
+      try { fs.closeSync(current.fd) } catch { /* the staging owner removes partial files */ }
+      current = undefined
+    }
+    if (!stageSucceeded && !stageReturned) for (const locator of openedFiles) {
+      try { fs.rmSync(path.join(staging.root, locator), { force: true }) } catch { /* staging recovery removes leftovers */ }
     }
   }
 }

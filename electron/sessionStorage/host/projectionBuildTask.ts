@@ -11,7 +11,7 @@ export function createProjectionBuildLifecycleTask(options: ProjectionBuildSuper
       const item = options.resolveWorkItem!(input)
       if (!item) throw new Error('PROJECTION_SCOPE_UNAVAILABLE')
       const result = await supervisor.prepare(item)
-      if (result.kind !== 'published') throw new Error(`PROJECTION_PREPARATION_${result.kind.toUpperCase().replaceAll('-', '_')}`)
+      if (result.kind !== 'published') throw new Error(`PROJECTION_PREPARATION_${result.kind.toUpperCase().replaceAll('-', '_')}${'reason' in result && result.reason ? `:${result.reason}` : ''}`)
     } } : {}) })
 }
 

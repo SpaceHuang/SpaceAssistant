@@ -37,8 +37,8 @@ anchorRequire('tsx/cjs/api').register()
 anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(anchor).href)
   .then(() => {}, (error) => setTimeout(() => { throw error }, 0))
 `)
-  const worker = new Worker(bootstrapPath, { execArgv: [], resourceLimits: { maxOldGenerationSizeMb: 128,
-    maxYoungGenerationSizeMb: 16, stackSizeMb: 4 }, env: {
+  const worker = new Worker(bootstrapPath, { execArgv: [], resourceLimits: { maxOldGenerationSizeMb: 256,
+    maxYoungGenerationSizeMb: 32, stackSizeMb: 4 }, env: {
     ...process.env, SA_PROJECTION_WORKER_ANCHOR: anchor, SA_PROJECTION_WORKER_TARGET: workerPath,
   } })
   worker.once('exit', () => fs.rm(bootstrapPath, { force: true }, () => undefined))
@@ -56,9 +56,10 @@ export function readProjectionHistoryChunkInWorker(
   if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('PROJECTION_WORKER_CANCELLED'))
   const workerPath = resolveProjectionHistoryWorkerPath(options.workerPath)
   if (!workerPath) return Promise.reject(new Error('PROJECTION_WORKER_ENTRY_UNAVAILABLE'))
+  // Clear inherited runner flags so this worker's explicit heap ceiling remains effective.
   let worker: Worker
   try { worker = options.createWorker?.(workerPath) ?? (workerPath.endsWith('.ts') ? spawnSourceWorker(workerPath) : new Worker(workerPath, {
-    resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
+    execArgv: [], resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 32, stackSizeMb: 4 },
   })) }
   catch (error) { return Promise.reject(new Error(`PROJECTION_WORKER_SPAWN_FAILED:${error instanceof Error ? error.message : String(error)}`)) }
 

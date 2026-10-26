@@ -1,8 +1,28 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { createProjectionChatBodyReducer } from './projectionChatBodyReducer'
 import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../domain/projectionSource'
 
 describe('ProjectionSpec.chatBodyV1 reducer', () => {
+  it('validates compact large dual-write facts by body length and digest', () => {
+    const reducer = createProjectionChatBodyReducer()
+    const body = 'large canonical body'
+    const event: ProjectionHistoryChunkEvent = {
+      invocationId: 'compact-inv', sequence: 1, eventId: 'compact-context', idempotencyKey: 'compact-context', turnId: 'compact-turn',
+      schemaVersion: 1, kind: 'invocation-context-committed', sessionSequence: 1, commitOrder: 1, createdAt: 1,
+      payloadJson: JSON.stringify({ messages: [{ id: 'compact-row', role: 'user', content: body, timestamp: 1 }] }),
+    }
+    const fact: ProjectionMessageFact = { id: 'compact-row', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop',
+      contentStorageState: 'canonical-backed-dual-write', writeMode: 'canonical', storedContent: '',
+      storedContentLength: body.length, storedContentDigest: createHash('sha256').update(body, 'utf8').digest('hex') }
+    expect(reducer.fold(reducer.createState(), [event], [fact]).outputOperations).toEqual([{ type: 'replace', messages: [
+      { id: fact.id, role: fact.role, content: body, timestamp: fact.timestamp },
+    ] }])
+    expect(() => reducer.fold(reducer.createState(), [{ ...event,
+      payloadJson: JSON.stringify({ messages: [{ id: 'compact-row', role: 'user', content: `${body}!`, timestamp: 1 }] }) }], [fact]))
+      .toThrow('CHAT_BODY_AUTHORITY_MISMATCH')
+  })
+
   it('materializes only body fields from canonical History using same-snapshot authority facts', () => {
     const reducer = createProjectionChatBodyReducer()
     const event: ProjectionHistoryChunkEvent = {

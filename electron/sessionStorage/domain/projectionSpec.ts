@@ -62,7 +62,8 @@ export function projectChatBodyV1(messages: readonly Message[]): ChatBodyV1[] {
 export function projectCanonicalChatBodyV1(
   canonicalMessages: readonly Readonly<{ id?: string; role: string; content?: unknown; timestamp?: number }>[],
   messageFacts: readonly Readonly<{ id: string; role: string; timestamp: number; sequence: number; queueScope: string;
-    contentStorageState: 'legacy' | 'canonical-backed-dual-write' | 'canonical-backed-only'; writeMode: string | null; storedContent: string }>[],
+    contentStorageState: 'legacy' | 'canonical-backed-dual-write' | 'canonical-backed-only'; writeMode: string | null; storedContent: string;
+    storedContentLength?: number; storedContentDigest?: string }>[],
   afterSequence = -1,
   options: Readonly<{ allowLegacyBodyMismatch?: boolean }> = {},
 ): ChatBodyV1[] {
@@ -105,7 +106,7 @@ export function projectCanonicalChatBodyV1(
 }
 
 /** Match canonical model content to the legacy chat body mirror without exposing non-text execution blocks. */
-function canonicalMessageBodyText(content: unknown): string {
+export function canonicalMessageBodyText(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) throw new Error('CHAT_BODY_IDENTITY_MISMATCH')
   let text = ''

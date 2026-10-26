@@ -7,6 +7,9 @@ import type { ProjectionPendingHistoryChunkManifestRef } from '../../domain/proj
 import type { ProjectionReducerArtifactStaging } from '../../application/projectionBuildCoordinator'
 import { createProjectionScopeHistoryReducer } from './projectionScopeHistoryReducer'
 import { createProjectionWorkerMemorySampler } from './projectionWorkerMemorySampler'
+import { projectionScopeKind } from '../../domain/scopeKey'
+import { readProjectionHistorySegmentItems } from './projectionHistorySegmentReader'
+import { reduceSegmentedChatBodyContext } from './projectionSegmentedChatBodyReducer'
 
 if (!parentPort) throw new Error('projection history reducer worker requires a parent port')
 const memorySampler = createProjectionWorkerMemorySampler()
@@ -26,6 +29,26 @@ parentPort.once('message', (message: {
     const startedAt = performance.now()
     const reducer = createProjectionScopeHistoryReducer()
     let stateJson = message.stateJson
+    const writeArtifact = async (root: string, locator: string, payload: string) => {
+      if (!/^\.projection-[0-9a-f-]{36}\.tmp$/.test(locator) || path.basename(locator) !== locator) {
+        throw new Error('PROJECTION_REDUCER_ARTIFACT_LOCATOR_INVALID')
+      }
+      const bytes = Buffer.from(payload, 'utf8')
+      let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+      try {
+        handle = await fs.open(path.join(path.resolve(root), locator), 'wx', 0o600)
+        await handle.writeFile(bytes)
+        await handle.sync()
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code && ['EACCES', 'EIO', 'EMFILE', 'ENFILE', 'ENOSPC', 'EROFS'].includes(code)) {
+          throw new Error(`PROJECTION_REDUCER_WORKER_ARTIFACT_IO:${code}`)
+        }
+        throw error
+      } finally { await handle?.close() }
+      return { tempLocator: locator, locator: `${locator.slice(1, -4)}.blob`, byteLength: bytes.byteLength,
+        payloadDigest: createHash('sha256').update(bytes).digest('hex') }
+    }
     const priorReducerState = message.staging?.context.priorReducerState
     if (priorReducerState) {
       if (priorReducerState.sessionId !== message.staging!.context.sessionId ||
@@ -47,6 +70,7 @@ parentPort.once('message', (message: {
     }
     let events = message.events
     let messageFacts = message.messageFacts
+    let result: Record<string, unknown>
     if (message.stagedChunk) {
       const { root, manifest } = message.stagedChunk
       if (manifest.scopeKey !== message.scopeKey || !/^projection-[0-9a-f-]{36}\.blob$/.test(manifest.locator) ||
@@ -152,6 +176,102 @@ parentPort.once('message', (message: {
             index += fragmentCount as number
           }
         }
+        if (message.staging && projectionScopeKind(message.scopeKey) === 'chatBodyV1' &&
+          (event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted')) {
+          const messageSegments = segmented.messageSegments as Parameters<typeof readProjectionHistorySegmentItems<unknown>>[0]['segments']
+          const factSegments = segmented.factSegments as Parameters<typeof readProjectionHistorySegmentItems<unknown>>[0]['segments']
+          const factsFromSegments: ProjectionMessageFact[] = []
+          for await (const fact of readProjectionHistorySegmentItems<unknown>({ segments: factSegments,
+            itemCount: segmented.factCount as number, readVerified: async (descriptor) =>
+              (await readSegmentBytes(descriptor)).bytes })) {
+            if (!isProjectionMessageFact(fact)) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+            factsFromSegments.push(fact)
+          }
+          let requiredUserMessage = segmented.requiredUserMessage as { id?: unknown; message?: unknown } | undefined
+          if (segmented.requiredUserMessageRef !== undefined) {
+            const reference = segmented.requiredUserMessageRef as { id?: unknown; messageIndex?: unknown }
+            if (typeof reference.id !== 'string' || !reference.id.trim() || !Number.isSafeInteger(reference.messageIndex) ||
+              (reference.messageIndex as number) < 0 || (reference.messageIndex as number) >= (segmented.messageCount as number)) {
+              throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+            }
+          }
+          if (segmented.requiredUserSegments !== undefined) {
+            const requiredItems: unknown[] = []
+            for await (const item of readProjectionHistorySegmentItems<unknown>({
+              segments: segmented.requiredUserSegments as Parameters<typeof readProjectionHistorySegmentItems<unknown>>[0]['segments'],
+              itemCount: 1, readVerified: async (descriptor) => (await readSegmentBytes(descriptor)).bytes })) requiredItems.push(item)
+            if (requiredItems.length !== 1 || requiredUserMessage !== undefined) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+            requiredUserMessage = requiredItems[0] as typeof requiredUserMessage
+          }
+          if (factsFromSegments.length !== segmented.factCount || segmentByteLength > 128 * 1024 * 1024) {
+            throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+          }
+          if (segmented.extraPayload !== undefined && (!segmented.extraPayload || typeof segmented.extraPayload !== 'object' ||
+            Array.isArray(segmented.extraPayload))) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+
+          const entries: Array<{ id: string; role: string }> = []
+          const seenIds = new Set<string>()
+          const rootPath = path.resolve(message.staging.root)
+          const requiredUserMessageShape = requiredUserMessage && typeof requiredUserMessage.id === 'string' &&
+            requiredUserMessage.message && typeof requiredUserMessage.message === 'object' && !Array.isArray(requiredUserMessage.message)
+            ? { id: requiredUserMessage.id, message: requiredUserMessage.message as import('../../../../packages/agent-sdk/src/model').CanonicalModelMessage }
+            : undefined
+          if (requiredUserMessage && !requiredUserMessageShape) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+          const outputManifests: Array<Awaited<ReturnType<typeof writeArtifact>>> = []
+          let currentOperations: unknown[] = []
+          let currentBytes = 0
+          const emitProjected = async (projected: Readonly<{ id: string; role: string; content: unknown; timestamp: number }>) => {
+            const operation = { type: entries.length === 1 ? 'replace' : 'append', messages: [projected] }
+            const opBytes = Buffer.byteLength(JSON.stringify(operation))
+            if (currentOperations.length && currentBytes + opBytes > MAX_OUTPUT_MANIFEST_SEGMENT_BYTES) await flushManifest(false)
+            currentOperations.push(operation)
+            currentBytes += opBytes
+          }
+          const flushManifest = async (sourceComplete: boolean) => {
+            if (!currentOperations.length && outputManifests.length) return
+            const locator = message.staging!.outputManifestTempLocators[outputManifests.length]
+            if (!locator) throw new Error('PROJECTION_REDUCER_OUTPUT_SEGMENT_LIMIT_EXCEEDED')
+            const previous = outputManifests.at(-1)
+            const payload = JSON.stringify({ formatVersion: 2, sessionId: message.staging!.context.sessionId,
+              sessionGeneration: message.staging!.context.sessionGeneration, scopeKey: message.staging!.context.scopeKey,
+              specVersion: message.staging!.context.specVersion, sourceIdentityJson: message.staging!.context.sourceIdentityJson,
+              outputManifest: { formatVersion: 1, parent: previous ? { locator: previous.locator, byteLength: previous.byteLength,
+                payloadDigest: previous.payloadDigest } : null, operations: currentOperations }, sourceComplete })
+            outputManifests.push(await writeArtifact(rootPath, locator, payload))
+            currentOperations = []
+            currentBytes = 0
+          }
+          const reduction = await reduceSegmentedChatBodyContext({ stateJson, event: { ...event as ProjectionHistoryChunkEvent, payloadJson: '',
+            payload: { ...((segmented.extraPayload as Record<string, unknown> | undefined) ?? {}), messages: [] } },
+            messages: readProjectionHistorySegmentItems<unknown>({ segments: messageSegments,
+              itemCount: segmented.messageCount as number, readVerified: async (descriptor) =>
+                (await readSegmentBytes(descriptor)).bytes }),
+            messageCount: segmented.messageCount as number, facts: factsFromSegments, scopeKey: message.scopeKey,
+            ...(requiredUserMessageShape ? { requiredUserMessage: requiredUserMessageShape } : {}),
+            ...(segmented.requiredUserMessageRef ? { requiredUserMessageRef: segmented.requiredUserMessageRef as { id: string; messageIndex: number } } : {}),
+            onProjectedMessage: async (projected) => {
+              if (seenIds.has(projected.id)) throw new Error('PROJECTION_STABLE_ID_OUTPUT_IDENTITY_INVALID')
+              seenIds.add(projected.id)
+              entries.push({ id: projected.id, role: projected.role })
+              await emitProjected(projected)
+            } })
+          if (!currentOperations.length && outputManifests.length === 0) currentOperations.push({ type: 'replace', messages: [] })
+          await flushManifest(message.finalize)
+          const stableIndex = JSON.stringify({ formatVersion: 1, messageCount: entries.length,
+            sessionId: message.staging.context.sessionId, scopeKey: message.staging.context.scopeKey,
+            sourceIdentityJson: message.staging.context.sourceIdentityJson,
+            ids: entries.map((entry) => entry.id), entries: entries.map((entry, ordinal) => ({ ...entry, ordinal })) })
+          const stableArtifact = await writeArtifact(rootPath, message.staging.stableIdIndexTempLocator, stableIndex)
+          const reducerState = Buffer.byteLength(reduction.stateJson) > 64 * 1024
+            ? await writeArtifact(rootPath, message.staging.reducerStateTempLocator, reduction.stateJson) : undefined
+          result = { resetOutput: true, ...(!reducerState ? { stateJson: reduction.stateJson } : {}),
+            stagedArtifacts: { outputManifests, stableIdIndex: { ...stableArtifact, itemCount: entries.length },
+              ...(reducerState ? { reducerState } : {}) }, workerThreadId: threadId }
+          result.workerSample = { durationMs: Math.max(0, performance.now() - startedAt), ...memorySampler.finish() }
+          parentPort!.postMessage({ requestId: message.requestId, result })
+          parentPort!.close()
+          return
+        }
         await readSegments(segmented.messageSegments as unknown[], messages)
         await readSegments(segmented.factSegments as unknown[], factsFromSegments as unknown[])
         let requiredUserMessage = segmented.requiredUserMessage
@@ -206,30 +326,10 @@ parentPort.once('message', (message: {
     const finalizedOutputOperations = message.finalize
       ? reducer.finalize(folded.stateJson, message.scopeKey).outputOperations
       : undefined
-    let result: Record<string, unknown> = { ...folded,
+    result = { ...folded,
       ...(finalizedOutputOperations ? { finalizedOutputOperations } : {}), workerThreadId: threadId }
     if (message.staging) {
       const { root, context } = message.staging
-      const writeArtifact = async (locator: string, payload: string) => {
-        if (!/^\.projection-[0-9a-f-]{36}\.tmp$/.test(locator) || path.basename(locator) !== locator) {
-          throw new Error('PROJECTION_REDUCER_ARTIFACT_LOCATOR_INVALID')
-        }
-        const bytes = Buffer.from(payload, 'utf8')
-        let handle: Awaited<ReturnType<typeof fs.open>> | undefined
-        try {
-          handle = await fs.open(path.join(path.resolve(root), locator), 'wx', 0o600)
-          await handle.writeFile(bytes)
-          await handle.sync()
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code
-          if (code && ['EACCES', 'EIO', 'EMFILE', 'ENFILE', 'ENOSPC', 'EROFS'].includes(code)) {
-            throw new Error(`PROJECTION_REDUCER_WORKER_ARTIFACT_IO:${code}`)
-          }
-          throw error
-        } finally { await handle?.close() }
-        return { tempLocator: locator, locator: `${locator.slice(1, -4)}.blob`, byteLength: bytes.byteLength,
-          payloadDigest: createHash('sha256').update(bytes).digest('hex') }
-      }
       const outputOperations = [...folded.outputOperations, ...(finalizedOutputOperations ?? [])]
       const operationSegments = segmentOutputOperations(outputOperations)
       if (operationSegments.length > message.staging.outputManifestTempLocators.length) {
@@ -244,14 +344,14 @@ parentPort.once('message', (message: {
           sessionGeneration: context.sessionGeneration, scopeKey: context.scopeKey, specVersion: context.specVersion,
           sourceIdentityJson: context.sourceIdentityJson,
           outputManifest: { formatVersion: 1, parent, operations }, sourceComplete: message.finalize && index === operationSegments.length - 1 })
-        const artifact = await writeArtifact(message.staging.outputManifestTempLocators[index]!, outputPayload)
+        const artifact = await writeArtifact(root, message.staging.outputManifestTempLocators[index]!, outputPayload)
         outputManifests.push(artifact)
         parent = { locator: artifact.locator, byteLength: artifact.byteLength, payloadDigest: artifact.payloadDigest }
       }
       const [stableIdIndex, reducerState] = await Promise.all([
-        writeArtifact(message.staging.stableIdIndexTempLocator, stableIndex.payload),
+        writeArtifact(root, message.staging.stableIdIndexTempLocator, stableIndex.payload),
         Buffer.byteLength(folded.stateJson) > 64 * 1024
-          ? writeArtifact(message.staging.reducerStateTempLocator, folded.stateJson) : Promise.resolve(undefined),
+          ? writeArtifact(root, message.staging.reducerStateTempLocator, folded.stateJson) : Promise.resolve(undefined),
       ])
       result = { resetOutput: folded.resetOutput,
         ...(reducerState ? {} : { stateJson: folded.stateJson }),
@@ -376,5 +476,9 @@ function isProjectionMessageFact(value: unknown): value is ProjectionMessageFact
     Number.isSafeInteger(fact.timestamp) && Number.isSafeInteger(fact.sequence) && typeof fact.queueScope === 'string' &&
     (fact.contentStorageState === 'legacy' || fact.contentStorageState === 'canonical-backed-dual-write' ||
       fact.contentStorageState === 'canonical-backed-only') &&
-    (fact.writeMode === null || typeof fact.writeMode === 'string') && typeof fact.storedContent === 'string'
+    (fact.writeMode === null || typeof fact.writeMode === 'string') && typeof fact.storedContent === 'string' &&
+    (fact.storedContentLength === undefined || (Number.isSafeInteger(fact.storedContentLength) && fact.storedContentLength >= 0)) &&
+    (fact.storedContentDigest === undefined || /^[a-f0-9]{64}$/.test(fact.storedContentDigest)) &&
+    (fact.storedContentDigest === undefined || (fact.contentStorageState === 'canonical-backed-dual-write' &&
+      fact.storedContent === '' && Number.isSafeInteger(fact.storedContentLength)))
 }

@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import type { ClaudeChatMessageWithBlocks } from '../../../../src/shared/api'
-import { isAnonymousToolResultMessage, projectCanonicalChatBodyV1 } from '../../domain/projectionSpec'
+import { canonicalMessageBodyText, isAnonymousToolResultMessage, projectCanonicalChatBodyV1 } from '../../domain/projectionSpec'
 import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../domain/projectionSource'
 import type { ProjectionHistoryReducerPort } from '../../application/projectionBuildCoordinator'
 import { createProjectionCanonicalHistoryReducer } from './projectionCanonicalHistoryReducer'
@@ -14,6 +15,8 @@ export function createProjectionChatBodyReducer(): ProjectionHistoryReducerPort 
     createState: () => JSON.stringify({ formatVersion: 1, canonicalStateJson: canonical.createState(), lastSequence: -1 } satisfies ChatBodyState),
     fold(stateJson: string, events: readonly ProjectionHistoryChunkEvent[], facts: readonly ProjectionMessageFact[] = []) {
       const state = parseState(stateJson)
+      const factById = new Map(facts.map((fact) => [fact.id, fact]))
+      if (factById.size !== facts.length) throw new Error('CHAT_BODY_SOURCE_FACT_DUPLICATE')
       const folded = canonical.fold(state.canonicalStateJson, events, facts)
       let lastSequence = folded.resetOutput ? -1 : state.lastSequence
       let chunkedAssistant = folded.resetOutput ? undefined : state.chunkedAssistant
@@ -34,7 +37,7 @@ export function createProjectionChatBodyReducer(): ProjectionHistoryReducerPort 
         const notYetProjected = operation.type === 'append' ? sourceMessages.filter((message) => {
           if (!message.id) return true
           if (chunkedAssistant?.id === message.id) return true
-          const fact = facts.find((candidate) => candidate.id === message.id)
+          const fact = message.id ? factById.get(message.id) : undefined
           return !fact || fact.sequence > lastSequence
         }) : sourceMessages
         const messages: ReturnType<typeof projectCanonicalChatBodyV1> = []
@@ -47,7 +50,8 @@ export function createProjectionChatBodyReducer(): ProjectionHistoryReducerPort 
           chunkedAssistant = undefined
         }
         for (const message of notYetProjected) {
-          const fact = message.id ? facts.find((candidate) => candidate.id === message.id) : undefined
+          const sourceFact = message.id ? factById.get(message.id) : undefined
+          const fact = sourceFact ? verifyCompactFact(message, sourceFact) : undefined
           if (isAnonymousToolResultMessage(message)) continue
           if (message.role === 'assistant' && message.id && chunkedAssistantIds.has(message.id) && fact &&
             (fact.contentStorageState === 'canonical-backed-only' || fact.contentStorageState === 'canonical-backed-dual-write')) {
@@ -75,10 +79,11 @@ export function createProjectionChatBodyReducer(): ProjectionHistoryReducerPort 
             continue
           }
           if (chunkedAssistant) closeChunkedAssistant()
-          const [projected] = projectCanonicalChatBodyV1([message], facts, lastSequence, { allowLegacyBodyMismatch: true })
+          const [projected] = projectCanonicalChatBodyV1([message], fact ? [fact] : [], lastSequence,
+            { allowLegacyBodyMismatch: true })
           if (projected) {
             messages.push(projected)
-            lastSequence = facts.find((candidate) => candidate.id === projected.id)?.sequence ?? lastSequence
+            lastSequence = factById.get(projected.id)?.sequence ?? lastSequence
           }
         }
         if (operation.type === 'replace' || messages.length > 0) outputOperations.push(Object.freeze({ type: operation.type, messages: Object.freeze(messages) }))
@@ -103,6 +108,16 @@ export function createProjectionChatBodyReducer(): ProjectionHistoryReducerPort 
       return Object.freeze({ outputOperations: Object.freeze(outputOperations) })
     }
   })
+}
+
+function verifyCompactFact(message: ClaudeChatMessageWithBlocks, fact: ProjectionMessageFact): ProjectionMessageFact {
+  if (fact.storedContentDigest === undefined) return fact
+  const body = canonicalMessageBodyText(message.content)
+  if (body.length !== fact.storedContentLength ||
+    createHash('sha256').update(body, 'utf8').digest('hex') !== fact.storedContentDigest) {
+    throw new Error('CHAT_BODY_AUTHORITY_MISMATCH')
+  }
+  return { ...fact, storedContent: body }
 }
 
 /** model-response-committed rows can carry successive text chunks for one persisted assistant message. */

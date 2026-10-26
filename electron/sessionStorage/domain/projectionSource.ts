@@ -46,6 +46,9 @@ export type ProjectionMessageFact = Readonly<{
   contentStorageState: 'legacy' | 'canonical-backed-dual-write' | 'canonical-backed-only'
   writeMode: string | null
   storedContent: string
+  /** Large staged dual-write facts may carry a digest instead of a second full body copy. */
+  storedContentLength?: number
+  storedContentDigest?: string
 }>
 
 export type ProjectionHistoryChunkResult = (

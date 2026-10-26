@@ -364,14 +364,24 @@ describe('SQLite projection build task composition', () => {
         .get('large-facts-context') as { byte_length: number }
       expect(storedEvent.byte_length).toBeGreaterThan(32 * 1024 * 1024)
       const processGeneration = advanceProcessGeneration(conn)
+      const sliceSamples: Array<{ maxWorkerHeapUsedBytesPeakSampled: number | null; maxProcessRssBytesPeakSampled: number | null;
+        sourceBytes: number; reducerWorkerDurationMs: number }> = []
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
-        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3,
+        onSlice: (sample) => sliceSamples.push(sample) })
       const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
           recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
       try {
         const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
         expect(prepared).toMatchObject({ sessionId: session.id, payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+        expect(sliceSamples.length).toBeGreaterThan(0)
+        expect(sliceSamples.every((sample) => sample.maxWorkerHeapUsedBytesPeakSampled !== null &&
+          sample.maxProcessRssBytesPeakSampled !== null)).toBe(true)
+        expect(sliceSamples.some((sample) => sample.sourceBytes > 0 && sample.maxWorkerHeapUsedBytesPeakSampled! <
+          256 * 1024 * 1024)).toBe(true)
+        expect(sliceSamples.some((sample) => sample.reducerWorkerDurationMs > 0 &&
+          sample.maxWorkerHeapUsedBytesPeakSampled! < 512 * 1024 * 1024)).toBe(true)
         const page = await host.storage.queries.readPreparedChatPage?.({ sessionId: session.id, prepared, limit: 10 })
         expect(page?.entries).toHaveLength(20)
         expect(page?.entries.every(({ message }) => message.content === body)).toBe(true)
