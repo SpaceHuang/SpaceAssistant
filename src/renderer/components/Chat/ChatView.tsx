@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { App, Button, Modal, Space } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
@@ -52,6 +52,8 @@ import { resolveSessionModelBinding, resolveSessionThinkingBinding, resolveAvail
 import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
 import { loadTurnFailureReasons } from '../../services/turnFailureHydration'
+import { readSessionSwitchTraceMetadata } from '../../../shared/sessionSwitchTraceMetadata'
+import { emitRendererSessionSwitchTrace, requestChatMessagePageWithTraceMetadata } from '../../services/sessionSwitchTrace'
 import type { ChatModelOption } from '../../../shared/llmModelConfig'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
 import { appendArchivedQuery } from '../../../shared/wikiSessionState'
@@ -150,6 +152,9 @@ export function ChatView() {
   const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
   const viewportRef = useRef<ChatMessageViewportHandle>(null)
   const stickToBottomRef = useRef(true)
+  const pendingSessionSwitchRenderTraceRef = useRef<{
+    metadata: NonNullable<ReturnType<typeof readSessionSwitchTraceMetadata>>; pageSize: number; storeCommitMs: number; dispatchCompletedAt: number
+  } | null>(null)
   const composerRef = useRef<MessageInputHandle>(null)
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
@@ -217,8 +222,39 @@ export function ChatView() {
    */
   const fetchMessagePage = useCallback(
     async (payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
-      const page = await window.api.chatGetMessagePage(payload)
-      const reasons = await loadTurnFailureReasons(page.entries.map((entry) => entry.message))
+      const requestStartedAt = performance.now()
+      let page: Awaited<ReturnType<typeof window.api.chatGetMessagePage>>
+      try {
+        page = await requestChatMessagePageWithTraceMetadata(() => window.api.chatGetMessagePage(payload))
+      } catch (error) {
+        const metadata = readSessionSwitchTraceMetadata(error)
+        if (metadata) emitRendererSessionSwitchTrace({ metadata, outcome: 'error', pageSize: 0,
+          stages: [{ name: 'renderer-page-request', durationMs: performance.now() - requestStartedAt, outcome: 'error' }] })
+        throw error
+      }
+      const pageRequestMs = performance.now() - requestStartedAt
+      const failureReasonStartedAt = performance.now()
+      let reasons: Awaited<ReturnType<typeof loadTurnFailureReasons>>
+      try {
+        reasons = await loadTurnFailureReasons(page.entries.map((entry) => entry.message))
+      } catch (error) {
+        const metadata = readSessionSwitchTraceMetadata(page)
+        if (metadata) emitRendererSessionSwitchTrace({ metadata, outcome: 'error', pageSize: page.entries.length,
+          stages: [
+            { name: 'renderer-page-request', durationMs: pageRequestMs, outcome: 'ok' },
+            { name: 'failure-reason-hydration', durationMs: performance.now() - failureReasonStartedAt, outcome: 'error' }
+          ] })
+        throw error
+      }
+      const failureReasonHydrationMs = performance.now() - failureReasonStartedAt
+      const traceMetadata = readSessionSwitchTraceMetadata(page)
+      if (traceMetadata) emitRendererSessionSwitchTrace({
+        metadata: traceMetadata, outcome: 'ok', pageSize: page.entries.length,
+        stages: [
+          { name: 'renderer-page-request', durationMs: pageRequestMs, outcome: 'ok' },
+          { name: 'failure-reason-hydration', durationMs: failureReasonHydrationMs, outcome: 'ok' }
+        ]
+      })
       if (Object.keys(reasons).length > 0) dispatch(mergeTurnFailures(reasons))
       return page
     },
@@ -235,6 +271,8 @@ export function ChatView() {
     void (async () => {
       const page = await fetchMessagePage({ sessionId, limit: SESSION_SWITCH_MESSAGE_PAGE_SIZE })
       if (cancelled) return
+      const renderTraceMetadata = readSessionSwitchTraceMetadata(page)
+      const storeCommitStartedAt = performance.now()
       dispatch(
         setDisplayPage({
           entries: page.entries,
@@ -243,6 +281,10 @@ export function ChatView() {
           generation
         })
       )
+      const storeCommitMs = performance.now() - storeCommitStartedAt
+      if (renderTraceMetadata) pendingSessionSwitchRenderTraceRef.current = {
+        metadata: renderTraceMetadata, pageSize: page.entries.length, storeCommitMs, dispatchCompletedAt: performance.now()
+      }
       initLiveSessionFromStore(sessionId)
       try {
         const baseline = await window.api.chatGetContextHistorySummaryBaseline({ sessionId })
@@ -257,6 +299,24 @@ export function ChatView() {
       cancelled = true
     }
   }, [sessionId, dispatch, bumpContextSummary, fetchMessagePage])
+
+  useLayoutEffect(() => {
+    const pending = pendingSessionSwitchRenderTraceRef.current
+    if (!pending) return
+    pendingSessionSwitchRenderTraceRef.current = null
+    const renderCommittedAt = performance.now()
+    const renderCommitMs = renderCommittedAt - pending.dispatchCompletedAt
+    requestAnimationFrame(() => {
+      emitRendererSessionSwitchTrace({
+        metadata: pending.metadata, outcome: 'ok', pageSize: pending.pageSize,
+        stages: [
+          { name: 'store-commit', durationMs: pending.storeCommitMs, outcome: 'ok' },
+          { name: 'render-commit', durationMs: renderCommitMs, outcome: 'ok' },
+          { name: 'next-paint', durationMs: performance.now() - renderCommittedAt, outcome: 'ok' }
+        ]
+      })
+    })
+  }, [displayGeneration, displayEntries])
 
   const loadPreviousPage = useCallback(async () => {
     if (!sessionId) return { loaded: false as const, beforeSequence: null as number | null }
@@ -431,7 +491,7 @@ export function ChatView() {
   useEffect(() => {
     if (sessionRunning || !sessionId || !streamingAssistant) return
     let active = true
-    void window.api.chatGetMessagePage({ sessionId, limit: 60 }).then((page) => {
+    void requestChatMessagePageWithTraceMetadata(() => window.api.chatGetMessagePage({ sessionId, limit: 60 })).then((page) => {
       if (!active) return
       const persisted = page.entries.find(({ message }) => message.id === streamingAssistant.id)?.message
       if (!persisted || persisted.status === 'streaming') return

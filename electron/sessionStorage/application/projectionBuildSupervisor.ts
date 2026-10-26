@@ -26,6 +26,7 @@ export type ProjectionBuildSupervisorOptions = Readonly<{
   monotonicNow?(): number
   onSlice?(input: Readonly<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean;
     sourceRows: number; sourceBytes: number; sourceSnapshotDurationMs: number; sourceWorkerDurationMs: number; reducerWorkerDurationMs: number;
+    finalViewMaterializationDurationMs: number;
     maxWorkerHeapUsedBytesAtExit: number | null; maxProcessRssBytesAtExit: number | null;
     maxWorkerHeapUsedBytesPeakSampled: number | null; maxProcessRssBytesPeakSampled: number | null;
     memorySampleIntervalMs: number | null; workerSamples: number }>): void
@@ -205,6 +206,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         while (!stopped && !controller.signal.aborted) {
           const sliceStartedAt = options.monotonicNow?.() ?? performance.now()
           const sliceMetrics = { sourceRows: 0, sourceBytes: 0, sourceSnapshotDurationMs: 0, sourceWorkerDurationMs: 0, reducerWorkerDurationMs: 0,
+            finalViewMaterializationDurationMs: 0,
             maxWorkerHeapUsedBytesAtExit: null as number | null, maxProcessRssBytesAtExit: null as number | null,
             maxWorkerHeapUsedBytesPeakSampled: null as number | null, maxProcessRssBytesPeakSampled: null as number | null,
             memorySampleIntervalMs: null as number | null, workerSamples: 0 }
@@ -249,6 +251,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
               blobs: options.blobs, limits: options.limits, maxChunksPerSlice: options.maxChunksPerSlice,
               now: options.now, retryAfter: options.retryAfter, signal: controller.signal })
             try { options.onResult?.(item, result) } catch { /* Observability must not own the worker lifecycle. */ }
+            if (result.kind === 'published') sliceMetrics.finalViewMaterializationDurationMs = result.finalViewMaterializationDurationMs
             const sliceDurationMs = Math.max(0, (options.monotonicNow?.() ?? performance.now()) - sliceStartedAt)
             const nextSequence = result.kind === 'checkpointed' || result.kind === 'published' ? result.checkpoint.nextSequence : null
             const sliceBudgetMs = options.sliceBudgetMs ?? Number.POSITIVE_INFINITY

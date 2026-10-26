@@ -15,7 +15,7 @@ import { OutboundSubmitIntent } from '../../src/shared/outboundProtocol'
 import { TurnExecutePayload } from '../../src/shared/api'
 import { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import type { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
-import { readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readRetryTargetAfterPreparation } from '../sessionStorage/public/readMessages'
+import { readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readChatPageWithSessionSwitchTrace, readSearchCorpusPageAfterPreparation, readRetryTargetAfterPreparation } from '../sessionStorage/public/readMessages'
 import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { isSqliteDatabaseOpen } from '../database'
@@ -78,6 +78,9 @@ import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRul
 import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
 import type { ContinuationIntentAcceptance, ContinuationSourceRef, PreparedChatBodyView } from '../sessionStorage/public/model'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
+import { createSessionSwitchRequestSequence } from './sessionSwitchTraceSequence'
+
+const nextSessionSwitchRequestOrdinal = createSessionSwitchRequestSequence()
 
 export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
   const workDir = ctx.sessionStorage ? resolveWorkDirForSession(ctx.sessionStorage.queries, sessionId,
@@ -727,15 +730,22 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:get-message-page',
     async (
-      _e,
+      event,
       payload: { sessionId: string; beforeSequence?: number; limit?: number }
     ) => {
-      return readChatPageAfterPreparation(sessionStorage, payload)
+      return readChatPageWithSessionSwitchTrace(
+        ({ trace, onCachePath }) => readChatPageAfterPreparation(sessionStorage, payload, { trace, onCachePath }),
+        { traceId: randomUUID(), rendererProcessId: event.processId, requestOrdinal: nextSessionSwitchRequestOrdinal(event.sender, event.processId),
+          emit: (event) => logAgentEvent('info', 'session.switch.trace', event) }
+      )
     }
   )
 
   ipcMain.handle('chat:get-display-message-page', async (_e, payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
-    const page = await readChatPageAfterPreparation(sessionStorage, payload)
+    const page = await readChatPageWithSessionSwitchTrace(
+      ({ trace, onCachePath }) => readChatPageAfterPreparation(sessionStorage, payload, { trace, onCachePath }),
+      { traceId: randomUUID(), emit: (event) => logAgentEvent('info', 'session.switch.trace', event) }
+    )
     return { ...page, entries: page.entries.filter(({ message }) => message.role === 'assistant').map(({ message, sequence }) => ({ display: turnToDisplay({ turnId: message.id, requestId: '', version: 0, assistantMessage: message }), sequence })) }
   })
 

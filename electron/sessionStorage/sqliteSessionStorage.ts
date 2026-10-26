@@ -167,10 +167,12 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       return snapshot?.sessionGeneration === sessionGeneration && snapshot.currentSessionGeneration === sessionGeneration
         ? snapshot.currentSourceIdentityJson ?? undefined : undefined
     },
-    readBodies: (view, messageIds, signal) => {
+    readBodies: (view, messageIds, signal, recordWorkerTiming) => {
+      const sourceStartedAt = performance.now()
       const source = readSourceTruthSpillsForPreparedView(view.sessionId, view.sessionGeneration, view.sourceIdentityJson)
+      try { recordWorkerTiming?.('source-spill-discovery', performance.now() - sourceStartedAt) } catch { /* Diagnostics must not affect the read. */ }
       return readPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', sourceSpillRoot: source.root,
-        sourceTruthSpills: source.descriptors, view, messageIds, signal })
+        sourceTruthSpills: source.descriptors, view, messageIds, signal, onWorkerTiming: recordWorkerTiming })
     },
     searchBodies: (view, query, limit, candidateFacts) => {
       const source = readSourceTruthSpillsForPreparedView(view.sessionId, view.sessionGeneration, view.sourceIdentityJson)

@@ -79,7 +79,8 @@ export type ProjectionReducerArtifactStaging = Readonly<{
 
 export type ProjectionBuildSliceResult =
   | Readonly<{ kind: 'checkpointed'; checkpoint: ProjectionBuildCheckpoint }>
-  | Readonly<{ kind: 'published'; checkpoint: ProjectionBuildCheckpoint; state: NonNullable<ReturnType<SessionProjectionService['get']>> }>
+  | Readonly<{ kind: 'published'; checkpoint: ProjectionBuildCheckpoint; state: NonNullable<ReturnType<SessionProjectionService['get']>>;
+    finalViewMaterializationDurationMs: number }>
   | Readonly<{ kind: 'publish-unknown'; checkpoint: ProjectionBuildCheckpoint }>
   | Readonly<{ kind: 'source-drift' }>
   | Readonly<{ kind: 'deferred-large'; eventSequence?: number }>
@@ -250,6 +251,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
     }
     if (result.kind === 'complete') {
       const output = checkpoint.outputManifest
+      const finalViewMaterializationStartedAt = performance.now()
       if (checkpoint.nextSequence > 0 && !output) return invalidateInvalidCheckpoint()
       let payload: string
       let payloadByteLength: number
@@ -305,6 +307,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
         payloadDigest = await projectionPayloadDigest(payload)
       }
       const inlinePayload = !workerFinalBlob && payloadByteLength <= 256 * 1024 ? payload : undefined
+      const finalViewMaterializationDurationMs = Math.max(0, performance.now() - finalViewMaterializationStartedAt)
       if (inlinePayload === undefined && output && !workerFinalBlob) {
         if (!input.blobs.readVerified) {
           rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'PROJECTION_OUTPUT_ROOT_READER_UNAVAILABLE', input.now, input.retryAfter)
@@ -343,14 +346,16 @@ export async function runProjectionBuildSlice(input: Readonly<{
         const reconciled = state ?? service.get(lease.sessionId, lease.scopeKey)
         if (reconciled?.status === 'valid' && reconciled.sourceIdentityJson === lease.sourceIdentityJson &&
           reconciled.payloadDigest === payloadDigest && reconciled.payloadGeneration === `projection-${payloadDigest}` &&
-          reconciled.validatedRangeJson === validatedRangeJson) return { kind: 'published', checkpoint, state: reconciled }
+          reconciled.validatedRangeJson === validatedRangeJson) return { kind: 'published', checkpoint, state: reconciled,
+            finalViewMaterializationDurationMs }
         return { kind: 'lease-lost' }
       } catch (error) {
         if (!(error instanceof Error) || error.name !== 'TransactionCommitUnknownError') throw error
         const reconciled = service.get(lease.sessionId, lease.scopeKey)
         if (reconciled?.status === 'valid' && reconciled.sourceIdentityJson === lease.sourceIdentityJson &&
           reconciled.payloadDigest === payloadDigest && reconciled.payloadGeneration === `projection-${payloadDigest}` &&
-          reconciled.validatedRangeJson === validatedRangeJson) return { kind: 'published', checkpoint, state: reconciled }
+          reconciled.validatedRangeJson === validatedRangeJson) return { kind: 'published', checkpoint, state: reconciled,
+            finalViewMaterializationDurationMs }
         return { kind: 'publish-unknown', checkpoint }
       } finally {
         if (finalBlob) await releaseBlob(finalBlob)

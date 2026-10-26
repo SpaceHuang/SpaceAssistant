@@ -52,6 +52,23 @@ describe('agentLogger', () => {
     expect(content).not.toContain('private transcript')
   })
 
+  it('attaches package identity to bounded session switch diagnostics', async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-log-session-switch-'))
+    initAgentLogger({ getWorkDir: () => tempDir, isPackaged: true, mainDirname: tempDir, appVersion: '0.2.9', artifactBuildId: 'build-switch' })
+
+    logAgentEvent('info', 'session.switch.trace', {
+      instance: 'main', traceId: 'trace-1', rendererProcessId: 77, requestOrdinal: 3, outcome: 'ok', cachePath: 'ready', pageSize: 20,
+      durationMs: 18.4, stages: [{ name: 'page-read', durationMs: 18.4, outcome: 'ok' }], content: 'private transcript'
+    })
+    await flushAgentLogger()
+
+    const logFile = path.join(tempDir, '.agent', 'logs', formatAgentLogFileName(new Date()))
+    const content = await fs.readFile(logFile, 'utf8')
+    const line = JSON.parse(content.trim()) as Record<string, unknown>
+    expect(line).toMatchObject({ event: 'session.switch.trace', appVersion: '0.2.9', artifactBuildId: 'build-switch', traceId: 'trace-1', rendererProcessId: 77, requestOrdinal: 3, durationMs: 18.4 })
+    expect(content).not.toContain('private transcript')
+  })
+
   it('target tool events drop raw process input and output', async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-log-safe-'))
     initAgentLogger({ getWorkDir: () => tempDir, isPackaged: true, mainDirname: tempDir })

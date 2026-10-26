@@ -26,6 +26,7 @@ describe('projection build supervisor', () => {
       let clock = 0
       const slices: Array<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean;
         sourceRows: number; sourceBytes: number; sourceSnapshotDurationMs: number; sourceWorkerDurationMs: number; reducerWorkerDurationMs: number;
+        finalViewMaterializationDurationMs: number;
         maxWorkerHeapUsedBytesAtExit: number | null; maxProcessRssBytesAtExit: number | null;
         maxWorkerHeapUsedBytesPeakSampled: number | null; maxProcessRssBytesPeakSampled: number | null;
         memorySampleIntervalMs: number | null; workerSamples: number }> = []
@@ -63,8 +64,10 @@ describe('projection build supervisor', () => {
         invocationId: 'cooperative-inv', sequence: 1, eventId: 'cooperative-event', idempotencyKey: 'cooperative-key',
         turnId: 'cooperative-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1,
         commitOrder: 1, createdAt: 1 })), sourceSnapshotDurationMs: 1, sourceWorkerDurationMs: 2, reducerWorkerDurationMs: 4,
+        finalViewMaterializationDurationMs: 0,
         maxWorkerHeapUsedBytesAtExit: 50, maxProcessRssBytesAtExit: 200, maxWorkerHeapUsedBytesPeakSampled: 60,
         maxProcessRssBytesPeakSampled: 250, memorySampleIntervalMs: 10, workerSamples: 2 })
+      expect(slices[1]?.finalViewMaterializationDurationMs).toEqual(expect.any(Number))
       expect(service.get(session.id, scopeKey)).toMatchObject({ status: 'valid' })
       handle.stop()
       await handle.quiesce()

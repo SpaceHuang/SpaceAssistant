@@ -6,6 +6,7 @@ import { store } from '../store'
 import { addCompactionMarker, setChatStatus, setContextProjection, setLastUsage } from '../store/chatSlice'
 import { turnDisplayToMessage } from '../../shared/turnDisplayProtocol'
 import { setTurnFailure } from '../store/chatSlice'
+import { requestChatMessagePageWithTraceMetadata } from './sessionSwitchTrace'
 
 function applyProjectedUsage(sessionId: string, usage: SessionUsage, projected: boolean): void {
   if (!projected) void window.api.usageSet({ sessionId, usage }).catch(() => {})
@@ -160,7 +161,8 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
         // display 协议本身不带失败详情，终态失败原因只能随这里已回查到的 terminal 带下去，
         // 否则失败气泡当场只剩通用提示，要等重开页面回查才能看到真实原因。
         const failureReason = display.outcome === 'failed' || display.outcome === 'timed-out' || display.outcome === 'interrupted' || display.outcome === 'commit-uncertain' ? terminal?.error?.message?.trim() || undefined : undefined
-        return window.api.chatGetMessagePage({ sessionId: display.sessionId, limit: 60 }).then((page) => ({ page, failureReason }))
+        return requestChatMessagePageWithTraceMetadata(() => window.api.chatGetMessagePage({ sessionId: display.sessionId, limit: 60 }))
+          .then((page) => ({ page, failureReason }))
       }).then((result) => {
         if (versions.get(display.turnId) !== display.version) return
         if (!result?.page) return

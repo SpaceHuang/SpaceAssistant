@@ -14,6 +14,7 @@ export function projectionBuildSliceLogFields(slice: ProjectionBuildSlice) {
     sourceSnapshotDurationMs: roundMs(slice.sourceSnapshotDurationMs),
     sourceWorkerDurationMs: roundMs(slice.sourceWorkerDurationMs),
     reducerWorkerDurationMs: roundMs(slice.reducerWorkerDurationMs),
+    finalViewMaterializationDurationMs: roundMs(slice.finalViewMaterializationDurationMs),
     maxWorkerHeapUsedBytesAtExit: slice.maxWorkerHeapUsedBytesAtExit,
     maxProcessRssBytesAtExit: slice.maxProcessRssBytesAtExit,
     maxWorkerHeapUsedBytesPeakSampled: slice.maxWorkerHeapUsedBytesPeakSampled,

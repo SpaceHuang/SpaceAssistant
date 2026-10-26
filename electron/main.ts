@@ -103,6 +103,8 @@ import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { measureStartupPhase } from './startupTiming'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
+import { projectRendererSessionSwitchTraceMessage } from './agentLogger/agentLogProjection'
+import { extractWebContentsConsoleMessage } from './consoleMessage'
 import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
 import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { createDesktopAgentRuntime } from './runtime/desktopAgentRuntime'
@@ -135,7 +137,7 @@ import { runConfirmModeRetirementMigrationOnce } from './confirmation/confirmMod
 import { runShellDefaultEnableMigrationOnce } from './shellEnableDefaultMigration'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { cleanupOrphanedChatAttachments } from './chatAttachmentManager'
-import { getRendererURL, isSpaceAssistantDev } from './devEnvironment'
+import { getRendererURL, getUserDataPath, isSpaceAssistantDev } from './devEnvironment'
 import { runAllShutdownCleanupTasks, type ShutdownCleanupResult } from './shutdownCleanup'
 import { cleanupMcpArtifactsOnStartup } from './mcp/mcpArtifactCleanup'
 import { readMcpArtifactCapacity, setMcpArtifactCapacityRequest } from './mcp/mcpArtifactCapacity'
@@ -155,7 +157,7 @@ const TOOLS_CONFIG_KEY = 'config.tools'
 // 开发版使用独立的 Electron userData，避免与已安装版或其他分支共用数据库。
 // 必须在 app.whenReady() 前设置，否则 Electron 已经确定了默认 userData 路径。
 if (isSpaceAssistantDev()) {
-  app.setPath('userData', `${app.getPath('userData')}-dev`)
+  app.setPath('userData', getUserDataPath(app.getPath('userData')))
 }
 
 function sleep(ms: number): Promise<void> {
@@ -376,10 +378,15 @@ export async function createMainWindow(): Promise<void> {
 
   setupWindowCloseHandler(win, getIsQuitting, isTrayEnabled)
 
+  win.webContents.on('console-message', (event, level, rawMessage) => {
+    const message = extractWebContentsConsoleMessage(event, level, rawMessage)
+    if (!message) return
+    if (message.startsWith('[startup]')) console.info(message)
+    const rendererTrace = projectRendererSessionSwitchTraceMessage(message, win.webContents.mainFrame.processId)
+    if (rendererTrace) logAgentEvent('info', 'session.switch.trace', rendererTrace)
+  })
+
   if (!initialRendererLoadReported) {
-    win.webContents.on('console-message', (details) => {
-      if (details.message.startsWith('[startup]')) console.info(details.message)
-    })
     win.once('ready-to-show', () => {
       console.info('[startup]', JSON.stringify({
         phase: 'app.start-to-window-ready-to-show',

@@ -7,14 +7,19 @@ export type PreparedChatBodyReadPreparation = Readonly<{
   readChatMessagesBeforePreparation?: (input: Readonly<{ sessionId: string; limit?: number; offset?: number }>) => unknown[] | undefined
 }>
 
+export type SessionSwitchReadTrace = Readonly<{
+  measure<T>(name: string, operation: () => T | Promise<T>): Promise<T>
+  record?(name: string, durationMs: number): void
+}>
+
 /** Use a current prepared view, or serve the still-valid old owner while scheduling a cold view. */
 export function tryPreparedChatBodyForRead(storage: PreparedChatBodyReadPreparation, sessionId: string):
-  Readonly<{ handled: boolean; prepared?: unknown }> {
+  Readonly<{ handled: boolean; prepared?: unknown; cachePath: 'ready' | 'prior-authority' | 'cold' }> {
   const prepared = storage.readPreparedChatBodyV1?.({ sessionId })
-  if (prepared !== undefined) return { handled: true, prepared }
-  if (!storage.requestChatBodyV1 || !storage.canReadChatBodyBeforePreparation?.(sessionId)) return { handled: false }
+  if (prepared !== undefined) return { handled: true, prepared, cachePath: 'ready' }
+  if (!storage.requestChatBodyV1 || !storage.canReadChatBodyBeforePreparation?.(sessionId)) return { handled: false, cachePath: 'cold' }
   void storage.requestChatBodyV1({ sessionId }).catch(() => undefined)
-  return { handled: true }
+  return { handled: true, cachePath: 'prior-authority' }
 }
 
 export async function prepareChatBodyForRead(

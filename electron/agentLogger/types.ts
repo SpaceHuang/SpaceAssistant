@@ -13,6 +13,7 @@ export type AgentLogEventName =
   | 'session.transcript.read'
   | 'session.projection.build.slice'
   | 'session.transcript.reconciliation'
+  | 'session.switch.trace'
   | 'eventloop.delay'
   | 'session.transcript.revalidation'
   | 'session.projection.blob_gc_failed'

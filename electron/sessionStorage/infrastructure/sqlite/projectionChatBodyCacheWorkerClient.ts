@@ -15,13 +15,17 @@ export type PreparedChatBodySelection = Readonly<{
   /** Zero identifies a fully verified <=256 KiB inline payload read on the caller thread. */
   workerThreadId: number
 }>
+type WorkerTimingStage = 'worker-startup' | 'worker-queue' | 'worker-read' | 'source-spill-verify' |
+  'source-spill-discovery' | 'worker-transport' | 'worker-exit-wait'
+type WorkerTimingRecorder = (stage: WorkerTimingStage, durationMs: number) => void
 export type PreparedChatBodySearch = PreparedChatBodySelection
 
 const MAX_CACHE_WORKER_MS = 30_000
 const MAX_CHAT_BODY_SEARCH_RESULTS = 10_000
 const pendingSearchRequests = new Map<string, Readonly<{
   resolve(value: PreparedChatBodySearch): void; reject(error: Error): void; timer: NodeJS.Timeout
-  operation: 'select' | 'search'; limit?: number; messageIds?: readonly string[]
+  operation: 'select' | 'search'; limit?: number; messageIds?: readonly string[]; onWorkerTiming?: WorkerTimingRecorder
+  requestStartedAt: number
 }>>()
 let preparedSearchWorker: Worker | undefined
 
@@ -29,6 +33,26 @@ function resolveWorkerPath(): string | undefined {
   const compiled = path.join(__dirname, 'projectionChatBodyCacheWorker.js')
   const source = path.join(__dirname, 'projectionChatBodyCacheWorker.ts')
   return fs.existsSync(compiled) ? compiled : fs.existsSync(source) ? source : undefined
+}
+
+function recordWorkerTimings(recorder: WorkerTimingRecorder | undefined, metrics: Partial<Record<WorkerTimingStage, number>> | undefined): void {
+  if (!recorder || !metrics) return
+  for (const stage of ['worker-queue', 'source-spill-verify', 'worker-read'] as const) {
+    const durationMs = metrics[stage]
+    if (durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0 && durationMs <= 600_000) {
+      try { recorder(stage, durationMs) } catch { /* Diagnostics must not affect the read. */ }
+    }
+  }
+}
+
+function recordWorkerTransport(recorder: WorkerTimingRecorder | undefined, requestStartedAt: number,
+  metrics: Partial<Record<WorkerTimingStage, number>> | undefined): void {
+  if (!recorder) return
+  const roundTripMs = performance.now() - requestStartedAt
+  const workerMs = (metrics?.['worker-queue'] ?? 0) + (metrics?.['source-spill-verify'] ?? 0) + (metrics?.['worker-read'] ?? 0)
+  const durationMs = roundTripMs - workerMs
+  if (!Number.isFinite(durationMs) || durationMs < 0 || durationMs > 600_000) return
+  try { recorder('worker-transport', durationMs) } catch { /* Diagnostics must not affect the read. */ }
 }
 
 function spawnSourceWorker(workerPath: string): Worker {
@@ -59,6 +83,7 @@ export function readPreparedChatBodiesInWorker(input: Readonly<{
   view: PreparedChatBodyView
   messageIds: readonly string[]
   signal?: AbortSignal
+  onWorkerTiming?: WorkerTimingRecorder
 }>): Promise<PreparedChatBodySelection> {
   return !input.sourceTruthSpills?.length && input.view.inlinePayload !== undefined
     ? readPreparedChatBodyCache({ ...input, operation: 'select' })
@@ -75,6 +100,7 @@ export function searchPreparedChatBodiesInWorker(input: Readonly<{
   limit: number
   candidateFacts: readonly ChatBodyCandidateFact[]
   signal?: AbortSignal
+  onWorkerTiming?: WorkerTimingRecorder
 }>): Promise<PreparedChatBodySearch> {
   return !input.sourceTruthSpills?.length && input.view.inlinePayload !== undefined
     ? readPreparedChatBodyCache({ ...input, operation: 'search' })
@@ -84,7 +110,7 @@ export function searchPreparedChatBodiesInWorker(input: Readonly<{
 function readWithPreparedCacheWorker(input: Readonly<{
   root: string; sourceSpillRoot?: string; sourceTruthSpills?: readonly SpillDescriptor[]
   view: PreparedChatBodyView; operation: 'select' | 'search'; query?: string; limit?: number; messageIds?: readonly string[];
-  candidateFacts?: readonly ChatBodyCandidateFact[]; signal?: AbortSignal
+  candidateFacts?: readonly ChatBodyCandidateFact[]; signal?: AbortSignal; onWorkerTiming?: WorkerTimingRecorder
 }>): Promise<PreparedChatBodySearch> {
   if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))
   const workerPath = path.join(__dirname, 'projectionChatBodyCacheSearchWorker.js')
@@ -93,11 +119,18 @@ function readWithPreparedCacheWorker(input: Readonly<{
   if (!resolvedPath) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ENTRY_UNAVAILABLE'))
   try {
     if (!preparedSearchWorker) {
+      const workerCreatedAt = performance.now()
       const worker = resolvedPath.endsWith('.ts') ? spawnSourceWorker(resolvedPath) : new Worker(resolvedPath, {
         resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 }
       })
       preparedSearchWorker = worker
-      worker.on('message', (message: { requestId?: string; error?: string; result?: PreparedChatBodySearch }) => {
+      worker.once('online', () => {
+        const durationMs = performance.now() - workerCreatedAt
+        if (Number.isFinite(durationMs) && durationMs >= 0 && durationMs <= 600_000) {
+          try { input.onWorkerTiming?.('worker-startup', durationMs) } catch { /* Diagnostics must not affect the read. */ }
+        }
+      })
+      worker.on('message', (message: { requestId?: string; error?: string; result?: PreparedChatBodySearch & { metrics?: Partial<Record<WorkerTimingStage, number>> } }) => {
         if (!message || typeof message.requestId !== 'string') return
         const pending = pendingSearchRequests.get(message.requestId)
         if (!pending) return
@@ -116,6 +149,8 @@ function readWithPreparedCacheWorker(input: Readonly<{
           pending.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_RESULT_INVALID'))
           return
         }
+        recordWorkerTimings(pending.onWorkerTiming, result.metrics)
+        recordWorkerTransport(pending.onWorkerTiming, pending.requestStartedAt, result.metrics)
         pending.resolve(result)
       })
       const fail = (error: Error) => {
@@ -157,9 +192,10 @@ function readWithPreparedCacheWorker(input: Readonly<{
     input.signal?.addEventListener('abort', onAbort, { once: true })
     const settleResolve = (value: PreparedChatBodySearch) => { input.signal?.removeEventListener('abort', onAbort); resolve(value) }
     const settleReject = (error: Error) => { input.signal?.removeEventListener('abort', onAbort); reject(error) }
-    pendingSearchRequests.set(requestId, { resolve: settleResolve, reject: settleReject, timer,
+    pendingSearchRequests.set(requestId, { resolve: settleResolve, reject: settleReject, timer, requestStartedAt: performance.now(),
       operation: input.operation, ...(input.limit !== undefined ? { limit: input.limit } : {}),
-      ...(input.messageIds ? { messageIds: input.messageIds } : {}) })
+      ...(input.messageIds ? { messageIds: input.messageIds } : {}),
+      ...(input.onWorkerTiming ? { onWorkerTiming: input.onWorkerTiming } : {}) })
     try { worker.postMessage({ requestId, root: input.root, sessionId: input.view.sessionId,
       sessionGeneration: input.view.sessionGeneration, scopeKey: input.view.scopeKey, specVersion: input.view.specVersion,
       sourceIdentityJson: input.view.sourceIdentityJson, payloadDigest: input.view.payloadDigest,
@@ -186,6 +222,7 @@ function readPreparedChatBodyCache(input: Readonly<{
   limit?: number
   candidateFacts?: readonly ChatBodyCandidateFact[]
   signal?: AbortSignal
+  onWorkerTiming?: WorkerTimingRecorder
 }>): Promise<PreparedChatBodySelection> {
   if (input.operation === 'select' && !input.messageIds) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID'))
   if (input.operation === 'search' && (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit) ||
@@ -209,15 +246,23 @@ function readPreparedChatBodyCache(input: Readonly<{
   const workerPath = resolveWorkerPath()
   if (!workerPath) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ENTRY_UNAVAILABLE'))
   let worker: Worker
+  const workerCreatedAt = performance.now()
   try { worker = workerPath.endsWith('.ts') ? spawnSourceWorker(workerPath) : new Worker(workerPath, {
     resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
   }) } catch (error) {
     return Promise.reject(new Error(`PROJECTION_CHAT_BODY_CACHE_WORKER_SPAWN_FAILED:${error instanceof Error ? error.message : String(error)}`))
   }
+  worker.once('online', () => {
+    const durationMs = performance.now() - workerCreatedAt
+    if (Number.isFinite(durationMs) && durationMs >= 0 && durationMs <= 600_000) {
+      try { input.onWorkerTiming?.('worker-startup', durationMs) } catch { /* Diagnostics must not affect the read. */ }
+    }
+  })
   const requestId = randomUUID()
   return new Promise((resolve, reject) => {
     let settled = false
     let abortRequested = false
+    let resultReceivedAt: number | undefined
     let candidateError: Error | undefined
     let candidateResult: PreparedChatBodySelection | undefined
     const timer = setTimeout(() => {
@@ -240,7 +285,8 @@ function readPreparedChatBodyCache(input: Readonly<{
       candidateError ??= error
       void worker.terminate().catch(() => { candidateError = new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_TERMINATION_FAILED') })
     }
-    worker.once('message', (message: { requestId?: string; error?: string; result?: PreparedChatBodySelection }) => {
+    worker.once('message', (message: { requestId?: string; error?: string; result?: PreparedChatBodySelection & { metrics?: Partial<Record<WorkerTimingStage, number>> } }) => {
+      resultReceivedAt = performance.now()
       if (message.requestId !== requestId) { terminateWithError(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_PROTOCOL_MISMATCH')); return }
       if (message.error) { terminateWithError(new Error(message.error)); return }
       const result = message.result
@@ -254,10 +300,17 @@ function readPreparedChatBodyCache(input: Readonly<{
         terminateWithError(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_RESULT_INVALID'))
         return
       }
+      recordWorkerTimings(input.onWorkerTiming, result.metrics)
       candidateResult = result
     })
     worker.once('error', (error) => { candidateError ??= error })
     worker.once('exit', (code) => {
+      if (resultReceivedAt !== undefined) {
+        const durationMs = performance.now() - resultReceivedAt
+        if (Number.isFinite(durationMs) && durationMs >= 0 && durationMs <= 600_000) {
+          try { input.onWorkerTiming?.('worker-exit-wait', durationMs) } catch { /* Diagnostics must not affect the read. */ }
+        }
+      }
       if (!settled) finish(candidateError ?? (abortRequested ? new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED') :
         candidateResult && code === 0 ? undefined : new Error(`PROJECTION_CHAT_BODY_CACHE_WORKER_EXIT:${code}`)), candidateResult)
     })

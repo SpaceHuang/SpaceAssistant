@@ -2,6 +2,31 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AppConfig, FileInfo, Message, SearchResult, Session } from '../src/shared/domainTypes'
 import type { SpaceAssistantApi } from '../src/shared/api'
 
+const sessionSwitchTraceMetadataKey = Symbol.for('spaceassistant.session-switch-trace-metadata.v1')
+let sessionSwitchRequestOrdinal = 0
+
+function nextSessionSwitchRequestOrdinal(): number {
+  sessionSwitchRequestOrdinal += 1
+  if (!Number.isSafeInteger(sessionSwitchRequestOrdinal) || sessionSwitchRequestOrdinal < 1) {
+    throw new Error('SESSION_SWITCH_TRACE_ORDINAL_EXHAUSTED')
+  }
+  return sessionSwitchRequestOrdinal
+}
+
+function attachSessionSwitchTraceMetadata<T extends object>(value: T, metadata: Readonly<{ processId: number; requestOrdinal: number }>): T {
+  if (!Number.isSafeInteger(metadata.processId) || metadata.processId < 0 ||
+    !Number.isSafeInteger(metadata.requestOrdinal) || metadata.requestOrdinal < 1) {
+    throw new Error('SESSION_SWITCH_TRACE_METADATA_INVALID')
+  }
+  Object.defineProperty(value, sessionSwitchTraceMetadataKey, {
+    value: Object.freeze({ processId: metadata.processId, requestOrdinal: metadata.requestOrdinal }),
+    enumerable: false,
+    configurable: false,
+    writable: false
+  })
+  return value
+}
+
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
   storageGetOverview: (force = false) => ipcRenderer.invoke('storage:get-overview', { force }),
@@ -45,7 +70,20 @@ const api: SpaceAssistantApi = {
   chatCompactSessionContext: (payload) => ipcRenderer.invoke('chat:compact-session-context', payload),
   chatGetSessionCompactionMarkers: (sessionId) => ipcRenderer.invoke('chat:get-session-compaction-markers', sessionId),
   chatGetApiContextBaseline: (payload) => ipcRenderer.invoke('chat:get-api-context-baseline', payload),
-  chatGetMessagePage: (payload) => ipcRenderer.invoke('chat:get-message-page', payload),
+  chatGetMessagePage: async (payload) => {
+    const requestOrdinal = nextSessionSwitchRequestOrdinal()
+    try {
+      const page = await ipcRenderer.invoke('chat:get-message-page', payload)
+      return page && typeof page === 'object'
+        ? attachSessionSwitchTraceMetadata(page, { processId: process.pid, requestOrdinal })
+        : page
+    } catch (error) {
+      if (error && typeof error === 'object') {
+        try { attachSessionSwitchTraceMetadata(error, { processId: process.pid, requestOrdinal }) } catch { /* Preserve the original IPC error. */ }
+      }
+      throw error
+    }
+  },
   chatGetDisplayMessagePage: (payload) => ipcRenderer.invoke('chat:get-display-message-page', payload),
   chatGetContextHistorySummaryBaseline: (payload) =>
     ipcRenderer.invoke('chat:get-context-history-summary-baseline', payload),

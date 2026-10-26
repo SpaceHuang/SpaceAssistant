@@ -12,11 +12,14 @@ const TARGET_EVENTS = new Set<AgentLogEventName>([
   'tool.request', 'tool.error', 'tool.result', 'tool.result.contract-violation',
   'trust.remove',
   'history.cutover', 'session.storage.shadow', 'session.history.recovery', 'session.history.repair.failed', 'session.transcript.read',
-  'session.projection.build.slice', 'session.transcript.reconciliation',
+  'session.projection.build.slice', 'session.transcript.reconciliation', 'session.switch.trace',
   'tools.execution_summary',
   'shell.security.deny', 'shell.trust.command', 'shell.path.confirm', 'shell.path.reject', 'shell.precheck', 'shell.confirm',
   'shell.exec.start', 'shell.exec.plan_failed', 'shell.exec.spawned', 'shell.exec.auto_background',
   'shell.exec.background', 'shell.exec.finish', 'shell.exec.error', 'grep.terminate'
+])
+const RENDERER_SESSION_SWITCH_STAGES = new Set([
+  'renderer-page-request', 'failure-reason-hydration', 'store-commit', 'render-commit', 'next-paint'
 ])
 const COMMON_KEYS = new Set([
   'requestId', 'sessionId', 'toolUseId', 'loopRound', 'toolName', 'level', 'success', 'durationMs',
@@ -42,6 +45,35 @@ const COMMON_KEYS = new Set([
   'baselineScanCount', 'projectedCount'
 ])
 
+/** Strictly decode the renderer console envelope before forwarding only safe scalars to AgentLogger. */
+export function projectRendererSessionSwitchTraceMessage(message: string, authoritativeProcessId?: number): Record<string, unknown> | undefined {
+  const prefix = '[session.switch.trace.renderer] '
+  if (!message.startsWith(prefix)) return undefined
+  let value: unknown
+  try { value = JSON.parse(message.slice(prefix.length)) } catch { return undefined }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const candidate = value as Record<string, unknown>
+  const processId = candidate.rendererProcessId ?? authoritativeProcessId
+  const requestOrdinal = candidate.requestOrdinal
+  const outcome = candidate.outcome
+  const pageSize = candidate.pageSize
+  if (candidate.event !== 'session.switch.trace' || candidate.instance !== 'renderer' ||
+    (authoritativeProcessId !== undefined && candidate.rendererProcessId !== undefined && candidate.rendererProcessId !== authoritativeProcessId) ||
+    !Number.isSafeInteger(processId) || Number(processId) < 0 || !Number.isSafeInteger(requestOrdinal) || Number(requestOrdinal) < 1 ||
+    (outcome !== 'ok' && outcome !== 'error') || !Number.isSafeInteger(pageSize) || Number(pageSize) < 0 || Number(pageSize) > 200 ||
+    !Array.isArray(candidate.stages) || candidate.stages.length > 20) return undefined
+  const stages = candidate.stages.flatMap((stage) => {
+    if (!stage || typeof stage !== 'object' || Array.isArray(stage)) return []
+    const item = stage as Record<string, unknown>
+    if (typeof item.name !== 'string' || !RENDERER_SESSION_SWITCH_STAGES.has(item.name) ||
+      typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0 || item.durationMs > 600_000 ||
+      (item.outcome !== 'ok' && item.outcome !== 'error')) return []
+    return [{ name: item.name, durationMs: Math.round(item.durationMs * 100) / 100, outcome: item.outcome }]
+  })
+  return { instance: 'renderer', traceId: `${processId}-${requestOrdinal}`, rendererProcessId: processId,
+    requestOrdinal, outcome, pageSize, stages }
+}
+
 function hash(value: unknown): string {
   let serialized = 'null'
   try {
@@ -65,6 +97,7 @@ export function projectAgentLogFields(
   // P0-D3 组 1：run_script 执行期事件与 shell.exec.* 共用同一 Shell/Script allowlist
   if (event.startsWith('script.exec.')) return projectShellAgentLogFields(event, fields)
   if (!TARGET_EVENTS.has(event)) return fields
+  if (event === 'session.switch.trace') return projectSessionSwitchTraceFields(fields)
 
   const out: Record<string, unknown> = {}
   const processTool = isProcessToolName(typeof fields.toolName === 'string' ? fields.toolName : undefined)
@@ -99,6 +132,30 @@ export function projectAgentLogFields(
     }
     if (key === 'userError' || key === 'userMessage' || key === 'summary') continue
     if (COMMON_KEYS.has(key)) out[key] = value
+  }
+  return out
+}
+
+function projectSessionSwitchTraceFields(fields: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (fields.instance === 'main' || fields.instance === 'renderer') out.instance = fields.instance
+  if (typeof fields.traceId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(fields.traceId)) out.traceId = fields.traceId
+  if (Number.isSafeInteger(fields.rendererProcessId) && Number(fields.rendererProcessId) >= 0) out.rendererProcessId = fields.rendererProcessId
+  if (Number.isSafeInteger(fields.requestOrdinal) && Number(fields.requestOrdinal) >= 1) out.requestOrdinal = fields.requestOrdinal
+  if (['ok', 'error', 'cancelled', 'timeout'].includes(String(fields.outcome))) out.outcome = fields.outcome
+  if (['ready', 'prior-authority', 'cold', 'invalidated', 'unknown'].includes(String(fields.cachePath))) out.cachePath = fields.cachePath
+  if (Number.isSafeInteger(fields.pageSize) && Number(fields.pageSize) >= 0 && Number(fields.pageSize) <= 200) out.pageSize = fields.pageSize
+  if (typeof fields.durationMs === 'number' && Number.isFinite(fields.durationMs) && fields.durationMs >= 0) out.durationMs = fields.durationMs
+  if (Array.isArray(fields.stages) && fields.stages.length <= 20) {
+    const stages = fields.stages.flatMap((stage) => {
+      if (!stage || typeof stage !== 'object') return []
+      const value = stage as Record<string, unknown>
+      if (typeof value.name !== 'string' || !/^[a-z][a-z-]{0,47}$/.test(value.name) ||
+        typeof value.durationMs !== 'number' || !Number.isFinite(value.durationMs) || value.durationMs < 0 ||
+        (value.outcome !== 'ok' && value.outcome !== 'error')) return []
+      return [{ name: value.name, durationMs: value.durationMs, outcome: value.outcome }]
+    })
+    out.stages = stages
   }
   return out
 }

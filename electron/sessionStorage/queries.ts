@@ -110,7 +110,9 @@ function selectUniqueFailedAssistantMessageId(db: AppDatabase, sessionId: string
 
 export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonly<{
   currentSourceIdentity(sessionId: string, sessionGeneration: string): string | undefined
-  readBodies(view: PreparedChatBodyView, messageIds: readonly string[], signal?: AbortSignal): Promise<PreparedChatBodySelection>
+  readBodies(view: PreparedChatBodyView, messageIds: readonly string[], signal?: AbortSignal, recordWorkerTiming?: (stage:
+    'source-spill-discovery' | 'worker-startup' | 'worker-queue' | 'worker-read' | 'source-spill-verify' |
+    'worker-transport' | 'worker-exit-wait', durationMs: number) => void): Promise<PreparedChatBodySelection>
   searchBodies(view: PreparedChatBodyView, query: string, limit: number, candidateFacts: readonly ChatBodyCandidateFact[]): Promise<PreparedChatBodySearch>
   invalidate(view: PreparedChatBodyView): void
 }>): SessionQueries {
@@ -193,26 +195,28 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         return tryOverlayPreparedBodies([latest as Message], selected.canonicalIds, bodies, () => preparedChatBody.invalidate(view))?.[0]
       })
     } } : {}),
-    ...(preparedChatBody ? { readPreparedChatPage: async ({ sessionId, beforeSequence, limit, prepared }) => {
+    ...(preparedChatBody ? { readPreparedChatPage: async ({ sessionId, beforeSequence, limit, prepared, measure, recordStage }) => {
       const view = prepared as PreparedChatBodyView | undefined
       if (!view) return undefined
-      const selected = runInTransaction(getDbConnection(db), () => {
+      const measureStage = measure ?? (async <T>(_name: string, operation: () => T | Promise<T>) => operation())
+      const selected = await measureStage('page-select', () => runInTransaction(getDbConnection(db), () => {
         if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
         const page = getChatMessagePage(db, sessionId, beforeSequence, limit)
         if (page.entries.length === 0) return { page, canonicalIds: [] as string[] }
         return { page, canonicalIds: canonicalBodyMessageIds(db, sessionId, page.entries.map(({ message }) => message)) }
-      })
+      }))
       if (!selected) return undefined
       if (selected.canonicalIds.length === 0) return { ...selected.page,
         entries: projectMessageEntriesV1('chatMessageV1', selected.page.entries) }
       let bodies: PreparedChatBodySelection
-      try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
+      try { bodies = await measureStage('body-read', () => preparedChatBody.readBodies(view, selected.canonicalIds,
+        undefined, recordStage ? (stage, durationMs) => recordStage(stage, durationMs) : undefined)) }
       catch (error) {
         propagatePreparedReadCancellation(error)
         preparedChatBody.invalidate(view)
         return undefined
       }
-      return runInTransaction(getDbConnection(db), () => {
+      return measureStage('final-source-check', () => runInTransaction(getDbConnection(db), () => {
         if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
         const latest = getChatMessagePage(db, sessionId, beforeSequence, limit)
         if (latest.oldestSequence !== selected.page.oldestSequence || latest.hasMoreBefore !== selected.page.hasMoreBefore ||
@@ -226,7 +230,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         if (!messages) return undefined
         const entries = latest.entries.map((entry, index) => ({ ...entry, message: messages[index]! }))
         return { ...latest, entries: projectMessageEntriesV1('chatMessageV1', entries) }
-      })
+      }))
     } } : {}),
     ...(preparedChatBody ? { readPreparedApiBaseline: async ({ sessionId, limit, prepared }) => {
       const view = prepared as PreparedChatBodyView | undefined

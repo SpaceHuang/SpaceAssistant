@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { projectAgentLogFields } from './agentLogProjection'
+import { projectRendererSessionSwitchTraceMessage } from './agentLogProjection'
 
 describe('projectAgentLogFields', () => {
+  it('accepts renderer switch timings only from the private console diagnostic envelope', () => {
+    expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] {"event":"session.switch.trace","instance":"renderer","rendererProcessId":44,"requestOrdinal":8,"outcome":"ok","pageSize":20,"stages":[{"name":"renderer-page-request","durationMs":3.4,"outcome":"ok"}],"private":"body"}'))
+      .toEqual({ instance: 'renderer', traceId: '44-8', rendererProcessId: 44, requestOrdinal: 8,
+        outcome: 'ok', pageSize: 20, stages: [{ name: 'renderer-page-request', durationMs: 3.4, outcome: 'ok' }] })
+    expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] {"private":"body"}')).toBeUndefined()
+    expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] not-json')).toBeUndefined()
+    expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] {"event":"session.switch.trace","instance":"renderer","requestOrdinal":9,"outcome":"ok","pageSize":20,"stages":[]}', 55))
+      .toEqual({ instance: 'renderer', traceId: '55-9', rendererProcessId: 55, requestOrdinal: 9,
+        outcome: 'ok', pageSize: 20, stages: [] })
+    expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] {"event":"session.switch.trace","instance":"renderer","rendererProcessId":44,"requestOrdinal":9,"outcome":"ok","pageSize":20,"stages":[]}', 55)).toBeUndefined()
+  })
+
   it('retains bounded projection slice metrics without scope or payload data', () => {
     expect(projectAgentLogFields('session.projection.build.slice', {
       durationMs: 9.2, nextSequence: 400, outcome: 'checkpointed', yielded: true,

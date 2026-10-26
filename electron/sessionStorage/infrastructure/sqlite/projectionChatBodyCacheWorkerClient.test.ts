@@ -76,11 +76,18 @@ describe('projection chat body cache worker client', () => {
       blobLocator, blobByteLength: bytes.byteLength
     }
 
-    const result = await readPreparedChatBodiesInWorker({ root, view, messageIds: ['requested'] })
+    const timings: Array<{ stage: string; durationMs: number }> = []
+    const result = await readPreparedChatBodiesInWorker({ root, view, messageIds: ['requested'],
+      onWorkerTiming: (stage, durationMs) => timings.push({ stage, durationMs }) })
 
     expect(result.workerThreadId).toBeGreaterThan(0)
     expect(result.workerThreadId).not.toBe(threadId)
     expect(result.messages).toEqual([{ id: 'requested', role: 'assistant', content: 'selected body', timestamp: 3 }])
+    expect(timings.map(({ stage }) => stage).sort()).toEqual([
+      'source-spill-verify', 'worker-queue', 'worker-read', 'worker-startup', 'worker-transport'
+    ])
+    expect(timings.every(({ durationMs }) => Number.isFinite(durationMs) && durationMs >= 0)).toBe(true)
+    console.info(`[session-switch-worker-perf] ${JSON.stringify(timings)}`)
     const repeatedSelection = await readPreparedChatBodiesInWorker({ root, view, messageIds: ['requested'] })
     expect(repeatedSelection.workerThreadId).toBe(result.workerThreadId)
     expect(repeatedSelection.messages).toEqual(result.messages)
