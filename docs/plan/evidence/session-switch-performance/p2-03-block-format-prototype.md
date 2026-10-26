@@ -42,11 +42,11 @@
 
 ## 原型验证
 
-`pageBodyReadPrototype.test.ts` 目前 7 项通过：完整 History reducer 对拍、compaction 覆盖旧 ID、chunk/mixed authority、页范围放大 10 倍、message ID 二级目录放大 10 倍、块摘要/目录摘要损坏、普通块 byte/message 上限及 300 KiB 单条隔离。
+`pageBodyReadPrototype.test.ts` 目前 9 项通过：完整 History reducer 对拍、compaction 覆盖旧 ID、assistant chunk/mixed authority、页范围和 message ID 二级目录各放大 10 倍、正文块/目录/来源片段/来源事件/依赖摘要损坏或变化拒绝、普通块 byte/message 上限及 300 KiB 单条隔离。逐消息来源记录绑定 event ID、invocation 内序号、session 序号、schema version、event kind、source digest 和完整 reducer dependency digests。测试先用不完整定位记录断言出 RED，再补来源坐标、摘要和 source revision fence；按页读取经 sequence directory 选中范围后，只验证目标片段，不遍历全体来源事件。
 
 ```text
 npm exec -- vitest run electron/sessionStorage/pageBodyReadPrototype.test.ts --reporter=dot
-1 file passed; 7 passed; 0 failed; 0.59s
+1 file passed; 9 passed; 0 failed; 0.59s
 ```
 
 这仍是内存数据结构原型，未接 SQLite、真实文件系统发布、GC、并发 History 写入或 source locator table；C4a 的来源定位全格式矩阵尚未通过。256 KiB/8 条和 fanout 8 必须在生产 block store 性能测试后冻结，不能由本原型直接带入生产常量。D-3 未获批准前，以上发布/迁移契约仅作候选方案。
