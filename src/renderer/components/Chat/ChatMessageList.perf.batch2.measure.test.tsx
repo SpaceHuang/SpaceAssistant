@@ -1,5 +1,5 @@
 /**
- * Batch2 本机复测：全量 500 vs 最新页 60（窗口化数据面）。
+ * Batch2 本机复测：比较全量 500、最新页 60 与切换首屏 20（窗口化数据面）。
  * 运行：npx vitest run src/renderer/components/Chat/ChatMessageList.perf.batch2.measure.test.tsx
  *
  * 产出：PERF_OUTPUT_DIR（默认 docs/develop）/chat-message-list-batch2-remeasure-results.json
@@ -211,10 +211,11 @@ async function measureScenario(label: string, messageCount: number): Promise<Sce
 }
 
 describe('ChatMessageList batch2 remasure', () => {
-  it('compares full-500 vs latest-page-60 mount cost', async () => {
+  it('compares full-500, latest-page-60, and session-switch-page-20 mount cost', async () => {
     await changeAppLocale('zh-CN')
     const full500 = await measureScenario('full-500', 500)
     const page60 = await measureScenario('latest-page-60', 60)
+    const page20 = await measureScenario('session-switch-page-20', 20)
 
     const outDir = path.join(process.cwd(), process.env.PERF_OUTPUT_DIR ?? 'docs/develop')
     mkdirSync(outDir, { recursive: true })
@@ -225,10 +226,12 @@ describe('ChatMessageList batch2 remasure', () => {
         arch: process.arch,
         node: process.version
       },
-      scenarios: [full500, page60],
+      scenarios: [full500, page60, page20],
       ratios: {
         mountMsPageOverFull: page60.mountMs / Math.max(full500.mountMs, 0.001),
+        mountMsPage20OverPage60: page20.mountMs / Math.max(page60.mountMs, 0.001),
         domNodesPageOverFull: page60.domNodes / Math.max(full500.domNodes, 1),
+        domNodesPage20OverPage60: page20.domNodes / Math.max(page60.domNodes, 1),
         mountCommitMaxPage: page60.mountCommits.max,
         mountCommitMaxFull: full500.mountCommits.max
       }

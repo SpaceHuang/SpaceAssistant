@@ -48,6 +48,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { setInvalidationBroadcaster } from './database/scopeVersion'
 import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
+import { createTurnDisplayPublisher } from './turnDisplayPublisher'
 import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask,
   createSqliteSessionStorage, createSqliteSessionStorageHost, createSqliteStartupHistoryRecoveryBindings,
   startSessionProjectionRevalidationDrain } from './sessionStorage/sqliteSessionStorage'
@@ -293,6 +294,7 @@ let storageLifecycleStop: ((deadlineMs: number) => Promise<{ status: 'quiescent'
 let storageProfileCoordinator: StorageProfileCoordinator | null = null
 let projectionRevalidationDrainStop: { stop: () => void } | null = null
 let eventLoopWatchdogStop: (() => void) | null = null
+let turnDisplayPublisherStop: (() => void) | null = null
 let safeDatabaseMaintenanceInFlight: Promise<void> | undefined
 let isQuitting = false
 let quitCleanupDone = false
@@ -994,6 +996,15 @@ app.whenReady().then(async () => {
   setInvalidationBroadcaster((scope, version) => {
     getMainWindow()?.webContents.send('scope:invalidated', { scope, version })
   })
+  const turnDisplayPublisher = createTurnDisplayPublisher<Parameters<typeof turnToDisplay>[0], { type: string }>((turn, event) => {
+    const display = turnToDisplay(turn)
+    if (event.type === 'source-cancelled') display.outcome = 'cancelled'
+    else if (event.type === 'source-timeout') display.outcome = 'timed-out'
+    else if (event.type === 'source-failed') display.outcome = 'failed'
+    else if (event.type === 'source-completed') display.outcome = 'completed'
+    getMainWindow()?.webContents.send('chat:turn-display', { display })
+  })
+  turnDisplayPublisherStop = () => turnDisplayPublisher.dispose()
   turnRuntime = createSessionTurnRuntime(sessionStorage, {
     deps: { now: Date.now, id: randomUUID },
     onCancel: (turn) => {
@@ -1003,12 +1014,7 @@ app.whenReady().then(async () => {
       cancelAllToolConfirmsForRequest(turn.requestId)
     },
     onEvent: (turn, event) => {
-      const display = turnToDisplay(turn)
-      if (event.type === 'source-cancelled') display.outcome = 'cancelled'
-      else if (event.type === 'source-timeout') display.outcome = 'timed-out'
-      else if (event.type === 'source-failed') display.outcome = 'failed'
-      else if (event.type === 'source-completed') display.outcome = 'completed'
-      getMainWindow()?.webContents.send('chat:turn-display', { display })
+      turnDisplayPublisher.enqueue(turn, event)
       if (event.type === 'usage-updated') {
         const usage = (event as { usage?: unknown }).usage
         if (usage && typeof usage === 'object') getMainWindow()?.webContents.send('chat:turn-usage', { sessionId: turn.sessionId, usage, projected: Boolean((event as { projected?: boolean }).projected) })
@@ -1483,6 +1489,8 @@ app.on('before-quit', (event) => {
   if (quitCleanupDone) return
   event.preventDefault()
   isQuitting = true
+  turnDisplayPublisherStop?.()
+  turnDisplayPublisherStop = null
   // 必须在启动异步 cleanup 之前同步切断事件生产，否则 flush 与最后一批
   // chunk/关键事件并发，flush 返回后仍可能接受新事件并被 app.quit 丢弃。
   beginSessionEventShutdown()

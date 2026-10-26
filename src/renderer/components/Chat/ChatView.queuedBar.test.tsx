@@ -35,6 +35,10 @@ function renderView() { return render(<Provider store={store}><ConfigProvider><A
 
 describe('ChatView queuedBar', () => {
   beforeEach(async () => { vi.clearAllMocks(); await changeAppLocale('zh-CN'); store.dispatch(resetChatUi()); store.dispatch(setConfig(makeConfig())); store.dispatch(setSession(session.id)); store.dispatch(setSessions([session])); setupApi() })
+  it('loads only one page of recent messages when opening a session', async () => {
+    renderView()
+    await waitFor(() => expect(window.api.chatGetMessagePage).toHaveBeenCalledWith({ sessionId: session.id, limit: 20 }))
+  })
   it('列表排除排队气泡但输入框上方渲染横条', async () => { const { container } = renderView(); await screen.findByText('first'); expect(container.querySelectorAll('[data-message-id="q1"], [data-message-id="q2"]')).toHaveLength(0); expect(container.querySelector('[data-message-id="normal"]')).toBeTruthy(); expect(container.querySelectorAll('.queued-task-bar__summary')).toHaveLength(2) })
   it('横条 DOM 位于 composer-box 之前', async () => { const { container } = renderView(); await screen.findByText('first'); expect(container.querySelector('.queued-task-bar')!.compareDocumentPosition(container.querySelector('.composer-box')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy() })
   it('拖动队列项后持久化并按新顺序显示', async () => {

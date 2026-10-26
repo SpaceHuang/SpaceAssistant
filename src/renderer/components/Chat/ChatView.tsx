@@ -81,6 +81,8 @@ import { runtimeText } from '../../i18n/runtimeText'
 import type { OutboundContextIntent } from '../../../shared/outboundProtocol'
 import { ChatMessageListSearch } from '../Search/ChatMessageListSearch'
 
+const SESSION_SWITCH_MESSAGE_PAGE_SIZE = 20
+
 type SendInternalOptions = {
   targetSessionId?: string
   /** 显式发送上下文意图；缺省为 create-user。决定（排队/发起/拒绝）由主进程受理端口做出 */
@@ -231,7 +233,7 @@ export function ChatView() {
     let cancelled = false
     const generation = beginContextSummarySession(sessionId)
     void (async () => {
-      const page = await fetchMessagePage({ sessionId, limit: 60 })
+      const page = await fetchMessagePage({ sessionId, limit: SESSION_SWITCH_MESSAGE_PAGE_SIZE })
       if (cancelled) return
       dispatch(
         setDisplayPage({
