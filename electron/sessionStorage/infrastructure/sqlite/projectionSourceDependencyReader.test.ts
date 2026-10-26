@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { createSession } from '../../../database/operations'
 import { getDbConnection } from '../../../database/sqliteStore'
@@ -24,6 +24,12 @@ describe('projection page source dependency reader', () => {
       { invocationId: 'unrelated-invocation', turnId: 'unrelated-turn', sequence: 1, schemaVersion: 1,
         eventId: 'unrelated-event', idempotencyKey: 'unrelated-event', kind: 'invocation-completed', payload: { status: 'completed' } },
     ], 0)
+    for (let index = 0; index < 99; index += 1) {
+      const suffix = String(index).padStart(3, '0')
+      await history.appendBatch([{ invocationId: `unrelated-invocation-${suffix}`, turnId: `unrelated-turn-${suffix}`,
+        sequence: 1, schemaVersion: 1, eventId: `unrelated-event-${suffix}`, idempotencyKey: `unrelated-event-${suffix}`,
+        kind: 'invocation-completed', payload: { status: 'completed' } }], 0)
+    }
     const sourceState = conn.prepare('SELECT source_revision FROM session_body_source_state WHERE session_id=?').get(session.id) as { source_revision: number }
     const event = conn.prepare('SELECT invocation_id,turn_id,sequence,event_id,idempotency_key,schema_version,kind,session_seq,commit_order,created_at,payload_json FROM agent_history_events WHERE event_id=?')
       .get('page-event') as Parameters<typeof projectionSourceEventDigest>[0]
@@ -38,10 +44,29 @@ describe('projection page source dependency reader', () => {
     conn.prepare(`UPDATE spill_reference_backfill_state SET status='complete',verified_generation=(SELECT meta_value
       FROM spill_reference_meta WHERE meta_key='canonical_change_generation') WHERE owner_table='agent_history_events'`).run()
 
-    expect(readProjectionPageSourceSpills(conn, session.id, sourceState.source_revision, ['page-message'])).toEqual([])
+    const historyPayloadRowCounts: number[] = []
+    const prepare = conn.prepare.bind(conn)
+    vi.spyOn(conn, 'prepare').mockImplementation((sql) => {
+      const statement = prepare(sql)
+      if (!sql.includes('payload_json FROM agent_history_events')) return statement
+      return new Proxy(statement, { get(target, property) {
+        if (property === 'all') return (...parameters: unknown[]) => {
+          const rows = Reflect.get(target, 'all', target).apply(target, parameters) as unknown[]
+          historyPayloadRowCounts.push(rows.length)
+          return rows
+        }
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      } }) as typeof statement
+    })
 
+    expect(readProjectionPageSourceSpills(conn, session.id, sourceState.source_revision, ['page-message'])).toEqual([])
+    expect(historyPayloadRowCounts).toEqual([1])
+
+    historyPayloadRowCounts.length = 0
     conn.prepare("UPDATE agent_history_events SET payload_json='{' WHERE event_id='unrelated-event'").run()
     expect(readProjectionPageSourceSpills(conn, session.id, sourceState.source_revision, ['page-message'])).toEqual([])
+    expect(historyPayloadRowCounts).toEqual([1])
   })
 
   it('fails closed when a selected locator is missing or its source event changed', async () => {
