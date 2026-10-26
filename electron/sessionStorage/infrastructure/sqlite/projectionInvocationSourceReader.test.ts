@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs/promises'
 import type { ProjectionHistoryChunkEvent, ProjectionMessageFact, ProjectionHistoryChunkResult } from '../../domain/projectionSource'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { createSession } from '../../../database/operations'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
+import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { iterateProjectionHistoryInvocations, readProjectionHistoryInvocationsInWorker } from './projectionInvocationSourceReader'
 
 const event = (invocationId: string, sequence: number, sessionSequence: number): ProjectionHistoryChunkEvent => ({
@@ -80,5 +82,33 @@ describe('projection invocation source reader', () => {
       expect(collected.map(({ events }) => events.map(({ invocationId, sequence }) => [invocationId, sequence])))
         .toEqual([[['reader-a', 1], ['reader-a', 2]], [['reader-b', 1]]])
     } finally { temp.cleanup() }
+  })
+
+  it('stages a single oversized History page in the Worker before returning its bounded source chunk', async () => {
+    const temp = createTempDatabase('projection-invocation-source-reader-large-')
+    const blobRoot = `${temp.dbPath}.blobs`
+    try {
+      const conn = getDbConnection(temp.db)
+      const session = createSession(temp.db, { name: 'large worker source reader' })
+      const history = new SqliteAgentHistory(conn, 1, () => 10, session.id)
+      await history.appendBatch([{ invocationId: 'reader-large', turnId: 'turn-large', sequence: 1, schemaVersion: 1,
+        eventId: 'reader-large-1', idempotencyKey: 'reader-large-1', kind: 'model-request-started',
+        payload: { requestId: 'large', diagnostic: 'x'.repeat(300_000) } }], 0)
+      const sourceIdentityJson = readProjectionSourceIdentity(conn, session.id, session.generation)!
+      const invocations = readProjectionHistoryInvocationsInWorker({ blobs: createSessionProjectionBlobStore(blobRoot), permit: {
+        dbPath: temp.dbPath, sessionId: session.id, sessionGeneration: session.generation,
+        scopeKey: 'source-backfill', specVersion: 1, sourceIdentityJson, connectionEpoch: 0,
+        processGeneration: 0, rebuildToken: 'reader-large-token',
+      } })
+
+      const collected = []
+      for await (const invocation of invocations) collected.push(invocation)
+      const [invocation] = collected
+      expect(invocation?.events).toHaveLength(1)
+      expect(invocation?.events[0]?.payloadJson).toContain('x'.repeat(1024))
+    } finally {
+      temp.cleanup()
+      await fs.rm(blobRoot, { recursive: true, force: true })
+    }
   })
 })

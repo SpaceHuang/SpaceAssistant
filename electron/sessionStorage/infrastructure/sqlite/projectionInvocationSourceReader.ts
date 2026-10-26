@@ -1,5 +1,11 @@
+import { createHash } from 'node:crypto'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact } from '../../domain/projectionSource'
+import type { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { readProjectionHistoryChunkInWorker } from './projectionHistoryChunkWorkerClient'
+
+type WorkerStagingBlobStore = Pick<ReturnType<typeof createSessionProjectionBlobStore>, 'withWorkerStaging'>
 
 export type ProjectionInvocationSourceInput = Readonly<{
   events: readonly ProjectionHistoryChunkEvent[]
@@ -9,15 +15,49 @@ export type ProjectionInvocationSourceInput = Readonly<{
 /** Production source stream: read one bounded page per worker and expose invocation-sized batches. */
 export function readProjectionHistoryInvocationsInWorker(input: Readonly<{
   permit: ProjectionHistoryChunkPermit
+  blobs: WorkerStagingBlobStore
   signal?: AbortSignal
   maxRows?: number
   maxBytes?: number
 }>): AsyncGenerator<ProjectionInvocationSourceInput> {
   const maxRows = input.maxRows ?? 200
   const maxBytes = input.maxBytes ?? 256 * 1024
-  return iterateProjectionHistoryInvocations((afterSessionSequence) => readProjectionHistoryChunkInWorker(input.permit, {
-    afterSessionSequence, maxRows, maxBytes, ...(input.signal ? { signal: input.signal } : {}),
-  }), 0)
+  return iterateProjectionHistoryInvocations(async (afterSessionSequence) => {
+    const readInput = { afterSessionSequence, maxRows, maxBytes, ...(input.signal ? { signal: input.signal } : {}) }
+    const page = await readProjectionHistoryChunkInWorker(input.permit, readInput)
+    if (page.kind !== 'deferred-large') return page
+    return input.blobs.withWorkerStaging(async (_promote, stage) => {
+      const result = await readProjectionHistoryChunkInWorker(input.permit, {
+        ...readInput, staging: { root: stage.root, tempLocator: stage.tempLocator, tempLocators: stage.allocate(15) },
+      })
+      if (result.kind !== 'staged-chunk') return result
+      if (result.stagedSegments?.length) return result
+      const staged = result.stagedBlob
+      const locatorPath = path.join(stage.root, staged.tempLocator)
+      const stat = await fs.lstat(locatorPath)
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== staged.byteLength) {
+        throw new Error('PROJECTION_SOURCE_BACKFILL_STAGED_PAGE_INVALID')
+      }
+      const bytes = await fs.readFile(locatorPath)
+      if (createHash('sha256').update(bytes).digest('hex') !== staged.payloadDigest) {
+        throw new Error('PROJECTION_SOURCE_BACKFILL_STAGED_PAGE_DIGEST_MISMATCH')
+      }
+      let payload: unknown
+      try { payload = JSON.parse(bytes.toString('utf8')) } catch { throw new Error('PROJECTION_SOURCE_BACKFILL_STAGED_PAGE_INVALID_JSON') }
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+        !Array.isArray((payload as { events?: unknown }).events) || !Array.isArray((payload as { messageFacts?: unknown }).messageFacts)) {
+        throw new Error('PROJECTION_SOURCE_BACKFILL_STAGED_PAGE_SHAPE_INVALID')
+      }
+      const events = (payload as { events: ProjectionHistoryChunkEvent[] }).events
+      const messageFacts = (payload as { messageFacts: ProjectionMessageFact[] }).messageFacts
+      if (events.length !== result.rowCount || events.at(-1)?.sessionSequence !== result.nextSessionSequence) {
+        throw new Error('PROJECTION_SOURCE_BACKFILL_STAGED_PAGE_COVERAGE_MISMATCH')
+      }
+      return Object.freeze({ kind: 'chunk' as const, permit: result.permit, afterSessionSequence: result.afterSessionSequence,
+        nextSessionSequence: result.nextSessionSequence, events: Object.freeze(events), messageFacts: Object.freeze(messageFacts),
+        byteLength: result.sourceByteLength, hasMore: result.hasMore })
+    })
+  }, 0)
 }
 
 /** Assemble one invocation at a time from bounded History pages. */

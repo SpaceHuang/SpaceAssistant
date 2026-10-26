@@ -7,7 +7,7 @@ import { readProjectionHistoryInvocationsInWorker } from './projectionInvocation
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { runSessionBodySourceBackfill } from './sessionBodySourceBackfill'
 
-type PendingSourceSession = Readonly<{ session_id: string; generation: string }>
+type PendingSourceSession = Readonly<{ session_id: string; generation: string; updated_at: number; created_at: number }>
 
 /** Runs locator backfills as cancellable derived-index maintenance, one session at a time. */
 export function createSessionBodySourceBackfillTask(input: Readonly<{
@@ -29,6 +29,8 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
     let timer: ReturnType<typeof setTimeout> | undefined
     let inFlight: Promise<void> | undefined
     let wakePending = false
+    let candidateCursor: Pick<PendingSourceSession, 'updated_at' | 'created_at' | 'session_id'> | undefined
+    const delayedSessions = new Map<string, Readonly<{ retryAt: number; updatedAt: number }>>()
     const schedule = (delay: number) => {
       if (stopped) return
       if (timer) clearTimeout(timer)
@@ -38,11 +40,41 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
       if (stopped || inFlight) return
       inFlight = (async () => {
         const conn = getDbConnection(input.db)
-        const session = conn.prepare(`SELECT sessions.id AS session_id,sessions.generation
-          FROM session_body_source_state state JOIN sessions ON sessions.id=state.session_id
-          WHERE state.status IN ('pending','backfilling') ORDER BY state.updated_at ASC,sessions.created_at ASC LIMIT 1`)
-          .get() as PendingSourceSession | undefined
-        if (!session) { schedule(input.idleDelayMs ?? 30 * 60_000); return }
+        const query = candidateCursor
+          ? conn.prepare(`SELECT sessions.id AS session_id,sessions.generation,state.updated_at,sessions.created_at
+            FROM session_body_source_state state JOIN sessions ON sessions.id=state.session_id
+            WHERE state.status IN ('pending','backfilling') AND (state.updated_at,sessions.created_at,sessions.id)>(?,?,?)
+            ORDER BY state.updated_at ASC,sessions.created_at ASC,sessions.id ASC LIMIT 64`)
+            .all(candidateCursor.updated_at, candidateCursor.created_at, candidateCursor.session_id)
+          : conn.prepare(`SELECT sessions.id AS session_id,sessions.generation,state.updated_at,sessions.created_at
+            FROM session_body_source_state state JOIN sessions ON sessions.id=state.session_id
+            WHERE state.status IN ('pending','backfilling')
+            ORDER BY state.updated_at ASC,sessions.created_at ASC,sessions.id ASC LIMIT 64`).all()
+        const candidates = query as PendingSourceSession[]
+        let session: PendingSourceSession | undefined
+        const now = Date.now()
+        for (const candidate of candidates) {
+          const delayed = delayedSessions.get(candidate.session_id)
+          if (!delayed || delayed.updatedAt !== candidate.updated_at || delayed.retryAt <= now) {
+            delayedSessions.delete(candidate.session_id)
+            session = candidate
+            break
+          }
+        }
+        if (!session) {
+          if (candidates.length === 64) {
+            candidateCursor = candidates.at(-1)
+              ? { updated_at: candidates.at(-1)!.updated_at, created_at: candidates.at(-1)!.created_at,
+                  session_id: candidates.at(-1)!.session_id } : undefined
+            schedule(0)
+          } else {
+            candidateCursor = undefined
+            const nextRetryAt = Math.min(...[...delayedSessions.values()].map(({ retryAt }) => retryAt))
+            schedule(Number.isFinite(nextRetryAt) ? Math.max(1, nextRetryAt - now) : input.idleDelayMs ?? 30 * 60_000)
+          }
+          return
+        }
+        candidateCursor = undefined
         try {
           const sourceIdentityJson = readProjectionSourceIdentity(conn, session.session_id, session.generation)
           if (!sourceIdentityJson) throw new Error('PROJECTION_SOURCE_IDENTITY_UNAVAILABLE')
@@ -58,14 +90,19 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
             specVersion: reducerSpecVersion, sourceIdentityJson, connectionEpoch: 0, processGeneration: 0, rebuildToken: randomUUID() })
           const result = await runSessionBodySourceBackfill({ db: input.db, blobs, sessionId: session.session_id,
             reducerSpecVersion, signal: controller.signal,
-            invocations: readProjectionHistoryInvocationsInWorker({ permit, signal: controller.signal }) })
+            invocations: readProjectionHistoryInvocationsInWorker({ permit, blobs, signal: controller.signal }) })
+          delayedSessions.delete(session.session_id)
           input.onResult?.({ sessionId: session.session_id, status: 'complete', messageCount: result.messageCount })
           schedule(0)
         } catch (error) {
           if (!stopped) {
             const message = error instanceof Error ? error.message : 'unknown-error'
+            const current = conn.prepare('SELECT updated_at FROM session_body_source_state WHERE session_id=?')
+              .get(session.session_id) as { updated_at: number } | undefined
+            delayedSessions.set(session.session_id, { retryAt: Date.now() + (input.retryDelayMs ?? 5 * 60_000),
+              updatedAt: current?.updated_at ?? session.updated_at })
             input.onResult?.({ sessionId: session.session_id, status: 'failed', error: message })
-            schedule(input.retryDelayMs ?? 5 * 60_000)
+            schedule(0)
           }
         }
       })().finally(() => {
