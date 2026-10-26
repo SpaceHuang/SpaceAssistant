@@ -272,6 +272,7 @@ export function createSessionProjectionBlobStore(root: string) {
           const reducerStateManifests: ProjectionBuildReducerStateManifestRef[] = []
           const pendingChunkManifests: ProjectionPendingHistoryChunkManifestRef[] = []
           const bodyBlockReferences: Array<{ locator: string; byteLength: number; payloadDigest: string }> = []
+          const sourceBodyReferences: Array<{ locator: string; byteLength: number; payloadDigest: string }> = []
           for (const row of conn.prepare(`SELECT locator,byte_length,payload_digest FROM session_projection_blob_references
             ORDER BY locator`).all() as Array<{ locator: string; byte_length: number; payload_digest: string }>) {
             try {
@@ -281,6 +282,18 @@ export function createSessionProjectionBlobStore(root: string) {
               }
               bodyBlockReferences.push({ locator, byteLength: row.byte_length, payloadDigest: row.payload_digest })
             } catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid paged body blob reference: ${String(cause)}`) }
+          }
+          for (const row of conn.prepare(`SELECT fragment_locator AS locator,byte_length,sha256 AS payload_digest FROM session_message_body_locator
+            UNION ALL
+            SELECT manifest_locator AS locator,byte_length,sha256 AS payload_digest FROM session_body_source_manifest
+            ORDER BY locator`).all() as Array<{ locator: string; byte_length: number; payload_digest: string }>) {
+            try {
+              const locator = assertLocator(row.locator)
+              if (!Number.isSafeInteger(row.byte_length) || row.byte_length < 1 || !/^[a-f0-9]{64}$/.test(row.payload_digest)) {
+                throw new Error('invalid source body metadata')
+              }
+              sourceBodyReferences.push({ locator, byteLength: row.byte_length, payloadDigest: row.payload_digest })
+            } catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid source body blob reference: ${String(cause)}`) }
           }
           for (const row of conn.prepare('SELECT session_id,scope_key,source_identity_json,blob_locator,blob_byte_length,payload_digest FROM session_projection_cache WHERE blob_locator IS NOT NULL').all() as Array<{ session_id: string; scope_key: string; source_identity_json: string; blob_locator: string; blob_byte_length: number; payload_digest: string }>) {
             try {
@@ -313,7 +326,7 @@ export function createSessionProjectionBlobStore(root: string) {
               catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid stable-ID index manifest reference: ${String(cause)}`) }
             }
           }
-          return { locators, manifests, reducerStateManifests, pendingChunkManifests, bodyBlockReferences }
+          return { locators, manifests, reducerStateManifests, pendingChunkManifests, bodyBlockReferences, sourceBodyReferences }
         })
         const referenced = roots.locators
         await retainOutputManifestChains(root, roots.manifests, referenced)
@@ -323,6 +336,15 @@ export function createSessionProjectionBlobStore(root: string) {
           catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `paged body blob is unavailable: ${String(cause)}`) }
           if (content.byteLength !== reference.byteLength || digest(content) !== reference.payloadDigest) {
             throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'paged body blob failed reference verification')
+          }
+          referenced.add(reference.locator)
+        }
+        for (const reference of roots.sourceBodyReferences) {
+          let content: Buffer
+          try { content = await fs.readFile(path.join(root, reference.locator)) }
+          catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `source body blob is unavailable: ${String(cause)}`) }
+          if (content.byteLength !== reference.byteLength || digest(content) !== reference.payloadDigest) {
+            throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'source body blob failed reference verification')
           }
           referenced.add(reference.locator)
         }

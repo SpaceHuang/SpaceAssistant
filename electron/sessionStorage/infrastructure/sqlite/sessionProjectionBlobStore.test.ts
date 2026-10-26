@@ -96,6 +96,25 @@ describe('session projection derived blob store', () => {
     await expect(blobs.collectGarbage(conn)).rejects.toMatchObject({ code: 'PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE' })
   })
 
+  it('keeps source locator fragments and invocation manifests alive until their rows are removed', async () => {
+    temp = createTempDatabase('projection-source-body-gc-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const session = createSession(temp.db, { name: 'source body gc roots', model: 'test' })
+    const [fragment, sourceManifest] = await blobs.writeMany(['message body fragment', 'invocation source manifest'])
+    await fragment!.release()
+    const conn = getDbConnection(temp.db)
+    conn.prepare(`INSERT INTO session_message_body_locator(session_id,message_id,sequence,fragment_locator,byte_length,sha256)
+      VALUES(?,?,?,?,?,?)`).run(session.id, 'message-a', 0, fragment.locator, fragment.byteLength, fragment.payloadDigest)
+    conn.prepare(`INSERT INTO session_body_source_manifest(session_id,invocation_id,source_revision,manifest_locator,byte_length,sha256,
+      history_watermark_json,schema_version) VALUES(?,?,0,?,?,?,?,1)`)
+      .run(session.id, 'invocation-a', sourceManifest.locator, sourceManifest.byteLength, sourceManifest.payloadDigest, '{}')
+
+    await expect(blobs.collectGarbage(conn)).resolves.toMatchObject({ removedCount: 0 })
+    conn.prepare('DELETE FROM session_body_source_state WHERE session_id=?').run(session.id)
+    await expect(blobs.collectGarbage(conn)).resolves.toMatchObject({ removedCount: 2 })
+  })
+
   it('streams a verified blob while holding the GC fence until the consumer reaches EOF', async () => {
     temp = createTempDatabase('projection-verified-stream-')
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')
