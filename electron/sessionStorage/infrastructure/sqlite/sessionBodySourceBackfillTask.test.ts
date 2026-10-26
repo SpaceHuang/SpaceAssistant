@@ -7,6 +7,7 @@ import { getDbConnection } from '../../../database/sqliteStore'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { projectionSourceEventDigest } from './projectionSourceDependencyReader'
+import type { AppDatabase } from '../../../database/sqliteStore'
 import { createSessionBodySourceBackfillTask } from './sessionBodySourceBackfillTask'
 
 describe('session body source backfill task', () => {
@@ -112,5 +113,19 @@ describe('session body source backfill task', () => {
     const body = JSON.parse(await createSessionProjectionBlobStore(blobRoot).readVerified({ locator: locator.fragment_locator,
       byteLength: locator.byte_length, payloadDigest: locator.sha256 })) as { message?: { content?: string } }
     expect(body.message?.content).toBe(content)
+  })
+
+  it('reports and retries a database-unavailable scan instead of losing the maintenance loop', async () => {
+    const temp = createTempDatabase('session-body-source-backfill-task-closed-db-')
+    cleanup = temp.cleanup
+    blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
+    const closedDb = { filePath: temp.dbPath, save() {}, flushSave() {}, close() {} } as AppDatabase
+    const result = new Promise<{ sessionId: string; status: string; error?: string }>((resolve) => {
+      const task = createSessionBodySourceBackfillTask({ db: closedDb, blobRoot: blobRoot!, idleDelayMs: 60_000,
+        retryDelayMs: 60_000, onResult: resolve })
+      taskStop = task.start()!.stop
+    })
+
+    await expect(result).resolves.toMatchObject({ status: 'failed', error: 'Database connection is closed' })
   })
 })

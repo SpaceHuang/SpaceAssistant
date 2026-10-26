@@ -39,61 +39,62 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
     const run = async () => {
       if (stopped || inFlight) return
       inFlight = (async () => {
-        const conn = getDbConnection(input.db)
-        const query = candidateCursor
-          ? conn.prepare(`SELECT sessions.id AS session_id,sessions.generation,state.updated_at,sessions.created_at
-            FROM session_body_source_state state JOIN sessions ON sessions.id=state.session_id
-            WHERE state.status IN ('pending','backfilling') AND (state.updated_at,sessions.created_at,sessions.id)>(?,?,?)
-            ORDER BY state.updated_at ASC,sessions.created_at ASC,sessions.id ASC LIMIT 64`)
-            .all(candidateCursor.updated_at, candidateCursor.created_at, candidateCursor.session_id)
-          : conn.prepare(`SELECT sessions.id AS session_id,sessions.generation,state.updated_at,sessions.created_at
-            FROM session_body_source_state state JOIN sessions ON sessions.id=state.session_id
-            WHERE state.status IN ('pending','backfilling')
-            ORDER BY state.updated_at ASC,sessions.created_at ASC,sessions.id ASC LIMIT 64`).all()
-        const candidates = query as PendingSourceSession[]
-        let session: PendingSourceSession | undefined
-        const now = Date.now()
-        for (const candidate of candidates) {
-          const delayed = delayedSessions.get(candidate.session_id)
-          if (!delayed || delayed.updatedAt !== candidate.updated_at || delayed.retryAt <= now) {
-            delayedSessions.delete(candidate.session_id)
-            session = candidate
-            break
-          }
-        }
-        if (!session) {
-          if (candidates.length === 64) {
-            candidateCursor = candidates.at(-1)
-              ? { updated_at: candidates.at(-1)!.updated_at, created_at: candidates.at(-1)!.created_at,
-                  session_id: candidates.at(-1)!.session_id } : undefined
-            schedule(0)
-          } else {
-            candidateCursor = undefined
-            const nextRetryAt = Math.min(...[...delayedSessions.values()].map(({ retryAt }) => retryAt))
-            schedule(Number.isFinite(nextRetryAt) ? Math.max(1, nextRetryAt - now) : input.idleDelayMs ?? 30 * 60_000)
-          }
-          return
-        }
-        candidateCursor = undefined
         try {
-          const sourceIdentityJson = readProjectionSourceIdentity(conn, session.session_id, session.generation)
-          if (!sourceIdentityJson) throw new Error('PROJECTION_SOURCE_IDENTITY_UNAVAILABLE')
-          const sourceIdentity = JSON.parse(sourceIdentityJson) as { sourceRevision?: unknown; historyWatermark?: unknown }
-          const sourceRevision = sourceIdentity.sourceRevision
-          if (!Number.isSafeInteger(sourceRevision) || !(sourceIdentity.historyWatermark === null ||
-            (Array.isArray(sourceIdentity.historyWatermark) && Number.isSafeInteger(sourceIdentity.historyWatermark[0])))) {
-            throw new Error('PROJECTION_SOURCE_IDENTITY_INVALID')
+          const conn = getDbConnection(input.db)
+          const query = candidateCursor
+            ? conn.prepare(`SELECT sessions.id AS session_id,sessions.generation,state.updated_at,sessions.created_at
+              FROM session_body_source_state state JOIN sessions ON sessions.id=state.session_id
+              WHERE state.status IN ('pending','backfilling') AND (state.updated_at,sessions.created_at,sessions.id)>(?,?,?)
+              ORDER BY state.updated_at ASC,sessions.created_at ASC,sessions.id ASC LIMIT 64`)
+              .all(candidateCursor.updated_at, candidateCursor.created_at, candidateCursor.session_id)
+            : conn.prepare(`SELECT sessions.id AS session_id,sessions.generation,state.updated_at,sessions.created_at
+              FROM session_body_source_state state JOIN sessions ON sessions.id=state.session_id
+              WHERE state.status IN ('pending','backfilling')
+              ORDER BY state.updated_at ASC,sessions.created_at ASC,sessions.id ASC LIMIT 64`).all()
+          const candidates = query as PendingSourceSession[]
+          let session: PendingSourceSession | undefined
+          const now = Date.now()
+          for (const candidate of candidates) {
+            const delayed = delayedSessions.get(candidate.session_id)
+            if (!delayed || delayed.updatedAt !== candidate.updated_at || delayed.retryAt <= now) {
+              delayedSessions.delete(candidate.session_id)
+              session = candidate
+              break
+            }
           }
-          const permit = Object.freeze({ dbPath: input.db.filePath, sessionId: session.session_id,
-            sessionGeneration: session.generation,
-            scopeKey: encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: reducerSpecVersion }),
-            specVersion: reducerSpecVersion, sourceIdentityJson, connectionEpoch: 0, processGeneration: 0, rebuildToken: randomUUID() })
-          const result = await runSessionBodySourceBackfill({ db: input.db, blobs, sessionId: session.session_id,
-            reducerSpecVersion, signal: controller.signal,
-            invocations: readProjectionHistoryInvocationsInWorker({ permit, blobs, signal: controller.signal }) })
-          delayedSessions.delete(session.session_id)
-          input.onResult?.({ sessionId: session.session_id, status: 'complete', messageCount: result.messageCount })
-          schedule(0)
+          if (!session) {
+            if (candidates.length === 64) {
+              candidateCursor = candidates.at(-1)
+                ? { updated_at: candidates.at(-1)!.updated_at, created_at: candidates.at(-1)!.created_at,
+                    session_id: candidates.at(-1)!.session_id } : undefined
+              schedule(0)
+            } else {
+              candidateCursor = undefined
+              const nextRetryAt = Math.min(...[...delayedSessions.values()].map(({ retryAt }) => retryAt))
+              schedule(Number.isFinite(nextRetryAt) ? Math.max(1, nextRetryAt - now) : input.idleDelayMs ?? 30 * 60_000)
+            }
+            return
+          }
+          candidateCursor = undefined
+          try {
+            const sourceIdentityJson = readProjectionSourceIdentity(conn, session.session_id, session.generation)
+            if (!sourceIdentityJson) throw new Error('PROJECTION_SOURCE_IDENTITY_UNAVAILABLE')
+            const sourceIdentity = JSON.parse(sourceIdentityJson) as { sourceRevision?: unknown; historyWatermark?: unknown }
+            const sourceRevision = sourceIdentity.sourceRevision
+            if (!Number.isSafeInteger(sourceRevision) || !(sourceIdentity.historyWatermark === null ||
+              (Array.isArray(sourceIdentity.historyWatermark) && Number.isSafeInteger(sourceIdentity.historyWatermark[0])))) {
+              throw new Error('PROJECTION_SOURCE_IDENTITY_INVALID')
+            }
+            const permit = Object.freeze({ dbPath: input.db.filePath, sessionId: session.session_id,
+              sessionGeneration: session.generation,
+              scopeKey: encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: reducerSpecVersion }),
+              specVersion: reducerSpecVersion, sourceIdentityJson, connectionEpoch: 0, processGeneration: 0, rebuildToken: randomUUID() })
+            const result = await runSessionBodySourceBackfill({ db: input.db, blobs, sessionId: session.session_id,
+              reducerSpecVersion, signal: controller.signal,
+              invocations: readProjectionHistoryInvocationsInWorker({ permit, blobs, signal: controller.signal }) })
+            delayedSessions.delete(session.session_id)
+            input.onResult?.({ sessionId: session.session_id, status: 'complete', messageCount: result.messageCount })
+            schedule(0)
         } catch (error) {
           if (!stopped) {
             const message = error instanceof Error ? error.message : 'unknown-error'
@@ -103,6 +104,13 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
               updatedAt: current?.updated_at ?? session.updated_at })
             input.onResult?.({ sessionId: session.session_id, status: 'failed', error: message })
             schedule(0)
+          }
+        }
+        } catch (error) {
+          if (!stopped) {
+            const message = error instanceof Error ? error.message : 'unknown-error'
+            try { input.onResult?.({ sessionId: '', status: 'failed', error: message }) } catch { /* Observers must not stop maintenance. */ }
+            schedule(input.retryDelayMs ?? 5 * 60_000)
           }
         }
       })().finally(() => {
