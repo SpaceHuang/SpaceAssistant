@@ -364,6 +364,23 @@ describe('session storage module graph rules', () => {
     `)).toEqual([])
   })
 
+  it('rejects raw connection re-exports, runtime-built SQL, and raw SQL in ordinary storage modules', () => {
+    expect(findSessionStorageModuleViolations('electron/remote/rawConnectionFacade.ts',
+      "export { getDbConnection } from '../database/sqliteStore'")).not.toEqual([])
+    expect(findSessionStorageModuleViolations('electron/remote/rawConnectionFacade.ts', `
+      import { getDbConnection as openDb } from '../database/sqliteStore'
+      export { openDb }
+    `)).not.toEqual([])
+    expect(findSessionStorageModuleViolations('electron/remote/dynamicSessionSql.ts', `
+      import { getDbConnection } from '../database/sqliteStore'
+      export function read(db, table) { return getDbConnection(db).prepare('SELECT id FROM ' + table).all() }
+    `)).not.toEqual([])
+    expect(findSessionStorageModuleViolations('electron/storage/sessionLookup.ts', `
+      import { getDbConnection } from '../database/sqliteStore'
+      export function read(db) { return getDbConnection(db).prepare('SELECT id FROM sessions').all() }
+    `)).not.toEqual([])
+  })
+
   it('publishes the execution capability from the public contract module', () => {
     const publicExecution = readFileSync(path.resolve('electron/sessionStorage/public/execution.ts'), 'utf8')
     const applicationPorts = readFileSync(path.resolve('electron/sessionStorage/application/ports.ts'), 'utf8')

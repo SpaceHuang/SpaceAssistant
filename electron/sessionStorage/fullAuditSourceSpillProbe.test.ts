@@ -36,6 +36,27 @@ it('rejects a prepared chat read when its canonical source spill has disappeared
  }finally{await host?.lifecycle.stop({deadlineMs:5000});temp.cleanup()}
 })
 
+it('does not serve retained mirror content on a cold read after canonical source spill loss',async()=>{
+ const temp=createTempDatabase('audit-cold-source-spill-');let host:ReturnType<typeof createSqliteSessionStorageHost>|undefined
+ try{
+  const db=temp.db,conn=getDbConnection(db),session=createSession(db,{name:'audit cold spill'}),body='canonical retained mirror '.repeat(5000)
+  appendMessage(db,{id:'audit-cold-user',sessionId:session.id,role:'user',content:body,timestamp:1,status:'sent'})
+  await new SqliteAgentHistory(conn,1,Date.now,session.id).appendBatch([{invocationId:'audit-cold-inv',turnId:'audit-cold-turn',sequence:1,schemaVersion:1,
+    eventId:'audit-cold-event',idempotencyKey:'audit-cold-event',kind:'invocation-context-committed',payload:{messages:[{id:'audit-cold-user',role:'user',content:body,timestamp:1}]}}],0)
+  const stored=JSON.parse(conn.prepare("SELECT payload_json FROM agent_history_events WHERE event_id='audit-cold-event'").get()!.payload_json as string)
+  const locator=stored.messages[0].content.__spaceassistant_spill_v1.locator
+  conn.prepare(`UPDATE spill_reference_backfill_state SET status='complete',verified_generation=(SELECT meta_value FROM spill_reference_meta WHERE meta_key='canonical_change_generation')
+    WHERE owner_table='agent_history_events'`).run()
+  conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+  conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE session_id=?").run(session.id)
+  const generation=advanceProcessGeneration(conn),blobRoot=path.join(path.dirname(temp.dbPath),'projection-blobs')
+  const task=createSqliteProjectionBuildTask({db,dbPath:temp.dbPath,blobRoot,processGeneration:()=>generation,connectionEpoch:()=>generation,now:Date.now})
+  host=createSqliteSessionStorageHost(db,{storage:{projectionBlobRoot:blobRoot},startup:{recoverHistory:async()=>({interruptedCount:0,repairFailureCount:0}),recoverSessionLedgers:async()=>({repairFailureCount:0})},maintenanceTasks:[task]})
+  await fs.rm(path.join(path.dirname(temp.dbPath),'spill',locator))
+  await expect(readChatMessagesAfterPreparation(host.storage,{sessionId:session.id})).rejects.toThrow('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+ }finally{await host?.lifecycle.stop({deadlineMs:5000});temp.cleanup()}
+})
+
 it('rejects a prepared chat read when its canonical source spill digest no longer matches',async()=>{
  const temp=createTempDatabase('audit-source-spill-tamper-');let host:ReturnType<typeof createSqliteSessionStorageHost>|undefined
  try{

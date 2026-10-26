@@ -57,9 +57,10 @@ function hasCurrentPriorChatBodyAuthority(conn: ReturnType<typeof getDbConnectio
   if (!session) return false
   const cutover = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
     .get(sessionId) as { write_mode: string } | undefined
-  if (!cutover || !['legacy', 'canonical'].includes(cutover.write_mode)) return false
-  if (cutover.write_mode === 'canonical' && conn.prepare("SELECT 1 FROM messages WHERE session_id=? AND content_storage_state='canonical-backed-only' LIMIT 1")
-    .get(sessionId)) return false
+  // The old mirror is independently readable only in legacy mode. In canonical
+  // mode even retained mirror rows are not authority: require the prepared path,
+  // which revalidates source spill files before returning their contents.
+  if (!cutover || cutover.write_mode !== 'legacy') return false
   const sourceIdentityJson = readProjectionSourceIdentity(conn, sessionId, session.generation)
   if (!sourceIdentityJson) return false
   const parityScopeKey = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })

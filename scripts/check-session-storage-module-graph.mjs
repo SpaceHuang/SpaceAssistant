@@ -157,6 +157,37 @@ function referencesSessionStorageSql(sourceFile) {
   return found
 }
 
+function isStaticSqlExpression(sourceFile, expression) {
+  const constants = new Map()
+  const evaluate = (node) => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
+    if (ts.isIdentifier(node)) return constants.get(node.text)
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = evaluate(node.left), right = evaluate(node.right)
+      return left !== undefined && right !== undefined ? left + right : undefined
+    }
+    if (ts.isTemplateExpression(node)) {
+      let value = node.head.text
+      for (const span of node.templateSpans) {
+        const part = evaluate(span.expression)
+        if (part === undefined) return undefined
+        value += part + span.literal.text
+      }
+      return value
+    }
+    return undefined
+  }
+  const collect = (node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const value = evaluate(node.initializer)
+      if (value !== undefined) constants.set(node.name.text, value)
+    }
+    ts.forEachChild(node, collect)
+  }
+  for (let pass = 0; pass < 4; pass++) collect(sourceFile)
+  return evaluate(expression) !== undefined
+}
+
 /** Resolve imports using the repository TypeScript configuration and enforce categorized module rules. */
 export function findSessionStorageModuleViolations(filePath, source) {
   const category = categoryFor(filePath)
@@ -168,6 +199,84 @@ export function findSessionStorageModuleViolations(filePath, source) {
     'getMessagesPageWithSequence', 'getSearchCorpusPage', 'searchMessages', 'getApiContextBaseline', 'getTurnContext', 'resolveRetryContext'])
   const rawSessionMessageWrites = new Set(['appendMessage', 'updateMessageContent', 'deleteMessage', 'deleteMessages',
     'updateMessageStatus', 'updateMessageMetadata'])
+  const rawConnectionImports = new Set()
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || !statement.importClause) continue
+    const resolved = moduleEdges(sourceFile).find((edge) => edge.specifier === statement.moduleSpecifier.text)?.resolved
+    if (resolved !== 'electron/database/sqliteStore' && resolved !== 'electron/database') continue
+    const bindings = statement.importClause.namedBindings
+    if (bindings && ts.isNamedImports(bindings)) {
+      for (const element of bindings.elements) {
+        if ((element.propertyName?.text ?? element.name.text) === 'getDbConnection') rawConnectionImports.add(element.name.text)
+      }
+    }
+  }
+  const rawConnectionViolations = []
+  if (category === 'external-electron') {
+    for (const statement of sourceFile.statements) {
+      if (ts.isVariableStatement(statement) && (ts.getModifiers(statement) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+        for (const declaration of statement.declarationList.declarations) {
+          const initializer = declaration.initializer
+          if (initializer && ts.isCallExpression(initializer) && ts.isIdentifier(initializer.expression) && rawConnectionImports.has(initializer.expression.text)) {
+            rawConnectionViolations.push({ category, specifier: `export@${sourceFile.getLineAndCharacterOfPosition(statement.getStart()).line + 1}`, resolved: '<raw-database-capability-export>' })
+          }
+        }
+      }
+      if (ts.isExportDeclaration(statement)) {
+        if (statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+          const edge = moduleEdges(sourceFile).find((candidate) => candidate.specifier === statement.moduleSpecifier.text)
+          if ((edge?.resolved === 'electron/database/sqliteStore' || edge?.resolved === 'electron/database') &&
+            (!statement.exportClause || (ts.isNamedExports(statement.exportClause) && statement.exportClause.elements.some((element) =>
+              (element.propertyName?.text ?? element.name.text) === 'getDbConnection')))) {
+            rawConnectionViolations.push({ category, specifier: statement.moduleSpecifier.text, resolved: '<raw-database-capability-export>' })
+          }
+        } else if (statement.exportClause && ts.isNamedExports(statement.exportClause) && statement.exportClause.elements.some((element) =>
+          rawConnectionImports.has(element.propertyName?.text ?? element.name.text))) {
+          rawConnectionViolations.push({ category, specifier: `export@${sourceFile.getLineAndCharacterOfPosition(statement.getStart()).line + 1}`, resolved: '<raw-database-capability-export>' })
+        }
+      }
+    }
+    if (rawConnectionImports.size) {
+      const approvedDynamicSqlOwners = new Set([
+        'electron/butler/taskStore.ts',
+        'electron/remote/trackModelInputViewStore.ts',
+        'electron/storage/sessionMessageContentCleanupMaintenance.ts',
+        'electron/storage/sessionStorageMaintenance.ts',
+        'electron/storage/spillStore.ts',
+        'electron/usageStats/usageStatsQueries.ts',
+      ])
+      if (approvedDynamicSqlOwners.has(normalizedFile)) {
+        // These adapters build SQL from fixed, module-owned fragments and bind
+        // user values separately. New consumers must not inherit this allowance.
+      } else {
+      const connectionVariables = new Set()
+      const collectConnections = (node) => {
+        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+          const initializer = node.initializer
+          const fromImportedConnection = ts.isCallExpression(initializer) && ts.isIdentifier(initializer.expression) && rawConnectionImports.has(initializer.expression.text)
+          const fromConnectionAlias = ts.isIdentifier(initializer) && connectionVariables.has(initializer.text)
+          if (fromImportedConnection || fromConnectionAlias) connectionVariables.add(node.name.text)
+        }
+        ts.forEachChild(node, collectConnections)
+      }
+      for (let pass = 0; pass < 4; pass++) collectConnections(sourceFile)
+      const visit = (node) => {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+          (node.expression.name.text === 'prepare' || node.expression.name.text === 'exec')) {
+          const receiver = node.expression.expression
+          const isRawConnection = (ts.isCallExpression(receiver) && ts.isIdentifier(receiver.expression) && rawConnectionImports.has(receiver.expression.text)) ||
+            (ts.isIdentifier(receiver) && connectionVariables.has(receiver.text))
+          if (!isRawConnection) { ts.forEachChild(node, visit); return }
+          const sql = node.arguments[0]
+          const isStaticSql = sql && isStaticSqlExpression(sourceFile, sql)
+          if (!isStaticSql) rawConnectionViolations.push({ category, specifier: `prepare@${sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1}:<dynamic-sql>`, resolved: '<raw-database-capability>' })
+        }
+        ts.forEachChild(node, visit)
+      }
+      visit(sourceFile)
+      }
+    }
+  }
   const allowed = (edge) => {
     if (category === 'database-adapter') return true
     if (category === 'session-cleanup-host') return edge.resolved.startsWith('electron/database/') || edge.resolved === 'electron/database' ||
@@ -177,16 +286,16 @@ export function findSessionStorageModuleViolations(filePath, source) {
       edge.resolved.startsWith('electron/runtime/') || edge.resolved === 'electron/turnRuntime' || edge.resolved.startsWith('electron/sessionStorage/') || edge.resolved.startsWith('src/shared/') ||
       edge.resolved.startsWith('packages/agent-sdk/') || edge.resolved.startsWith('node:')
     if (category === 'external-electron') {
-      const storageImplementation = normalizedFile.startsWith('electron/storage/') && !normalizedFile.includes('__gate_probe__')
       const databaseConnectionEdge = (edge.resolved === 'electron/database/sqliteStore' || edge.resolved === 'electron/database') &&
         (edge.symbols.includes('*') || edge.symbols.includes('getDbConnection'))
-      if (!storageImplementation && databaseConnectionEdge && sessionStorageSql && normalizedFile !== 'electron/main.ts') return false
+      const approvedSessionSqlOwners = new Set(['electron/storage/periodicSqliteMaintenance.ts'])
+      if (databaseConnectionEdge && sessionStorageSql && normalizedFile !== 'electron/main.ts' && !approvedSessionSqlOwners.has(normalizedFile)) return false
       if (edge.resolved === 'electron/runtime/sqliteAgentHistory' && !normalizedFile.endsWith('/agentContinuation.ts')) return false
       if (edge.resolved === 'electron/database' && edge.symbols.includes('*')) return false
-      if (!storageImplementation && edge.resolved === 'electron/database/operations' &&
+      if (edge.resolved === 'electron/database/operations' &&
         edge.symbols.some((symbol) => rawSessionMessageWrites.has(symbol))) return false
     }
-    if (category === 'external-electron' && !normalizedFile.startsWith('electron/storage/') && edge.resolved === 'electron/database/operations' &&
+    if (category === 'external-electron' && edge.resolved === 'electron/database/operations' &&
       edge.symbols.some((symbol) => rawSessionMessageReads.has(symbol))) return false
     if (category === 'external-electron' && edge.resolved === 'electron/sessionStorage/sqliteRuntimeBindings') {
       const key = `${normalizedFile}|${edge.resolved}`
@@ -324,7 +433,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
       }
     }
     return true
-  }).map(({ specifier, resolved }) => ({ category, specifier, resolved }))
+  }).map(({ specifier, resolved }) => ({ category, specifier, resolved })).concat(rawConnectionViolations)
   for (const load of nonStaticModuleLoads(sourceFile)) {
     violations.push({ category, specifier: `${load.kind}@${load.line}:<non-static>`, resolved: '<dynamic-module-load>' })
   }
@@ -452,6 +561,12 @@ function runIllegalEdgeProbes() {
       ['dynamic raw SQLite connection import', 'electron/ipc/__gate_probe__.ts', `const load = () => import('../database/sqliteStore')`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['non-static dynamic module load', 'electron/ipc/__gate_probe__.ts', `const modulePath = '../sessionStorage/infrastructure/sqlite/sessionProjectionStateStore'; import(modulePath)`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['raw connection re-export', 'electron/remote/__gate_probe__.ts', `export { getDbConnection } from '../database/sqliteStore'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['runtime-built session SQL', 'electron/remote/__gate_probe__.ts', `import { getDbConnection } from '../database/sqliteStore'; export const read = (db, table) => getDbConnection(db).prepare('SELECT id FROM ' + table).all()`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['ordinary storage raw session SQL', 'electron/storage/sessionLookup.ts', `import { getDbConnection } from '../database/sqliteStore'; export const read = (db) => getDbConnection(db).prepare('SELECT id FROM sessions').all()`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0]
     ]
     const missed = probes.filter(([, file, source, rejects]) => !rejects(file, source))
