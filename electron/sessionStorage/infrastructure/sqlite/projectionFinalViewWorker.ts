@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parentPort, threadId } from 'node:worker_threads'
-import { materializeProjectionOutputManifest, type ProjectionOutputIdentity } from '../../application/projectionOutputManifest'
+import { iterateProjectionOutputMessages, type ProjectionOutputIdentity } from '../../application/projectionOutputManifest'
 import type { ProjectionBuildOutputManifestRef } from '../../domain/projectionBuild'
 
 if (!parentPort) throw new Error('projection final view worker requires a parent port')
@@ -34,28 +34,54 @@ parentPort.once('message', async (message: {
         return bytes.toString('utf8')
       }
     }
-    const messages = await materializeProjectionOutputManifest(message.output, message.identity, blobs)
-    const payload = JSON.stringify({ formatVersion: message.payloadIdentity.formatVersion,
+    const envelope = JSON.stringify({ formatVersion: message.payloadIdentity.formatVersion,
       scopeKey: message.identity.scopeKey, specVersion: message.identity.specVersion,
       sessionId: message.identity.sessionId, sessionGeneration: message.identity.sessionGeneration,
       sourceIdentityJson: message.identity.sourceIdentityJson,
-      historyWatermarkJson: message.payloadIdentity.historyWatermarkJson, messages })
-    const byteLength = Buffer.byteLength(payload)
-    const payloadDigest = digest(payload)
+      historyWatermarkJson: message.payloadIdentity.historyWatermarkJson, messages: [] })
+    const marker = '"messages":[]'
+    const markerIndex = envelope.indexOf(marker)
+    if (markerIndex < 0) throw new Error('PROJECTION_FINAL_VIEW_RESULT_INVALID')
+    const prefix = Buffer.from(`${envelope.slice(0, markerIndex)}"messages":[`, 'utf8')
+    const suffix = Buffer.from(`]${envelope.slice(markerIndex + marker.length)}`, 'utf8')
+    const tempLocator = `.projection-${randomUUID()}.tmp`
+    const tempPath = path.join(path.resolve(message.root), tempLocator)
+    if (path.dirname(tempPath) !== path.resolve(message.root)) throw new Error('PROJECTION_FINAL_VIEW_ROOT_INVALID')
+    const handle = await fs.open(tempPath, 'wx', 0o600)
+    const hash = createHash('sha256')
+    let byteLength = 0
+    const write = async (chunk: Buffer) => {
+      let offset = 0
+      while (offset < chunk.byteLength) {
+        const { bytesWritten } = await handle.write(chunk, offset, chunk.byteLength - offset, null)
+        if (bytesWritten < 1) throw new Error('PROJECTION_FINAL_VIEW_WRITE_INCOMPLETE')
+        offset += bytesWritten
+      }
+      hash.update(chunk)
+      byteLength += chunk.byteLength
+    }
+    try {
+      await write(prefix)
+      let first = true
+      for await (const projected of iterateProjectionOutputMessages(message.output, message.identity, blobs)) {
+        if (!first) await write(Buffer.from(','))
+        first = false
+        await write(Buffer.from(JSON.stringify(projected), 'utf8'))
+      }
+      await write(suffix)
+      await handle.sync()
+    } catch (error) {
+      await handle.close()
+      await fs.rm(tempPath, { force: true }).catch(() => undefined)
+      throw error
+    }
+    await handle.close()
+    const payloadDigest = hash.digest('hex')
     if (byteLength <= 256 * 1024) {
+      const payload = await fs.readFile(tempPath, 'utf8')
+      await fs.rm(tempPath, { force: true })
       parentPort!.postMessage({ requestId: message.requestId, result: { payload, byteLength, payloadDigest, workerThreadId: threadId } })
     } else {
-      const tempLocator = `.projection-${randomUUID()}.tmp`
-      const filePath = path.join(path.resolve(message.root), `projection-${randomUUID()}.blob`)
-      const tempPath = path.join(path.resolve(message.root), tempLocator)
-      if (path.dirname(filePath) !== path.resolve(message.root) || path.dirname(tempPath) !== path.resolve(message.root)) {
-        throw new Error('PROJECTION_FINAL_VIEW_ROOT_INVALID')
-      }
-      const handle = await fs.open(tempPath, 'wx', 0o600)
-      try {
-        await handle.writeFile(payload, 'utf8')
-        await handle.sync()
-      } finally { await handle.close() }
       parentPort!.postMessage({ requestId: message.requestId, result: {
         stagedBlob: { tempLocator, byteLength, payloadDigest }, byteLength, payloadDigest, workerThreadId: threadId
       } })

@@ -305,10 +305,15 @@ describe('session transcript projection P2 read path', () => {
       const walBytesBefore = await fs.stat(`${temp.dbPath}-wal`).then(({ size }) => size).catch(() => 0)
       const historySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
       const shadowHistorySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
-      const historyReadCount = () => historySpy.mock.calls.length + shadowHistorySpy.mock.calls.length
+      const historyReadCounts = () => {
+        const results = [...historySpy.mock.results, ...shadowHistorySpy.mock.results]
+        return { calls: results.length, events: results.reduce((sum, result) => sum +
+          (result.type === 'return' && result.value?.kind === 'matched' ? result.value.eventCount : 0), 0) }
+      }
       historySpy.mockClear()
       shadowHistorySpy.mockClear()
       let candidateHistoryReads = 0
+      let candidateHistoryEvents = 0
       for (let sample = 0; sample < 30; sample += 1) {
         const authorityStarted = performance.now()
         const authority = readSessionTranscriptProjection(db, session.id)
@@ -317,7 +322,7 @@ describe('session transcript projection P2 read path', () => {
         expect(authority.messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
           .toEqual(messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
 
-        const historyReadsBeforeCandidate = historyReadCount()
+        const historyCountsBeforeCandidate = historyReadCounts()
         const started = performance.now()
         eventLoopDelay.reset()
         const prepared = await readChatMessagesAfterPreparation(readStorage, { sessionId: session.id, limit: 80 })
@@ -325,9 +330,10 @@ describe('session transcript projection P2 read path', () => {
         mainBlockSamples.push(eventLoopDelay.max / 1_000_000)
         expect(prepared.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
           .toEqual(authority.messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
-        const candidateReads = historyReadCount() - historyReadsBeforeCandidate
-        candidateHistoryReads += candidateReads
-        expect(candidateReads).toBe(1)
+        const candidateCounts = historyReadCounts()
+        candidateHistoryReads += candidateCounts.calls - historyCountsBeforeCandidate.calls
+        candidateHistoryEvents += candidateCounts.events - historyCountsBeforeCandidate.events
+        expect(candidateCounts.calls - historyCountsBeforeCandidate.calls).toBe(1)
         await backgroundPreparations.at(-1)
         const current = stateStore.get(session.id, scopeKey)
         expect(current?.status).toBe('valid')
@@ -340,7 +346,9 @@ describe('session transcript projection P2 read path', () => {
       const memoryAfter = process.memoryUsage()
       const walBytes = await fs.stat(`${temp.dbPath}-wal`).then(({ size }) => size).catch(() => 0)
       const maxMainBlockMs = Math.max(...mainBlockSamples)
-      const historyReads = historyReadCount()
+      const historyCounts = historyReadCounts()
+      const baselineHistoryReads = historyCounts.calls - candidateHistoryReads
+      const baselineHistoryEvents = historyCounts.events - candidateHistoryEvents
       eventLoopDelay.disable()
       process.stdout.write(`cold-C-scope authorityP50=${percentile(authoritySamples, 0.5).toFixed(2)}ms ` +
         `authorityP95=${percentile(authoritySamples, 0.95).toFixed(2)}ms preparedP50=${percentile(coldVisitSamples, 0.5).toFixed(2)}ms ` +
@@ -348,15 +356,17 @@ describe('session transcript projection P2 read path', () => {
         `legacyProof=valid newScope=chatBodyV1 noOpStartupBP95=${percentile(baselineStartupSamples, 0.95).toFixed(2)}ms ` +
         `noOpStartupCP95=${percentile(candidateStartupSamples, 0.95).toFixed(2)}ms mainBlockMax=${maxMainBlockMs.toFixed(2)}ms ` +
         `heapDelta=${memoryAfter.heapUsed - memoryBefore.heapUsed} rssDelta=${memoryAfter.rss - memoryBefore.rss} walBytes=${walBytes} ` +
-        `walDeltaBytes=${walBytes - walBytesBefore} mainHistoryReadsB=${historyReads} mainHistoryEventsB=${historyReads} ` +
-        `mainHistoryReadsC=${candidateHistoryReads} mainHistoryEventsC=${candidateHistoryReads} ` +
+        `walDeltaBytes=${walBytes - walBytesBefore} mainHistoryReadsB=${baselineHistoryReads} mainHistoryEventsB=${baselineHistoryEvents} ` +
+        `mainHistoryReadsC=${candidateHistoryReads} mainHistoryEventsC=${candidateHistoryEvents} ` +
         `sourceRows=${sliceSamples.reduce((sum, sample) => sum + sample.sourceRows, 0)} ` +
         `sourceBytes=${sliceSamples.reduce((sum, sample) => sum + sample.sourceBytes, 0)} ` +
         `sourceSnapshotMs=${sliceSamples.reduce((sum, sample) => sum + sample.sourceSnapshotDurationMs, 0).toFixed(2)}ms ` +
         `quiesceBP95=${percentile(baselineQuiesceSamples, 0.95).toFixed(2)}ms ` +
         `quiesceCP95=${percentile(candidateQuiesceSamples, 0.95).toFixed(2)}ms samples=30\n`)
-      expect(historyReads).toBeGreaterThan(0)
+      expect(baselineHistoryReads).toBeGreaterThan(0)
+      expect(baselineHistoryEvents).toBeGreaterThan(0)
       expect(candidateHistoryReads).toBe(coldVisitSamples.length)
+      expect(candidateHistoryEvents).toBeGreaterThan(0)
       expect(coldVisitSamples).toHaveLength(30)
       expect(candidateStartupSamples).toHaveLength(30)
       expect(sliceSamples.reduce((sum, sample) => sum + sample.sourceRows, 0)).toBeGreaterThan(0)

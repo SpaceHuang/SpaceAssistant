@@ -64,7 +64,9 @@ export function readProjectionHistoryChunkInWorker(
   catch (error) { return Promise.reject(new Error(`PROJECTION_WORKER_SPAWN_FAILED:${error instanceof Error ? error.message : String(error)}`)) }
 
   const requestId = randomUUID()
-  const timeoutMs = options.timeoutMs ?? 15_000
+  // Segmented snapshots may scan and hash up to the 128 MiB source budget in bounded batches.
+  // Keep ordinary reads on the shorter deadline while allowing that explicit large-item path to finish.
+  const timeoutMs = options.timeoutMs ?? (input.staging ? 60_000 : 15_000)
   return new Promise((resolve, reject) => {
     let result: ProjectionHistoryChunkResult | undefined
     let failure: Error | undefined

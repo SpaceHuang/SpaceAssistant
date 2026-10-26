@@ -30,14 +30,29 @@ parentPort.once('message', (message: {
     const reducer = createProjectionScopeHistoryReducer()
     let stateJson = message.stateJson
     const writeArtifact = async (root: string, locator: string, payload: string) => {
+      async function* payloadChunks() { yield payload }
+      return writeArtifactChunks(root, locator, payloadChunks())
+    }
+    const writeArtifactChunks = async (root: string, locator: string, chunks: AsyncIterable<string | Buffer>) => {
       if (!/^\.projection-[0-9a-f-]{36}\.tmp$/.test(locator) || path.basename(locator) !== locator) {
         throw new Error('PROJECTION_REDUCER_ARTIFACT_LOCATOR_INVALID')
       }
-      const bytes = Buffer.from(payload, 'utf8')
       let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+      const hash = createHash('sha256')
+      let byteLength = 0
       try {
         handle = await fs.open(path.join(path.resolve(root), locator), 'wx', 0o600)
-        await handle.writeFile(bytes)
+        for await (const chunk of chunks) {
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8')
+          let offset = 0
+          while (offset < bytes.byteLength) {
+            const { bytesWritten } = await handle.write(bytes, offset, bytes.byteLength - offset, null)
+            if (bytesWritten < 1) throw new Error('PROJECTION_REDUCER_ARTIFACT_WRITE_INCOMPLETE')
+            offset += bytesWritten
+          }
+          hash.update(bytes)
+          byteLength += bytes.byteLength
+        }
         await handle.sync()
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code
@@ -46,8 +61,8 @@ parentPort.once('message', (message: {
         }
         throw error
       } finally { await handle?.close() }
-      return { tempLocator: locator, locator: `${locator.slice(1, -4)}.blob`, byteLength: bytes.byteLength,
-        payloadDigest: createHash('sha256').update(bytes).digest('hex') }
+      return { tempLocator: locator, locator: `${locator.slice(1, -4)}.blob`, byteLength,
+        payloadDigest: hash.digest('hex') }
     }
     const priorReducerState = message.staging?.context.priorReducerState
     if (priorReducerState) {
@@ -232,12 +247,26 @@ parentPort.once('message', (message: {
             const locator = message.staging!.outputManifestTempLocators[outputManifests.length]
             if (!locator) throw new Error('PROJECTION_REDUCER_OUTPUT_SEGMENT_LIMIT_EXCEEDED')
             const previous = outputManifests.at(-1)
-            const payload = JSON.stringify({ formatVersion: 2, sessionId: message.staging!.context.sessionId,
+            const envelope = JSON.stringify({ formatVersion: 2, sessionId: message.staging!.context.sessionId,
               sessionGeneration: message.staging!.context.sessionGeneration, scopeKey: message.staging!.context.scopeKey,
               specVersion: message.staging!.context.specVersion, sourceIdentityJson: message.staging!.context.sourceIdentityJson,
               outputManifest: { formatVersion: 1, parent: previous ? { locator: previous.locator, byteLength: previous.byteLength,
-                payloadDigest: previous.payloadDigest } : null, operations: currentOperations }, sourceComplete })
-            outputManifests.push(await writeArtifact(rootPath, locator, payload))
+                payloadDigest: previous.payloadDigest } : null, operations: [] }, sourceComplete })
+            const marker = '"operations":[]'
+            const markerIndex = envelope.indexOf(marker)
+            if (markerIndex < 0) throw new Error('PROJECTION_REDUCER_OUTPUT_MANIFEST_INVALID')
+            const prefix = Buffer.from(`${envelope.slice(0, markerIndex)}"operations":[`, 'utf8')
+            const suffix = Buffer.from(`]${envelope.slice(markerIndex + marker.length)}`, 'utf8')
+            async function* manifestChunks(): AsyncGenerator<Buffer> {
+              yield prefix
+              for (const [index, operation] of currentOperations.entries()) {
+                if (index > 0) yield Buffer.from(',')
+                yield Buffer.from(JSON.stringify(operation), 'utf8')
+              }
+              yield suffix
+            }
+            const artifact = await writeArtifactChunks(rootPath, locator, manifestChunks())
+            outputManifests.push(artifact)
             currentOperations = []
             currentBytes = 0
           }

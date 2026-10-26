@@ -346,8 +346,8 @@ describe('SQLite projection build task composition', () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-large-message-facts-blobs-'))
     try {
       const session = createSession(db, { name: 'large History message facts', model: 'test' })
-      const body = 'dual-write-fact-body-'.repeat(2_048)
-      const messages = Array.from({ length: 850 }, (_, index) => ({ id: `large-fact-${index}`, role: 'user', content: body, timestamp: index + 1 }))
+      const body = 'dual-write-fact-body-'.repeat(3_000)
+      const messages = Array.from({ length: 1_000 }, (_, index) => ({ id: `large-fact-${index}`, role: 'user', content: body, timestamp: index + 1 }))
       for (const message of messages) appendMessage(db, { ...message, sessionId: session.id, status: 'sent' })
       const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id,
         createSpillStore(path.join(path.dirname(temp.dbPath), 'source-spill')))
@@ -360,9 +360,12 @@ describe('SQLite projection build task composition', () => {
       const conn = getDbConnection(db)
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE session_id=?").run(session.id)
-      const storedEvent = conn.prepare('SELECT length(CAST(payload_json AS BLOB)) AS byte_length FROM agent_history_events WHERE event_id=?')
-        .get('large-facts-context') as { byte_length: number }
-      expect(storedEvent.byte_length).toBeGreaterThan(32 * 1024 * 1024)
+      const storedEvent = conn.prepare(`SELECT length(CAST(payload_json AS BLOB)) AS byte_length,
+        (SELECT COALESCE(SUM(length(CAST(content AS BLOB))),0) FROM messages WHERE session_id=?) AS fact_content_byte_length
+        FROM agent_history_events WHERE event_id=?`).get(session.id, 'large-facts-context') as
+        { byte_length: number; fact_content_byte_length: number }
+      expect(storedEvent.byte_length).toBeGreaterThan(60 * 1024 * 1024)
+      expect(storedEvent.byte_length + storedEvent.fact_content_byte_length).toBeLessThanOrEqual(128 * 1024 * 1024)
       const processGeneration = advanceProcessGeneration(conn)
       const sliceSamples: Array<{ maxWorkerHeapUsedBytesPeakSampled: number | null; maxProcessRssBytesPeakSampled: number | null;
         sourceBytes: number; reducerWorkerDurationMs: number }> = []

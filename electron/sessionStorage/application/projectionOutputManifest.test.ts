@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { materializeProjectionOutputManifest } from './projectionOutputManifest'
+import { iterateProjectionOutputMessages, materializeProjectionOutputManifest } from './projectionOutputManifest'
 
 const identity = { sessionId: 's1', sessionGeneration: 'g1', scopeKey: 'chatBodyV1', specVersion: 1, sourceIdentityJson: '{"revision":1}' }
 function blob(locator: string, parent: unknown, operations: unknown[]) {
@@ -25,6 +25,10 @@ describe('projection output manifest materializer', () => {
     } })
     expect(reads).toEqual(['second', 'first'])
     expect(result).toEqual([{ role: 'user', id: 'u2', content: 'compacted' }, { role: 'assistant', id: 'a2', content: 'new answer' }])
+    const streamed: unknown[] = []
+    for await (const message of iterateProjectionOutputMessages(second, identity, { readVerified: async ({ locator }) =>
+      locator === 'first' ? first.payload : second.payload })) streamed.push(message)
+    expect(streamed).toEqual(result)
   })
 
   it('appends assistant text chunks to an existing stable message identity', async () => {
@@ -36,6 +40,10 @@ describe('projection output manifest materializer', () => {
       locator === 'chunk-first' ? first.payload : second.payload })).resolves.toEqual([
       { role: 'assistant', id: 'a1', content: 'partial response' },
     ])
+    const streamed: unknown[] = []
+    for await (const message of iterateProjectionOutputMessages(second, identity, { readVerified: async ({ locator }) =>
+      locator === 'chunk-first' ? first.payload : second.payload })) streamed.push(message)
+    expect(streamed).toEqual([{ role: 'assistant', id: 'a1', content: 'partial response' }])
     const invalid = blob('chunk-invalid', null, [{ type: 'appendText', updates: [{ role: 'assistant', id: 'missing', text: 'x' }] }])
     await expect(materializeProjectionOutputManifest(invalid, identity, { readVerified: async () => invalid.payload }))
       .rejects.toThrow('PROJECTION_OUTPUT_TEXT_APPEND_TARGET_INVALID')
