@@ -7,6 +7,7 @@ import type { ProjectionWorkerSample } from '../domain/projectionSource'
 
 export type ProjectionBuildWorkItem = Readonly<{ sessionId: string; sessionGeneration: string; scopeKey: string; specVersion: number }>
 const MIN_PREPARATION_RETRY_MS = 1_000
+const DEFAULT_MAINTENANCE_PROMOTION_AGE_MS = 250
 type MaintenanceReason = 'startup' | 'window-ready' | 'policy-changed' | 'scope-changed' | 'capacity-pressure' | 'retry'
 export type ProjectionBuildTaskHandle = Readonly<{ stop(): void; quiesce(): Promise<void>; request?(reason: MaintenanceReason): void }>
 export type ProjectionBuildSupervisorOptions = Readonly<{
@@ -23,6 +24,8 @@ export type ProjectionBuildSupervisorOptions = Readonly<{
   maxChunksPerSlice: number
   /** Cooperative wall-clock budget; one synchronous chunk cannot be preempted, so it is measured then yielded. */
   sliceBudgetMs?: number
+  /** Promote the oldest background scope after this much time waiting behind foreground requests. */
+  maintenancePromotionAgeMs?: number
   monotonicNow?(): number
   onSlice?(input: Readonly<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean;
     sourceRows: number; sourceBytes: number; sourceSnapshotDurationMs: number; sourceWorkerDurationMs: number; reducerWorkerDurationMs: number;
@@ -49,6 +52,11 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
   const suspendedItems = new Map<string, ProjectionBuildWorkItem>()
   const retryWorkItems = new Map<string, ProjectionBuildWorkItem>()
   const delayedRetryKeys = new Set<string>()
+  const maintenanceWaitingSince = new Map<string, number>()
+  const maintenancePromotionAgeMs = options.maintenancePromotionAgeMs ?? DEFAULT_MAINTENANCE_PROMOTION_AGE_MS
+  if (!Number.isSafeInteger(maintenancePromotionAgeMs) || maintenancePromotionAgeMs < 0 || maintenancePromotionAgeMs > 600_000) {
+    throw new Error('PROJECTION_BUILD_MAINTENANCE_AGE_INVALID')
+  }
   const keyOf = (item: ProjectionBuildWorkItem) => JSON.stringify([item.sessionId, item.scopeKey])
   return Object.freeze({
     prepare(item) {
@@ -203,8 +211,8 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
           return false
         }
         claimFailures.delete(key)
+        const sliceStartedAt = options.monotonicNow?.() ?? performance.now()
         while (!stopped && !controller.signal.aborted) {
-          const sliceStartedAt = options.monotonicNow?.() ?? performance.now()
           const sliceMetrics = { sourceRows: 0, sourceBytes: 0, sourceSnapshotDurationMs: 0, sourceWorkerDurationMs: 0, reducerWorkerDurationMs: 0,
             finalViewMaterializationDurationMs: 0,
             maxWorkerHeapUsedBytesAtExit: null as number | null, maxProcessRssBytesAtExit: null as number | null,
@@ -309,23 +317,37 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       }
       loopPromise = (async () => {
         while (!stopped) {
-          const requested = requests.values().next().value as { item: ProjectionBuildWorkItem } | undefined
-          if (requested) { await runItem(requested.item); continue }
-          const retryItem = retryWorkItems.values().next().value as ProjectionBuildWorkItem | undefined
-          if (retryItem) { retryWorkItems.delete(keyOf(retryItem)); await runItem(retryItem); continue }
           const work = readDueWork().filter((item) => !delayedRetryKeys.has(keyOf(item)))
-          if (!work.length) {
+          const maintenance = new Map<string, ProjectionBuildWorkItem>()
+          for (const item of retryWorkItems.values()) maintenance.set(keyOf(item), item)
+          for (const item of work) maintenance.set(keyOf(item), item)
+          const now = options.now()
+          for (const [key, item] of maintenance) {
+            if (requests.has(key)) {
+              maintenanceWaitingSince.delete(key)
+              continue
+            }
+            if (!maintenanceWaitingSince.has(key)) maintenanceWaitingSince.set(key, now)
+          }
+          for (const key of maintenanceWaitingSince.keys()) {
+            if (!maintenance.has(key) || requests.has(key)) maintenanceWaitingSince.delete(key)
+          }
+          const agedMaintenance = [...maintenance.values()]
+            .filter((item) => !requests.has(keyOf(item)) &&
+              now - (maintenanceWaitingSince.get(keyOf(item)) ?? now) >= maintenancePromotionAgeMs)
+            .sort((left, right) => (maintenanceWaitingSince.get(keyOf(left)) ?? now) - (maintenanceWaitingSince.get(keyOf(right)) ?? now))[0]
+          const requested = requests.values().next().value as { item: ProjectionBuildWorkItem } | undefined
+          const retryItem = retryWorkItems.values().next().value as ProjectionBuildWorkItem | undefined
+          const nextItem = agedMaintenance ?? requested?.item ?? retryItem ?? work[0]
+          if (!nextItem) {
             await waitForWorkOrRetry()
             continue
           }
-          let claimedAny = false
-          for (const item of work) {
-            if (stopped) break
-            if (requests.has(keyOf(item))) continue
-            claimedAny = await runItem(item) || claimedAny
-          }
-          if (!stopped && requests.size > 0) continue
-          if (!stopped && (!claimedAny || readDueWork().length === 0)) await waitForWorkOrRetry()
+          const key = keyOf(nextItem)
+          retryWorkItems.delete(key)
+          const claimed = await runItem(nextItem)
+          if (retryWorkItems.has(key)) maintenanceWaitingSince.set(key, options.now())
+          if (!claimed && requests.size === 0 && !stopped) await waitForWorkOrRetry()
         }
       })()
       const handle: ProjectionBuildTaskHandle = Object.freeze({

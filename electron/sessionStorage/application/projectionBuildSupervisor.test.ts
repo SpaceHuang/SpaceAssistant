@@ -331,6 +331,197 @@ describe('projection build supervisor', () => {
     } finally { db.close() }
   })
 
+  it.each([
+    { waitedMs: 0, expectedOrder: ['background-head', 'foreground', 'maintenance'] },
+    { waitedMs: 300, expectedOrder: ['background-head', 'maintenance', 'foreground'] },
+  ])('keeps foreground priority until maintenance has waited long enough ($waitedMs ms)', async ({ waitedMs, expectedOrder }) => {
+    const db = createMemoryAppDb()
+    try {
+      const headSession = createSession(db, { name: 'projection background head', model: 'test' })
+      const maintenanceSession = createSession(db, { name: 'projection aged maintenance', model: 'test' })
+      const foregroundSession = createSession(db, { name: 'projection queued foreground', model: 'test' })
+      const store = createSqliteProjectionStateStore(db)
+      const head = { sessionId: headSession.id, sessionGeneration: headSession.generation, scopeKey: 'scope-background-head', specVersion: 1 }
+      const maintenance = { sessionId: maintenanceSession.id, sessionGeneration: maintenanceSession.generation,
+        scopeKey: 'scope-aged-maintenance', specVersion: 1 }
+      const foreground = { sessionId: foregroundSession.id, sessionGeneration: foregroundSession.generation,
+        scopeKey: 'scope-queued-foreground', specVersion: 1 }
+      for (const item of [head, maintenance, foreground]) store.ensureInvalid({ sessionId: item.sessionId, scopeKey: item.scopeKey,
+        sessionGeneration: item.sessionGeneration, now: 1 })
+      const service = createProjectionService(store, { processGeneration: () => 1, connectionEpoch: () => 1,
+        createToken: (() => { let token = 0; return () => `fair-${++token}` })(), now: () => 1 })
+      let releaseHead!: () => void
+      let signalHeadStarted!: () => void
+      const headStarted = new Promise<void>((resolve) => { signalHeadStarted = resolve })
+      const order: string[] = []
+      let signalMaintenancePublished!: () => void
+      const maintenancePublished = new Promise<void>((resolve) => { signalMaintenancePublished = resolve })
+      let now = 0
+      const blobs = new Map<string, string>()
+      const dueWork = [head, maintenance]
+      const supervisor = createProjectionBuildSupervisor({ service,
+        listDueWork: () => dueWork.filter((item) => service.get(item.sessionId, item.scopeKey)?.status === 'invalid'),
+        dbPath: db.filePath,
+        readChunk: async (permit, input) => {
+          if (permit.scopeKey === head.scopeKey) {
+            order.push('background-head')
+            signalHeadStarted()
+            await new Promise<void>((resolve) => { releaseHead = resolve })
+          } else if (permit.scopeKey === maintenance.scopeKey) order.push('maintenance')
+          else order.push('foreground')
+          return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
+        },
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }),
+          finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async (payload) => { const locator = `fair-${blobs.size}.blob`; blobs.set(locator, payload); return { locator,
+          byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined } },
+          readVerified: async ({ locator }) => blobs.get(locator)! },
+        limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, sliceBudgetMs: 0,
+        maintenancePromotionAgeMs: 250, monotonicNow: (() => { let tick = 0; return () => tick++ })(), now: () => now,
+        onResult: (item, result) => { if (item.scopeKey === maintenance.scopeKey && result.kind === 'published') signalMaintenancePublished() } })
+      const handle = supervisor.start()
+      await headStarted
+      const foregroundResult = supervisor.prepare(foreground)
+      now = waitedMs
+      releaseHead()
+      await expect(foregroundResult).resolves.toMatchObject({ kind: 'published' })
+      await maintenancePublished
+      expect(order).toEqual(expectedOrder)
+      expect(service.get(maintenance.sessionId, maintenance.scopeKey)).toMatchObject({ status: 'valid' })
+      handle.stop()
+      await handle.quiesce()
+    } finally { db.close() }
+  })
+
+  it('yields on the accumulated slice budget when each individual history chunk is below budget', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const backgroundSession = createSession(db, { name: 'projection accumulated slice', model: 'test' })
+      const foregroundSession = createSession(db, { name: 'projection slice foreground', model: 'test' })
+      const store = createSqliteProjectionStateStore(db)
+      const background = { sessionId: backgroundSession.id, sessionGeneration: backgroundSession.generation,
+        scopeKey: 'scope-accumulated-slice', specVersion: 1 }
+      const foreground = { sessionId: foregroundSession.id, sessionGeneration: foregroundSession.generation,
+        scopeKey: 'scope-slice-foreground', specVersion: 1 }
+      for (const item of [background, foreground]) store.ensureInvalid({ sessionId: item.sessionId, scopeKey: item.scopeKey,
+        sessionGeneration: item.sessionGeneration, now: 1 })
+      const service = createProjectionService(store, { processGeneration: () => 1, connectionEpoch: () => 1,
+        createToken: (() => { let token = 0; return () => `slice-${++token}` })(), now: () => 1 })
+      let releaseFirstChunk!: () => void
+      let signalFirstChunk!: () => void
+      const firstChunkStarted = new Promise<void>((resolve) => { signalFirstChunk = resolve })
+      let backgroundReads = 0
+      let fakeTime = 0
+      const order: string[] = []
+      const slices: Array<{ durationMs: number; yielded: boolean }> = []
+      const blobs = new Map<string, string>()
+      const supervisor = createProjectionBuildSupervisor({ service,
+        listDueWork: () => service.get(background.sessionId, background.scopeKey)?.status === 'invalid' ? [background] : [],
+        dbPath: db.filePath,
+        readChunk: async (permit, input) => {
+          if (permit.scopeKey !== background.scopeKey) {
+            order.push(`foreground:${input.afterSessionSequence}`)
+            return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
+          }
+          order.push(`background:${input.afterSessionSequence}`)
+          if (backgroundReads++ === 0) {
+            signalFirstChunk()
+            await new Promise<void>((resolve) => { releaseFirstChunk = resolve })
+          }
+          if (input.afterSessionSequence >= 2) return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
+          const next = input.afterSessionSequence + 1
+          const event = { invocationId: 'slice-inv', sequence: next, eventId: `slice-event-${next}`,
+            idempotencyKey: `slice-key-${next}`, turnId: 'slice-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}',
+            sessionSequence: next, commitOrder: next, createdAt: next }
+          return { kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence, nextSessionSequence: next,
+            events: [event], messageFacts: [], byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: true }
+        },
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }),
+          finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async (payload) => { const locator = `slice-${blobs.size}.blob`; blobs.set(locator, payload); return { locator,
+          byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined } },
+          readVerified: async ({ locator }) => blobs.get(locator)! },
+        limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, sliceBudgetMs: 8,
+        monotonicNow: () => { const current = fakeTime; fakeTime += 5; return current }, maintenancePromotionAgeMs: 250,
+        onSlice: ({ durationMs, yielded }) => slices.push({ durationMs, yielded }), now: () => 0 })
+      const handle = supervisor.start()
+      await firstChunkStarted
+      const foregroundResult = supervisor.prepare(foreground)
+      releaseFirstChunk()
+      await expect(foregroundResult).resolves.toMatchObject({ kind: 'published' })
+      expect(order.slice(0, 3)).toEqual(['background:0', 'background:1', 'foreground:0'])
+      expect(slices.slice(0, 2)).toEqual([{ durationMs: 5, yielded: false }, { durationMs: 10, yielded: true }])
+      handle.stop()
+      await handle.quiesce()
+    } finally { db.close() }
+  })
+
+  it('preserves one worker owner across deterministic request, stop, and resume sequences', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const store = createSqliteProjectionStateStore(db)
+      const service = createProjectionService(store, { processGeneration: () => 1, connectionEpoch: () => 1,
+        createToken: (() => { let token = 0; return () => `random-sequence-${++token}` })(), now: () => 1 })
+      const items = Array.from({ length: 5 }, (_, index) => {
+        const session = createSession(db, { name: `projection randomized ${index}`, model: 'test' })
+        const item = { sessionId: session.id, sessionGeneration: session.generation, scopeKey: `scope-random-${index}`, specVersion: 1 }
+        store.ensureInvalid({ sessionId: item.sessionId, scopeKey: item.scopeKey, sessionGeneration: item.sessionGeneration, now: 1 })
+        return item
+      })
+      let seed = 0x5eed
+      const random = () => { seed = (seed * 48_271) % 2_147_483_647; return seed }
+      const requestOrder = [...items]
+      for (let index = requestOrder.length - 1; index > 0; index -= 1) {
+        const other = random() % (index + 1)
+        ;[requestOrder[index], requestOrder[other]] = [requestOrder[other]!, requestOrder[index]!]
+      }
+      let activeWorkers = 0
+      let maxActiveWorkers = 0
+      let signalFirstWorker!: () => void
+      const firstWorkerStarted = new Promise<void>((resolve) => { signalFirstWorker = resolve })
+      const supervisor = createProjectionBuildSupervisor({ service,
+        listDueWork: () => store.listDueWork(1), dbPath: db.filePath,
+        readChunk: async (permit, input) => {
+          activeWorkers += 1
+          maxActiveWorkers = Math.max(maxActiveWorkers, activeWorkers)
+          signalFirstWorker()
+          try {
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(resolve, 1)
+              input.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('WORKER_ABORTED')) }, { once: true })
+            })
+            return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
+          } finally { activeWorkers -= 1 }
+        },
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }),
+          finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async (payload) => ({ locator: `random-${payload.length}.blob`, byteLength: Buffer.byteLength(payload),
+          payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined }),
+          readVerified: async () => '[]' },
+        limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, now: () => 1 })
+      const firstHandle = supervisor.start()
+      const interruptedRequests = requestOrder.slice(0, 2).map((item) => supervisor.prepare(item))
+      await firstWorkerStarted
+      firstHandle.request?.('capacity-pressure')
+      firstHandle.stop()
+      const interrupted = await Promise.allSettled(interruptedRequests)
+      await firstHandle.quiesce()
+      expect(interrupted.every((result) => result.status === 'rejected')).toBe(true)
+
+      const resumedHandle = supervisor.start()
+      const requests = requestOrder.flatMap((item, index) => index % 2 === 0
+        ? [supervisor.prepare(item), supervisor.prepare(item)]
+        : [supervisor.prepare(item)])
+      const results = await Promise.all(requests)
+      expect(results.every((result) => result.kind === 'published')).toBe(true)
+      expect(maxActiveWorkers).toBe(1)
+      expect(activeWorkers).toBe(0)
+      for (const item of items) expect(service.get(item.sessionId, item.scopeKey)).toMatchObject({ status: 'valid' })
+      resumedHandle.stop()
+      await resumedHandle.quiesce()
+    } finally { db.close() }
+  })
+
   it('reports source measurements when a worker defers an oversized History event', async () => {
     const db = createMemoryAppDb()
     try {

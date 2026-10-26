@@ -153,9 +153,9 @@ export function readProjectionChatBodyCacheManifest(
     (input.sessionGeneration !== undefined && initial.currentSessionGeneration !== input.sessionGeneration) ||
     initial.scopeKey !== input.scopeKey || initial.specVersion !== input.specVersion || initial.status !== 'valid') return { kind: 'miss' }
   if (!validManifest(initial)) { invalidateObserved(initial, store); return { kind: 'miss' } }
-  const fresh = store.readSnapshot(input.sessionId, input.scopeKey)
-  if (!fresh || fresh.currentSessionGeneration !== fresh.sessionGeneration || !samePublication(initial, fresh) ||
-    fresh.currentSourceIdentityJson !== initial.sourceIdentityJson) return { kind: 'miss' }
+  // This path is fully synchronous: readSnapshot already captured the publication and
+  // recomputed source identity in one SQLite transaction, so a second snapshot here
+  // only repeats the full source scan without crossing an asynchronous boundary.
   return Object.freeze({ kind: 'ready', snapshot: initial })
 }
 

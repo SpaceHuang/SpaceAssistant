@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { encodeProjectionScopeKey } from '../domain/scopeKey'
-import { readProjectionChatBodyCache, type ProjectionChatBodyCacheSnapshot } from './projectionChatBodyCacheReader'
+import { readProjectionChatBodyCache, readProjectionChatBodyCacheManifest, type ProjectionChatBodyCacheSnapshot } from './projectionChatBodyCacheReader'
 
 const sourceIdentityJson = JSON.stringify({ formatVersion: 1, sessionGeneration: 'g1', messageRevision: 4, historyWatermark: null })
 const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 1 })
@@ -19,6 +19,14 @@ function snapshot(payload = JSON.stringify({ formatVersion: 1, scopeKey, specVer
 }
 
 describe('verified chatBodyV1 cache reader', () => {
+  it('reuses one synchronous source snapshot when checking a ready manifest', () => {
+    const current = snapshot()
+    const store = { readSnapshot: vi.fn().mockReturnValue(current), invalidateObserved: vi.fn() }
+    expect(readProjectionChatBodyCacheManifest({ sessionId: 's1', sessionGeneration: 'g1', scopeKey, specVersion: 1 }, store))
+      .toMatchObject({ kind: 'ready', snapshot: current })
+    expect(store.readSnapshot).toHaveBeenCalledOnce()
+    expect(store.invalidateObserved).not.toHaveBeenCalled()
+  })
   it('returns the DTO only when the payload and manifest agree with a fresh source snapshot', async () => {
     const current = snapshot()
     const store = { readSnapshot: vi.fn().mockReturnValue(current), invalidateObserved: vi.fn() }

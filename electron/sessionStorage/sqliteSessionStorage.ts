@@ -497,6 +497,7 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
     readChunk: readProjectionHistoryChunkInWorker, historyReducer: createProjectionScopeHistoryReducer(),
     reduceChunk: reduceProjectionHistoryChunkInWorker,
     blobs, limits: input.limits ?? { maxRows: 200, maxBytes: 256 * 1024 },
-    maxChunksPerSlice: input.maxChunksPerSlice ?? 4, sliceBudgetMs: 8, now: input.now, onResult: input.onResult,
+    maxChunksPerSlice: input.maxChunksPerSlice ?? 4, sliceBudgetMs: 8, maintenancePromotionAgeMs: 250,
+    now: input.now, onResult: input.onResult,
     onSlice: input.onSlice, onFailure: input.onFailure })
 }
