@@ -304,4 +304,6 @@ Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 sel
 
 源码提交前构建的 arm64 应用目录包（构建期间源码已包含与 `ea2dc2f9` 完全相同的锁修复；构建身份因此标记 `sourceTreeClean=false`、`commitSha=38d9b82d`）在全新隔离副本 `/tmp/spaceassistant-p4-validation/copies/maintenance-canonical14-1793128956` 验证。目标仍为同一 1000 条 canonical-backed-only 合成会话，仅删除该会话的 projection cache/state/blob-reference 派生记录；启动后数秒内状态直接成为 `valid`、`attempts=0`，backfill 状态为 `complete`，没有出现 `source-unavailable`，不再等待约 60 秒的重试。该 app.asar SHA-256 为 `3330eda77d36f8c8b82e15bafa55ea4e25daa0e1b942bf3f81db70a13f48bb82`。
 
+另在新隔离副本 `/tmp/spaceassistant-p4-validation/copies/maintenance-canonical15-1793129059` 上，以 100 ms 间隔采样同一应用启动，按主进程 PID 19019 汇总主进程与 3 个 helper。数据库 `session_projection_state` 标为 `rebuilding` 的 640 ms 内采到 6 点，RSS p50 为 895.8 MiB、nearest-rank p95/max 为 899.1 MiB；下一次采样时状态已为 `valid`，最终 `attempts=0`。该采样证实有效 slice 期间的进程树 RSS，但只有约 0.64 秒有效窗口，且没有 Long Task observer；它不代表完整维护过程峰值或 AC-7。
+
 这关闭了隔离包中的首轮锁竞争复现，不代表其他维护场景或 AC-7 已通过。本轮没有在有效重建期间取得设置页点击响应与 RSS 同窗数据；CUA 仍报告 Mac 锁定，不能据此声称已完成 UI 竞争验收。缓存/维护矩阵、长任务指标与 P4-02/P4-03 仍保持进行中。
