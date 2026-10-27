@@ -295,3 +295,13 @@ Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 sel
 启动后首次投影准备记录 `CONTENT_UNAVAILABLE / WORKER_FAILED`，状态进入 `rejected`；持久化 `retry_after` 到期后，应用约 60 秒后自动重试，状态转为 `valid`，没有外部唤醒。另一份同源隔离副本在 `rejected` 期间调用 `chatGetMessagePage`，仍返回 20 条消息；renderer 记录 page request 约 368 ms、提交后下一绘制机会约 1 ms。该读数含页面已有工作与一次性冷路径，仅作可读性观察，不用于 AC-7 延迟验收。重试前后的日志未暴露 `WORKER_FAILED` 的底层原因，暂不能判定它是程序瞬态还是夹具身份变化造成。
 
 对发生自动重试的副本按正确主进程 PID 采样 75 秒，共 75 点、主进程及 3 个 Electron helper。进程树 RSS p50 为 821 MiB、p95/max 为 917 MiB。采样在首次失败后才开始；自动重试成功后只覆盖了状态变为 `valid` 的时段，没有采到有效重建 slice 的完整区间。因此该 RSS 不能作为维护期间峰值，也不关闭维护内存验收。当前 CUA 在本轮仍报告 Mac 锁定，无法在有效重建期间进行实际设置页点击；本轮没有设置并发响应样本。P4-02/AC-7 继续进行中，底层首次失败原因、维护期 RSS 及设置点击竞争仍待验收。
+
+### 修复同进程投影 blob 文件锁竞争（2026-10-28）
+
+上一节记录的 `WORKER_FAILED` 已通过 `/tmp` 中的临时诊断包定位到 `Lock file is already being held`（`ELOCKED`）。投影构建、正文 source backfill、blob GC 共用同一投影 blob 目录；它们由生命周期在同一主进程启动，独立创建的 blob store 会尝试获取同一路径的文件锁。原适配器直接把本机并发交给 `proper-lockfile` 的有限重试，持锁超过重试窗口时，正常的同进程竞争被当作投影内容不可用。
+
+按 TDD 增加 `sessionProjectionBlobStore.test.ts` 回归：两个独立 store 共用同一目录，第一个持锁 800 ms；旧实现第二个请求稳定以 `ELOCKED` 失败（RED）。提交 `ea2dc2f9` 在文件锁适配器前增加按锁文件路径的同进程 FIFO 排队，实际跨进程互斥仍由 `proper-lockfile` 提供。验证：blob store 定向文件 25 项通过；投影构建与正文回填组合用例单独复跑通过；`npx tsc -p tsconfig.electron.json --noEmit` 通过。四文件联合回归曾有一项受 15 秒单测上限影响而超时；该组合用例在独立运行时 11.59 秒通过，没有把超时计作 RED。
+
+源码提交前构建的 arm64 应用目录包（构建期间源码已包含与 `ea2dc2f9` 完全相同的锁修复；构建身份因此标记 `sourceTreeClean=false`、`commitSha=38d9b82d`）在全新隔离副本 `/tmp/spaceassistant-p4-validation/copies/maintenance-canonical14-1793128956` 验证。目标仍为同一 1000 条 canonical-backed-only 合成会话，仅删除该会话的 projection cache/state/blob-reference 派生记录；启动后数秒内状态直接成为 `valid`、`attempts=0`，backfill 状态为 `complete`，没有出现 `source-unavailable`，不再等待约 60 秒的重试。该 app.asar SHA-256 为 `3330eda77d36f8c8b82e15bafa55ea4e25daa0e1b942bf3f81db70a13f48bb82`。
+
+这关闭了隔离包中的首轮锁竞争复现，不代表其他维护场景或 AC-7 已通过。本轮没有在有效重建期间取得设置页点击响应与 RSS 同窗数据；CUA 仍报告 Mac 锁定，不能据此声称已完成 UI 竞争验收。缓存/维护矩阵、长任务指标与 P4-02/P4-03 仍保持进行中。
