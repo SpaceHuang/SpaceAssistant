@@ -71,6 +71,8 @@ P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通
 
 对 32 个 backfilling 的 legacy-only 会话，26 个 coverage mismatch 有源数据缺口证据（16 个无 History stream、10 个有 stream 但无 event）；另外 5 个 message ID 缺失及 1 个 source fact 缺失仍未查明根因。它们不计作完成回填。P4-02/P4-03 继续未完成；缓存与维护矩阵、维护竞争/耗时/RSS、其余 AC-5/AC-6 包内场景均未齐。无专用 IM sandbox，会话消息测试不适用。
 
+对候选包额外采集的 15 轮 Chromium trace 将常规切换工作定位到 `react-virtuoso` 滚动/尺寸回调与 React 更新，但没有复现此前的 115 ms renderer Long Task，尚不能解释该长任务或关闭 AC-7。详见 [external-performance.md](external-performance.md)。
+
 ## 同源基线与最大历史窗口点击补充（2026-10-27）
 
 为解决此前基线 schema 不兼容，重新从同一冻结数据库备份制作独立 APFS clone：旧基线 `109a9384` 在其 clone 上迁移至 schema 107，候选 build `3817abb0-b0b3-4bd6-9b34-964550c2d40f` 在另一 clone 上迁移至 schema 116；串行运行，未改原始库，IM 设置仅在副本关闭。

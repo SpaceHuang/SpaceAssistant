@@ -210,3 +210,9 @@ PerformanceObserver 同时记录到基线 4 个 Long Task（4 个与点击至 re
 另复核此前 32 个 backfilling 会话的错误类别与隔离数据库中的 History 源数据：26 个 `PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH` 中，16 个没有 `agent_history_streams` 记录，10 个有 stream 记录但没有 event；这 26 项有缺少可回填源数据的直接证据，不能归因于空消息修复，也不能视为成功回填。其余 6 项仍未解释：5 个 `CHAT_BODY_MESSAGE_ID_MISSING`、1 个 `CHAT_BODY_SOURCE_FACT_MISSING`；相关样本存在 History events，前者部分已有 locator，当前证据不足以判定失败根因。故不得把 32 项统一记作“源文件缺失”或宣称它们已修复。源表/事件缺失的会话仍需明确的旧 reader 可用性与维护收敛验收；6 项需要独立复现和逐项归因。
 
 本轮仍不关闭 P4-02：首次/热/损坏缓存、维护开关与前台竞争矩阵、维护耗时及维护期间 RSS 尚缺；AC-7 长任务限制未通过，回填剩余失败也未全部查明。
+
+### 候选包 renderer trace 归因补充（2026-10-27）
+
+对同一候选包再用 Chromium tracing 采集 15 轮大/普通会话交替切换，临时生成 renderer source map 将编译栈映回依赖源码。Renderer 主线程最大 `RunTask` 为 35.2 ms；最长的 24.2 ms 函数调用位于 `react-virtuoso` 的滚动状态处理（`Zn`，内部使用 `flushSync`），动画帧中的尺寸回调约 8.3 ms；React DOM 的一次 microtask/render 约 30 ms。该 trace 没有复现此前 115 ms renderer Long Task，不能推翻前述有效观测，也不能把它归因到某一个调用。Browser 主线程另有两次 54.6/71.7 ms `RunMicrotasks`，属于不同进程线程，不计作 renderer Long Task。
+
+当前证据把常规切换的同步工作收窄到 Virtuoso 滚动/尺寸处理和 React 更新，但仍没有捕获到 AC-7 超 50 ms renderer 长任务的完整因果栈。没有据此改动 Virtuoso 行为；需要在出现长任务的样本中取得可归因 trace 后再选源码修复点。该补充 trace 不关闭 AC-7 或 P4-02。
