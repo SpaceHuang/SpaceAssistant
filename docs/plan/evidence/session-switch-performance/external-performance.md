@@ -173,4 +173,6 @@ P4-02 仍未完成。可靠的新证据覆盖了候选 cold-page 的真实 UI �
 
 又在独立 COW 副本中生成一条 390,000 字符正文的 canonical-backed-only 消息，并将 390,000 字节 source spill 改写为同长度错误内容以触发摘要不匹配。候选 PKG 实际调用 preload `window.api.chatGetMessages` 后拒绝读取，IPC 错误为 `CANONICAL_SESSION_CONTENT_UNAVAILABLE`，没有返回镜像正文。生成器与故障副本已清理，候选 v7 重新以隔离真实库启动；未修改原始数据，也未发送 IM 消息。
 
-AC-6 包内仍未验证：spill 定位不匹配、投影块截断、发布边界故障及源编辑/追加/压缩/删除后的场景；源码层对应测试继续作为其余边界证据。
+第三个独立 COW 副本中生成一条 370,000 字符正文，并把 History spill descriptor 的 locator 改成格式合法但不存在的 `.spill` 文件。候选 PKG 的 preload `window.api.chatGetMessages` 同样拒绝读取并返回 `CANONICAL_SESSION_CONTENT_UNAVAILABLE`。临时生成器与副本已清理，候选 v7 已恢复为唯一常规实例；原始数据库未修改。
+
+AC-6 包内仍未验证：投影块截断、发布边界故障及源编辑/追加/压缩/删除后的场景；源码层对应测试继续作为其余边界证据。
