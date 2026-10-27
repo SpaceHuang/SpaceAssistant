@@ -27,6 +27,51 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('mirrors all thinking blocks from the completed turn into the assistant message', async () => {
+    const registry = new ModelProviderRegistry()
+    let requestCount = 0
+    registry.register(route, { providerId: 'terminal-thinking-mirror', stream: () => {
+      requestCount += 1
+      return requestCount === 1
+        ? stream(
+            { type: 'thinking-delta', text: 'first thought' },
+            { type: 'tool-call', toolCallId: 'thinking-tool', toolName: 'lookup', input: {} },
+            { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+          )
+        : stream(
+            { type: 'thinking-delta', text: 'second thought' }, { type: 'text-delta', text: 'answer' },
+            { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+          )
+    } })
+    const backing = new MemoryHistory()
+    let transcriptCommit: import('../src/history').SessionTranscriptCommitIntent | undefined
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], expectedVersion: number, commit?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (commit) transcriptCommit = commit
+        return backing.appendBatch(events, expectedVersion)
+      },
+      read: (invocationId: string) => backing.read(invocationId)
+    }
+    const invocationId = 'terminal-thinking-mirror'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, turnId: invocationId, sessionId: 'thinking-session',
+      sessionTranscriptBaseVersion: 0, assistantMessageId: 'thinking-assistant', history,
+      request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'auth-v1' }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'tool done' })), maxModelTurns: 3
+    })
+
+    expect(transcriptCommit?.messageMirror).toMatchObject({
+      messageId: 'thinking-assistant', status: 'completed', content: 'answer',
+      thinking: { content: 'first thoughtsecond thought', isVisible: true }
+    })
+  })
+
   it('freezes request patches and metadata across provider retry, then refreshes them for the next model turn', async () => {
     const registry = new ModelProviderRegistry()
     const providerRequests: CanonicalModelMessage[][] = []

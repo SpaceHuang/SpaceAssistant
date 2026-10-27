@@ -622,6 +622,7 @@ export class SqliteAgentHistory implements HistoryPort {
         }
         const result = this.conn.prepare(`UPDATE messages SET
           content=CASE WHEN content_storage_state='canonical-backed-only' THEN content ELSE COALESCE(?,content) END,
+          thinking=COALESCE(?,thinking),
           content_segments=COALESCE(?,content_segments),
           status=?,
           content_storage_state=CASE WHEN content_storage_state='canonical-backed-only' THEN content_storage_state
@@ -629,6 +630,7 @@ export class SqliteAgentHistory implements HistoryPort {
               THEN 'canonical-backed-dual-write' ELSE content_storage_state END
           WHERE id=? AND session_id=? AND role='assistant'`).run(
           mirror.content ?? null,
+          mirror.thinking === undefined ? null : JSON.stringify(mirror.thinking),
           mirror.content === undefined || !currentMessage ? null : JSON.stringify(reconcileTerminalContentSegments(
             currentMessage.content_segments, mirror.content, this.now()
           )),

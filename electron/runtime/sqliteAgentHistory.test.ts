@@ -400,8 +400,8 @@ describe('SqliteAgentHistory', () => {
       .run('atomic-terminal-session', 'generation')
     const terminal: HistoryEvent = { ...event('atomic-terminal', 1), invocationId: 'atomic-terminal-invocation', turnId: 'atomic-terminal-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
     const intent = { sessionId: 'atomic-terminal-session', baseVersion: 0, outcome: 'completed' as const,
-      messages: [{ role: 'user', content: 'accepted' }, { id: 'atomic-terminal-assistant', role: 'assistant', content: 'beforeafter' }],
-      messageMirror: { messageId: 'atomic-terminal-assistant', status: 'completed' as const, content: 'beforeafter' } }
+      messages: [{ role: 'user', content: 'accepted' }, { id: 'atomic-terminal-assistant', role: 'assistant', content: 'beforeafter', thinking: { content: 'reasoning text', isVisible: true, startTime: 1 } }],
+      messageMirror: { messageId: 'atomic-terminal-assistant', status: 'completed' as const, content: 'beforeafter', thinking: { content: 'reasoning text', isVisible: true, startTime: 1 } } }
 
     await history.appendBatch([terminal], 0, intent)
 
@@ -413,8 +413,8 @@ describe('SqliteAgentHistory', () => {
       .toEqual({ version: 1, last_turn_id: 'atomic-terminal-turn', status: 'ready' })
     expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get('atomic-terminal-session'))
       .toEqual({ status: 'transcript_committed' })
-    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('atomic-terminal-assistant'))
-      .toEqual({ content: 'beforeafter', status: 'completed' })
+    expect(conn.prepare('SELECT content,status,thinking FROM messages WHERE id=?').get('atomic-terminal-assistant'))
+      .toEqual({ content: 'beforeafter', status: 'completed', thinking: JSON.stringify({ content: 'reasoning text', isVisible: true, startTime: 1 }) })
     const persistedSegments = JSON.parse(conn.prepare('SELECT content_segments FROM messages WHERE id=?').get('atomic-terminal-assistant')!.content_segments as string)
     expect(persistedSegments).toEqual([{ content: 'before', startTime: 1, endTime: 2 }, { content: 'after', startTime: 4, endTime: 5 }])
     expect(buildAssistantActivityTimeline({ content: 'beforeafter', contentSegments: persistedSegments,

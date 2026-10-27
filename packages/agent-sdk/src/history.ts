@@ -23,6 +23,7 @@ export type SessionTranscriptCommitIntent = Readonly<{
     messageId: string
     status: 'completed' | 'failed' | 'cancelled'
     content?: string
+    thinking?: unknown
   }>
 }>
 

@@ -536,13 +536,25 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     }
     await projectTurnOutput(input.observer, result)
     const terminalPayload = { status: 'completed' as const, outputText: result.text, usage: result.usage }
+    const completedThinkingContent = input.assistantMessageId
+      ? result.messages
+          .filter((message) => message.role === 'assistant' && message.id === input.assistantMessageId && Array.isArray(message.content))
+          .flatMap((message) => (message as Extract<CanonicalTurnMessage, { role: 'assistant' }>).content as readonly CanonicalContentBlock[])
+          .filter((block) => block.type === 'thinking')
+          .map((block) => block.thinking)
+          .filter(Boolean)
+          .join('')
+      : ''
     const sessionLedger = input.sessionLedgerForInvocationTerminal
       ? await input.sessionLedgerForInvocationTerminal({ ...terminalPayload, turnId: input.turnId ?? input.invocationId })
       : undefined
     const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined
       ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: 'completed' as const,
           messages: result.messages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[],
-          ...(input.assistantMessageId ? { messageMirror: { messageId: input.assistantMessageId, status: 'completed' as const, content: result.text } } : {}) }
+          ...(input.assistantMessageId ? { messageMirror: {
+            messageId: input.assistantMessageId, status: 'completed' as const, content: result.text,
+            ...(completedThinkingContent ? { thinking: { content: completedThinkingContent, isVisible: true, startTime: Date.now() } } : {})
+          } } : {}) }
       : undefined
     await appendTerminalHistory('invocation-completed', terminalPayload, sessionLedger, transcriptCommit)
     await observe(input.observer, 'turn-finished', () => input.observer?.onTurnFinished?.(result))
