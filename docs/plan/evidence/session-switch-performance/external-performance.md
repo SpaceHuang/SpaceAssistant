@@ -135,3 +135,17 @@ P4-02 **保持进行中**。代码修复已提交，但不按局部候选分段�
 2026-10-27 更新：用户确认 Mac 已解锁，但桌面自动化仍返回“Mac 已锁定”。因此改用 `open -n` 启动最新解包候选两次，只指向隔离目录 `/tmp/spaceassistant-p4-validation/copies/candidate-v6`，基线使用独立副本 `/tmp/spaceassistant-p4-validation/copies/baseline-v4`。候选实际启动并写入 build ID `c3d37a41-8a08-46e0-b327-52800a4d494d` 的日志。两次启动都各自自动请求初始页（`requestOrdinal=1`）：main 9.94/3.86 ms、renderer page request 40.8/66.2 ms、render commit 21.9/6.4 ms、next paint 14.7/11 ms。辅助功能脚本能看到候选进程，但没有可访问窗口，无法激活窗口；这些是启动页观测，不是会话切换，不能计入 AC-7。完成日志读取后已向本任务启动的候选与基线实例发送 TERM，并确认退出。
 
 IM 项经用户澄清标为不适用：项目没有专用私聊或群聊 sandbox 会话，不向真实会话发测试消息。P4-02 仍进行中：桌面自动化未能恢复，真实点击切换、同口径基线、缓存/维护矩阵、主线程长任务、内存峰值和维护完成时间仍无证据；P4-03 的 AC-5/AC-6 包内代表场景也未验收。启动页 trace 和函数级数据不替代这些项目。
+
+### 解锁后的候选包交互测量与基线构建（2026-10-27）
+
+用户确认设备已解锁后，CUA 已能连接实际窗口。候选仍是同一 arm64 PKG / app.asar（build ID `c3d37a41-8a08-46e0-b327-52800a4d494d`，提交 `d117424e`），仅以 `--user-data-dir=/tmp/spaceassistant-p4-validation/copies/candidate-v6` 运行；进程启动参数已复核。实际大/普通会话分别有 64/8 条消息。期间交替切换并在候选隔离副本里采到 105 次有效分页：大页 20 条 54 次、普通页 8 条 51 次，全部成功，`cachePath=cold`。另有 3 次 44 条分页，是 `limit: 60` 的后台读取，不并入首屏切换统计。
+
+从该候选 build ID 的主进程日志重新计算，20 条页主进程 `main-ipc` p50/p95/max 为 4.09/9.86/15.60 ms；8 条页为 5.77/7.23/11.65 ms。首次 60 次交替切换的 renderer 分段日志另显示：20 条页的选择至请求 p50/p95/max 为 9.0/11.4/14.2 ms，请求 7.0/8.3/26.4 ms，render commit 3.8/4.8/6.1 ms，next paint 18.1/20.2/26.9 ms；8 条页对应为 8.7/10.6/12.1 ms、8.9/11.2/16.7 ms、4.8/5.9/6.8 ms、8.2/34.7/94.1 ms。此分段阶段的 next-paint 有明显离群值；这些指标来自候选单边，不构成基线比较或完整 AC-7 矩阵。
+
+额外打开 `PerformanceObserver` 后，在 DevTools 关闭期间快速切换观察到 74/50/62 ms long task 和 104.6/57.8/52.0 ms long animation frame；受控的大/普通切换还观察到 94.2/56.4 ms long animation frame。至少一组长帧时间与一次 44 条后台读取及失败原因补齐时间相邻，说明分页 trace 之外仍有切换期工作可能影响响应；目前没有脚本 attribution 或调用级关联，不能把该相邻关系当成因果结论。候选主进程 25 秒采样的 RSS 峰值约 529,792 KiB（约 517.4 MiB），单进程样本，不含 Electron helper。
+
+为补计划指定的真实基线，已在临时 detached worktree 从 `109a938404124235d632e4cdbd4f9e06eaa48728` 完整构建并生成 arm64 PKG。基线 build ID `ebeaacf2-9a50-4773-8d98-b851e2b1c385`，`sourceTreeClean=true`；PKG SHA-256 `c4da0479b8a200f7170917f0df1e8729b1d73ef856f9d99c575cf5d681e3a098`，app.asar SHA-256 `bf70ebe8b402d7c3b2387f428a6e5f1dd4779362d580a3d3446c153eca107d0b`。打包目录与展开 PKG 的 app.asar 哈希相同，`codesign --verify --deep --strict` 通过。该基线包尝试在隔离 `baseline-v4` 副本启动时，因库 `schema_version=115` 高于二进制支持的 107 而拒绝打开。已检查的其余基线副本也为 schema 115，候选副本为 116；不能降级或篡改 schema 来强行运行。因此这次构建固定了基线二进制身份，但没有产生可采信的同库 UI 对照数据。
+
+此前记录“设备仍锁定、无法点击”已被本次真实窗口测量取代；旧 AX/screenshot 计时仍只作为无效校准，不计入新样本。候选实例目前唯一运行，仍指向隔离副本；基线实例已因版本拒绝退出。IM 仍不适用：用户说明项目没有私聊或群聊测试会话，未发送任何消息。
+
+P4-02 仍未完成。可靠的新证据覆盖了候选 cold-page 的真实 UI 切换与少量主线程长帧观察；尚缺基线兼容数据库、同口径基线、ready/corrupt cache、维护开关矩阵、长帧因果归因及维护竞争测量。不能据候选单边 p95 达成情况关闭 AC-7。
