@@ -333,3 +333,9 @@ Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 sel
 主进程日志记录两段 slice：57.81 ms `checkpointed` 与 481.11 ms `published`，合计 538.92 ms；两条完成时间相隔 482 ms。以 25 ms 间隔采集应用主进程及 3 个 Electron helper 的 RSS，重建状态期间得到 9 点：合计 RSS p50/p95/max 为 894.2/899.2/899.2 MiB；启动全过程 42 点最大合计 RSS 为 1039.4 MiB。RSS 按进程相加，会重复计算共享页，不能解释成物理内存占用。逐项汇总：[package-maintenance-rss-2026-10-28.json](package-maintenance-rss-2026-10-28.json)。
 
 这补充了短时重建 slice 中的进程树 RSS 与完成状态，不是维护期间的设置点击或并发前台页请求，没有 Long Task/LoAF observer；因此不关闭 AC-5 的维护竞争或 AC-7。另一个同 profile startup page trace 为 cold，main handler 65.6 ms、renderer page request 316.2 ms、next-paint 1.2 ms，但日志没有 sessionId，该 trace 不归因到 1000 条目标会话，也不是可信切换数据。
+
+### 用户确认解锁后的候选窗口重试（2026-10-28）
+
+用户明确表示 Mac 已解锁。CUA 随后能读取应用清单，但在检查桌面时返回“Mac 已锁定”，没有提供可操作窗口。为避免再次触碰默认 profile，本次从隔离真实库副本 `/tmp/spaceassistant-p4-validation/copies/pkg-candidate-schema102` 创建 APFS clone，确认副本中的飞书与微信均禁用；在独立 HOME `/tmp/spaceassistant-ui-unlocked-20261028` 下尝试启动已提取的 arm64 PKG 应用。启动命令返回后没有候选进程或可连接窗口，重定向启动日志为空；该轮没有产生交互、性能或维护竞争样本。默认用户数据库未作为该进程的数据目录。
+
+本次只确认“用户已解锁”与桌面自动化的锁屏判断仍不一致，不能据此断言应用本身的退出原因。P4-02/P4-03 与 AC-7 保持未完成；维护期间前台竞争及可信窗口内容 ready 仍需在可操作窗口中采集。

@@ -114,3 +114,9 @@ arm64 PKG build ID `eb0aac8b-6f5b-496c-ba11-f45f194f9584`，PKG SHA-256 `abd5b8f
 后续测试提交 `6efddbf6` 增加停放会话的读取回归：真实 SQLite storage 中，已有 legacy 消息的会话即使 source 状态被标为当前 revision 停放，`readChatPageAfterPreparation` 仍在 1 秒内经现有 reader 返回原正文，且不请求回填。三项定向回归共 21 项通过；此测试改动不改变已构建 PKG 内的源码。
 
 桌面工具超时时的副作用核对：`cua.getApp("SpaceAssistant")` 在约 121 秒后超时，但仍启动了 `/Applications/SpaceAssistant.app` 并打开默认用户目录。该进程已退出；只读核对默认库仍为 schema 116、没有 v117 标记列，数据库主文件修改时间仍为 `2026-10-27 22:24:11`，WAL 为 0 字节。该进程不属于隔离 PKG 验收样本，没有证据显示它提交过 SQLite 写事务；之后不再用 `getApp` 自动启动默认实例。
+
+## 用户确认解锁后的隔离候选启动重试（2026-10-28）
+
+用户确认 Mac 已解锁后，CUA 应用清单可读，但桌面状态再次返回“Mac 已锁定”，没有可操作窗口。本次从 `pkg-candidate-schema102` 制作独立 APFS clone，检查副本中的飞书与微信配置均为 disabled；将副本置于 `/tmp/spaceassistant-ui-unlocked-20261028/Library/Application Support/SpaceAssistant`，并尝试在对应临时 HOME 下启动提取自 v117 PKG 的 app bundle。启动日志为空，检查时未发现候选主进程、调试端口或窗口；没有采到任何点击、正文 ready、Long Task 或维护竞争数据。该次观察不能说明进程退出原因，也没有把默认用户数据库交给候选 app。
+
+结论不变：P4-02/P4-03 未完成。IM 并发仍不适用；待补证据是候选可操作窗口中的 AC-7 内容 ready 与维护竞争，以及 AC-5/AC-6 仍适用的包内场景。
