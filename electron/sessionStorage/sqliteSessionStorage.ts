@@ -241,8 +241,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
           { source_revision: number; terminal_source_revision: number | null; terminal_reducer_spec_version: number | null } | undefined
         if (state && state.terminal_source_revision === state.source_revision &&
           state.terminal_reducer_spec_version === CHAT_BODY_PROJECTION_SPEC_VERSION) return false
-        options.requestBodySourceBackfill?.()
-        return true
+        return options.requestBodySourceBackfill?.() === false ? false : true
       },
       waitForSourceBackfill: async ({ sessionId, sessionGeneration, sourceRevision }) => {
         const timeoutMs = options.sourceBackfillWaitMs ?? 10 * 60_000

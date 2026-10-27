@@ -228,6 +228,23 @@ describe('session body source backfill', () => {
       .toEqual({ status: 'backfilling' })
   })
 
+  it('does not wait for source backfill when the scheduler declines the request', async () => {
+    const temp = createTempDatabase('session-body-source-backfill-declined-')
+    cleanup = temp.cleanup
+    const conn = getDbConnection(temp.db)
+    const session = createSession(temp.db, { name: 'declined source backfill' })
+    appendMessage(temp.db, { id: 'declined-source-user', sessionId: session.id, role: 'user', content: '', timestamp: 1, status: 'sent' })
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-only' WHERE id=?").run('declined-source-user')
+    blobRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-body-source-backfill-declined-blobs-'))
+    const requestBackfill = vi.fn(() => false)
+    const storage = createSqliteSessionStorage(temp.db, { projectionBlobRoot: blobRoot, requestBodySourceBackfill: requestBackfill,
+      sourceBackfillWaitMs: 0 })
+
+    await expect(storage.queries.readSourceChatPage?.({ sessionId: session.id, limit: 10 })).resolves.toBeUndefined()
+    expect(requestBackfill).toHaveBeenCalledOnce()
+  })
+
   it('discards a locator page if the selected message window changes during body materialization', async () => {
     const temp = createTempDatabase('session-source-page-drift-')
     cleanup = temp.cleanup
