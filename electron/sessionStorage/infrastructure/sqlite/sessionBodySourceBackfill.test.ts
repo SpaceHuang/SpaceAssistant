@@ -148,6 +148,11 @@ describe('session body source backfill', () => {
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(item.session.id)
       conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run(item.id)
     }
+    const insertEmptyStream = conn.prepare(`INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id)
+      VALUES(?,0,1,?)`)
+    for (const item of rows) {
+      for (let index = 0; index < 100; index += 1) insertEmptyStream.run(`unrelated-empty-${item.session.id}-${index}`, item.session.id)
+    }
     conn.prepare(`UPDATE spill_reference_backfill_state SET status='complete',verified_generation=(SELECT meta_value
       FROM spill_reference_meta WHERE meta_key='canonical_change_generation') WHERE owner_table='agent_history_events'`).run()
     blobRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-source-page-switch-blobs-'))
@@ -170,12 +175,43 @@ describe('session body source backfill', () => {
 
     const storage = createSqliteSessionStorage(temp.db, { projectionBlobRoot: blobRoot, requestBodySourceBackfill: () => undefined })
     const reads = [first.id, second.id, first.id]
-    for (const sessionId of reads) {
-      const page = await readChatPageAfterPreparation(storage, { sessionId, limit: 10 })
-      const expected = rows.find((item) => item.session.id === sessionId)!
-      expect(page.entries.map(({ message }) => ({ id: message.id, content: message.content })))
-        .toEqual([{ id: expected.id, content: expected.body }])
-    }
+    let scannedUnrelatedStreams = 0
+    const locatorRowsPerRead: number[] = []
+    const dependencyRowsPerRead: number[] = []
+    const historyPayloadRowsPerRead: number[] = []
+    const prepare = conn.prepare.bind(conn)
+    const streamScanSpy = vi.spyOn(conn, 'prepare').mockImplementation((sql) => {
+      const statement = prepare(sql)
+      const counter = /FROM\s+agent_history_streams\b/i.test(sql) ? 'streams'
+        : /SELECT\s+locator\.message_id AS id[\s\S]+FROM\s+session_message_body_locator/i.test(sql) ? 'locators'
+          : /SELECT\s+refs\.message_id,refs\.invocation_id/i.test(sql) ? 'dependencies'
+            : /payload_json FROM\s+agent_history_events/i.test(sql) ? 'history' : undefined
+      if (!counter) return statement
+      return new Proxy(statement, { get(target, property) {
+        if (property === 'all') return (...parameters: unknown[]) => {
+          const result = Reflect.get(target, 'all', target).apply(target, parameters) as Array<{ invocation_id?: string }>
+          if (counter === 'streams') scannedUnrelatedStreams += result.filter(({ invocation_id }) => invocation_id?.startsWith('unrelated-empty-')).length
+          if (counter === 'locators') locatorRowsPerRead.push(result.length)
+          if (counter === 'dependencies') dependencyRowsPerRead.push(result.length)
+          if (counter === 'history') historyPayloadRowsPerRead.push(result.length)
+          return result
+        }
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      } }) as typeof statement
+    })
+    try {
+      for (const sessionId of reads) {
+        const page = await readChatPageAfterPreparation(storage, { sessionId, limit: 10 })
+        const expected = rows.find((item) => item.session.id === sessionId)!
+        expect(page.entries.map(({ message }) => ({ id: message.id, content: message.content })))
+          .toEqual([{ id: expected.id, content: expected.body }])
+      }
+    } finally { streamScanSpy.mockRestore() }
+    expect(scannedUnrelatedStreams).toBe(0)
+    expect(locatorRowsPerRead).toEqual([1, 1, 1])
+    expect(dependencyRowsPerRead).toEqual([1, 1, 1])
+    expect(historyPayloadRowsPerRead).toEqual([1, 1, 1])
   })
 
   it('does not mark complete when a canonical message is missing from the locator output', async () => {

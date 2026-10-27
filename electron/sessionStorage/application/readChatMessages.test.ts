@@ -122,6 +122,7 @@ describe('readChatPageAfterPreparation', () => {
     const emit = vi.fn()
     const trace = createSessionSwitchTrace({ instance: 'main', traceId: 'cold-source-page', emit })
     const page = { entries: [{ sequence: 4, message: { id: 'cold-canonical', content: 'source body' } }], oldestSequence: 4, hasMoreBefore: true }
+    let cachePath: 'ready' | 'prior-authority' | 'cold' | 'invalidated' = 'prior-authority'
     const result = await readChatPageAfterPreparation({
       ensureChatBodyV1: async () => { events.push('ensure'); throw new Error('must not wait for projection') },
       queries: {
@@ -129,8 +130,9 @@ describe('readChatPageAfterPreparation', () => {
         readPreparedChatPage: async () => { events.push('prepared'); return undefined },
         readChatPage: () => { events.push('authority'); return { entries: [], oldestSequence: null, hasMoreBefore: false } }
       }
-    }, { sessionId: 'cold-session', limit: 20 }, { trace })
-    trace.finish({ outcome: 'ok', cachePath: 'prior-authority', pageSize: page.entries.length })
+    }, { sessionId: 'cold-session', limit: 20 }, { trace, onCachePath: (value) => { cachePath = value } })
+    trace.finish({ outcome: 'ok', cachePath, pageSize: page.entries.length })
+    expect(cachePath).toBe('cold')
     expect(result).toBe(page)
     expect(events).toEqual(['source-page'])
     expect(emit.mock.calls[0]?.[0]?.stages).toEqual([{ name: 'source-page-read', durationMs: expect.any(Number), outcome: 'ok' }])

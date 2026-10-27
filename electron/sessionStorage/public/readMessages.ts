@@ -173,7 +173,7 @@ export async function readChatPageAfterPreparation(
     }
   }
   if (sourcePage) {
-    diagnostics?.onCachePath?.('prior-authority')
+    diagnostics?.onCachePath?.('cold')
     return sourcePage
   }
   const preparedView = await measure('projection-prepare', () => prepareForRead(storage, input.sessionId, undefined, diagnostics?.onCachePath))

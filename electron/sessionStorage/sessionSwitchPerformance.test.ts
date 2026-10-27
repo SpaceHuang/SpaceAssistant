@@ -13,6 +13,7 @@ import { advanceProcessGeneration } from '../database/processGeneration'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { readProjectionSourceIdentity } from './infrastructure/sqlite/projectionSourceIdentity'
+import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
 import { encodeProjectionScopeKey } from './domain/scopeKey'
 import { readPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
 import { createSessionBodySourceBackfillTask, createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sqliteSessionStorage'
@@ -177,23 +178,39 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
         for (let index = 0; index < streamCount; index += 1) insert.run(`invocation-${String(index).padStart(6, '0')}`, session.id)
       })
 
-      const queryPlan = conn.prepare(`EXPLAIN QUERY PLAN SELECT invocation_id FROM agent_history_streams
-        WHERE session_id=? ORDER BY invocation_id`).all(session.id)
+      let scannedHistoryStreamRows = 0
+      const prepare = conn.prepare.bind(conn)
+      const streamScanSpy = vi.spyOn(conn, 'prepare').mockImplementation((sql) => {
+        const statement = prepare(sql)
+        if (!/FROM\s+agent_history_streams\b/i.test(sql)) return statement
+        return new Proxy(statement, { get(target, property) {
+          if (property === 'all') return (...parameters: unknown[]) => {
+            const rows = Reflect.get(target, 'all', target).apply(target, parameters) as unknown[]
+            scannedHistoryStreamRows += rows.length
+            return rows
+          }
+          const value = Reflect.get(target, property, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        } }) as typeof statement
+      })
       const durations: number[] = []
       let identity = ''
-      for (let sample = 0; sample < 30; sample += 1) {
-        const startedAt = performance.now()
-        identity = readProjectionSourceIdentity(conn, session.id, session.generation) ?? ''
-        durations.push(performance.now() - startedAt)
-      }
+      try {
+        for (let sample = 0; sample < 30; sample += 1) {
+          const startedAt = performance.now()
+          identity = readProjectionSourceIdentity(conn, session.id, session.generation) ?? ''
+          durations.push(performance.now() - startedAt)
+        }
+      } finally { streamScanSpy.mockRestore() }
       const sorted = [...durations].sort((a, b) => a - b)
       const p50Ms = Number(sorted[14]!.toFixed(3))
       const p95Ms = Number(sorted[28]!.toFixed(3))
       const maxMs = Number(sorted[29]!.toFixed(3))
-      const indexed = JSON.stringify(queryPlan).includes('idx_agent_history_streams_session')
-      console.info(`[session-switch-perf] ${JSON.stringify({ streamCount, samples: 30, identityBytes: Buffer.byteLength(identity), p50Ms, p95Ms, maxMs, indexed, queryPlan })}`)
-      expect(JSON.parse(identity).historyStreams).toHaveLength(streamCount)
-      expect(indexed).toBe(true)
+      console.info(`[session-switch-perf] ${JSON.stringify({ streamCount, samples: 30, identityBytes: Buffer.byteLength(identity),
+        scannedHistoryStreamRows, p50Ms, p95Ms, maxMs })}`)
+      expect(JSON.parse(identity)).not.toHaveProperty('historyStreams')
+      expect(Buffer.byteLength(identity)).toBeLessThan(512)
+      expect(scannedHistoryStreamRows).toBe(0)
     } finally {
       temp.cleanup()
     }
@@ -216,7 +233,7 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
         }
       })
       const queryPlan = conn.prepare(`EXPLAIN QUERY PLAN SELECT session_seq,commit_order,event_id,invocation_id FROM agent_history_events
-        WHERE session_id=? ORDER BY session_seq DESC LIMIT 1`).all(session.id)
+        WHERE session_id=? AND session_seq IS NOT NULL ORDER BY session_seq DESC LIMIT 1`).all(session.id)
       const durations: number[] = []
       let identity = ''
       for (let sample = 0; sample < 30; sample += 1) {
@@ -232,7 +249,8 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
       const usesTemporarySort = JSON.stringify(queryPlan).includes('TEMP B-TREE FOR ORDER BY')
       console.info(`[session-switch-event-perf] ${JSON.stringify({ eventCount, samples: 30, identityBytes: Buffer.byteLength(identity), p50Ms, p95Ms, maxMs, usesSequenceIndex, usesTemporarySort, queryPlan })}`)
       expect(JSON.parse(identity).historyWatermark[0]).toBe(eventCount)
-      expect(queryPlan.length).toBeGreaterThan(0)
+      expect(usesSequenceIndex).toBe(true)
+      expect(usesTemporarySort).toBe(false)
     } finally {
       temp.cleanup()
     }
@@ -660,6 +678,7 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
     const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot,
       processGeneration: () => generation, connectionEpoch: () => generation, now: () => 10 })
     const sourceBackfillTask = createSessionBodySourceBackfillTask({ db, blobRoot, idleDelayMs: 60_000, retryDelayMs: 60_000 })
+    const sourceBlobs = createSessionProjectionBlobStore(blobRoot)
     const host = createSqliteSessionStorageHost(db, {
       storage: { projectionBlobRoot: blobRoot },
       startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
@@ -670,10 +689,12 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
       host.lifecycle.allowBackgroundWork()
       await vi.waitFor(() => expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(session.id))
         .toEqual({ status: 'complete' }), { timeout: 30_000 })
+      const sampleCount = Number(process.env.SESSION_SWITCH_PERF_SAMPLE_COUNT ?? 30)
+      if (!Number.isSafeInteger(sampleCount) || sampleCount < 1 || sampleCount > 30) throw new Error('SESSION_SWITCH_PERF_SAMPLE_COUNT_INVALID')
       const requestMs: number[] = []
       let finalCheckMutations = 0
       let fallbacks = 0
-      for (let sample = 0; sample < 30; sample += 1) {
+      for (let sample = 0; sample < sampleCount; sample += 1) {
         const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
         expect(prepared).toBeDefined()
         const baseRead = host.storage.queries.readPreparedChatPage!
@@ -682,11 +703,23 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
             const measure = input.measure
             return baseRead({ ...input, measure: measure ? async (name, operation) => {
               if (name === 'final-source-check') {
-                // Advance only the source fence so the already-read page remains authoritative after fallback.
-                conn.prepare(`UPDATE session_body_source_state SET source_revision=source_revision+1,status='complete',
-                  checkpoint_json=NULL,updated_at=updated_at+1 WHERE session_id=?`).run(session.id)
+                // Advance only the source fence while retagging the unchanged message fragment for the new revision.
+                const current = conn.prepare('SELECT source_revision FROM session_body_source_state WHERE session_id=?')
+                  .get(session.id) as { source_revision: number }
+                const nextRevision = current.source_revision + 1
+                conn.prepare(`UPDATE session_body_source_state SET source_revision=?,status='complete',
+                  checkpoint_json=NULL,updated_at=updated_at+1 WHERE session_id=?`).run(nextRevision, session.id)
                 conn.prepare(`UPDATE session_body_source_manifest SET source_revision=(SELECT source_revision FROM session_body_source_state
                   WHERE session_id=?) WHERE session_id=?`).run(session.id, session.id)
+                const locator = conn.prepare(`SELECT message_id,fragment_locator FROM session_message_body_locator
+                  WHERE session_id=? AND message_id=?`).get(session.id, initialMessage.id) as { message_id: string; fragment_locator: string }
+                const fragmentPath = path.join(blobRoot, locator.fragment_locator)
+                const fragment = JSON.parse(await fs.readFile(fragmentPath, 'utf8')) as Record<string, unknown>
+                const replacement = await sourceBlobs.write(JSON.stringify({ ...fragment, sourceRevision: nextRevision }))
+                conn.prepare(`UPDATE session_message_body_locator SET fragment_locator=?,byte_length=?,sha256=?
+                  WHERE session_id=? AND message_id=?`).run(replacement.locator, replacement.byteLength, replacement.payloadDigest,
+                    session.id, initialMessage.id)
+                await replacement.release()
                 finalCheckMutations += 1
               }
               return measure(name, operation)
@@ -704,16 +737,17 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
       }
       const ordered = [...requestMs].sort((a, b) => a - b)
       console.info(`[session-switch-inflight-drift-perf] ${JSON.stringify({ samples: requestMs.length,
-        finalCheckMutations, fallbacks, requestP50Ms: Number(ordered[14]!.toFixed(3)),
-        requestP95Ms: Number(ordered[28]!.toFixed(3)), requestMaxMs: Number(ordered[29]!.toFixed(3)) })}`)
-      expect(finalCheckMutations).toBe(30)
-      expect(fallbacks).toBe(30)
+        finalCheckMutations, fallbacks, requestP50Ms: Number(ordered[Math.floor((ordered.length - 1) * 0.5)]!.toFixed(3)),
+        requestP95Ms: Number(ordered[Math.max(0, Math.ceil(ordered.length * 0.95) - 1)]!.toFixed(3)),
+        requestMaxMs: Number(ordered.at(-1)!.toFixed(3)) })}`)
+      expect(finalCheckMutations).toBe(sampleCount)
+      expect(fallbacks).toBe(sampleCount)
     } finally {
       await host.lifecycle.stop({ deadlineMs: 5_000 })
       temp.cleanup()
       await fs.rm(blobRoot, { recursive: true, force: true })
     }
-  }, 120_000)
+  }, 240_000)
 
   it('measures production fallback after a prepared blob is corrupted (30 samples)', async () => {
     const temp = createTempDatabase('session-switch-production-corrupt-')
@@ -781,6 +815,57 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
     }
   }, 180_000)
 
+  it('measures background locator backfill completion time and process RSS for 1000 legacy messages', async () => {
+    const messageCount = 1_000
+    const temp = createTempDatabase('session-switch-backfill-scale-')
+    const blobRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-switch-backfill-scale-blobs-'))
+    const session = createSession(temp.db, { name: 'synthetic legacy backfill scale', model: 'test' })
+    const conn = getDbConnection(temp.db)
+    const messages = Array.from({ length: messageCount }, (_, index) => ({ id: `backfill-${index}`, role: 'user' as const,
+      content: `message-${index}-` + 'x'.repeat(256), timestamp: index + 1 }))
+    try {
+      runInTransaction(conn, () => {
+        for (const message of messages) appendMessage(temp.db, { ...message, sessionId: session.id, status: 'sent' })
+      })
+      const history = new SqliteAgentHistory(conn, 1, () => Date.now(), session.id)
+      await history.appendBatch([{ invocationId: 'backfill-scale-invocation', turnId: 'backfill-scale-turn', sequence: 1,
+        schemaVersion: 1, eventId: 'backfill-scale-context', idempotencyKey: 'backfill-scale-context',
+        kind: 'invocation-context-committed', payload: { messages } }], 0)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+      let reconciliation = await runSpillReferenceReconciliationBatch(conn)
+      for (let attempt = 0; reconciliation.status === 'running' && attempt < 10; attempt += 1) {
+        reconciliation = await runSpillReferenceReconciliationBatch(conn)
+      }
+      expect(reconciliation.status).toBe('complete')
+
+      let result: { sessionId: string; status: 'complete' | 'failed'; messageCount?: number; error?: string } | undefined
+      const task = createSessionBodySourceBackfillTask({ db: temp.db, blobRoot, idleDelayMs: 60_000, retryDelayMs: 60_000,
+        onResult: (value) => { if (value.sessionId === session.id) result = value } })
+      const handle = task.start()!
+      const rssSamples = [process.memoryUsage().rss]
+      const sampler = setInterval(() => rssSamples.push(process.memoryUsage().rss), 10)
+      const startedAt = performance.now()
+      try {
+        await vi.waitFor(() => expect(result).toMatchObject({ sessionId: session.id, status: 'complete', messageCount }), { timeout: 120_000 })
+      } finally {
+        clearInterval(sampler)
+        handle.stop()
+        await handle.quiesce()
+      }
+      const durationMs = performance.now() - startedAt
+      const locatorCount = (conn.prepare('SELECT COUNT(*) AS count FROM session_message_body_locator WHERE session_id=?')
+        .get(session.id) as { count: number }).count
+      console.info(`[session-switch-backfill-perf] ${JSON.stringify({ messageCount, historyEvents: 1, durationMs: Number(durationMs.toFixed(3)),
+        rssBeforeBytes: rssSamples[0], rssPeakBytes: Math.max(...rssSamples), rssAfterBytes: process.memoryUsage().rss,
+        rssSamples: rssSamples.length, locatorCount, status: result?.status })}`)
+      expect(locatorCount).toBe(messageCount)
+    } finally {
+      temp.cleanup()
+      await fs.rm(blobRoot, { recursive: true, force: true })
+    }
+  }, 180_000)
+
   it('measures cold production reads after source locators are ready (30 canonical-only sessions)', async () => {
     const temp = createTempDatabase('session-switch-production-cold-')
     const blobRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-switch-production-cold-blobs-'))
@@ -809,7 +894,9 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
     const projectionSummaries: Array<{ durationMs: number; sourceSnapshotMs: number; sourceWorkerMs: number;
       reducerWorkerMs: number; finalViewMaterializationMs: number; sourceRows: number; sourceBytes: number; slices: number; yieldedSlices: number }> = []
     let lastPrepared: unknown
+    let projectionPreparationCalls = 0
     const tracedStorage = { ...host.storage, ensureChatBodyV1: async (input: { sessionId: string; signal?: AbortSignal }) => {
+      projectionPreparationCalls += 1
       const result = await host.storage.ensureChatBodyV1?.(input)
       lastPrepared = result
       return result
@@ -900,6 +987,7 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
       expect(stageOutcomes.get('body-read')?.error ?? 0).toBe(0)
       expect(stageOutcomes.get('final-source-check')?.ok ?? 0).toBe(sampleCount)
       expect(stageOutcomes.has('legacy-fallback')).toBe(false)
+      expect(projectionPreparationCalls).toBe(0)
     } finally {
       await host.lifecycle.stop({ deadlineMs: 5_000 })
       temp.cleanup()

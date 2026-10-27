@@ -154,7 +154,7 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
     if (input.command.type === 'publish') {
       let source: { formatVersion?: unknown; messageRevision?: unknown; historyWatermark?: unknown }
       try { source = JSON.parse(input.command.expectedSourceIdentityJson) as typeof source } catch { return null }
-      if (source.formatVersion !== 1 || !Number.isSafeInteger(source.messageRevision) ||
+      if ((source.formatVersion !== 1 && source.formatVersion !== 2) || !Number.isSafeInteger(source.messageRevision) ||
         input.command.messageRevision !== source.messageRevision || input.command.historyWatermarkJson !== JSON.stringify(source.historyWatermark ?? null)) return null
     }
     const next = transitionProjectionState(current, input.command, sourceIdentityJson)

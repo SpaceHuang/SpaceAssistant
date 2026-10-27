@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createSession } from '../../database/operations'
+import { appendMessage, createSession } from '../../database/operations'
 import { createMemoryAppDb } from '../../database/testHelpers'
 import { getDbConnection } from '../../database/sqliteStore'
 import { openDatabase } from '../../database'
@@ -46,6 +46,23 @@ describe('Session ProjectionService', () => {
     expect(nextLease).toMatchObject({ status: 'invalid' })
     expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_projection_cache WHERE session_id=? AND scope_key=?').get(session.id, 'scope-a'))
       .toEqual({ count: 0 })
+  })
+
+  it('publishes bounded format-version-two source identities without serializing every History stream', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'bounded source identity publication', model: 'test' })
+    appendMessage(db, { id: 'bounded-identity-message', sessionId: session.id, role: 'user', content: 'body',
+      timestamp: 1, status: 'sent' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), {
+      processGeneration: () => 2, connectionEpoch: () => 1, createToken: () => 'bounded-identity-token', now: () => 1,
+    })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+
+    expect(JSON.parse(lease.sourceIdentityJson)).not.toHaveProperty('historyStreams')
+    expect(JSON.parse(lease.sourceIdentityJson).formatVersion).toBe(2)
+    expect(service.publish(lease, { sourceIdentityJson: lease.sourceIdentityJson, payloadGeneration: 'bounded-payload',
+      payloadDigest: 'bounded-digest', validatedRangeJson: '{}', inlinePayload: '{}' })).toMatchObject({ status: 'valid' })
   })
 
   it('refuses oversized inline cache publications before they reach the state store', () => {

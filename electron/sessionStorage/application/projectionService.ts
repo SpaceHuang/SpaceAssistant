@@ -104,7 +104,8 @@ export function createProjectionService(store: ProjectionStateStore, options: Re
       new Set(output.blobReferences.map(({ locator }) => locator)).size !== output.blobReferences.length)) return null
     let source: { formatVersion?: unknown; sessionGeneration?: unknown; messageRevision?: unknown; historyWatermark?: unknown }
     try { source = JSON.parse(lease.sourceIdentityJson) as typeof source } catch { return null }
-    if (source.formatVersion !== 1 || source.sessionGeneration !== lease.sessionGeneration || !Number.isSafeInteger(source.messageRevision)) return null
+    if ((source.formatVersion !== 1 && source.formatVersion !== 2) || source.sessionGeneration !== lease.sessionGeneration ||
+      !Number.isSafeInteger(source.messageRevision)) return null
     const command: ProjectionStateCommand = {
       type: 'publish', processGeneration: lease.processGeneration, rebuildToken: lease.rebuildToken,
       expectedSourceIdentityJson: lease.sourceIdentityJson, historyWatermarkJson: JSON.stringify(source.historyWatermark ?? null),
