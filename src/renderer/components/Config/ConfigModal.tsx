@@ -158,6 +158,7 @@ export function ConfigSettingsPage() {
   const localeWatch = Form.useWatch('locale', form)
 
   const thinkingEffortWatch = Form.useWatch('thinkingEffort', form)
+  const contextCompactionTriggerRatioWatch = Form.useWatch('contextCompactionTriggerRatio', form)
 
   const [models, setModels] = useState<ModelEntry[]>([])
   const modelIds = useMemo(() => getModelIds(models), [models])
@@ -290,7 +291,8 @@ export function ConfigSettingsPage() {
 
         locale: cfg.locale,
 
-        thinkingEffort: cfg.thinkingEffort
+        thinkingEffort: cfg.thinkingEffort,
+        contextCompactionTriggerRatio: Math.round(cfg.contextCompactionTriggerRatio * 100)
 
       })
 
@@ -451,6 +453,7 @@ export function ConfigSettingsPage() {
       locale: resolveLocaleForSnapshot(localeWatch, form, cfg),
 
       thinkingEffort: resolveThinkingEffortForSnapshot(thinkingEffortWatch, form, cfg),
+      contextCompactionTriggerRatio: (contextCompactionTriggerRatioWatch ?? Math.round((cfg?.contextCompactionTriggerRatio ?? 0.8) * 100)) / 100,
 
       models,
 
@@ -493,6 +496,7 @@ export function ConfigSettingsPage() {
     localeWatch,
 
     thinkingEffortWatch,
+    contextCompactionTriggerRatioWatch,
 
     models,
 
@@ -623,6 +627,7 @@ export function ConfigSettingsPage() {
         locale: v.locale,
 
         thinkingEffort: v.thinkingEffort,
+        contextCompactionTriggerRatio: v.contextCompactionTriggerRatio / 100,
 
         models,
 

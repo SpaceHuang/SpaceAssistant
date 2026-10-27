@@ -137,7 +137,10 @@
       "thinkingHint": "仅对支持 extended thinking 的模型生效",
       "effortLabel": "Thinking 强度",
       "effortAria": "选择全局 Thinking 强度",
-      "effortHint": "对会长时间思考的模型，可在此调低默认强度；也可在对话中单独调整当前会话。"
+      "effortHint": "对会长时间思考的模型，可在此调低默认强度；也可在对话中单独调整当前会话。",
+      "compactionTriggerLabel": "自动压缩触发阈值",
+      "compactionTriggerAria": "自动压缩触发阈值（百分比）",
+      "compactionTriggerHint": "当上下文使用达到此比例时，系统会尝试生成交接摘要。范围 60%–90%，默认 80%。"
     }
   },
   "llmService": {

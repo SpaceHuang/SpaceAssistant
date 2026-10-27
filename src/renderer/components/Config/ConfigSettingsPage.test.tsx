@@ -43,6 +43,7 @@ const models: ModelEntry[] = [
 
 const cfg = {
   locale: 'zh-CN',
+  contextCompactionTriggerRatio: 0.8,
   thinkingEnabled: false,
   models,
   llmServices: [
@@ -129,6 +130,22 @@ describe('ConfigSettingsPage 优选默认模型', () => {
     expect(screen.getByText('API Key 会在本地加密保存。')).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: '验证已保存 Key' }))
     await waitFor(() => expect(verify).toHaveBeenCalledWith('ds'))
+  })
+
+  it('展示 60%–90% 自动压缩阈值并随设置保存', async () => {
+    renderPage()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    const slider = screen.getByRole('slider', { name: '自动压缩触发阈值（百分比）' })
+    expect(slider.getAttribute('aria-valuemin')).toBe('60')
+    expect(slider.getAttribute('aria-valuemax')).toBe('90')
+    expect(slider.getAttribute('aria-valuenow')).toBe('80')
+    const saveBtn = screen.getByRole('button', { name: '保存并返回' })
+    fireEvent.keyDown(slider, { key: 'ArrowRight', keyCode: 39, which: 39 })
+    await waitFor(() => expect(saveBtn.disabled).toBe(false))
+    fireEvent.click(saveBtn)
+    await waitFor(() => expect(configSet).toHaveBeenCalled())
+    const calls = configSet.mock.calls as unknown as Array<[Record<string, unknown>]>
+    expect(calls[calls.length - 1]![0]).toMatchObject({ contextCompactionTriggerRatio: 0.81 })
   })
 
   it('「语言模型 → 默认」可改选快速模型并保存生效', async () => {

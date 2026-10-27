@@ -43,6 +43,7 @@ describe('buildConfigModalSnapshot', () => {
       workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp/work', isDefault: true }],
       locale: 'zh-CN' as const,
       thinkingEffort: 'medium' as const,
+      contextCompactionTriggerRatio: 0.8,
       models: [{ id: '1', name: 'claude', maximumContext: 200000, maxTokens: 64000, isDefault: true, isFast: false, isVision: false, enabled: true }],
       llmState,
       toolUi: {
@@ -143,6 +144,7 @@ describe('buildConfigModalSnapshot', () => {
       workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp', isDefault: true }],
       locale: 'en-US' as const,
       thinkingEffort: 'off' as const,
+      contextCompactionTriggerRatio: 0.8,
       models: [],
       llmState,
       toolUi: {
@@ -205,6 +207,7 @@ describe('buildConfigModalSnapshot 优选默认模型', () => {
     workDirProfiles: [],
     locale: 'zh-CN' as const,
     thinkingEffort: 'off' as const,
+    contextCompactionTriggerRatio: 0.8,
     models: [],
     llmState: initLlmServiceTabState([], [], []),
     toolUi: {
@@ -244,6 +247,10 @@ describe('buildConfigModalSnapshot 优选默认模型', () => {
         buildConfigModalSnapshot({ ...base, preferredVisionModelId: 'other-vision' })
       )
     ).toBe(false)
+  })
+
+  it('自动压缩阈值变化时快照必须变化', () => {
+    expect(configModalSnapshotsEqual(buildConfigModalSnapshot(base), buildConfigModalSnapshot({ ...base, contextCompactionTriggerRatio: 0.9 }))).toBe(false)
   })
 
   it('基线快照覆盖优选默认模型（保存后不残留未保存改动）', () => {
@@ -287,6 +294,7 @@ describe('buildConfigModalSnapshot Thinking 强度与能力标记（§5.5 / §2.
     workDirProfiles: [],
     locale: 'zh-CN' as const,
     thinkingEffort: 'medium' as const,
+    contextCompactionTriggerRatio: 0.8,
     models: [
       { id: '1', name: 'claude', maximumContext: 200000, maxTokens: 64000, isDefault: true, isFast: false, isVision: false, enabled: true }
     ],
