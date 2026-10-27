@@ -138,7 +138,7 @@ describe('session switch trace', () => {
     expect(result).toBe(page)
     expect(storage.queries.readChatPage).not.toHaveBeenCalled()
     expect(emit.mock.calls[0]![0]!.stages.map(({ name }) => name)).toEqual([
-      'projection-prepare', 'page-select', 'source-spill-discovery', 'worker-queue', 'source-spill-verify', 'worker-read', 'body-read', 'final-source-check'
+      'page-select', 'source-spill-discovery', 'worker-queue', 'source-spill-verify', 'worker-read', 'body-read', 'final-source-check'
     ])
     expect(emit.mock.calls[0]![0]!.stages.map(({ name }) => name)).toContain('worker-queue')
     expect(emit.mock.calls[0]![0]!.stages.map(({ name }) => name)).toContain('worker-read')

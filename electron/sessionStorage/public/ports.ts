@@ -128,6 +128,8 @@ export interface SessionQueries {
   /** Async single message body lookup; undefined means selection must use the existing authority reader. */
   readPreparedMessage?(input: { sessionId: string; messageId: string; prepared?: PreparedChatBodyView }): Promise<Message | undefined>
   /** Async sequence-page lookup; undefined means selection must use the existing authority reader. */
+  readSourceChatPage?(input: { sessionId: string; beforeSequence?: number | null; limit?: number;
+    measure?: <T>(name: string, operation: () => T | Promise<T>) => Promise<T>; recordStage?: (name: string, durationMs: number) => void }): Promise<ChatMessagePage | undefined>
   readPreparedChatPage?(input: { sessionId: string; beforeSequence?: number | null; limit?: number; prepared?: PreparedChatBodyView; measure?: <T>(name: string, operation: () => T | Promise<T>) => Promise<T>; recordStage?: (name: string, durationMs: number) => void }): Promise<ChatMessagePage | undefined>
   /** Async latest-window API baseline lookup; undefined means selection must use the existing authority reader. */
   readPreparedApiBaseline?(input: { sessionId: string; limit?: number; prepared?: PreparedChatBodyView }): Promise<ApiContextBaseline | undefined>

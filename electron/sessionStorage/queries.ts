@@ -97,6 +97,14 @@ function isPreparedSourceLocatorPending(error: unknown): boolean {
   return error instanceof Error && error.message === 'PROJECTION_SOURCE_LOCATOR_NOT_READY'
 }
 
+function sourceRevisionFromIdentity(sourceIdentityJson: string): number | undefined {
+  try {
+    const value = JSON.parse(sourceIdentityJson) as { sourceRevision?: unknown }
+    return Number.isSafeInteger(value.sourceRevision) && (value.sourceRevision as number) >= 0
+      ? value.sourceRevision as number : undefined
+  } catch { return undefined }
+}
+
 function getTurnByAssistant(db: AppDatabase, sessionId: string, assistantMessageId: string): { requestId: string; turnId: string } | undefined {
   return getDbConnection(db).prepare('SELECT request_id AS requestId, turn_id AS turnId FROM turns WHERE session_id=? AND assistant_message_id=?').get(sessionId, assistantMessageId) as { requestId: string; turnId: string } | undefined
 }
@@ -114,6 +122,11 @@ function selectUniqueFailedAssistantMessageId(db: AppDatabase, sessionId: string
 
 export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonly<{
   currentSourceIdentity(sessionId: string, sessionGeneration: string): string | undefined
+  currentAuthoritySourceIdentity?(sessionId: string, sessionGeneration: string): string | undefined
+  readSourceBodies?(input: Readonly<{ sessionId: string; sessionGeneration: string; sourceIdentityJson: string; messageIds: readonly string[];
+    expectedSequences: readonly Readonly<{ id: string; sequence: number }>[]; recordStage?: (name: string, durationMs: number) => void }>): Promise<PreparedChatBodySelection | undefined>
+  requestSourceBackfill?(): boolean | void
+  waitForSourceBackfill?(input: Readonly<{ sessionId: string; sessionGeneration: string; sourceRevision: number }>): Promise<'complete' | 'changed' | 'missing' | 'timeout'>
   readBodies(view: PreparedChatBodyView, messageIds: readonly string[], signal?: AbortSignal, recordWorkerTiming?: (stage:
     'source-spill-discovery' | 'worker-startup' | 'worker-queue' | 'worker-read' | 'source-spill-verify' |
     'worker-transport' | 'worker-exit-wait', durationMs: number) => void): Promise<PreparedChatBodySelection>
@@ -234,6 +247,64 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         if (!messages) return undefined
         const entries = latest.entries.map((entry, index) => ({ ...entry, message: messages[index]! }))
         return { ...latest, entries: projectMessageEntriesV1('chatMessageV1', entries) }
+      }))
+    } } : {}),
+    ...(preparedChatBody?.readSourceBodies ? { readSourceChatPage: async ({ sessionId, beforeSequence, limit, measure, recordStage }) => {
+      const measureStage = measure ?? (async <T>(_name: string, operation: () => T | Promise<T>) => operation())
+      const selected = await measureStage('page-select', () => runInTransaction(getDbConnection(db), () => {
+        const session = getSession(db, sessionId)
+        if (!session) return undefined
+        const sourceIdentityJson = (preparedChatBody.currentAuthoritySourceIdentity ?? preparedChatBody.currentSourceIdentity)(sessionId, session.generation)
+        if (!sourceIdentityJson) return undefined
+        const page = getChatMessagePage(db, sessionId, beforeSequence, limit)
+        const canonicalIds = canonicalBodyMessageIds(db, sessionId, page.entries.map(({ message }) => message))
+        return { sessionGeneration: session.generation, sourceIdentityJson, page, canonicalIds }
+      }))
+      if (!selected) return undefined
+      if (selected.canonicalIds.length === 0) return { ...selected.page,
+        entries: projectMessageEntriesV1('chatMessageV1', selected.page.entries) }
+      const expectedSequences = selected.page.entries.filter(({ message }) => selected.canonicalIds.includes(message.id))
+        .map(({ sequence, message }) => ({ id: message.id, sequence }))
+      const readBodies = () => measureStage('body-read', () => preparedChatBody.readSourceBodies!({ sessionId,
+        sessionGeneration: selected.sessionGeneration, sourceIdentityJson: selected.sourceIdentityJson,
+        messageIds: selected.canonicalIds, expectedSequences, recordStage }))
+      const waitForBodies = async (): Promise<PreparedChatBodySelection | undefined> => {
+        let canWait: boolean | void = undefined
+        try { canWait = preparedChatBody.requestSourceBackfill?.() } catch { /* Scheduling must not alter the read result. */ }
+        if (canWait === false) return undefined
+        const sourceRevision = sourceRevisionFromIdentity(selected.sourceIdentityJson)
+        const result = sourceRevision === undefined ? 'changed' : await preparedChatBody.waitForSourceBackfill?.({
+          sessionId, sessionGeneration: selected.sessionGeneration, sourceRevision }) ?? 'timeout'
+        if (result === 'missing') throw new Error('SESSION_NOT_FOUND')
+        if (result === 'changed') throw new Error('PROJECTION_SOURCE_REVISION_CHANGED')
+        if (result === 'timeout') throw new Error('PROJECTION_SOURCE_BACKFILL_WAIT_TIMEOUT')
+        const bodies = await readBodies()
+        if (!bodies) throw new Error('PROJECTION_SOURCE_LOCATOR_UNAVAILABLE')
+        return bodies
+      }
+      let bodies: PreparedChatBodySelection | undefined
+      try {
+        bodies = await readBodies()
+      } catch (error) {
+        if (!isPreparedSourceLocatorPending(error)) throw error
+        bodies = await waitForBodies()
+      }
+      if (!bodies) bodies = await waitForBodies()
+      if (!bodies) return undefined
+      return measureStage('final-source-check', () => runInTransaction(getDbConnection(db), () => {
+        if ((preparedChatBody.currentAuthoritySourceIdentity ?? preparedChatBody.currentSourceIdentity)(sessionId, selected.sessionGeneration) !== selected.sourceIdentityJson) {
+          throw new Error('PROJECTION_SOURCE_REVISION_CHANGED')
+        }
+        const latest = getChatMessagePage(db, sessionId, beforeSequence, limit)
+        if (latest.oldestSequence !== selected.page.oldestSequence || latest.hasMoreBefore !== selected.page.hasMoreBefore ||
+          latest.entries.length !== selected.page.entries.length || latest.entries.some((entry, index) => {
+            const prior = selected.page.entries[index]
+            return !prior || entry.sequence !== prior.sequence || entry.message.id !== prior.message.id ||
+              entry.message.role !== prior.message.role || entry.message.timestamp !== prior.message.timestamp
+          })) throw new Error('PROJECTION_SOURCE_PAGE_CHANGED')
+        const messages = overlayPreparedBodies(latest.entries.map(({ message }) => message), selected.canonicalIds, bodies!)
+        return { ...latest, entries: projectMessageEntriesV1('chatMessageV1', latest.entries.map((entry, index) =>
+          ({ ...entry, message: messages[index]! }))) }
       }))
     } } : {}),
     ...(preparedChatBody ? { readPreparedApiBaseline: async ({ sessionId, limit, prepared }) => {

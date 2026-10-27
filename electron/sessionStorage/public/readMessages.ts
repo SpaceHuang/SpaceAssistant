@@ -19,7 +19,7 @@ type SessionSwitchTraceSummary = Readonly<Pick<SessionSwitchTraceEvent, 'outcome
 const SESSION_SWITCH_TRACE_STAGES = new Set([
   'page-read', 'renderer-page-request', 'failure-reason-hydration', 'store-commit', 'render-commit',
   'next-paint', 'main-ipc', 'projection-prepare', 'source-identity', 'page-select', 'body-read',
-  'final-source-check', 'source-spill-discovery', 'worker-startup', 'worker-queue', 'worker-read', 'source-spill-verify',
+  'final-source-check', 'source-page-read', 'source-spill-discovery', 'worker-startup', 'worker-queue', 'worker-read', 'source-spill-verify',
   'worker-transport', 'worker-exit-wait', 'legacy-fallback', 'background-scheduler'
 ])
 
@@ -144,6 +144,8 @@ export async function readChatPageAfterPreparation(
   storage: PreparedChatBodyReadPreparation & Readonly<{
     queries: Readonly<{
       readChatPage(input: Readonly<{ sessionId: string; beforeSequence?: number | null; limit?: number }>): ChatMessagePage
+      readSourceChatPage?(input: Readonly<{ sessionId: string; beforeSequence?: number | null; limit?: number;
+        measure?: SessionSwitchReadTrace['measure']; recordStage?: SessionSwitchReadTrace['record'] }>): Promise<ChatMessagePage | undefined>
       readPreparedChatPage?(input: Readonly<{ sessionId: string; beforeSequence?: number | null; limit?: number; prepared?: unknown; measure?: SessionSwitchReadTrace['measure']; recordStage?: SessionSwitchReadTrace['record'] }>): Promise<ChatMessagePage | undefined>
     }>
   }>,
@@ -151,6 +153,29 @@ export async function readChatPageAfterPreparation(
   diagnostics?: Readonly<{ trace?: SessionSwitchReadTrace; onCachePath?: (path: 'ready' | 'prior-authority' | 'cold' | 'invalidated') => void }>
 ): Promise<ChatMessagePage> {
   const measure = diagnostics?.trace ? diagnostics.trace.measure.bind(diagnostics.trace) : async <T>(_name: string, operation: () => T | Promise<T>) => operation()
+  const readyView = storage.readPreparedChatBodyV1?.({ sessionId: input.sessionId })
+  if (readyView !== undefined) {
+    diagnostics?.onCachePath?.('ready')
+    const readyPage = await storage.queries.readPreparedChatPage?.({ ...input, prepared: readyView, measure,
+      recordStage: diagnostics?.trace?.record?.bind(diagnostics.trace) })
+    if (readyPage) return readyPage
+    diagnostics?.onCachePath?.('invalidated')
+  }
+  let sourcePage: ChatMessagePage | undefined
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      sourcePage = await measure('source-page-read', () => storage.queries.readSourceChatPage?.({ ...input, measure,
+        recordStage: diagnostics?.trace?.record?.bind(diagnostics.trace) }))
+      break
+    } catch (error) {
+      const retryable = error instanceof Error && ['PROJECTION_SOURCE_REVISION_CHANGED', 'PROJECTION_SOURCE_PAGE_CHANGED'].includes(error.message)
+      if (!retryable || attempt === 1) throw error
+    }
+  }
+  if (sourcePage) {
+    diagnostics?.onCachePath?.('prior-authority')
+    return sourcePage
+  }
   const preparedView = await measure('projection-prepare', () => prepareForRead(storage, input.sessionId, undefined, diagnostics?.onCachePath))
   const prepared = await storage.queries.readPreparedChatPage?.({ ...input, prepared: preparedView, measure, recordStage: diagnostics?.trace?.record?.bind(diagnostics.trace) })
   if (prepared) return prepared

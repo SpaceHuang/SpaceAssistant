@@ -32,6 +32,6 @@ npm run build:electron:incremental
 通过：pi-ai runtime closure、session-storage cleanup/module graph 门禁（31 项 illegal-edge probes）、agent provider 构建及 electron TypeScript 编译。
 ```
 
-## 尚未关闭的相邻任务
+## 当时尚未关闭的相邻任务
 
-P3-02 只接通新版缓存产物的构建和发布。SQLite 逐消息来源定位记录的 Worker 回填、来源依赖归约及读取器按页查询仍由 P3-03、P3-04 验收；当前生产读路径尚未使用 v4，不能据此声明会话切换性能目标已达成。
+本证据建立时，P3-02 只接通新版缓存产物的构建和发布；SQLite 逐消息来源定位记录的 Worker 回填、来源依赖归约及读取器按页查询仍由 P3-03、P3-04 验收。之后续项分别记录在 [P3-03 来源依赖证据](p3-03-source-dependency.md) 与 [P3-04 分页查询证据](p3-04-paged-query.md)。这些任务完成不代表 P3-06 性能全矩阵或 P4 真机验收已完成。

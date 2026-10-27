@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import os from 'node:os'
 import fsSync from 'node:fs'
 import path from 'node:path'
@@ -6,7 +6,7 @@ import fs from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { appendMessage, createPersistedTurn, createSession, enqueueQueuedUserMessage } from '../database/operations'
-import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sqliteSessionStorage'
+import { createSessionBodySourceBackfillTask, createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sqliteSessionStorage'
 import { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { createSqliteProjectionChatBodyCacheStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { readProjectionChatBodyCache } from './application/projectionChatBodyCacheReader'
@@ -60,6 +60,8 @@ describe('SQLite projection build task composition', () => {
           eventId: 'projection-chat-body-terminal', idempotencyKey: 'projection-chat-body-terminal', kind: 'invocation-completed',
           payload: { status: 'completed' } },
       ], 0)
+      getDbConnection(db).prepare(`UPDATE spill_reference_backfill_state SET status='complete',verified_generation=(SELECT meta_value
+        FROM spill_reference_meta WHERE meta_key='canonical_change_generation') WHERE owner_table='agent_history_events'`).run()
       createPersistedTurn(db, { turnId: 'projection-chat-body-failed-turn', requestId: 'projection-chat-body-failed-invocation',
         sessionId: session.id, userMessageId: 'projection-chat-body-user', assistantMessageId: 'projection-chat-body-assistant',
         contextBoundarySequence: 0, state: 'failed', startToken: 'projection-chat-body-failed-token' })
@@ -68,13 +70,17 @@ describe('SQLite projection build task composition', () => {
       const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+      const sourceTask = createSessionBodySourceBackfillTask({ db, blobRoot: root, idleDelayMs: 60_000 })
       const host = createSqliteSessionStorageHost(db, {
         storage: { projectionBlobRoot: root },
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
           recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
-        maintenanceTasks: [task],
+        maintenanceTasks: [task, sourceTask],
       })
+      host.lifecycle.allowBackgroundWork()
       try {
+        await vi.waitFor(() => expect(getDbConnection(db).prepare(`SELECT status FROM session_body_source_state
+          WHERE session_id=?`).get(session.id)).toEqual({ status: 'complete' }), { timeout: 60_000 })
         const ensured = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
         expect(ensured).toMatchObject({ sessionId: session.id, sourceIdentityJson: expect.any(String), sessionGeneration: session.generation,
           payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
@@ -180,28 +186,37 @@ describe('SQLite projection build task composition', () => {
           payload: { sessionId: session.id, messageId: user.message.id, role: 'user', inputFingerprint: queueInputFingerprint({ text: 'accepted canonical body', attachments: [] }) } },
         { invocationId: 'prepared-accepted-turn', turnId: 'prepared-accepted-turn', sequence: 2, schemaVersion: 1,
           eventId: 'prepared-accepted-context', idempotencyKey: 'prepared-accepted-context', kind: 'invocation-context-committed',
-          payload: { messages: [{ id: user.message.id, role: 'user', content: 'accepted canonical body', timestamp: 11 }] } },
+          payload: { messages: [
+            { id: user.message.id, role: 'user', content: 'accepted canonical body', timestamp: 11 },
+            { id: 'prepared-accepted-assistant', role: 'assistant', content: '', timestamp: 12 },
+          ] } },
         { invocationId: 'prepared-accepted-turn', turnId: 'prepared-accepted-turn', sequence: 3, schemaVersion: 1,
           eventId: 'prepared-accepted-terminal', idempotencyKey: 'prepared-accepted-terminal', kind: 'invocation-completed',
           payload: { status: 'completed' } },
       ], 0)
+      getDbConnection(db).prepare(`UPDATE spill_reference_backfill_state SET status='complete',verified_generation=(SELECT meta_value
+        FROM spill_reference_meta WHERE meta_key='canonical_change_generation') WHERE owner_table='agent_history_events'`).run()
       getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?")
         .run(user.message.id)
       const processGeneration = advanceProcessGeneration(getDbConnection(db))
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+      const sourceTask = createSessionBodySourceBackfillTask({ db, blobRoot: root, idleDelayMs: 60_000 })
       const host = createSqliteSessionStorageHost(db, {
         storage: { projectionBlobRoot: root },
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
           recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
-        maintenanceTasks: [task],
+        maintenanceTasks: [task, sourceTask],
       })
+      host.lifecycle.allowBackgroundWork()
       const replaySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
       const shadowReplaySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
       const fullHistoryReadSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readSync')
 
       try {
+        await vi.waitFor(() => expect(getDbConnection(db).prepare(`SELECT status FROM session_body_source_state
+          WHERE session_id=?`).get(session.id)).toEqual({ status: 'complete' }), { timeout: 60_000 })
         const actual = await host.storage.execution.loadAcceptedMessagesAsync({ sessionId: session.id, turnId: 'prepared-accepted-turn' })
         expect(actual).toMatchObject([{ id: user.message.id, content: 'accepted canonical body' }])
         expect(fullHistoryReadSpy).not.toHaveBeenCalled()
@@ -211,6 +226,7 @@ describe('SQLite projection build task composition', () => {
         fullHistoryReadSpy.mockRestore()
         replaySpy.mockRestore()
         shadowReplaySpy.mockRestore()
+        await host.lifecycle.stop({ deadlineMs: 5_000 })
       }
     } finally { temp.cleanup() }
   })
@@ -424,10 +440,14 @@ describe('SQLite projection build task composition', () => {
       const processGeneration = advanceProcessGeneration(conn)
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+      const sourceTask = createSessionBodySourceBackfillTask({ db, blobRoot: root, idleDelayMs: 60_000 })
       const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
-          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task, sourceTask] })
+      host.lifecycle.allowBackgroundWork()
       try {
+        await vi.waitFor(() => expect(conn.prepare(`SELECT status FROM session_body_source_state WHERE session_id=?`)
+          .get(session.id)).toEqual({ status: 'complete' }), { timeout: 60_000 })
         const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
         expect(prepared).toMatchObject({ sessionId: session.id, payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
         const page = await host.storage.queries.readPreparedChatPage?.({ sessionId: session.id, prepared, limit: 1 })

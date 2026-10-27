@@ -48,6 +48,7 @@ import { encodeProjectionScopeKey } from './domain/scopeKey'
 import type { LifecycleTaskRegistration } from './host/ports'
 import type { ProjectionBuildSupervisorOptions } from './application/projectionBuildSupervisor'
 import { readPreparedChatBodiesInWorker, searchPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
+import { readProjectionSourceChatBodiesInWorker } from './infrastructure/sqlite/projectionSourceChatBodyWorkerClient'
 
 export { createSessionBodySourceBackfillTask }
 import { createSqliteStartupHistoryRecoveryBindings } from './infrastructure/sqlite/sessionHistoryRecoveryHost'
@@ -78,7 +79,8 @@ export function createSessionTurnRuntime(storage: SessionStorage, options: Omit<
 /** SQLite composition root. Consumers receive bound ports and never receive the database handle. */
 export function createSqliteSessionStorage(db: AppDatabase, options: {
   prepareProjection?: NonNullable<SessionStorage['prepareProjection']>
-  requestBodySourceBackfill?: () => void
+  requestBodySourceBackfill?: () => boolean | void
+  sourceBackfillWaitMs?: number
   projectionBlobRoot?: string
   getTurnRuntime?: () => import('../turnRuntime').TurnRuntime
   getWorkDirForSession?: (sessionId: string) => string | undefined
@@ -126,6 +128,49 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const bodyScopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
   const cacheStore = createSqliteProjectionChatBodyCacheStore(db)
   const cacheBlobs = options.projectionBlobRoot ? createSessionProjectionBlobStore(options.projectionBlobRoot) : undefined
+  const readSourceBodies = async (input: Readonly<{ sessionId: string; sessionGeneration: string; sourceIdentityJson: string;
+    messageIds: readonly string[]; expectedSequences: readonly Readonly<{ id: string; sequence: number }>[];
+    recordStage?: (name: string, durationMs: number) => void }>) => {
+    if (!cacheBlobs || input.messageIds.length === 0) return undefined
+    const conn = getDbConnection(db)
+    const source = runInTransaction(conn, () => {
+      if (readProjectionSourceIdentity(conn, input.sessionId, input.sessionGeneration) !== input.sourceIdentityJson) return undefined
+      let identity: { sourceRevision?: unknown }
+      try { identity = JSON.parse(input.sourceIdentityJson) as typeof identity } catch { return undefined }
+      if (!Number.isSafeInteger(identity.sourceRevision) || (identity.sourceRevision as number) < 0) return undefined
+      const sourceRevision = identity.sourceRevision as number
+      const state = conn.prepare('SELECT source_revision,status FROM session_body_source_state WHERE session_id=?')
+        .get(input.sessionId) as { source_revision: number; status: string } | undefined
+      if (!state || state.status !== 'complete' || state.source_revision !== sourceRevision) return undefined
+      const fragments: Array<{ id: string; sequence: number; locator: string; byteLength: number; sha256: string }> = []
+      for (let start = 0; start < input.messageIds.length; start += 400) {
+        const batch = input.messageIds.slice(start, start + 400)
+        const marks = batch.map(() => '?').join(',')
+        fragments.push(...conn.prepare(`SELECT locator.message_id AS id,locator.sequence,locator.fragment_locator AS locator,
+          locator.byte_length AS byteLength,locator.sha256 FROM session_message_body_locator locator
+          WHERE locator.session_id=? AND locator.message_id IN (${marks})`).all(input.sessionId, ...batch) as typeof fragments)
+      }
+      if (fragments.length !== input.messageIds.length || new Set(fragments.map(({ id }) => id)).size !== input.messageIds.length) {
+        throw new Error('PROJECTION_SOURCE_LOCATOR_UNAVAILABLE')
+      }
+      const expectedSequenceById = new Map(input.expectedSequences.map(({ id, sequence }) => [id, sequence]))
+      if (fragments.some(({ id, sequence }) => expectedSequenceById.get(id) !== sequence)) throw new Error('PROJECTION_SOURCE_LOCATOR_SEQUENCE_MISMATCH')
+      const sourceSpillStartedAt = performance.now()
+      const sourceTruthSpills = readProjectionPageSourceSpills(conn, input.sessionId, sourceRevision, input.messageIds)
+      try { input.recordStage?.('source-spill-discovery', performance.now() - sourceSpillStartedAt) } catch { /* Diagnostics must not alter the read. */ }
+      const sourceSpillStore = sourceTruthSpills.length ? createSpillStoreForDatabase(conn) : undefined
+      if (sourceTruthSpills.length && !sourceSpillStore) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+      return { sourceRevision, fragments: input.messageIds.map((id) => fragments.find((fragment) => fragment.id === id)!),
+        sourceTruthSpills, sourceSpillRoot: sourceSpillStore?.root }
+    })
+    if (!source) return undefined
+    const workerStartedAt = performance.now()
+    const result = await readProjectionSourceChatBodiesInWorker({ root: cacheBlobs.root, sessionId: input.sessionId,
+      sessionGeneration: input.sessionGeneration, sourceRevision: source.sourceRevision, fragments: source.fragments,
+      sourceSpillRoot: source.sourceSpillRoot, sourceTruthSpills: source.sourceTruthSpills, expectedMessageIds: input.messageIds })
+    try { input.recordStage?.('worker-read', performance.now() - workerStartedAt) } catch { /* Diagnostics must not alter the read. */ }
+    return result
+  }
   const readSourceTruthSpillsForPreparedView = (sessionId: string, sessionGeneration: string, expectedIdentity: string,
     messageIds?: readonly string[]):
     Readonly<{ root?: string; descriptors: readonly SpillDescriptor[] }> => {
@@ -186,11 +231,29 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     return { root: sourceSpillStore.root, descriptors: evidence }
   }
   const queries = createSessionQueries(db, {
+    ...(cacheBlobs && options.requestBodySourceBackfill ? { readSourceBodies,
+      requestSourceBackfill: options.requestBodySourceBackfill,
+      waitForSourceBackfill: async ({ sessionId, sessionGeneration, sourceRevision }) => {
+        const timeoutMs = options.sourceBackfillWaitMs ?? 10 * 60_000
+        if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) throw new Error('PROJECTION_SOURCE_BACKFILL_WAIT_BUDGET_INVALID')
+        const deadline = Date.now() + timeoutMs
+        for (;;) {
+          const state = runInTransaction(getDbConnection(db), () => getDbConnection(db).prepare(`SELECT sessions.generation,
+            state.source_revision,state.status FROM sessions LEFT JOIN session_body_source_state state ON state.session_id=sessions.id
+            WHERE sessions.id=?`).get(sessionId) as { generation: string; source_revision: number | null; status: string | null } | undefined)
+          if (!state) return 'missing' as const
+          if (state.generation !== sessionGeneration || state.source_revision !== sourceRevision) return 'changed' as const
+          if (state.status === 'complete') return 'complete' as const
+          if (Date.now() >= deadline) return 'timeout' as const
+          await new Promise<void>((resolve) => setTimeout(resolve, 100))
+        }
+      } } : {}),
     currentSourceIdentity: (sessionId, sessionGeneration) => {
       const snapshot = cacheStore.readSnapshot(sessionId, bodyScopeKey)
       return snapshot?.sessionGeneration === sessionGeneration && snapshot.currentSessionGeneration === sessionGeneration
         ? snapshot.currentSourceIdentityJson ?? undefined : undefined
     },
+    currentAuthoritySourceIdentity: (sessionId, sessionGeneration) => readProjectionSourceIdentity(getDbConnection(db), sessionId, sessionGeneration) ?? undefined,
     readBodies: (view, messageIds, signal, recordWorkerTiming) => {
       const sourceStartedAt = performance.now()
       const source = readSourceTruthSpillsForPreparedView(view.sessionId, view.sessionGeneration, view.sourceIdentityJson, messageIds)
@@ -437,7 +500,11 @@ export function createSqliteSessionStorageHost(db: AppDatabase, input: {
   })
   const storage = createSqliteSessionStorage(db, {
     ...input.storage,
-    requestBodySourceBackfill: () => { lifecycle.requestMaintenance({ reason: 'scope-changed', taskId: 'session-body-source-backfill' }) },
+    requestBodySourceBackfill: () => {
+      const request = lifecycle.requestMaintenance({ reason: 'scope-changed', taskId: 'session-body-source-backfill' })
+      const task = lifecycle.inspectMaintenance().find(({ taskId }) => taskId === 'session-body-source-backfill')
+      return request.status !== 'not-needed' && task?.status === 'scheduled'
+    },
     inspectMaintenance: () => lifecycle.inspectMaintenance(),
     prepareProjection: async (request) => {
       await lifecycle.prepareProjection(request)

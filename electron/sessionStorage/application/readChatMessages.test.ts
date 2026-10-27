@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { prepareChatBodiesForSessions, readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readExportPageAfterPreparation, readRetryTargetAfterPreparation } from './readChatMessages'
+import { createSessionSwitchTrace } from '../public/readMessages'
 
 describe('readChatMessagesAfterPreparation', () => {
   it('prepares the chat body view and reruns the complete synchronous selection', async () => {
@@ -99,6 +100,74 @@ describe('readChatMessagesAfterPreparation', () => {
 })
 
 describe('readChatPageAfterPreparation', () => {
+  it('keeps the ready cache page ahead of cold source-locator discovery', async () => {
+    const events: string[] = []
+    const prepared = { view: 'ready' }
+    const page = { entries: [], oldestSequence: null, hasMoreBefore: false }
+    const result = await readChatPageAfterPreparation({
+      readPreparedChatBodyV1: () => prepared,
+      ensureChatBodyV1: async () => { events.push('ensure'); return undefined },
+      queries: {
+        readPreparedChatPage: async ({ prepared: view }) => { events.push('ready-page'); expect(view).toBe(prepared); return page },
+        readSourceChatPage: async () => { events.push('source-page'); return undefined },
+        readChatPage: () => { events.push('legacy'); return page }
+      }
+    }, { sessionId: 'ready-session' })
+    expect(result).toBe(page)
+    expect(events).toEqual(['ready-page'])
+  })
+
+  it('uses a complete source-locator page before waiting for projection preparation', async () => {
+    const events: string[] = []
+    const emit = vi.fn()
+    const trace = createSessionSwitchTrace({ instance: 'main', traceId: 'cold-source-page', emit })
+    const page = { entries: [{ sequence: 4, message: { id: 'cold-canonical', content: 'source body' } }], oldestSequence: 4, hasMoreBefore: true }
+    const result = await readChatPageAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); throw new Error('must not wait for projection') },
+      queries: {
+        readSourceChatPage: async () => { events.push('source-page'); return page as never },
+        readPreparedChatPage: async () => { events.push('prepared'); return undefined },
+        readChatPage: () => { events.push('authority'); return { entries: [], oldestSequence: null, hasMoreBefore: false } }
+      }
+    }, { sessionId: 'cold-session', limit: 20 }, { trace })
+    trace.finish({ outcome: 'ok', cachePath: 'prior-authority', pageSize: page.entries.length })
+    expect(result).toBe(page)
+    expect(events).toEqual(['source-page'])
+    expect(emit.mock.calls[0]?.[0]?.stages).toEqual([{ name: 'source-page-read', durationMs: expect.any(Number), outcome: 'ok' }])
+  })
+
+  it('reselects once after a source revision changes during a cold page read', async () => {
+    const events: string[] = []
+    const page = { entries: [], oldestSequence: null, hasMoreBefore: false }
+    let calls = 0
+    const result = await readChatPageAfterPreparation({
+      ensureChatBodyV1: async () => { throw new Error('projection preparation should not run') },
+      queries: {
+        readSourceChatPage: async () => {
+          calls += 1
+          events.push(`source:${calls}`)
+          if (calls === 1) throw new Error('PROJECTION_SOURCE_REVISION_CHANGED')
+          return page
+        },
+        readPreparedChatPage: async () => undefined,
+        readChatPage: () => page
+      }
+    }, { sessionId: 'changed-source-session' })
+    expect(result).toBe(page)
+    expect(events).toEqual(['source:1', 'source:2'])
+  })
+
+  it('does not retry a drifting cold page more than once', async () => {
+    const failure = new Error('PROJECTION_SOURCE_PAGE_CHANGED')
+    const readSourceChatPage = vi.fn(async () => { throw failure })
+    await expect(readChatPageAfterPreparation({
+      ensureChatBodyV1: async () => { throw new Error('projection preparation should not run') },
+      queries: { readSourceChatPage, readPreparedChatPage: async () => undefined,
+        readChatPage: () => ({ entries: [], oldestSequence: null, hasMoreBefore: false }) }
+    }, { sessionId: 'always-changing-source' })).rejects.toBe(failure)
+    expect(readSourceChatPage).toHaveBeenCalledTimes(2)
+  })
+
   it('passes the prepared view into sequence-page selection and uses the verified result', async () => {
     const events: string[] = []
     const prepared = { sourceIdentityJson: 'fresh-source' }
