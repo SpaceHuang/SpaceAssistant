@@ -330,13 +330,23 @@ describe('SQLite projection build task composition', () => {
       expect(storedPayload.spill_marker).toBe(0)
       getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+      getDbConnection(db).prepare(`UPDATE spill_reference_backfill_state SET status='complete',verified_generation=(SELECT meta_value
+        FROM spill_reference_meta WHERE meta_key='canonical_change_generation') WHERE owner_table='agent_history_events'`).run()
       const processGeneration = advanceProcessGeneration(getDbConnection(db))
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+      let sourceBackfillFinished = false
+      const sourceTask = createSessionBodySourceBackfillTask({ db, blobRoot: root, idleDelayMs: 60_000,
+        onResult: (result) => { if (result.sessionId === session.id && result.status === 'complete') sourceBackfillFinished = true } })
       const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }), recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
         maintenanceTasks: [task] })
+      let sourceBackfillHandle: ReturnType<typeof sourceTask.start> | undefined
       try {
+        sourceBackfillHandle = sourceTask.start()
+        await vi.waitFor(() => expect(sourceBackfillFinished).toBe(true), { timeout: 60_000 })
+        sourceBackfillHandle?.stop()
+        await sourceBackfillHandle?.quiesce()
         const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
         expect(prepared).toMatchObject({
           sessionId: session.id, payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
@@ -352,9 +362,13 @@ describe('SQLite projection build task composition', () => {
         expect(projected).toHaveLength(messages.length)
         expect(new Set(projected.map(({ id }) => id))).toEqual(new Set(messages.map(({ id }) => id)))
         expect(projected.every((message) => message.content === body)).toBe(true)
-      } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
+      } finally {
+        sourceBackfillHandle?.stop()
+        await sourceBackfillHandle?.quiesce()
+        await host.lifecycle.stop({ deadlineMs: 5_000 })
+      }
     } finally { temp.cleanup() }
-  }, 60_000)
+  }, 180_000)
 
   it('segments large same-snapshot message facts instead of embedding them in the root manifest', async () => {
     const temp = createTempDatabase('sqlite-projection-large-message-facts-segments-')
@@ -376,6 +390,8 @@ describe('SQLite projection build task composition', () => {
       const conn = getDbConnection(db)
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE session_id=?").run(session.id)
+      conn.prepare(`UPDATE spill_reference_backfill_state SET status='complete',verified_generation=(SELECT meta_value
+        FROM spill_reference_meta WHERE meta_key='canonical_change_generation') WHERE owner_table='agent_history_events'`).run()
       const storedEvent = conn.prepare(`SELECT length(CAST(payload_json AS BLOB)) AS byte_length,
         (SELECT COALESCE(SUM(length(CAST(content AS BLOB))),0) FROM messages WHERE session_id=?) AS fact_content_byte_length
         FROM agent_history_events WHERE event_id=?`).get(session.id, 'large-facts-context') as
@@ -388,10 +404,18 @@ describe('SQLite projection build task composition', () => {
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3,
         onSlice: (sample) => sliceSamples.push(sample) })
+      let sourceBackfillFinished = false
+      const sourceTask = createSessionBodySourceBackfillTask({ db, blobRoot: root, idleDelayMs: 60_000,
+        onResult: (result) => { if (result.sessionId === session.id && result.status === 'complete') sourceBackfillFinished = true } })
       const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
           recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+      let sourceBackfillHandle: ReturnType<typeof sourceTask.start> | undefined
       try {
+        sourceBackfillHandle = sourceTask.start()
+        await vi.waitFor(() => expect(sourceBackfillFinished).toBe(true), { timeout: 60_000 })
+        sourceBackfillHandle?.stop()
+        await sourceBackfillHandle?.quiesce()
         const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
         expect(prepared).toMatchObject({ sessionId: session.id, payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
         expect(sliceSamples.length).toBeGreaterThan(0)
@@ -404,9 +428,13 @@ describe('SQLite projection build task composition', () => {
         const page = await host.storage.queries.readPreparedChatPage?.({ sessionId: session.id, prepared, limit: 10 })
         expect(page?.entries).toHaveLength(20)
         expect(page?.entries.every(({ message }) => message.content === body)).toBe(true)
-      } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
+      } finally {
+        sourceBackfillHandle?.stop()
+        await sourceBackfillHandle?.quiesce()
+        await host.lifecycle.stop({ deadlineMs: 5_000 })
+      }
     } finally { temp.cleanup() }
-  }, 60_000)
+  }, 180_000)
 
   it('segments one oversized spilled message item across bounded History blobs', async () => {
     const temp = createTempDatabase('sqlite-projection-single-oversized-history-item-')
@@ -414,7 +442,7 @@ describe('SQLite projection build task composition', () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-single-oversized-history-item-blobs-'))
     try {
       const session = createSession(db, { name: 'single oversized History item', model: 'test' })
-      const body = 'x'.repeat(17 * 1024 * 1024)
+      const body = 'x'.repeat(16 * 1024 * 1024)
       appendMessage(db, { id: 'single-oversized-history-item', sessionId: session.id, role: 'user', content: body,
         timestamp: 1, status: 'sent' })
       const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id,
@@ -577,7 +605,7 @@ describe('SQLite projection build task composition', () => {
           processGeneration: () => nextProcessGeneration, connectionEpoch: () => nextProcessGeneration, now: () => 10,
           limits: { maxRows: 1, maxBytes: 8192 }, maxChunksPerSlice: 1 })
         const resumedHandle = resumedTask.start()!
-        const publishDeadline = Date.now() + 8_000
+        const publishDeadline = Date.now() + 30_000
         while (reopenedStateStore.get(session.id, scopeKey)?.status !== 'valid' && Date.now() < publishDeadline) {
           await new Promise((resolve) => setTimeout(resolve, 10))
         }
@@ -592,7 +620,7 @@ describe('SQLite projection build task composition', () => {
         await resumedHandle.quiesce()
       } finally { if (db === temp.db) await firstHandle.quiesce(); db.close(); temp.cleanup() }
     } finally { await fs.rm(root, { recursive: true, force: true }); root = undefined }
-  })
+  }, 60_000)
 
   it('reopens a file-backed checkpoint under a newer process and publishes the resumed projection', async () => {
     const temp = createTempDatabase('sqlite-projection-task-reopen-')

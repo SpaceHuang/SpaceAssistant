@@ -21,6 +21,6 @@ describe('invocation pending view retirement migration', () => {
     runMigrations(conn)
 
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='canonical_invocation_pending_views'").get()).toBeUndefined()
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '115' })
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '116' })
   })
 })

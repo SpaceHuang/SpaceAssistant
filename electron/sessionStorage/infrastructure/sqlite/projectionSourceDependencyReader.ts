@@ -11,6 +11,24 @@ type HistoryEventRow = Readonly<{
   schema_version: number; kind: string; session_seq: number; commit_order: number; created_at: number; payload_json: string
 }>
 
+const STREAMED_EVENT_DIGEST_THRESHOLD = 64 * 1024
+const EVENT_DIGEST_CHUNK_CHARS = 16 * 1024
+
+function updateJsonStringContents(hash: ReturnType<typeof createHash>, value: string): void {
+  for (let start = 0; start < value.length;) {
+    let end = Math.min(value.length, start + EVENT_DIGEST_CHUNK_CHARS)
+    if (end < value.length) {
+      const last = value.charCodeAt(end - 1)
+      const next = value.charCodeAt(end)
+      if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--
+    }
+    const encoded = JSON.stringify(value.slice(start, end))
+    if (typeof encoded !== 'string') throw new Error('PROJECTION_SOURCE_DIGEST_ENCODING_FAILED')
+    hash.update(encoded.slice(1, -1), 'utf8')
+    start = end
+  }
+}
+
 /** Resolve and verify only the invocation dependencies named by a complete page locator. */
 export function readProjectionPageSourceSpills(conn: DatabaseSync, sessionId: string, sourceRevision: number,
   messageIds: readonly string[]): readonly SpillDescriptor[] {
@@ -110,8 +128,19 @@ export function readProjectionPageSourceSpills(conn: DatabaseSync, sessionId: st
 }
 
 export function projectionSourceEventDigest(event: HistoryEventRow): string {
-  return createHash('sha256').update(JSON.stringify({ invocationId: event.invocation_id, turnId: event.turn_id,
+  const fields = { invocationId: event.invocation_id, turnId: event.turn_id,
     sequence: event.sequence, eventId: event.event_id, idempotencyKey: event.idempotency_key, schemaVersion: event.schema_version,
     kind: event.kind, sessionSequence: event.session_seq, commitOrder: event.commit_order, createdAt: event.created_at,
-    payloadJson: event.payload_json }), 'utf8').digest('hex')
+    payloadJson: event.payload_json }
+  if (event.payload_json.length <= STREAMED_EVENT_DIGEST_THRESHOLD) {
+    return createHash('sha256').update(JSON.stringify(fields), 'utf8').digest('hex')
+  }
+
+  // Preserve the existing JSON digest format while avoiding a second full-size escaped payload string.
+  const envelope = JSON.stringify({ ...fields, payloadJson: '' })
+  const hash = createHash('sha256')
+  hash.update(envelope.slice(0, -2), 'utf8')
+  updateJsonStringContents(hash, event.payload_json)
+  hash.update('"}', 'utf8')
+  return hash.digest('hex')
 }

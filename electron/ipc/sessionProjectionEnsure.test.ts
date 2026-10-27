@@ -8,6 +8,7 @@ import { createSessionTurnRuntime, createSqliteSessionStorage } from '../session
 describe('chat:get-messages projection preparation', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
   let turnRuntime: ReturnType<typeof createSessionTurnRuntime> | undefined
+  const ipcEvent = { processId: 1, sender: {} }
   afterEach(() => { db?.close(); db = undefined; turnRuntime = undefined })
 
   it('prepares a session before the outbound retry-source query reads message bodies', async () => {
@@ -156,7 +157,7 @@ describe('chat:get-messages projection preparation', () => {
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })
 
-    await expect(Promise.resolve(handlers.get('chat:get-message-page')!(null, { sessionId: session.id }))).resolves.toMatchObject({ entries: [] })
+    await expect(Promise.resolve(handlers.get('chat:get-message-page')!(ipcEvent, { sessionId: session.id }))).resolves.toMatchObject({ entries: [] })
     expect(events).toEqual(['ensure', 'select'])
     expect(sessionStorage.ensureChatBodyV1).toHaveBeenCalledWith({ sessionId: session.id })
   })
@@ -182,7 +183,7 @@ describe('chat:get-messages projection preparation', () => {
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })
 
-    await expect(handlers.get('chat:get-message-page')!(null, { sessionId: session.id })).resolves.toMatchObject({ entries: [] })
+    await expect(handlers.get('chat:get-message-page')!(ipcEvent, { sessionId: session.id })).resolves.toMatchObject({ entries: [] })
     expect(events).toEqual(['ensure', 'authoritative-read'])
   })
 

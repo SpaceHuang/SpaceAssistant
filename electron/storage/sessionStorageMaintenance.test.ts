@@ -1064,7 +1064,7 @@ describe('worker compaction orchestration', () => {
     const temp = createTempDatabase('storage-maintenance-execution-target-')
     const userDataDir = path.dirname(temp.dbPath)
     const conn = getDbConnection(temp.db)
-    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES('compact-me');")
+    conn.exec("CREATE TABLE maintenance_payload(value BLOB NOT NULL); INSERT INTO maintenance_payload VALUES(zeroblob(1000000)); DELETE FROM maintenance_payload;")
     temp.db.flushSave()
     const unusedWorker = vi.fn(() => { throw new Error('worker must not fork') })
 

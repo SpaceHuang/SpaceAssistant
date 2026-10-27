@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { createSession } from '../../../database/operations'
 import { getDbConnection } from '../../../database/sqliteStore'
@@ -125,5 +126,22 @@ describe('projection page source dependency reader', () => {
         projectionSourceEventDigest(event))
     expect(() => readProjectionPageSourceSpills(conn, session.id, revision.source_revision, ['coverage-message']))
       .toThrow('PROJECTION_SOURCE_DEPENDENCY_INCOMPLETE:coverage-message')
+  })
+
+  it('hashes large History payloads in bounded JSON string chunks without changing the digest', () => {
+    const payload_json = `${'quote" slash\\ newline\n snow 雪 emoji 😀 '.repeat(8_000)}\u2028\u2029\u0001`
+    const event = { invocation_id: 'large-invocation', turn_id: 'large-turn', sequence: 7, event_id: 'large-event',
+      idempotency_key: 'large-key', schema_version: 1, kind: 'invocation-context-committed', session_seq: 9,
+      commit_order: 3, created_at: 11, payload_json }
+    const expected = createHash('sha256').update(JSON.stringify({ invocationId: event.invocation_id, turnId: event.turn_id,
+      sequence: event.sequence, eventId: event.event_id, idempotencyKey: event.idempotency_key, schemaVersion: event.schema_version,
+      kind: event.kind, sessionSequence: event.session_seq, commitOrder: event.commit_order, createdAt: event.created_at,
+      payloadJson: event.payload_json }), 'utf8').digest('hex')
+    const stringify = vi.spyOn(JSON, 'stringify')
+    try {
+      expect(projectionSourceEventDigest(event)).toBe(expected)
+      expect(stringify.mock.calls.some(([value]) => !!value && typeof value === 'object' &&
+        'payloadJson' in value && (value as { payloadJson?: unknown }).payloadJson === payload_json)).toBe(false)
+    } finally { stringify.mockRestore() }
   })
 })

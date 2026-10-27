@@ -2140,9 +2140,6 @@ CREATE TABLE IF NOT EXISTS session_body_source_state (
   checkpoint_json TEXT,
   updated_at INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO session_body_source_state(session_id,source_revision,status,checkpoint_json,updated_at)
-SELECT id,0,'pending',NULL,unixepoch()*1000 FROM sessions;
-
 CREATE TABLE IF NOT EXISTS session_body_source_manifest (
   session_id TEXT NOT NULL REFERENCES session_body_source_state(session_id) ON DELETE CASCADE,
   invocation_id TEXT NOT NULL,
@@ -2203,6 +2200,9 @@ CREATE TABLE IF NOT EXISTS session_projection_blob_references (
 CREATE INDEX IF NOT EXISTS idx_session_projection_blob_references_locator
   ON session_projection_blob_references(locator);
 
+`
+
+export const MIGRATION_V116_SESSION_BODY_LOCATOR_SESSION_TRIGGERS_SQL = `
 CREATE TRIGGER IF NOT EXISTS seed_session_body_source_state
 AFTER INSERT ON sessions BEGIN
   INSERT OR IGNORE INTO session_body_source_state(session_id,source_revision,status,checkpoint_json,updated_at)
@@ -2214,6 +2214,9 @@ AFTER UPDATE OF generation ON sessions WHEN OLD.generation IS NOT NEW.generation
   WHERE session_id=NEW.id;
 END;
 
+`
+
+export const MIGRATION_V116_SESSION_BODY_LOCATOR_HISTORY_TRIGGERS_SQL = `
 CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_history_insert
 AFTER INSERT ON agent_history_events BEGIN
   UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
@@ -2231,6 +2234,9 @@ AFTER DELETE ON agent_history_events BEGIN
   WHERE session_id=COALESCE(OLD.session_id,(SELECT session_id FROM agent_history_streams WHERE invocation_id=OLD.invocation_id));
 END;
 
+`
+
+export const MIGRATION_V116_SESSION_BODY_LOCATOR_STREAM_TRIGGERS_SQL = `
 CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_stream_insert
 AFTER INSERT ON agent_history_streams WHEN NEW.session_id IS NOT NULL BEGIN
   UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
@@ -2247,6 +2253,9 @@ AFTER DELETE ON agent_history_streams WHEN OLD.session_id IS NOT NULL BEGIN
   WHERE session_id=OLD.session_id;
 END;
 
+`
+
+export const MIGRATION_V116_SESSION_BODY_LOCATOR_CUTOVER_TRIGGERS_SQL = `
 CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_cutover_insert
 AFTER INSERT ON session_message_content_cutover BEGIN
   UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000

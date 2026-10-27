@@ -277,7 +277,7 @@ function readLargeContextEventCapture(
     FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
     { messages_type: string | null; raw_payload_json: string; message_count: number | null; required_user_byte_length: number | null;
       required_user_id: string | null; message_json_byte_length: number; extra_payload_json: string } | undefined
-  if (shape?.messages_type !== 'array' || Buffer.byteLength(shape.raw_payload_json, 'utf8') > MAX_STAGED_SOURCE_CHUNK_BYTES ||
+  if (shape?.messages_type !== 'array' || Buffer.byteLength(shape.raw_payload_json, 'utf8') > MAX_SEGMENTED_HISTORY_EVENT_BYTES ||
     !Number.isSafeInteger(shape.message_count) || (shape.message_count ?? 0) < 1 ||
     Buffer.byteLength(shape.extra_payload_json, 'utf8') > MAX_STAGED_SOURCE_CHUNK_BYTES || (shape.required_user_byte_length !== null &&
       shape.required_user_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES)) return undefined

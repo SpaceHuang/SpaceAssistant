@@ -11,7 +11,7 @@ import { getDbConnection, reopenDatabaseConnection } from '../database/sqliteSto
 import { advanceProcessGeneration } from '../database/processGeneration'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from '../sessionStorage/sqliteSessionStorage'
+import { createSessionBodySourceBackfillTask, createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from '../sessionStorage/sqliteSessionStorage'
 import { createSqliteProjectionStateStore } from '../sessionStorage/infrastructure/sqlite/sessionProjectionStateStore'
 import { CHAT_BODY_PROJECTION_SPEC_VERSION, encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 import { createStorageLifecycleControl } from '../sessionStorage/lifecycle'
@@ -2144,14 +2144,20 @@ describe('session transcript projection P2 read path', () => {
         invocationId: 'prepared-retry-request', turnId: 'prepared-retry-turn', sequence: 2, schemaVersion: 1,
         eventId: 'prepared-retry-terminal', idempotencyKey: 'prepared-retry-terminal', kind: 'invocation-failed', payload: { status: 'failed' }
       }], 0)
+      conn.prepare(`UPDATE spill_reference_backfill_state SET status='complete',verified_generation=(SELECT meta_value
+        FROM spill_reference_meta WHERE meta_key='canonical_change_generation') WHERE owner_table='agent_history_events'`).run()
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
       const processGeneration = advanceProcessGeneration(conn)
       const task = createSqliteProjectionBuildTask({ db: temp.db, dbPath: temp.dbPath, blobRoot,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now })
+      const sourceTask = createSessionBodySourceBackfillTask({ db: temp.db, blobRoot, idleDelayMs: 60_000 })
       host = createSqliteSessionStorageHost(temp.db, { storage: { projectionBlobRoot: blobRoot },
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
-          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task, sourceTask] })
+      host.lifecycle.allowBackgroundWork()
+      await vi.waitFor(() => expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(session.id))
+        .toEqual({ status: 'complete' }), { timeout: 30_000 })
       const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
       if (!prepared) throw new Error('RETRY_FIXTURE_PROJECTION_PREPARATION_UNAVAILABLE')
       const replay = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow').mockImplementation(() => {

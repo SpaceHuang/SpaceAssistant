@@ -47,7 +47,7 @@ anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(
   .then(() => {}, (error) => setTimeout(() => { throw error }, 0))
 `)
   const worker = new Worker(bootstrapPath, { execArgv: [],
-    resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
+    resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
     env: { ...process.env, SA_PROJECTION_VIEW_ANCHOR: anchor, SA_PROJECTION_VIEW_TARGET: workerPath } })
   worker.once('exit', () => fs.rm(bootstrapPath, { force: true }, () => undefined))
   return worker
@@ -89,7 +89,7 @@ export function materializeProjectionFinalViewInWorker(input: Readonly<{
   let worker: Worker
   try {
     worker = workerPath.endsWith('.ts') ? spawnSourceWorker(workerPath) : new Worker(workerPath, {
-      resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
+      resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
     })
   } catch (error) {
     return Promise.reject(new Error(`PROJECTION_FINAL_VIEW_WORKER_SPAWN_FAILED:${error instanceof Error ? error.message : String(error)}`))

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { DatabaseSync } from 'node:sqlite'
 import { createSession } from './operations'
 import { createTempDatabase } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
@@ -43,5 +44,21 @@ describe('session body locator schema v116', () => {
         12, 'b'.repeat(64), 'body-block')
     conn.prepare('DELETE FROM session_projection_cache WHERE session_id=? AND scope_key=?').run(session.id, 'paged-body-v1')
     expect(conn.prepare('SELECT 1 FROM session_projection_blob_references WHERE session_id=?').get(session.id)).toBeUndefined()
+  })
+
+  it('advances sparse compatibility databases while installing only triggers whose source tables exist', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES ('schema_version','115');`)
+
+    runMigrations(conn)
+
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
+      .toEqual({ value: '116' })
+    expect(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_message_body_locator'").get())
+      .toBeDefined()
+    expect(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='bump_session_body_source_after_history_insert'").get())
+      .toBeUndefined()
+    conn.close()
   })
 })

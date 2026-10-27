@@ -45,7 +45,7 @@ describe('session projection durable build checkpoint schema', () => {
       .get('session-a', 'scope-a')).toEqual({ build_checkpoint_json: null })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_session_projection_state_rebuilding'").get())
       .toEqual({ name: 'idx_session_projection_state_rebuilding' })
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '115' })
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '116' })
     conn.close()
   })
 })

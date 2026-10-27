@@ -40,6 +40,10 @@ import {
   MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
   MIGRATION_V114_INVOCATION_PENDING_VIEWS_RETIREMENT_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SQL,
+  MIGRATION_V116_SESSION_BODY_LOCATOR_SESSION_TRIGGERS_SQL,
+  MIGRATION_V116_SESSION_BODY_LOCATOR_HISTORY_TRIGGERS_SQL,
+  MIGRATION_V116_SESSION_BODY_LOCATOR_STREAM_TRIGGERS_SQL,
+  MIGRATION_V116_SESSION_BODY_LOCATOR_CUTOVER_TRIGGERS_SQL,
   SCHEMA_META_KEYS, WIKI_PROJECTS_TABLE_SQL
 } from './schema'
 import { runInTransaction } from './transaction'
@@ -2339,6 +2343,21 @@ export function runMigrations(conn: DatabaseSync): void {
   // v115 → v116: persistent rebuildable message-body locators and paged-cache blob roots.
   if (version === 115) runInTransaction(conn, () => {
     conn.exec(MIGRATION_V116_SESSION_BODY_LOCATOR_SQL)
+    if (hasTable(conn, 'sessions')) {
+      conn.exec(`INSERT OR IGNORE INTO session_body_source_state(session_id,source_revision,status,checkpoint_json,updated_at)
+        SELECT id,0,'pending',NULL,unixepoch()*1000 FROM sessions`)
+      conn.exec(MIGRATION_V116_SESSION_BODY_LOCATOR_SESSION_TRIGGERS_SQL)
+    }
+    if (hasTable(conn, 'agent_history_events') && hasColumn(conn, 'agent_history_events', 'session_id') &&
+      hasTable(conn, 'agent_history_streams') && hasColumn(conn, 'agent_history_streams', 'session_id')) {
+      conn.exec(MIGRATION_V116_SESSION_BODY_LOCATOR_HISTORY_TRIGGERS_SQL)
+    }
+    if (hasTable(conn, 'agent_history_streams') && hasColumn(conn, 'agent_history_streams', 'session_id')) {
+      conn.exec(MIGRATION_V116_SESSION_BODY_LOCATOR_STREAM_TRIGGERS_SQL)
+    }
+    if (hasTable(conn, 'session_message_content_cutover')) {
+      conn.exec(MIGRATION_V116_SESSION_BODY_LOCATOR_CUTOVER_TRIGGERS_SQL)
+    }
     version = 116
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
