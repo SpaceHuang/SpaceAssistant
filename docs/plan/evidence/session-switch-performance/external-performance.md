@@ -273,3 +273,17 @@ Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 sel
 通过窗口列表交替切换 64 条与 8 条消息会话共 12 次，页面捕获的 12 个点击事件均为 `isTrusted=true`，每组 6 次。36.2 秒 renderer V8 profile 使用 1 ms 采样间隔；期间出现 1 个 133 ms Long Task，开始时间约在普通会话点击后 63 ms。其附近记录到 146 ms LoAF（blocking duration 81 ms）；大历史点击附近另有 56 ms LoAF（blocking duration 0）。Profile 对该 Long Task 时间窗采到 111 个样本，其中 75 个落在 V8 idle、8 个为 program；可见的应用帧只包含 minified `sessionDisplay` 与 `main` bundle 的少数样本。包内未发现对应 source map，无法可靠映射到源码函数。采样期出现的 53/110/293 ms 旧 Long Task 属于 buffered 历史记录，时间早于本次 profile，不计入本轮切换结果。
 
 这组证据确认卡顿帧仍可在真实包内复现，但没有把主要耗时归因到具体代码；它不支持据此新增源码修复，也不是正文 ready 的 30 样本验收。维护竞争、缓存状态分组、完整 AC-7 指标与剩余 AC-5/AC-6 包内场景仍未完成，P4-02/P4-03 保持进行中。测试后已退出候选进程；未打开或修改默认用户数据库，也没有发送 IM 消息。
+
+### canonical 合成夹具的缓存状态矩阵补测（2026-10-28）
+
+为把缓存路径与既有真实库中的 legacy 历史问题隔离，使用同一候选 arm64 PKG 和两个全新隔离用户目录构造 canonical-backed-only 会话：大夹具 64 条消息、每条正文约 2 KB；普通夹具 8 条消息、每条正文约 160 B。每个夹具由一条完整上下文 History 事件持有，并由生产 source-history worker 与 body-source backfill 生成 64/8 条 locator；完成后再启动 PKG。候选 build ID `3b2b677b-89aa-4d52-ae71-3cc4dae23559`，源码 `76cb2b7812d2c7a00e4d997a3c37fa10751e7611`。所有更改均在 `/tmp/spaceassistant-p4-validation/copies/` 下的测试目录；默认用户数据库时间戳未变化，测试后候选进程已退出。
+
+先完成一次初始读取与投影构建，再在候选包真实窗口中于 64 条和 8 条会话间交替切换 30 轮。每次切换后都检查 AX 状态中的目标正文；main `session.switch.trace` 的 60 条记录均为 `cachePath=ready`、`outcome=ok`。8 条页 main IPC p50/p95/max 为 1.19/1.33/1.39 ms；64 条页为 5.09/6.47/7.29 ms。60 条 renderer `next-paint` p50/p95/max 为 11.15/15.00/15.20 ms。该组是有明确 prepared-cache 命中标记的热路径样本；没有在这轮启用 Long Task/LoAF observer，不能以此判定主线程长任务目标。
+
+冷路径只取得单样本：首次打开普通夹具的 main IPC 为 `cachePath=cold`、410.34 ms，其中 worker read 404.66 ms；renderer 页面请求 414.4 ms，随后 projection build slices 分别耗时 292.57/140.79 ms。由于仅 n=1，该数据用于确认路径和工作分解，不可用于 p95 或验收通过率。
+
+损坏缓存场景由 hot 夹具的 APFS 测试副本派生，在 64 条大夹具的 `session_projection_cache.inline_payload` 写入非法 JSON、保留旧摘要后启动同一 PKG。窗口正确显示目标会话末尾正文；main 请求走 `cachePath=cold`，用时 156.86 ms，renderer 页面请求 372.4 ms；之后 projection build slice 用时 128.33 ms，cache row 恢复为 `session_projection_state=valid`，payload 长度和原摘要恢复。该单次结果表明损坏的派生缓存可回退并重建，不证明性能分位数或 Long Task 门槛。构建 slice 发生在首读附近，但本轮没有维护专属时间线或 RSS 采样，不能据此判定维护竞争已经通过。
+
+本轮只补足了 synthetic canonical cache 的冷/热/损坏路径证据。它不代替冻结真实库上的 ready 首屏对照，也没有完成维护开启/暂停矩阵、维护竞争、总完成时间、维护期间全进程 RSS 或 AC-7 的 Long Task/LoAF 目标；P4-02/P4-03 继续未完成。
+
+维护补测：在隔离副本 `/tmp/spaceassistant-p4-validation/copies/maintenance-light` 中使用 1000 条、每条正文 80 字符的 canonical-backed-only 合成消息。一次生产 PKG 启动成功完成 projection：首段 slice 149.24 ms（checkpointed），次段 241.47 ms（published），随后数据库状态为 `valid`。另一次紧贴窗口启动时点击“设置”，设置页正常显示，但该轮 1000 条任务最终记录为 `source-unavailable`，不能作为维护并发响应的有效样本。两次运行的时序没有形成同一轮“有效重建期间点击设置”的可核对证据；也没有取得有效重建窗口内的 RSS 峰值。因此维护竞争与内存验收仍未完成。
