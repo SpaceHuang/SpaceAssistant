@@ -165,6 +165,8 @@ P4-02 仍未完成。可靠的新证据覆盖了候选 cold-page 的真实 UI �
 
 ### AC-6 包内故障探针的样本适用性（2026-10-27）
 
-检查候选隔离库的存储状态分布：`messages` 共 821 行，全部 `content_storage_state=legacy`，没有 canonical-backed-only 消息。临时副本中删除大历史最早消息的一个 `session-projections` 片段后启动同一 PKG 并打开会话，实际读取页包含 20 条消息；但该片段不属于当前页，而且会话走 legacy 格式，不能证明 AC-6 对 canonical source spill 缺失的处理。该探针未计入验收，临时损坏副本已删除。
+检查真实候选隔离库的存储状态分布：`messages` 共 821 行，全部 `content_storage_state=legacy`，没有 canonical-backed-only 消息。先前在该库删除旧历史片段的探针走 legacy 格式且片段不属于当前页，未计入验收；临时探针副本已删除。
 
-因此 AC-6 的 spill 缺失、截断与发布边界故障仍只有源码层证据；需要可安全复制且含 canonical-backed 数据的隔离 fixture，或在本机建立有效 canonical 数据集后，才能做包内故障验收。用户原始库未被修改。
+随后在候选数据的 APFS copy-on-write 副本中，通过项目 History 写入与 source-backfill 实现生成独立合成会话：一条 400,032 字符正文，`content_storage_state=canonical-backed-only`，SQLite 镜像正文长度为 0，History 正文写入 source spill。用 build ID `3817abb0-b0b3-4bd6-9b34-964550c2d40f` 的 PKG 调用实际 preload API `window.api.chatGetMessages`：健康样本返回 1 条消息且正文长度为 400,032；在另一隔离副本中只移除该 History source spill 后，同一 API 拒绝读取，IPC 错误为 `CANONICAL_SESSION_CONTENT_UNAVAILABLE`，未返回镜像正文。包启动回收了该合成会话的 projection fragment，因此故障副本没有依赖另一份派生正文；此测试验证的是 canonical History spill 缺失 fail-closed 路径。两份临时副本与临时 fixture generator 已清理，未改用户原始数据库，未发送 IM 消息。
+
+这关闭了 AC-6 的包内 canonical source spill 缺失代表场景。spill 截断、定位/摘要不匹配、发布边界故障及源编辑/追加/压缩/删除后的包内场景仍未测；源码层对应测试继续作为其余边界证据。
