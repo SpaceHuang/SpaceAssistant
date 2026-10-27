@@ -90,3 +90,11 @@ P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通
 ## 渲染 CPU 采样补充（2026-10-28）
 
 最新候选包 12 次可信切换（64 条/8 条会话各 6 次）中出现一次 133 ms Long Task 和 146 ms LoAF（blocking duration 81 ms），与普通会话点击时间接近；大历史点击附近另有 56 ms LoAF，blocking duration 为 0。1 ms V8 profile 的该任务窗口样本主要落在 idle/program，未得到可映射到源码的主因；包内无相应 source map。维护完成后才开始此 profile，所以它不覆盖维护竞争。详细事件和限制见 [external-performance.md](external-performance.md) 的“解锁后的渲染 CPU 采样补充”。开测时误通过应用名激活旧版窗口，出现数据库版本 116 高于支持版本 115 的提示并自动退出；未打开或写入默认数据库，之后通过候选 `.app` 完整路径重新接入。该观察不关闭 AC-7，也不足以支持新的源码修复。P4-03 仍未完成。
+
+## 确定性 locator 回填失败不再跨启动重复扫描（2026-10-28）
+
+源码提交 `e220942e` 将 `CHAT_BODY_MESSAGE_ID_MISSING`、`CHAT_BODY_SOURCE_FACT_MISSING` 与 `PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH` 记录为当前 source revision 与 reducer spec version 的确定性失败。任务查询跳过同一版本的失败项；History source revision 变化或 reducer spec 升级后恢复尝试。失败只在实际扫描的 source revision 仍是当前版本时记录，避免并发更新被误标。既有瞬时错误仍走进程内退避并保留后续重试。
+
+新增 TDD 回归覆盖失败标记持久化、同版本重启不重扫、reducer 版本升级后重试、source 更新后成功回填，以及 v116 → v117 schema 迁移。定向命令 `npm exec vitest run electron/sessionStorage/infrastructure/sqlite/sessionBodySourceBackfillTask.test.ts electron/database/migrations.sessionBodyLocator.test.ts`：11 项通过；`npm run build:electron:incremental` 通过，包含 session-storage 与 cleanup 边界门禁。本次没有重跑全仓测试。
+
+该修复目前只在源码工作树中，尚未打入 arm64 安装包，也没有新的包内隔离库或界面样本。本轮 CUA 在用户确认解锁后仍报告 Mac 锁屏，无法启动可操作窗口；P4-02/03 与 AC-7 维持未完成。
