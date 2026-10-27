@@ -65,3 +65,22 @@ print('cache/outcomes', sorted(set(r[3] for r in rows)), sorted(set(r[4] for r i
 修复后的 arm64 PKG payload 已重建并在候选隔离副本上运行：`artifactBuildId=410a14dd-312b-4c9f-9b3b-e7500a6b6e5f`，PKG SHA-256 `1ec33ad664ede178a6a57a478894a663dc74876bb432a94af4431966cf9f740e`，app.asar SHA-256 `8496423a9af327a849398eb270b56a9f41ad59b75eb3f1ca861a26148a4ddff6`。日志里 ordinal 1–13 共 13 次完整读取均成功且为 `cold`，没有 baseline phase；13 次 ledger 检查均复用既有 proof，耗时 6–79 ms。ordinal 2–13 的选择到分页请求为 8.4–12.5 ms，提交后 `next-paint` 为 10.9–101.7 ms。该批样本是 6 对大小会话的短测，不构成 AC-7 样本矩阵；期间仍有一条 `eventloop.delay` 告警（p99 845 ms），故不能宣称 UI 已无卡顿。该告警与当时的操作无法建立因果关系，仍需调查。
 
 P4-02 **保持进行中**。代码修复已提交，但不按局部候选分段数据关闭 AC-7。下一步要继续调查候选包 residual event-loop delay，并实现基线与候选同口径端到端采集（同时固定可验证基线二进制身份）；覆盖方案 §2 的首次访问、热缓存、损坏缓存、维护开/关，每个适用矩阵格至少 30 次；补充长任务、内存与维护完成数据。若同口径测量证实目标未达，返回相应源码任务处理。
+
+### 第二项切换期主线程扫描：canonical compaction 回放（2026-10-27）
+
+此前已停止的候选 v4 使用隔离库 `candidate-v6`。追踪发现 `sessionIpc.ts` 每次切换会读取 compaction replay；当 ledger 为 blocked 时，代码再回退到 `readCanonicalCompactionReplay`。旧实现用 `readValidatedSessionHistoryRows` 解析并验证该会话的所有 History payload，健康数据中也产生 O(History) 主线程工作。这段不在既有 `session.switch.trace` page-read 时长里，因此只看 UI 分段会漏掉它。
+
+在隔离数据库只读测量旧编译实现：大历史目标 `37c2d127-d30f-48d1-b601-7ccf131b328a`（64 条消息、2,590 个 History event）10 次耗时 1.21–1.50 s；普通目标 `c1a07aba-0603-4935-b334-71ac077d4194`（8 条消息、343 个 History event）10 次耗时 0.86–0.87 s。只读取 raw payload 已分别耗时约 422 ms / 231 ms；主要成本来自验证整段 History。
+
+按 TDD 修改并提交于 `d117424ece9555f565d29af2a187012aa67d947d`：先新增 `electron/runtime/sqliteAgentHistory.test.ts` 回归，构造一个合法 compaction invocation 与无关 invocation，损坏无关 History payload 后要求 replay 仍返回 marker，并断言不调用全局 cursor 检查；损坏相关 completion event 时则必须拒绝。原实现下 RED 由无关损坏 payload 触发，随后实现仅读取 compaction marker 所需的 owner/cursor 元数据，并只验证包含 `transcript-compacted` 的 invocation stream，GREEN 通过。联合定向回归命令 `npm exec vitest run -- electron/runtime/sqliteAgentHistory.test.ts electron/sessionStorage/sessionStorage.test.ts electron/sessionStorage/sessionSwitchPerformance.test.ts`：3 个文件通过，275 项通过、25 项跳过。
+
+完整构建 `npm run build` 通过；边界检查均通过。随后从该提交的干净源码创建 arm64 PKG，未安装到系统，也未启动新窗口：
+
+- build identity：`c3d37a41-8a08-46e0-b327-52800a4d494d`，版本 `0.2.9`，提交 `d117424ece9555f565d29af2a187012aa67d947d`，`sourceTreeClean=true`。
+- PKG：`release/SpaceAssistant-0.2.9-arm64.pkg`，SHA-256 `868e130b26943bf1cd0902222551c4be455263e1c4c5312670870ef4255f456c`。
+- app.asar：SHA-256 `d11b3528f82bfc2627773bd54ba6c1a6b262b9250d283492a5c9020335a9c529`；从 PKG 展开后的 app.asar 与 builder 输出哈希一致。
+- `codesign --verify --deep --strict --verbose=2 release/mac-arm64/SpaceAssistant.app` 通过。无 Developer ID 身份，产物为 ad-hoc 签名，仅供隔离验收，不代表已公证或可直接分发。
+
+直接从 PKG 的 app.asar 解出编译产物，用 `node:sqlite` 只读打开同一 `candidate-v6` 库，对上面两个会话各执行 10 次 `readCanonicalCompactionReplay`：大历史 min/p50/p95/max 为 13.47/13.65/13.79/105.30 ms；普通历史为 8.09/8.19/9.17/22.42 ms。该测量隔离的是 compaction replay 读取函数，不是点击到首帧；它证明打入包的实现没有再扫描/解析整段 History，但不能关闭 AC-7。
+
+当前运行实例已收敛为一个基线实例；旧候选 v4 已正常终止。最新 PKG 尚未启动，因为桌面自动化当前报告 macOS 已锁定，不能安全采集 UI 首帧、主线程长任务和设置响应证据。恢复桌面可操作后，再以最新包创建/启动唯一候选实例并完成同口径矩阵；在此之前，P4-02 仍保持进行中。P4-03 仍缺真实 IM sandbox 账号 / 会话，之前授权的少量测试消息尚未发送。
