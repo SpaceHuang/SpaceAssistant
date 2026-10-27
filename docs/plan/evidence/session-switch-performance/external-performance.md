@@ -68,6 +68,51 @@ print('cache/outcomes', sorted(set(r[3] for r in rows)), sorted(set(r[4] for r i
 
 另审查了切换时触发的 `chat:get-session-compaction-markers` 旁路：当 ledger 可写时它会读取并解析整个 `events.jsonl`，而不是只读压缩标记。对隔离副本中最大的该文件（1,196,023 bytes），直接调用最新 PKG app.asar 中的 `readCompactionReplay` 30 次，p50 5.01 ms、p95 5.97 ms、max 7.19 ms。该样本尚不足以代表更大的事件日志；测量值也不能解释 845 ms watchdog 告警，但此全文件解析路径仍应纳入更大文件与 UI 验收。
 
+### PKG 主进程分页读路径补测（2026-10-27）
+
+桌面仍锁定，不能做 UI/首帧采集；继续使用已授权真实库的隔离副本，补测最新候选包实际编译代码的源分页分支。使用 APFS clone 创建 `/tmp/spaceassistant-p4-validation/page-read-bench/spaceassistant-data.db`（与候选副本同为 2,780,368,896 bytes），原库不传给读写连接；只在 clone 上通过 `openSqliteDatabase` 打开。复用候选副本 `session-projections` 与 `spill` 数据。测试会话的大/普通消息源定位状态均为 `complete`，切换读路径 30 次全部报告 `cachePath=cold`，即没有可直接命中的 prepared body 视图，走源分页读取。
+
+运行时为 PKG 自带 Electron binary 的 `ELECTRON_RUN_AS_NODE=1`，版本 Electron 44.1.1 / Node 24.19.0；加载从当前 PKG app.asar 解出的 `dist-electron`，调用共享实现 `readChatPageAfterPreparation(storage, { sessionId, limit: 20 })`，不是重新手写 SQL。大历史目标每页 20 条，p50 2.91 ms、p95 3.71 ms、max 6.25 ms；普通目标每页 8 条，p50 4.07 ms、p95 4.96 ms、max 6.04 ms。30 次连续读取共享同一进程，SQLite/文件系统页缓存会逐渐变热，因此它不是冷 OS 缓存测量；它也不含 IPC、React render、paint、用户点击等待或后台维护竞争。该结果表明这个隔离真实库中 cold-projection source-page 读路径本身低于 7 ms，不能据此关闭 AC-7 或推断其他路径的 event-loop delay。
+
+复现步骤（在已解出 PKG app.asar 的机器上替换下列 `/tmp` 根路径）。先用 macOS `cp -c` 对数据库做 APFS clone，再把 spill 目录连入 clone；应用只打开 clone。`openSqliteDatabase` 在 clone 上初始化 SQLite 连接与 schema，不把原副本交给读写连接：
+
+```bash
+mkdir -p '<isolated-db-clone>'
+cp -c '<isolated-original>/spaceassistant-data.db' '<isolated-db-clone>/spaceassistant-data.db'
+ln -s '<isolated-original>/spill' '<isolated-db-clone>/spill'
+ELECTRON_RUN_AS_NODE=1 <unpacked-app>/Contents/MacOS/SpaceAssistant - <<'NODE'
+const root = '<extracted-app-asar>/dist-electron/electron'
+const { openSqliteDatabase } = require(root + '/database/sqliteStore.js')
+const { createSqliteSessionStorage } = require(root + '/sessionStorage/sqliteSessionStorage.js')
+const { readChatPageAfterPreparation } = require(root + '/sessionStorage/public/readMessages.js')
+const db = openSqliteDatabase('<isolated-db-clone>/spaceassistant-data.db')
+const storage = createSqliteSessionStorage(db, {
+  projectionBlobRoot: '<isolated-original>/session-projections',
+  requestBodySourceBackfill: () => false
+})
+;(async () => {
+  for (const [label, sessionId] of [
+    ['large', '37c2d127-d30f-48d1-b601-7ccf131b328a'],
+    ['small', 'c1a07aba-0603-4935-b334-71ac077d4194']
+  ]) {
+    const samples = []; const paths = {}; let entries = 0
+    for (let i = 0; i < 30; i++) {
+      let cachePath = 'unset'; const start = performance.now()
+      const page = await readChatPageAfterPreparation(storage, { sessionId, limit: 20 }, {
+        onCachePath: value => { cachePath = value }
+      })
+      samples.push(performance.now() - start); paths[cachePath] = (paths[cachePath] || 0) + 1
+      if (!page) throw new Error(`${label}: page unavailable`)
+      entries = page.entries.length
+    }
+    samples.sort((a, b) => a - b)
+    console.log({ label, entries, paths, p50Ms: samples[14], p95Ms: samples[28], maxMs: samples[29] })
+  }
+  db.close()
+})().catch(error => { console.error(error); try { db.close() } catch {} ; process.exitCode = 1 })
+NODE
+```
+
 P4-02 **保持进行中**。代码修复已提交，但不按局部候选分段数据关闭 AC-7。下一步要继续调查候选包 residual event-loop delay，并实现基线与候选同口径端到端采集（同时固定可验证基线二进制身份）；覆盖方案 §2 的首次访问、热缓存、损坏缓存、维护开/关，每个适用矩阵格至少 30 次；补充长任务、内存与维护完成数据。若同口径测量证实目标未达，返回相应源码任务处理。
 
 ### 第二项切换期主线程扫描：canonical compaction 回放（2026-10-27）
