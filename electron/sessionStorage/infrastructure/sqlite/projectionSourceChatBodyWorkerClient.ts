@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
 import type { SpillDescriptor } from '../../../storage/spillProtocol'
 import type { PreparedChatBodySelection } from './projectionChatBodyCacheWorkerClient'
+import { withProjectionForegroundWorkerBudget } from './projectionForegroundWorkerBudget'
 
 export type ProjectionSourceBodyFragment = Readonly<{ id: string; sequence: number; locator: string; byteLength: number; sha256: string }>
 
@@ -40,7 +41,16 @@ anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(
 export function readProjectionSourceChatBodiesInWorker(input: Readonly<{
   root: string; sessionId: string; sessionGeneration: string; sourceRevision: number
   fragments: readonly ProjectionSourceBodyFragment[]; sourceSpillRoot?: string; sourceTruthSpills: readonly SpillDescriptor[]
-  expectedMessageIds: readonly string[]; timeoutMs?: number
+  expectedMessageIds: readonly string[]; timeoutMs?: number; onQueueWait?(durationMs: number): void
+}>): Promise<PreparedChatBodySelection> {
+  return withProjectionForegroundWorkerBudget(() => readProjectionSourceChatBodiesWithoutBudget(input),
+    input.onQueueWait ? { onQueueWait: input.onQueueWait } : undefined)
+}
+
+function readProjectionSourceChatBodiesWithoutBudget(input: Readonly<{
+  root: string; sessionId: string; sessionGeneration: string; sourceRevision: number
+  fragments: readonly ProjectionSourceBodyFragment[]; sourceSpillRoot?: string; sourceTruthSpills: readonly SpillDescriptor[]
+  expectedMessageIds: readonly string[]; timeoutMs?: number; onQueueWait?(durationMs: number): void
 }>): Promise<PreparedChatBodySelection> {
   const workerPath = resolveWorkerPath()
   if (!workerPath) return Promise.reject(new Error('PROJECTION_SOURCE_PAGE_WORKER_ENTRY_UNAVAILABLE'))

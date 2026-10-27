@@ -9,6 +9,7 @@ import type { PreparedChatBodyView } from '../../public/model'
 import { searchVerifiedChatBodyPayload, selectVerifiedChatBodyPayload } from './projectionChatBodyCachePayload'
 import type { SpillDescriptor } from '../../../storage/spillProtocol'
 import type { ChatBodyCandidateFact } from './projectionChatBodyCachePayload'
+import { withProjectionForegroundWorkerBudget } from './projectionForegroundWorkerBudget'
 
 export type PreparedChatBodySelection = Readonly<{
   messages: readonly Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>[]
@@ -21,6 +22,7 @@ type WorkerTimingRecorder = (stage: WorkerTimingStage, durationMs: number) => vo
 export type PreparedChatBodySearch = PreparedChatBodySelection
 
 const MAX_CACHE_WORKER_MS = 30_000
+const MAX_CACHE_WORKER_PENDING_REQUESTS = 32
 const MAX_CHAT_BODY_SEARCH_RESULTS = 10_000
 const pendingSearchRequests = new Map<string, Readonly<{
   resolve(value: PreparedChatBodySearch): void; reject(error: Error): void; timer: NodeJS.Timeout
@@ -85,9 +87,14 @@ export function readPreparedChatBodiesInWorker(input: Readonly<{
   signal?: AbortSignal
   onWorkerTiming?: WorkerTimingRecorder
 }>): Promise<PreparedChatBodySelection> {
-  return !input.sourceTruthSpills?.length && input.view.inlinePayload !== undefined
-    ? readPreparedChatBodyCache({ ...input, operation: 'select' })
-    : readWithPreparedCacheWorker({ ...input, operation: 'select' })
+  if (input.sourceTruthSpills?.length || input.view.inlinePayload === undefined) {
+    return readWithPreparedCacheWorker({ ...input, operation: 'select' })
+  }
+  if (Buffer.byteLength(input.view.inlinePayload, 'utf8') <= 256 * 1024) {
+    return readPreparedChatBodyCache({ ...input, operation: 'select' })
+  }
+  return withProjectionForegroundWorkerBudget(() => readPreparedChatBodyCache({ ...input, operation: 'select' }), { signal: input.signal,
+    ...(input.onWorkerTiming ? { onQueueWait: (durationMs) => input.onWorkerTiming?.('worker-queue', durationMs) } : {}) })
 }
 
 /** Search a verified prepared snapshot, returning only bounded matches from the cache worker. */
@@ -112,6 +119,9 @@ function readWithPreparedCacheWorker(input: Readonly<{
   view: PreparedChatBodyView; operation: 'select' | 'search'; query?: string; limit?: number; messageIds?: readonly string[];
   candidateFacts?: readonly ChatBodyCandidateFact[]; signal?: AbortSignal; onWorkerTiming?: WorkerTimingRecorder
 }>): Promise<PreparedChatBodySearch> {
+  if (pendingSearchRequests.size >= MAX_CACHE_WORKER_PENDING_REQUESTS) {
+    return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_QUEUE_FULL'))
+  }
   if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))
   const workerPath = path.join(__dirname, 'projectionChatBodyCacheSearchWorker.js')
   const sourcePath = path.join(__dirname, 'projectionChatBodyCacheSearchWorker.ts')

@@ -3,8 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabase } from '../../../database/testHelpers'
-import { appendMessage, createSession } from '../../../database/operations'
-import { getDbConnection } from '../../../database/sqliteStore'
+import { appendMessage, createSession, deleteSession } from '../../../database/operations'
+import { getDbConnection, reopenDatabaseConnection } from '../../../database/sqliteStore'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
@@ -125,6 +125,59 @@ describe('session body source backfill', () => {
       .rejects.toThrow('PROJECTION_BLOB_CORRUPT')
   })
 
+  it('keeps source-locator pages session-scoped across an A-to-B-to-A switch sequence', async () => {
+    const temp = createTempDatabase('session-source-page-switch-sequence-')
+    cleanup = temp.cleanup
+    const conn = getDbConnection(temp.db)
+    const first = createSession(temp.db, { name: 'source page session A' })
+    const second = createSession(temp.db, { name: 'source page session B' })
+    const rows = [
+      { session: first, id: 'switch-a-message', invocationId: 'switch-a-invocation', turnId: 'switch-a-turn',
+        eventId: 'switch-a-context', body: 'private body for session A', timestamp: 1 },
+      { session: second, id: 'switch-b-message', invocationId: 'switch-b-invocation', turnId: 'switch-b-turn',
+        eventId: 'switch-b-context', body: 'private body for session B', timestamp: 2 },
+    ]
+    for (const item of rows) {
+      appendMessage(temp.db, { id: item.id, sessionId: item.session.id, role: 'user', content: item.body,
+        timestamp: item.timestamp, status: 'sent' })
+      await new SqliteAgentHistory(conn, 1, () => 10, item.session.id).appendBatch([{ invocationId: item.invocationId,
+        turnId: item.turnId, sequence: 1, schemaVersion: 1, eventId: item.eventId, idempotencyKey: item.eventId,
+        kind: 'invocation-context-committed', payload: { messages: [
+          { id: item.id, role: 'user', content: item.body, timestamp: item.timestamp },
+        ] } }], 0)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(item.session.id)
+      conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run(item.id)
+    }
+    conn.prepare(`UPDATE spill_reference_backfill_state SET status='complete',verified_generation=(SELECT meta_value
+      FROM spill_reference_meta WHERE meta_key='canonical_change_generation') WHERE owner_table='agent_history_events'`).run()
+    blobRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-source-page-switch-blobs-'))
+    const blobs = createSessionProjectionBlobStore(blobRoot)
+    for (const item of rows) {
+      const sourceIdentityJson = readProjectionSourceIdentity(conn, item.session.id, item.session.generation)!
+      const historyRows = conn.prepare(`SELECT invocation_id,turn_id,sequence,event_id,idempotency_key,schema_version,kind,session_seq,
+        commit_order,created_at,payload_json FROM agent_history_events WHERE session_id=? ORDER BY session_seq`).all(item.session.id) as
+        Array<{ invocation_id: string; turn_id: string; sequence: number; event_id: string; idempotency_key: string;
+          schema_version: number; kind: string; session_seq: number; commit_order: number; created_at: number; payload_json: string }>
+      const events: ProjectionHistoryChunkEvent[] = historyRows.map((row) => ({ invocationId: row.invocation_id, turnId: row.turn_id,
+        sequence: row.sequence, eventId: row.event_id, idempotencyKey: row.idempotency_key, schemaVersion: row.schema_version,
+        kind: row.kind, sessionSequence: row.session_seq, commitOrder: row.commit_order, createdAt: row.created_at, payloadJson: row.payload_json }))
+      const facts: ProjectionMessageFact[] = [{ id: item.id, role: 'user', timestamp: item.timestamp, sequence: 0,
+        queueScope: 'desktop', contentStorageState: 'canonical-backed-only', writeMode: 'canonical', storedContent: '' }]
+      await runSessionBodySourceBackfill({ db: temp.db, blobs, sessionId: item.session.id, reducerSpecVersion: 1,
+        invocations: (async function* () { yield { events, messageFacts: facts } })() })
+      expect(sourceIdentityJson).toBeTruthy()
+    }
+
+    const storage = createSqliteSessionStorage(temp.db, { projectionBlobRoot: blobRoot, requestBodySourceBackfill: () => undefined })
+    const reads = [first.id, second.id, first.id]
+    for (const sessionId of reads) {
+      const page = await readChatPageAfterPreparation(storage, { sessionId, limit: 10 })
+      const expected = rows.find((item) => item.session.id === sessionId)!
+      expect(page.entries.map(({ message }) => ({ id: message.id, content: message.content })))
+        .toEqual([{ id: expected.id, content: expected.body }])
+    }
+  })
+
   it('does not mark complete when a canonical message is missing from the locator output', async () => {
     const temp = createTempDatabase('session-body-source-incomplete-')
     cleanup = temp.cleanup
@@ -161,6 +214,54 @@ describe('session body source backfill', () => {
     })
 
     await expect(queries.readSourceChatPage?.({ sessionId: session.id, limit: 20 })).rejects.toThrow('PROJECTION_SOURCE_PAGE_CHANGED')
+  })
+
+  it('does not return a selected page after its session is deleted during body materialization', async () => {
+    const temp = createTempDatabase('session-source-page-delete-inflight-')
+    cleanup = temp.cleanup
+    const session = createSession(temp.db, { name: 'source page delete in flight' })
+    appendMessage(temp.db, { id: 'delete-inflight-user', sessionId: session.id, role: 'user', content: '', timestamp: 1, status: 'sent' })
+    const conn = getDbConnection(temp.db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-only' WHERE id=?").run('delete-inflight-user')
+    const currentIdentity = () => readProjectionSourceIdentity(conn, session.id, session.generation) ?? undefined
+    const readSourceBodies = vi.fn(async ({ messageIds }: { messageIds: readonly string[] }) => {
+      deleteSession(temp.db!, session.id, { flush: false })
+      return { messages: messageIds.map((id) => ({ id, role: 'user' as const, timestamp: 1, content: 'must not escape' })), workerThreadId: 1 }
+    })
+    const queries = createSessionQueries(temp.db, { currentSourceIdentity: currentIdentity,
+      currentAuthoritySourceIdentity: currentIdentity, readSourceBodies,
+      readBodies: async () => ({ messages: [], workerThreadId: 1 }), searchBodies: async () => ({ messages: [], workerThreadId: 1 }),
+      invalidate: () => undefined })
+
+    await expect(readChatPageAfterPreparation({ ensureChatBodyV1: async () => { throw new Error('SESSION_NOT_FOUND') }, queries },
+      { sessionId: session.id, limit: 10 })).rejects.toThrow('SESSION_NOT_FOUND')
+    expect(readSourceBodies).toHaveBeenCalledOnce()
+  })
+
+  it('rejects instead of returning a page when the database closes before final source validation', async () => {
+    const temp = createTempDatabase('session-source-page-close-inflight-')
+    cleanup = temp.cleanup
+    const session = createSession(temp.db, { name: 'source page close in flight' })
+    appendMessage(temp.db, { id: 'close-inflight-user', sessionId: session.id, role: 'user', content: '', timestamp: 1, status: 'sent' })
+    const conn = getDbConnection(temp.db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-only' WHERE id=?").run('close-inflight-user')
+    const currentIdentity = () => readProjectionSourceIdentity(getDbConnection(temp.db!), session.id, session.generation) ?? undefined
+    const readSourceBodies = vi.fn(async ({ messageIds }: { messageIds: readonly string[] }) => {
+      temp.db.close()
+      return { messages: messageIds.map((id) => ({ id, role: 'user' as const, timestamp: 1, content: 'must not escape' })), workerThreadId: 1 }
+    })
+    const queries = createSessionQueries(temp.db, { currentSourceIdentity: currentIdentity,
+      currentAuthoritySourceIdentity: currentIdentity, readSourceBodies,
+      readBodies: async () => ({ messages: [], workerThreadId: 1 }), searchBodies: async () => ({ messages: [], workerThreadId: 1 }),
+      invalidate: () => undefined })
+
+    try {
+      await expect(readChatPageAfterPreparation({ ensureChatBodyV1: async () => { throw new Error('projection fallback must not run') }, queries },
+        { sessionId: session.id, limit: 10 })).rejects.toThrow('Database connection is closed')
+      expect(readSourceBodies).toHaveBeenCalledOnce()
+    } finally { reopenDatabaseConnection(temp.db) }
   })
 
   it('passes cancellation into the worker before processing a backfill invocation', async () => {

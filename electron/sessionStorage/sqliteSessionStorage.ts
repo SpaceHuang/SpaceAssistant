@@ -167,7 +167,8 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     const workerStartedAt = performance.now()
     const result = await readProjectionSourceChatBodiesInWorker({ root: cacheBlobs.root, sessionId: input.sessionId,
       sessionGeneration: input.sessionGeneration, sourceRevision: source.sourceRevision, fragments: source.fragments,
-      sourceSpillRoot: source.sourceSpillRoot, sourceTruthSpills: source.sourceTruthSpills, expectedMessageIds: input.messageIds })
+      sourceSpillRoot: source.sourceSpillRoot, sourceTruthSpills: source.sourceTruthSpills, expectedMessageIds: input.messageIds,
+      ...(input.recordStage ? { onQueueWait: (durationMs) => input.recordStage?.('worker-queue', durationMs) } : {}) })
     try { input.recordStage?.('worker-read', performance.now() - workerStartedAt) } catch { /* Diagnostics must not alter the read. */ }
     return result
   }
