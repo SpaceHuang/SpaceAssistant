@@ -8,8 +8,8 @@
 - 所有运行验收均使用隔离数据库副本；未把用户原始数据库交给验收应用。
 - 最新候选 build identity：`3817abb0-b0b3-4bd6-9b34-964550c2d40f`，版本 `0.2.9`，源码提交 `6570771d54ba667b00c4436e83c6c6c1c903715b`，构建时工作树干净。
 - 最新 arm64 PKG SHA-256 为 `d21aa292afefcced83f2d49fbe78487a15ece142cebe80fe9138b4f24338ecc1`，PKG 内 `app.asar` SHA-256 为 `dbe16e0c955b0b143e34cc7283fff0db1f88c4d2e2256903ea2ea163be7e67c1`。`codesign --verify --deep --strict` 通过；无 Developer ID 身份，属于 ad-hoc 隔离候选，不是已签名公证的发布包。
-- 最新包内分页代码在隔离真实库 APFS clone 上执行 `readChatPageAfterPreparation`：大/普通会话 cold-projection source-page 各 30 次，p95 为 3.71/4.96 ms。这是 Electron 44.1.1 / Node 24.19.0 中的共享主进程读函数数据，不包含点击到首帧、React 渲染、跨进程等待或维护竞争。
-- 最新包内 `readCanonicalCompactionReplay` 在同一真实库副本上，大/普通会话各 10 次 p50 为 13.65/8.19 ms。此前包 `410a14dd` 的 15 次 ledger 检查均为 proof reuse，没有重复 baseline；该包仍记录一次 845 ms event-loop delay，来源未确定。
+- 前一候选包内分页代码在隔离真实库 APFS clone 上执行 `readChatPageAfterPreparation`：大/普通会话 cold-projection source-page 各 30 次，p95 为 3.71/4.96 ms。该共享主进程实现与当前 v7 相同；测量使用 Electron 44.1.1 / Node 24.19.0，不包含点击到首帧、React 渲染、跨进程等待或维护竞争。
+- 前一候选包内 `readCanonicalCompactionReplay` 在同一真实库副本上，大/普通会话各 10 次 p50 为 13.65/8.19 ms。此前包 `410a14dd` 的 15 次 ledger 检查均为 proof reuse，没有重复 baseline；该包仍记录一次 845 ms event-loop delay，来源未确定。
 - P4-02 的完整证据和限制见 [external-performance.md](external-performance.md)。视口回归修复的定向测试、类型检查、完整构建和新候选 PKG 校验均通过。
 - 较早的点击测量使用隔离目录 `/tmp/spaceassistant-p4-validation/copies/candidate-v6`；该状态已由下方最新候选 v7 的复测更新。
 - 前一候选启动后日志确认 build ID `c3d37a41-8a08-46e0-b327-52800a4d494d`。两次启动都自动请求初始会话页（各自 `requestOrdinal=1`），观测值分别为：main 9.94/3.86 ms、renderer page request 40.8/66.2 ms、render commit 21.9/6.4 ms、next paint 14.7/11 ms。启动期另观测到 ledger proof reuse 135 ms 与 41 ms，recovery completed 6 ms 与 5 ms。辅助功能看到进程可见但没有窗口，故两条 trace 都只是启动初始页，**不是会话切换样本**，不纳入 AC-7 的点击到首帧统计。日志位置：`/tmp/spaceassistant-p4-validation/copies/candidate-v6/workspaces/2/.agent/logs/Agent-20261027.log`。
@@ -24,7 +24,7 @@
 
 1. 最新包在当前 macOS arm64 设备上的首次访问、热缓存、损坏缓存和维护开/关矩阵；已采集的 105 次 cold 页切换不能代替这些矩阵，按方案 §2 对每个适用格采集至少 30 次、失败率、p50/p95/max。
 2. 同设备、同冻结库来源、同场景的基线/候选点击到首帧比较。计划基线 `109a9384` 已打包，但 schema 115 副本高于基线二进制支持的 107，无法启动；先前 CUA AX / screenshot 计时包含自动化等待和可访问性树读取，不可作为首帧证据。
-3. 切换期间长任务的调用级归因、候选全进程峰值 RSS、维护完成耗时及后台维护对前台的竞争数据。设置页响应已在大/普通上下文各测 20 次，详见“视口修复后的候选包复验”，但不覆盖维护竞争时的设置响应。
+3. 切换期间长任务的调用级归因、维护期间全进程峰值 RSS、维护完成耗时及后台维护对前台的竞争数据。已采集无维护时 4 个进程合计 RSS 的 30 秒样本，见 [external-performance.md](external-performance.md)；设置页响应已在大/普通上下文各测 20 次，但不覆盖维护竞争时的响应。
 4. 安装包 AC-5 的取消等待者、后台维护与前台竞争、关闭/切库场景，以及 AC-6 的源编辑/追加/压缩/删除、spill 损坏、块截断、发布边界故障。窗口 A→B→A 与重复切换已有本轮样本；源码测试通过不能替代剩余安装包场景证据。
 5. IM 并发项不适用：用户确认没有专用私聊或群聊 sandbox。当前不向真实 IM 会话发送测试消息。
 
@@ -38,13 +38,13 @@
 
 ## 结论
 
-P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通会话窗口切换与设置响应采样，并观察确认视口索引修复生效；首次/热/损坏缓存和维护开关矩阵、可兼容的基线对照、维护竞争与完整内存数据，以及 AC-5 的取消/维护/关闭切库和 AC-6 故障注入包内场景仍缺。IM 并发因产品没有私聊、群聊或专用测试会话而不适用。当前结论不表示 AC-7 全面通过，也不构成发布许可。
+P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通会话窗口切换与设置响应采样，并观察确认视口索引修复生效；首次/热/损坏缓存和维护开关矩阵、可兼容的基线对照、维护竞争与维护期间内存峰值，以及 AC-5 的取消/维护/关闭切库和 AC-6 故障注入包内场景仍缺。无维护时的全进程 RSS 基线已采样。IM 并发因产品没有私聊、群聊或专用测试会话而不适用。当前结论不表示 AC-7 全面通过，也不构成发布许可。
 
 ## 解锁后补充（2026-10-27）
 
 - 在候选包窗口实际观察到 94–104.6 ms 的 long animation frame 与 50–74 ms long task。它们足以说明仍存在可感知卡顿风险，但缺少脚本 attribution 和调用级关联；当前没有证据证明 20 条首屏页读取本身是长帧来源。候选单进程 RSS 采样峰值约 517.4 MiB。
 - 已从计划基线 `109a9384` 构建 arm64 PKG；构建与签名校验成功。但该二进制支持的最高数据库版本为 107，其他可读取的同数据副本均为 schema 115/116，启动被安全拒绝；另有一份 baseline-v3 副本无法只读校验。因此同库基线 UI 对照仍不可执行，也没有尝试降低 schema 或修改用户数据。
-- 当前唯一运行实例是候选 PKG，进程命令行明确带有 `--user-data-dir=/tmp/spaceassistant-p4-validation/copies/candidate-v6`；基线实例已退出。没有启动多个候选/基线窗口并行测试。
+- 截至该段旧测量记录，唯一运行实例是候选 PKG，进程命令行带有 `--user-data-dir=/tmp/spaceassistant-p4-validation/copies/candidate-v6`；基线实例已退出。该状态已由下方 v7 复测更新，期间没有并行启动基线/候选窗口。
 - IM 项继续标记为不适用：项目没有专用私聊或群聊测试会话，未向任何真实会话发送消息。
 
 更新后的结论仍是 **P4-03 未完成**。真实候选窗口测量已开始，但基线版本拒绝兼容、AC-7 全矩阵及 AC-5/AC-6 包内代表场景尚未完成；因此不能写“验收完成”或“允许发布”。
@@ -57,4 +57,4 @@ P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通
 - 最新唯一运行进程是候选 PKG，隔离目录 `/tmp/spaceassistant-p4-validation/copies/candidate-v7`，未启用远程调试端口。没有向任何 IM 会话发消息；用户确认产品没有私聊、群聊或专用 IM 测试会话，因此 IM 并发验收不适用。
 - 用来尝试 AC-6 源片段缺失的副本只有 legacy 格式消息，故该尝试不计验收；细节与数据分布见 [external-performance.md](external-performance.md)。
 
-结论维持 **P4-03 未完成**。热/损坏缓存与维护开关矩阵、维护竞争和维护完成时间、全进程 RSS、可兼容的基线对照，以及安装包内 AC-5 剩余并发场景和 AC-6 故障场景仍待验收。当前候选测量只关闭了本轮视口跨会话索引回归的运行观察，不构成整体验收或发布许可。
+结论维持 **P4-03 未完成**。热/损坏缓存与维护开关矩阵、维护竞争和维护完成时间、维护期间全进程峰值 RSS、可兼容的基线对照，以及安装包内 AC-5 剩余并发场景和 AC-6 故障场景仍待验收。无维护时的全进程 RSS 基线已有 30 秒样本。当前候选测量只关闭了本轮视口跨会话索引回归的运行观察，不构成整体验收或发布许可。
