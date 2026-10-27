@@ -550,13 +550,13 @@ app.whenReady().then(async () => {
     getTurnRuntime: () => turnRuntime,
     getUserDataDir: () => app.getPath('userData'),
     projectionBlobRoot: path.join(app.getPath('userData'), 'session-projections'),
-    ensureSessionLedgerReady: async ({ session, workDir }) => {
+    ensureSessionLedgerReady: async ({ session, workDir, retryBlocked = true }) => {
       const result = await ensureSessionLedgerReady({
         conn: getDbConnection(db),
         location: { workDir, sessionId: session.id, createdAt: session.createdAt },
         sessionGeneration: session.generation,
         processGeneration,
-        retryBlocked: true,
+        retryBlocked,
         dependencies: sessionLedgerLifecycleDependencies,
         onTrace: logSessionLedgerGateTrace
       })

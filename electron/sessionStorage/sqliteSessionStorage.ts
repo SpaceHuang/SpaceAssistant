@@ -87,7 +87,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   getUserDataDir?: () => string
   getSessionEventSink?: typeof getSessionEventSink
   readCompactionReplay?: typeof readCompactionReplay
-  ensureSessionLedgerReady?: (input: { session: import('../../src/shared/domainTypes').Session; workDir: string }) => Promise<boolean>
+  ensureSessionLedgerReady?: (input: { session: import('../../src/shared/domainTypes').Session; workDir: string; retryBlocked?: boolean }) => Promise<boolean>
   inspectMaintenance?: () => readonly MaintenanceState[]
   recoveryStages?: Partial<Pick<SessionRecoveryDependencies, 'history' | 'snapshots' | 'coordinator' | 'reconcile' | 'continuations' | 'ledgerRepairs'>>
 } = {}): SessionStorage {
@@ -96,7 +96,9 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   }> => {
     const session = queries.readSession(sessionId)
     if (!session) throw new Error('SESSION_NOT_FOUND')
-    const canPersist = !options.ensureSessionLedgerReady || await options.ensureSessionLedgerReady({ session, workDir })
+    // Session-switch marker hydration is read-only: reuse a blocked verdict rather than rescanning
+    // all canonical history on every switch. Write paths keep the default retry behavior.
+    const canPersist = !options.ensureSessionLedgerReady || await options.ensureSessionLedgerReady({ session, workDir, retryBlocked: false })
     if (!canPersist) return { replay: queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }, canPersist: false }
     const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
     const fileReplay = await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)

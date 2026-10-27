@@ -181,6 +181,23 @@ function renderChatView(): ReturnType<typeof render> {
 }
 
 describe('ChatView 失败原因回溯', () => {
+  it('切换会话 trace 从 setSession 调用开始计时并在页面请求中保留关联', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    renderChatView()
+
+    await waitFor(() => {
+      const line = info.mock.calls.map(([value]) => String(value)).find((value) => value.startsWith('[session.switch.trace.renderer] '))
+      expect(line).toBeDefined()
+      const trace = JSON.parse(line!.replace('[session.switch.trace.renderer] ', '')) as {
+        stages: Array<{ name: string; durationMs: number; outcome: string }>
+        sessionId?: string
+      }
+      expect(trace.stages).toContainEqual({ name: 'selection-to-page-request', durationMs: expect.any(Number), outcome: 'ok' })
+      expect(trace).not.toHaveProperty('sessionId')
+    })
+    info.mockRestore()
+  })
+
   it('失败原因查询挂起时先提交并显示消息正文', async () => {
     let resolveReasons!: (value: Array<{ assistantMessageId: string; message: string }>) => void
     vi.mocked(window.api.chatGetTurnErrors).mockImplementation(() => new Promise((resolve) => { resolveReasons = resolve }))

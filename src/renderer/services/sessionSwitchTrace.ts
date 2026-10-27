@@ -3,10 +3,27 @@ import { attachSessionSwitchTraceMetadata, type SessionSwitchTraceMetadata } fro
 export type RendererSessionSwitchStage = Readonly<{ name: string; durationMs: number; outcome: 'ok' | 'error' }>
 
 const ALLOWED_RENDERER_STAGES = new Set([
-  'renderer-page-request', 'failure-reason-hydration', 'store-commit', 'render-commit', 'next-paint'
+  'selection-to-page-request', 'renderer-page-request', 'failure-reason-hydration', 'store-commit', 'render-commit', 'next-paint'
 ])
 
 let rendererPageRequestOrdinal = 0
+let pendingSessionSelection: Readonly<{ sessionId: string; startedAt: number }> | undefined
+
+/** Keep the selection start in renderer memory only; session IDs are never emitted. */
+export function recordRendererSessionSelection(sessionId: string | null, previousSessionId: string | null, now = performance.now()): void {
+  if (!sessionId || sessionId === previousSessionId || !Number.isFinite(now)) return
+  pendingSessionSelection = { sessionId, startedAt: now }
+}
+
+/** Consume one selection marker when ChatView begins the corresponding page request. */
+export function takeRendererSessionSelectionDuration(sessionId: string, now = performance.now()): number | undefined {
+  const pending = pendingSessionSelection
+  if (!pending || pending.sessionId !== sessionId) return undefined
+  pendingSessionSelection = undefined
+  const durationMs = now - pending.startedAt
+  if (!Number.isFinite(durationMs) || durationMs < 0 || durationMs > 600_000) return undefined
+  return Math.round(durationMs * 100) / 100
+}
 
 /** Attach correlation in the renderer world, after contextBridge has copied the IPC result. */
 export async function requestChatMessagePageWithTraceMetadata<T extends object>(request: () => Promise<T>): Promise<T> {

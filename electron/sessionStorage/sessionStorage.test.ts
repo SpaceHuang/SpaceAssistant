@@ -490,6 +490,27 @@ describe('SQLite session storage public queries', () => {
     expect(readReplay).not.toHaveBeenCalled()
   })
 
+  it('does not retry a blocked ledger while reading compaction markers for a session switch', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'blocked-compaction-marker-read' })
+    const ensureSessionLedgerReady = vi.fn(async () => false)
+    const getLedger = vi.fn(() => { throw new Error('blocked ledger must not open the event file') })
+    const storage = createSqliteSessionStorage(db, {
+      getWorkDirForSession: () => '/tmp/blocked-compaction-marker-read',
+      ensureSessionLedgerReady,
+      getSessionEventSink: getLedger as never
+    })
+
+    await expect(storage.readCompactionReplay({ sessionId: session.id, workDir: '/tmp/blocked-compaction-marker-read' }))
+      .resolves.toEqual({ committed: [], rejected: [] })
+    expect(ensureSessionLedgerReady).toHaveBeenCalledWith(expect.objectContaining({
+      session: expect.objectContaining({ id: session.id }),
+      workDir: '/tmp/blocked-compaction-marker-read',
+      retryBlocked: false
+    }))
+    expect(getLedger).not.toHaveBeenCalled()
+  })
+
   it('rebuilds readCurrent from committed compaction shadow after recreating the session adapter', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'restart-context-shadow' })

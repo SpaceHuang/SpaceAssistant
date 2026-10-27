@@ -95,13 +95,19 @@ describe('session switch trace', () => {
   it('allows only bounded switch trace fields through the production log projection', () => {
     const projected = projectAgentLogFields('session.switch.trace', {
       instance: 'main', traceId: 'trace-1', rendererProcessId: 77, requestOrdinal: 3, outcome: 'ok', cachePath: 'ready', pageSize: 20,
-      durationMs: 12.34, stages: [{ name: 'page-read', durationMs: 12.34, outcome: 'ok' }],
+      durationMs: 12.34, stages: [
+        { name: 'selection-to-page-request', durationMs: 4.5, outcome: 'ok' },
+        { name: 'page-read', durationMs: 12.34, outcome: 'ok' }
+      ],
       sessionId: 'private-session', content: 'private body', error: 'private error', path: '/private/path'
     })
 
     expect(projected).toEqual({
       instance: 'main', traceId: 'trace-1', rendererProcessId: 77, requestOrdinal: 3, outcome: 'ok', cachePath: 'ready', pageSize: 20,
-      durationMs: 12.34, stages: [{ name: 'page-read', durationMs: 12.34, outcome: 'ok' }]
+      durationMs: 12.34, stages: [
+        { name: 'selection-to-page-request', durationMs: 4.5, outcome: 'ok' },
+        { name: 'page-read', durationMs: 12.34, outcome: 'ok' }
+      ]
     })
   })
 

@@ -4,9 +4,12 @@ import { projectRendererSessionSwitchTraceMessage } from './agentLogProjection'
 
 describe('projectAgentLogFields', () => {
   it('accepts renderer switch timings only from the private console diagnostic envelope', () => {
-    expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] {"event":"session.switch.trace","instance":"renderer","rendererProcessId":44,"requestOrdinal":8,"outcome":"ok","pageSize":20,"stages":[{"name":"renderer-page-request","durationMs":3.4,"outcome":"ok"}],"private":"body"}'))
+    expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] {"event":"session.switch.trace","instance":"renderer","rendererProcessId":44,"requestOrdinal":8,"outcome":"ok","pageSize":20,"stages":[{"name":"selection-to-page-request","durationMs":4.5,"outcome":"ok"},{"name":"renderer-page-request","durationMs":3.4,"outcome":"ok"}],"private":"body"}'))
       .toEqual({ instance: 'renderer', traceId: '44-8', rendererProcessId: 44, requestOrdinal: 8,
-        outcome: 'ok', pageSize: 20, stages: [{ name: 'renderer-page-request', durationMs: 3.4, outcome: 'ok' }] })
+        outcome: 'ok', pageSize: 20, stages: [
+          { name: 'selection-to-page-request', durationMs: 4.5, outcome: 'ok' },
+          { name: 'renderer-page-request', durationMs: 3.4, outcome: 'ok' }
+        ] })
     expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] {"private":"body"}')).toBeUndefined()
     expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] not-json')).toBeUndefined()
     expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] {"event":"session.switch.trace","instance":"renderer","requestOrdinal":9,"outcome":"ok","pageSize":20,"stages":[]}', 55))

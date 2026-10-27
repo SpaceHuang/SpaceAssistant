@@ -8,6 +8,7 @@ import { changeAppLocale } from '../../i18n/localeSync'
 import { store } from '../../store'
 import { setChatStatus, setSession } from '../../store/chatSlice'
 import { setSessions } from '../../store/sessionSlice'
+import { takeRendererSessionSelectionDuration } from '../../services/sessionSwitchTrace'
 import { SessionListPane } from './SessionListPane'
 
 const pendingItems = vi.hoisted(() => ({ current: [] as Array<{ sessionId: string; requestId: string; toolUseId: string; toolName: string; input: unknown; riskLevel: 'low' | 'medium' | 'high'; createdAt: number }> }))
@@ -86,6 +87,15 @@ describe('SessionListPane rename', () => {
     fireEvent.click(selectBtn)
 
     expect(store.getState().chat.currentSessionId).toBe('s2')
+  })
+
+  it('captures the session selection before ChatView starts its page request', () => {
+    renderPane([stubSession('s1', '会话 A'), stubSession('s2', '会话 B')], 's1')
+
+    fireEvent.click(screen.getByText('会话 B'))
+
+    expect(store.getState().chat.currentSessionId).toBe('s2')
+    expect(takeRendererSessionSelectionDuration('s2')).toEqual(expect.any(Number))
   })
 
   it('keeps only the latest session in edit mode', async () => {

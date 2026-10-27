@@ -19,7 +19,7 @@ const TARGET_EVENTS = new Set<AgentLogEventName>([
   'shell.exec.background', 'shell.exec.finish', 'shell.exec.error', 'grep.terminate'
 ])
 const RENDERER_SESSION_SWITCH_STAGES = new Set([
-  'renderer-page-request', 'failure-reason-hydration', 'store-commit', 'render-commit', 'next-paint'
+  'selection-to-page-request', 'renderer-page-request', 'failure-reason-hydration', 'store-commit', 'render-commit', 'next-paint'
 ])
 const COMMON_KEYS = new Set([
   'requestId', 'sessionId', 'toolUseId', 'loopRound', 'toolName', 'level', 'success', 'durationMs',

@@ -53,7 +53,7 @@ import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
 import { loadTurnFailureReasons } from '../../services/turnFailureHydration'
 import { readSessionSwitchTraceMetadata } from '../../../shared/sessionSwitchTraceMetadata'
-import { emitRendererSessionSwitchTrace, requestChatMessagePageWithTraceMetadata } from '../../services/sessionSwitchTrace'
+import { emitRendererSessionSwitchTrace, requestChatMessagePageWithTraceMetadata, takeRendererSessionSelectionDuration } from '../../services/sessionSwitchTrace'
 import type { ChatModelOption } from '../../../shared/llmModelConfig'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
 import { appendArchivedQuery } from '../../../shared/wikiSessionState'
@@ -223,7 +223,7 @@ export function ChatView() {
 
   /** Fetch page data only; failure diagnostics are requested after the page has been committed. */
   const fetchMessagePage = useCallback(
-    async (payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
+    async (payload: { sessionId: string; beforeSequence?: number; limit?: number; selectionToPageRequestMs?: number }) => {
       const requestStartedAt = performance.now()
       let page: Awaited<ReturnType<typeof window.api.chatGetMessagePage>>
       try {
@@ -231,14 +231,20 @@ export function ChatView() {
       } catch (error) {
         const metadata = readSessionSwitchTraceMetadata(error)
         if (metadata) emitRendererSessionSwitchTrace({ metadata, outcome: 'error', pageSize: 0,
-          stages: [{ name: 'renderer-page-request', durationMs: performance.now() - requestStartedAt, outcome: 'error' }] })
+          stages: [
+            ...(payload.selectionToPageRequestMs === undefined ? [] : [{ name: 'selection-to-page-request', durationMs: payload.selectionToPageRequestMs, outcome: 'ok' as const }]),
+            { name: 'renderer-page-request', durationMs: performance.now() - requestStartedAt, outcome: 'error' }
+          ] })
         throw error
       }
       const pageRequestMs = performance.now() - requestStartedAt
       const traceMetadata = readSessionSwitchTraceMetadata(page)
       if (traceMetadata) emitRendererSessionSwitchTrace({
         metadata: traceMetadata, outcome: 'ok', pageSize: page.entries.length,
-        stages: [{ name: 'renderer-page-request', durationMs: pageRequestMs, outcome: 'ok' }]
+        stages: [
+          ...(payload.selectionToPageRequestMs === undefined ? [] : [{ name: 'selection-to-page-request', durationMs: payload.selectionToPageRequestMs, outcome: 'ok' as const }]),
+          { name: 'renderer-page-request', durationMs: pageRequestMs, outcome: 'ok' }
+        ]
       })
       return page
     },
@@ -275,8 +281,9 @@ export function ChatView() {
     let cancelled = false
     const summaryGeneration = beginContextSummarySession(sessionId)
     const generation = nextDisplayRequestGeneration()
+    const selectionToPageRequestMs = takeRendererSessionSelectionDuration(sessionId)
     void (async () => {
-      const page = await fetchMessagePage({ sessionId, limit: SESSION_SWITCH_MESSAGE_PAGE_SIZE })
+      const page = await fetchMessagePage({ sessionId, limit: SESSION_SWITCH_MESSAGE_PAGE_SIZE, selectionToPageRequestMs })
       if (cancelled) return
       const renderTraceMetadata = readSessionSwitchTraceMetadata(page)
       const storeCommitStartedAt = performance.now()
