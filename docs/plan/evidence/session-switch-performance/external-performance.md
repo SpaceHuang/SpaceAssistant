@@ -132,4 +132,6 @@ P4-02 **保持进行中**。代码修复已提交，但不按局部候选分段�
 
 直接从 PKG 的 app.asar 解出编译产物，用 `node:sqlite` 只读打开同一 `candidate-v6` 库，对上面两个会话各执行 10 次 `readCanonicalCompactionReplay`：大历史 min/p50/p95/max 为 13.47/13.65/13.79/105.30 ms；普通历史为 8.09/8.19/9.17/22.42 ms。该测量隔离的是 compaction replay 读取函数，不是点击到首帧；它证明打入包的实现没有再扫描/解析整段 History，但不能关闭 AC-7。
 
-当前运行实例已收敛为一个基线实例；旧候选 v4 已正常终止。最新 PKG 尚未启动，因为桌面自动化当前报告 macOS 已锁定，不能安全采集 UI 首帧、主线程长任务和设置响应证据。恢复桌面可操作后，再以最新包创建/启动唯一候选实例并完成同口径矩阵；在此之前，P4-02 仍保持进行中。P4-03 仍缺真实 IM sandbox 账号 / 会话，之前授权的少量测试消息尚未发送。
+2026-10-27 更新：用户确认 Mac 已解锁，但桌面自动化仍返回“Mac 已锁定”。因此改用 `open -n` 启动最新解包候选一次，只指向隔离目录 `/tmp/spaceassistant-p4-validation/copies/candidate-v6`，基线使用独立副本 `/tmp/spaceassistant-p4-validation/copies/baseline-v4`。候选实际启动并写入 build ID `c3d37a41-8a08-46e0-b327-52800a4d494d` 的日志。首次启动产生一条初始页 trace：main 9.94 ms、renderer page request 40.8 ms、render commit 21.9 ms、next paint 14.7 ms；这是启动初始页，不是会话切换，不能计入 AC-7。完成日志读取后已向本任务启动的候选与基线实例发送 TERM，并确认退出。
+
+IM 项经用户澄清标为不适用：项目没有专用私聊或群聊 sandbox 会话，不向真实会话发测试消息。P4-02 仍进行中：桌面自动化未能恢复，真实点击切换、同口径基线、缓存/维护矩阵、主线程长任务、内存峰值和维护完成时间仍无证据；P4-03 的 AC-5/AC-6 包内代表场景也未验收。启动页 trace 和函数级数据不替代这些项目。
