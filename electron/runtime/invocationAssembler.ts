@@ -117,6 +117,7 @@ export interface AgentInvocationMaterials {
   providerRouteId?: string
   contextWindow?: number
   contextWindowTrusted?: boolean
+  contextCompactionTriggerRatio?: number
   baseUrl?: string
   messages: readonly unknown[]
   system?: string
@@ -1709,6 +1710,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       lane: materialsLane,
       model: materials.model,
       contextWindow: materials.contextWindow,
+      contextCompactionTriggerRatio: materials.contextCompactionTriggerRatio,
       getWorkDirSnapshot: () => {
         const snapshot = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
         return { workDir: snapshot.rootPath ?? materials.workDir, profileId: snapshot.profileId ?? '', key: snapshot.key ?? '', revision: snapshot.revision ?? 0 }

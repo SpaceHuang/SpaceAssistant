@@ -1,6 +1,13 @@
 import { DEFAULT_MODEL_MAX_CONTEXT } from './domainTypes'
 import { estimateTokensFromUtf8Text } from './contextUsageEstimate'
 
+export const CONTEXT_COMPACTION_TRIGGER_RATIO = { DEFAULT: 0.8, MIN: 0.6, MAX: 0.9 } as const
+
+export function normalizeContextCompactionTriggerRatio(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return CONTEXT_COMPACTION_TRIGGER_RATIO.DEFAULT
+  return Math.min(CONTEXT_COMPACTION_TRIGGER_RATIO.MAX, Math.max(CONTEXT_COMPACTION_TRIGGER_RATIO.MIN, value))
+}
+
 function estimateProtocolTokens(value: unknown): number {
   if (typeof value === 'string') return estimateTokensFromUtf8Text(value)
   if (Array.isArray(value)) return value.reduce((sum, item) => sum + estimateProtocolTokens(item), 0)
@@ -223,7 +230,9 @@ export function buildRequestContextPayload(args: {
   contextUsage?: RequestContextPayload['contextUsage']
   windowId?: string
   planningStatus?: RequestContextPayload['planningStatus']
+  triggerRatio?: number
 }): RequestContextPayload {
+  const triggerRatio = normalizeContextCompactionTriggerRatio(args.triggerRatio ?? CONTEXT_COMPACTION_TRIGGER_RATIO.DEFAULT)
   const outputAccounting = args.outputAccounting ?? 'shared'
   const hasConfiguredWindow = Number.isFinite(args.contextWindow) && args.contextWindow! > 0
   const contextWindow = hasConfiguredWindow ? args.contextWindow! : DEFAULT_MODEL_MAX_CONTEXT
@@ -233,7 +242,7 @@ export function buildRequestContextPayload(args: {
   const bodyBudget = Math.max(0, totalInputBudget - prefixTokens)
   const surfaceTokens = args.surfaceSnapshot?.surfaceTokens ?? prefixTokens
   const decision = args.decision ?? { decisionId: args.requestId, phase: 'turn_boundary', reason: 'proactive', ruleVersion: 'adaptive-v1' }
-  const decisionFingerprint = fingerprint(JSON.stringify({ ...decision, surfaceTokens, prefixTokens, totalInputBudget, bodyBudget, triggerRatio: 0.9, targetBodyRatio: 0.8, contextWindow, windowId: args.windowId ?? args.requestId }))
+  const decisionFingerprint = fingerprint(JSON.stringify({ ...decision, surfaceTokens, prefixTokens, totalInputBudget, bodyBudget, triggerRatio, targetBodyRatio: 0.8, contextWindow, windowId: args.windowId ?? args.requestId }))
   return {
     requestId: args.requestId,
     windowId: args.windowId ?? args.requestId,
@@ -244,7 +253,7 @@ export function buildRequestContextPayload(args: {
     outputReserveTokens: outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0,
     outputAccounting,
     schemaVersion: 1,
-    budget: { totalInputBudget, bodyBudget, inputBudget: bodyBudget, prefixTokens, requiredTokens: 0, outputReserveTokens: outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0, safetyReserveTokens: 0, triggerRatio: 0.9, targetBodyRatio: 0.8, estimatorVersion: 'default-v1', serializationVersion: 'anthropic-wire-v1' },
+    budget: { totalInputBudget, bodyBudget, inputBudget: bodyBudget, prefixTokens, requiredTokens: 0, outputReserveTokens: outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0, safetyReserveTokens: 0, triggerRatio, targetBodyRatio: 0.8, estimatorVersion: 'default-v1', serializationVersion: 'anthropic-wire-v1' },
     contextUsage: args.contextUsage ?? { pressureTokens: null, projectedTokens: null, surfaceTokens, hardFit: surfaceTokens <= totalInputBudget, bodyFit: Math.max(0, surfaceTokens - prefixTokens) <= bodyBudget },
     ...decision,
     decisionFingerprint,

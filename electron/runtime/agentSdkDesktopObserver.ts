@@ -28,6 +28,7 @@ export function createAgentSdkDesktopObserver(input: {
   lane?: ExecutionLane
   model?: string
   contextWindow?: number
+  contextCompactionTriggerRatio?: number
   windowId?: string
   sessionEventLocation?: { workDir: string; sessionId: string; createdAt: number }
   turnIdForRetry?: string
@@ -225,6 +226,7 @@ export function createAgentSdkDesktopObserver(input: {
       provider: 'anthropic',
       model: input.model ?? request.routeId,
       contextWindow: input.contextWindow,
+      triggerRatio: input.contextCompactionTriggerRatio,
       maxTokensEffective: request.request.maxTokens,
       surfaceSnapshot: {
         surfaceTokens: header.surfaceSnapshot.surfaceTokens,
@@ -313,6 +315,7 @@ export function createAgentSdkDesktopObserver(input: {
       provider: requestContext.context.provider,
       model: requestContext.context.model,
       contextWindow: contextWindow.tokens,
+      triggerRatio: input.contextCompactionTriggerRatio,
       maxTokensEffective: requestContext.context.maxTokensEffective,
       surfaceSnapshot: finalHeader.surfaceSnapshot,
       contextUsage: projection,

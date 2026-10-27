@@ -38,6 +38,7 @@ export type TurnExecutionConfig = {
   lane?: 'desktop' | 'feishu' | 'wechat' | 'automation'
   model?: string
   maximumContext?: number
+  contextCompactionTriggerRatio?: number
   maximumContextTrusted?: boolean
   llmServiceId?: string
   system?: string

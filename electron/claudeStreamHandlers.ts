@@ -498,6 +498,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           model,
           providerRouteId,
           contextWindow: frozen.maximumContext,
+          contextCompactionTriggerRatio: frozen.contextCompactionTriggerRatio,
           contextWindowTrusted: frozen.maximumContextTrusted,
           baseUrl,
           messages,

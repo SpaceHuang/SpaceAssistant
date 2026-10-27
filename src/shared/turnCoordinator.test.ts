@@ -29,6 +29,10 @@ function storage(): TurnStorage {
 }
 
 describe('TurnCoordinator', () => {
+  it('冻结配置规范化时保留上下文压缩触发比例', () => {
+    expect(normalizeTurnExecutionConfig({ lane: 'desktop', contextCompactionTriggerRatio: 0.6 })).toMatchObject({ contextCompactionTriggerRatio: 0.6 })
+  })
+
   it('冻结配置规范化时丢弃 API key 等未声明凭据字段', () => {
     // P4（偏差 5）：baseUrl 出契约——normalize 不再保留该字段（网络目标归宿主绑定）
     const config = normalizeTurnExecutionConfig({ model: ' deepseek-chat ', baseUrl: 'https://api.deepseek.com/', apiKey: 'secret' } as never)

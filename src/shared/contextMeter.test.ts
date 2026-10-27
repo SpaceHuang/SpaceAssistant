@@ -60,6 +60,12 @@ describe('ContextMeter pure projections', () => {
     expect(shouldCompact({ ...result, projectedTokens: 920 }, input().budget)).toBe(true)
   })
 
+  it('honors trigger ratios below the safety ceiling', () => {
+    const result = computeContextPressure(input({ currentSurface: { ...input().currentSurface, surfaceTokens: 800, messageTokens: 600 } }))
+    expect(shouldCompact({ ...result, projectedTokens: 679 }, { ...input().budget, triggerRatio: 0.6 })).toBe(false)
+    expect(shouldCompact({ ...result, projectedTokens: 680 }, { ...input().budget, triggerRatio: 0.6 })).toBe(true)
+  })
+
   it('builds an anchor only from the same request event triplet', () => {
     const base = input()
     const snapshot = base.currentSurface

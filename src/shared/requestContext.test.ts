@@ -25,6 +25,11 @@ describe('request context payload', () => {
       outputReserveTokens: 2000, outputAccounting: 'shared'
     })
   })
+  it('uses the configured trigger ratio in both the budget and decision fingerprint', () => {
+    const payload = buildRequestContextPayload({ requestId: 'r1', provider: 'x', model: 'm', contextWindow: 100, maxTokensEffective: 20, triggerRatio: 0.6 })
+    expect(payload.budget.triggerRatio).toBe(0.6)
+    expect(payload.decisionFingerprint).not.toBe(buildRequestContextPayload({ requestId: 'r1', provider: 'x', model: 'm', contextWindow: 100, maxTokensEffective: 20 }).decisionFingerprint)
+  })
   it('uses separate accounting when the provider window excludes output', () => {
     expect(buildRequestContextPayload({ requestId: 'r1', provider: 'x', model: 'm', contextWindow: 100, maxTokensEffective: 20, outputAccounting: 'separate' }).outputReserveTokens).toBe(0)
   })
