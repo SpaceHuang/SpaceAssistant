@@ -1,0 +1,48 @@
+{
+  "buildId": "e4aca912-a3e7-4d0b-8d43-2cb820057f02",
+  "appAsarSha256": "3330eda77d36f8c8b82e15bafa55ea4e25daa0e1b942bf3f81db70a13f48bb82",
+  "profile": "/tmp/spaceassistant-p4-validation/copies/maintenance-rss-20261028",
+  "session": {
+    "id": "8daf401c-29b3-49eb-bb6f-e6c10f55f5c6",
+    "messageCount": 1000
+  },
+  "maintenance": {
+    "observedStatus": "valid",
+    "attempts": 0,
+    "bodySourceStatus": "complete",
+    "firstSliceCompletedAtUtc": "2026-10-27T19:54:47.160Z",
+    "publishedAtUtc": "2026-10-27T19:54:47.642Z",
+    "sliceLogCompletionDeltaMs": 482,
+    "sliceDurationMs": [
+      57.81,
+      481.11
+    ],
+    "summedSliceDurationMs": 538.92,
+    "launchToPublishedMs": null,
+    "timingNote": "The source log was copied with historical records; launch-relative time was not measured. Slice timestamps/durations were read from the newly appended end-of-run log entries."
+  },
+  "rssDuringRebuilding": {
+    "samples": 9,
+    "p50MiB": 894.203125,
+    "p95MiB": 899.21875,
+    "maxMiB": 899.21875,
+    "processCountMin": 4,
+    "processCountMax": 4,
+    "sampleIntervalMs": 25
+  },
+  "rssOverall": {
+    "samples": 42,
+    "maxMiB": 1039.375,
+    "note": "Includes startup; summed process RSS double counts shared pages."
+  },
+  "sampleIntervalMs": 25,
+  "limitation": "Synthetic canonical-backed-only data in isolated COW profile; 9 samples over a short rebuilding interval; summed per-process RSS double counts shared pages; no trusted window click, concurrent foreground request, or Long Task/LoAF observer.",
+  "pageTrace": {
+    "pageSize": 20,
+    "cachePath": "cold",
+    "mainHandlerMs": 65.6,
+    "rendererPageRequestMs": 316.2,
+    "nextPaintMs": 1.2,
+    "scope": "one startup request trace; log does not include sessionId, so not attributed to the 1000-message fixture"
+  }
+}

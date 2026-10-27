@@ -24,7 +24,7 @@
 
 1. 最新包在当前 macOS arm64 设备上的首次访问、热缓存、损坏缓存和维护开/关矩阵；已采集的 105 次 cold 页切换不能代替这些矩阵，按方案 §2 对每个适用格采集至少 30 次、失败率、p50/p95/max。
 2. 已完成同一冻结备份来源的基线/候选真实窗口点击代理比较，细节见下方“同源基线与最大历史窗口点击补充”。因两版最大会话规模不同，且指标截止双帧而非正文首屏 ready，该证据不能关闭 AC-7；仍需按方案口径测量内容 ready 与缓存/维护场景。
-3. 切换期间长任务的调用级归因、维护期间全进程峰值 RSS、维护完成耗时及后台维护对前台的竞争数据。已采集无维护时 4 个进程合计 RSS 的 30 秒样本，见 [external-performance.md](external-performance.md)；设置页响应已在大/普通上下文各测 20 次，但不覆盖维护竞争时的响应。
+3. 切换期间长任务的调用级归因、完整维护峰值 RSS 及后台维护对前台的竞争数据仍缺。新增 arm64 包 1000 条 canonical 会话重建记录：两段 slice 合计 538.9 ms；重建期间进程树 RSS 9 点 p50/p95/max 为 894.2/899.2/899.2 MiB，启动全过程 max 为 1039.4 MiB（RSS 相加重复计算共享页）。该短窗口未并发触发前台请求、未采集 Long Task/LoAF，不能关闭维护竞争或 AC-7。此前无维护时 4 进程 30 秒样本及设置页数据见 [external-performance.md](external-performance.md)。
 4. 安装包 AC-5 的取消等待者、后台维护与前台竞争、关闭/切库场景，以及 AC-6 的源编辑/追加/压缩/删除、投影块截断、发布边界故障。包内预加载 API 的 A→B→A 30 轮、并发 40 次页读取及会话路由隔离已有样本；这不是窗口点击证据。canonical source spill 缺失、截断、同长度摘要篡改、合法格式但不存在的 locator 时 fail-closed 均已用合成 canonical-backed 包内样本验证，详见 [external-performance.md](external-performance.md)。源码测试通过不能替代剩余安装包场景证据。
 5. IM 并发项不适用：用户确认没有专用私聊或群聊 sandbox。当前不向真实 IM 会话发送测试消息。
 
@@ -57,7 +57,7 @@ P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通
 - 最新唯一运行进程是候选 PKG，隔离目录 `/tmp/spaceassistant-p4-validation/copies/candidate-v7`，未启用远程调试端口。没有向任何 IM 会话发消息；用户确认产品没有私聊、群聊或专用 IM 测试会话，因此 IM 并发验收不适用。
 - 真实库上的早期 AC-6 探针因样本是 legacy 消息而不计验收。随后已在独立合成 canonical-backed fixture 上验证包内 source spill 缺失、截断、同长度摘要篡改及 locator 指向不存在文件均返回 `CANONICAL_SESSION_CONTENT_UNAVAILABLE`，证据见 [external-performance.md](external-performance.md)。
 
-结论维持 **P4-03 未完成**。同源基线点击代理比较已有记录，但双帧指标不能替代正文首屏 ready；热/损坏缓存与维护开关矩阵、维护竞争和维护完成时间、维护期间全进程峰值 RSS，以及安装包内 AC-5 剩余并发场景和 AC-6 剩余故障场景仍待验收。无维护时的全进程 RSS 基线已有 30 秒样本；source spill 缺失、截断、摘要篡改与 locator 失效的 fail-closed 已在包内验证。当前候选测量不构成整体验收或发布许可。
+结论维持 **P4-03 未完成**。同源基线点击代理比较已有记录，但双帧指标不能替代正文首屏 ready；热/损坏缓存与维护开关矩阵、维护期间前台竞争、适用于真实历史的完整维护收敛时长与进程峰值 RSS，以及安装包内 AC-5 剩余并发场景和 AC-6 剩余故障场景仍待验收。另有一次 1000 条 canonical-backed-only 合成会话的包内重建测量：两段 slice 合计 538.9 ms，短窗口 RSS 采样见 [external-performance.md](external-performance.md)，不替代上述矩阵。无维护时的全进程 RSS 基线已有 30 秒样本；source spill 缺失、截断、摘要篡改与 locator 失效的 fail-closed 已在包内验证。当前候选测量不构成整体验收或发布许可。
 
 ## 空消息回填修复包的补充运行记录（2026-10-27）
 

@@ -324,3 +324,12 @@ Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 sel
 30 轮 A→B→A 共 90 次串行请求，跨会话返回数为 0，总耗时 307 ms；另执行 40 次并发页请求，跨会话返回数和空页数均为 0，总耗时 108.9 ms。对应 main trace 共 130 条，130/130 成功且 `cachePath=ready`；handler p50/p95/max 为 3.76/5.61/13.61 ms。逐条结果见 [package-ac5-routing-2026-10-28.json](package-ac5-routing-2026-10-28.json)。
 
 这验证的是包内预加载 API 在重复切换顺序和并发读取下的会话路由隔离，不测量用户点击后的界面响应、消息正文 ready 或渲染主线程任务；也未覆盖取消等待者、维护与前台竞争、关闭/切库。因此它只补齐 AC-5 的路由子场景，P4-03 仍未完成。
+
+
+### arm64 包 1000 条会话重建期间 RSS 采样（2026-10-28）
+
+在新建隔离副本 `/tmp/spaceassistant-p4-validation/copies/maintenance-rss-20261028` 中使用 arm64 应用目录包 build ID `e4aca912-a3e7-4d0b-8d43-2cb820057f02`（`app.asar` SHA-256 `3330eda77d36f8c8b82e15bafa55ea4e25daa0e1b942bf3f81db70a13f48bb82`），夹具为 1000 条 canonical-backed-only 消息。只删除该会话的 projection blob references、cache 与 state 行；canonical 消息、History、source locator 保留。运行后投影状态为 `valid`、`attempts=0`，body source 为 `complete`。
+
+主进程日志记录两段 slice：57.81 ms `checkpointed` 与 481.11 ms `published`，合计 538.92 ms；两条完成时间相隔 482 ms。以 25 ms 间隔采集应用主进程及 3 个 Electron helper 的 RSS，重建状态期间得到 9 点：合计 RSS p50/p95/max 为 894.2/899.2/899.2 MiB；启动全过程 42 点最大合计 RSS 为 1039.4 MiB。RSS 按进程相加，会重复计算共享页，不能解释成物理内存占用。逐项汇总：[package-maintenance-rss-2026-10-28.json](package-maintenance-rss-2026-10-28.json)。
+
+这补充了短时重建 slice 中的进程树 RSS 与完成状态，不是维护期间的设置点击或并发前台页请求，没有 Long Task/LoAF observer；因此不关闭 AC-5 的维护竞争或 AC-7。另一个同 profile startup page trace 为 cold，main handler 65.6 ms、renderer page request 316.2 ms、next-paint 1.2 ms，但日志没有 sessionId，该 trace 不归因到 1000 条目标会话，也不是可信切换数据。
