@@ -265,3 +265,11 @@ Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 sel
 另对先前 181 ms Long Task 的 `App.tsx` 5 秒 reconciliation 定时器设置运行时断点，命中时 `TurnDisplayStore` 的 display 数与 known 数均为 0。栈映射只能确认该长任务发生在定时器触发的 `reconcile()` 调用期间；由于活动项为空且缺少能说明 CPU 占用来源的可靠采样，不足以认定 timer / `activeKnown()` 是根因，本轮不据此改动源码。`App.tsx` 中的 5 秒轮询在基线 `109a9384` 已存在。
 
 测试时另有一个独立的 `/Applications/SpaceAssistant.app` 窗口报告默认用户数据目录数据库版本 116 高于该程序支持的 115。进程检查确认它不是本轮启动的候选（候选 PID 79106，带隔离 `--user-data-dir`；独立窗口 PID 81740 指向默认目录）；本轮没有在该窗口操作，也没有打开或改写默认数据库。当前产品没有私聊、群聊或专用 IM 测试会话，故 IM 并发项不适用，也没有发送消息。P4-02/AC-7 仍未关闭；缓存与维护矩阵、维护竞争/耗时/RSS 及首屏 ready 口径仍待验收。
+
+### 解锁后的渲染 CPU 采样补充（2026-10-28）
+
+在同一 arm64 候选包 build ID `3b2b677b-89aa-4d52-ae71-3cc4dae23559`、源码 `76cb2b7812d2c7a00e4d997a3c37fa10751e7611` 上继续采样。进程命令行及 renderer 子进程均确认使用隔离副本 `/tmp/spaceassistant-p4-validation/copies/pkg-candidate-schema102`。副本中 64 条消息会话 `37c2d127-d30f-48d1-b601-7ccf131b328a` 的 source locator 被重新排入 backfilling；自动维护完成后才开始本轮 CPU profile，因此本轮 profile 不代表维护竞争场景。副本启动日志仍报告其他历史 142 项 ledger repair failure；这些 legacy 源数据不全的会话不纳入目标切换样本。
+
+通过窗口列表交替切换 64 条与 8 条消息会话共 12 次，页面捕获的 12 个点击事件均为 `isTrusted=true`，每组 6 次。36.2 秒 renderer V8 profile 使用 1 ms 采样间隔；期间出现 1 个 133 ms Long Task，开始时间约在普通会话点击后 63 ms。其附近记录到 146 ms LoAF（blocking duration 81 ms）；大历史点击附近另有 56 ms LoAF（blocking duration 0）。Profile 对该 Long Task 时间窗采到 111 个样本，其中 75 个落在 V8 idle、8 个为 program；可见的应用帧只包含 minified `sessionDisplay` 与 `main` bundle 的少数样本。包内未发现对应 source map，无法可靠映射到源码函数。采样期出现的 53/110/293 ms 旧 Long Task 属于 buffered 历史记录，时间早于本次 profile，不计入本轮切换结果。
+
+这组证据确认卡顿帧仍可在真实包内复现，但没有把主要耗时归因到具体代码；它不支持据此新增源码修复，也不是正文 ready 的 30 样本验收。维护竞争、缓存状态分组、完整 AC-7 指标与剩余 AC-5/AC-6 包内场景仍未完成，P4-02/P4-03 保持进行中。测试后已退出候选进程；未打开或修改默认用户数据库，也没有发送 IM 消息。
