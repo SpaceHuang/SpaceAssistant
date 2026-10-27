@@ -114,6 +114,9 @@ describe('session body source backfill task', () => {
       expect.objectContaining({ sessionId: broken.id, status: 'failed' }),
       expect.objectContaining({ sessionId: healthy.id, status: 'complete' }),
     ])), { timeout: 10_000 })
+    expect(results.find(({ sessionId }) => sessionId === broken.id)?.error).toBe('PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH')
+    expect(conn.prepare(`SELECT terminal_source_revision,terminal_reducer_spec_version FROM session_body_source_state WHERE session_id=?`)
+      .get(broken.id)).toEqual({ terminal_source_revision: null, terminal_reducer_spec_version: null })
     expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(healthy.id))
       .toEqual({ status: 'complete' })
   })

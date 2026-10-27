@@ -10,8 +10,7 @@ import { runSessionBodySourceBackfill } from './sessionBodySourceBackfill'
 type PendingSourceSession = Readonly<{ session_id: string; generation: string; updated_at: number; created_at: number }>
 
 function isDeterministicSourceRejection(message: string): boolean {
-  return message === 'CHAT_BODY_MESSAGE_ID_MISSING' || message === 'CHAT_BODY_SOURCE_FACT_MISSING' ||
-    message === 'PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH'
+  return message === 'CHAT_BODY_MESSAGE_ID_MISSING' || message === 'CHAT_BODY_SOURCE_FACT_MISSING'
 }
 
 /** Runs locator backfills as cancellable derived-index maintenance, one session at a time. */
