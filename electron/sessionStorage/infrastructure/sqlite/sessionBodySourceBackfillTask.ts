@@ -13,6 +13,16 @@ function isDeterministicSourceRejection(message: string): boolean {
   return message === 'CHAT_BODY_MESSAGE_ID_MISSING' || message === 'CHAT_BODY_SOURCE_FACT_MISSING'
 }
 
+function hasNoHistorySource(conn: ReturnType<typeof getDbConnection>, sessionId: string, sourceRevision: number): boolean {
+  const source = conn.prepare(`SELECT state.source_revision,
+    (SELECT COUNT(*) FROM messages WHERE session_id=state.session_id) AS message_count,
+    (SELECT COUNT(*) FROM agent_history_events WHERE session_id=state.session_id) AS event_count,
+    (SELECT COUNT(*) FROM agent_history_streams WHERE session_id=state.session_id) AS stream_count
+    FROM session_body_source_state state WHERE state.session_id=?`).get(sessionId) as
+    { source_revision: number; message_count: number; event_count: number; stream_count: number } | undefined
+  return source?.source_revision === sourceRevision && source.message_count > 0 && source.event_count === 0 && source.stream_count === 0
+}
+
 /** Runs locator backfills as cancellable derived-index maintenance, one session at a time. */
 export function createSessionBodySourceBackfillTask(input: Readonly<{
   db: AppDatabase
@@ -114,7 +124,10 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
             const message = error instanceof Error ? error.message : 'unknown-error'
             const current = conn.prepare('SELECT updated_at FROM session_body_source_state WHERE session_id=?')
               .get(session.session_id) as { updated_at: number } | undefined
-            if (attemptedSourceRevision !== undefined && isDeterministicSourceRejection(message)) {
+            const deterministicMissingSource = attemptedSourceRevision !== undefined &&
+              message === 'PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH' &&
+              hasNoHistorySource(conn, session.session_id, attemptedSourceRevision)
+            if (attemptedSourceRevision !== undefined && (isDeterministicSourceRejection(message) || deterministicMissingSource)) {
               conn.prepare(`UPDATE session_body_source_state SET terminal_source_revision=?,terminal_reducer_spec_version=?,updated_at=?
                 WHERE session_id=? AND source_revision=?`).run(attemptedSourceRevision, reducerSpecVersion, Date.now(),
                   session.session_id, attemptedSourceRevision)

@@ -93,6 +93,10 @@ describe('session body source backfill task', () => {
     const conn = getDbConnection(temp.db)
     const broken = createSession(temp.db, { name: 'broken source session' })
     appendMessage(temp.db, { id: 'missing-history-body', sessionId: broken.id, role: 'user', content: 'no source', timestamp: 1, status: 'sent' })
+    const recoverable = createSession(temp.db, { name: 'source stream without events' })
+    appendMessage(temp.db, { id: 'recoverable-history-body', sessionId: recoverable.id, role: 'user', content: 'pending source', timestamp: 1, status: 'sent' })
+    conn.prepare(`INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(?,1,1,?)`)
+      .run('recoverable-invocation', recoverable.id)
     const healthy = createSession(temp.db, { name: 'healthy source session' })
     appendMessage(temp.db, { id: 'healthy-body', sessionId: healthy.id, role: 'user', content: 'healthy', timestamp: 1, status: 'sent' })
     const history = new SqliteAgentHistory(conn, 1, () => 10, healthy.id)
@@ -112,13 +116,32 @@ describe('session body source backfill task', () => {
 
     await vi.waitFor(() => expect(results).toEqual(expect.arrayContaining([
       expect.objectContaining({ sessionId: broken.id, status: 'failed' }),
+      expect.objectContaining({ sessionId: recoverable.id, status: 'failed' }),
       expect.objectContaining({ sessionId: healthy.id, status: 'complete' }),
     ])), { timeout: 10_000 })
     expect(results.find(({ sessionId }) => sessionId === broken.id)?.error).toBe('PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH')
+    const missingSourceState = conn.prepare(`SELECT source_revision,terminal_source_revision,terminal_reducer_spec_version
+      FROM session_body_source_state WHERE session_id=?`).get(broken.id) as
+      { source_revision: number; terminal_source_revision: number | null; terminal_reducer_spec_version: number | null }
+    expect(missingSourceState.terminal_source_revision).toBe(missingSourceState.source_revision)
+    expect(missingSourceState.terminal_reducer_spec_version).toBe(CHAT_BODY_PROJECTION_SPEC_VERSION)
     expect(conn.prepare(`SELECT terminal_source_revision,terminal_reducer_spec_version FROM session_body_source_state WHERE session_id=?`)
-      .get(broken.id)).toEqual({ terminal_source_revision: null, terminal_reducer_spec_version: null })
+      .get(recoverable.id)).toEqual({ terminal_source_revision: null, terminal_reducer_spec_version: null })
     expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(healthy.id))
       .toEqual({ status: 'complete' })
+
+    await new SqliteAgentHistory(conn, 1, () => 10, broken.id).appendBatch([{ invocationId: 'recovered-invocation',
+      turnId: 'recovered-turn', sequence: 1, schemaVersion: 1, eventId: 'recovered-context', idempotencyKey: 'recovered-context',
+      kind: 'invocation-context-committed', payload: { messages: [
+        { id: 'missing-history-body', role: 'user', content: 'recovered source', timestamp: 1 },
+      ] } }], 0)
+    handle.request()
+    await vi.waitFor(() => expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(broken.id))
+      .toEqual({ status: 'complete' }), { timeout: 10_000 })
+    const recovered = conn.prepare(`SELECT source_revision,terminal_source_revision FROM session_body_source_state WHERE session_id=?`)
+      .get(broken.id) as { source_revision: number; terminal_source_revision: number | null }
+    expect(recovered.source_revision).toBeGreaterThan(missingSourceState.source_revision)
+    expect(recovered.terminal_source_revision).toBe(missingSourceState.source_revision)
   })
 
   it('persists deterministic source rejection across restart and retries after the source revision changes', async () => {
