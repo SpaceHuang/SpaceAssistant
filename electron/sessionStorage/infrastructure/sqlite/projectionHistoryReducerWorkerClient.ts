@@ -61,7 +61,12 @@ export async function reduceAndPublishProjectionInvocationChatBodySourcesInWorke
 }>): Promise<T> {
   return input.blobs.withWorkerStaging(async (promote, stage) => {
     const tempLocators = [stage.tempLocator]
-    for (let remaining = input.messageFacts.length; remaining > 0;) {
+    const segmentedMessageCount = input.events.reduce((count, event) => {
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload as { kind?: unknown; messageCount?: unknown } : undefined
+      return payload?.kind === 'source-segmented-history-event' && Number.isSafeInteger(payload.messageCount)
+        ? Math.max(count, payload.messageCount as number) : count
+    }, 0)
+    for (let remaining = Math.max(input.messageFacts.length, segmentedMessageCount); remaining > 0;) {
       const count = Math.min(32, remaining)
       tempLocators.push(...stage.allocate(count))
       remaining -= count

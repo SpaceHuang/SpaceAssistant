@@ -10,7 +10,8 @@ import { createProjectionWorkerMemorySampler } from './projectionWorkerMemorySam
 import { projectionScopeKind } from '../../domain/scopeKey'
 import { readProjectionHistorySegmentItems } from './projectionHistorySegmentReader'
 import { reduceSegmentedChatBodyContext } from './projectionSegmentedChatBodyReducer'
-import { reduceProjectionInvocationChatBodySources } from './projectionChatBodySourceReducer'
+import { reduceProjectionInvocationChatBodySources, reduceSegmentedProjectionInvocationChatBodySources,
+  type SegmentedSourceHistoryPayload } from './projectionChatBodySourceReducer'
 
 if (!parentPort) throw new Error('projection history reducer worker requires a parent port')
 const memorySampler = createProjectionWorkerMemorySampler()
@@ -85,7 +86,12 @@ parentPort.once('message', (message: {
           !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(locator) || path.basename(locator) !== locator)) {
         throw new Error('PROJECTION_SOURCE_ARTIFACT_STAGING_INVALID')
       }
-      const source = reduceProjectionInvocationChatBodySources(message.events, message.messageFacts)
+      const segmentedEvent = message.events.find((event) => event.payload && typeof event.payload === 'object' &&
+        (event.payload as { kind?: unknown }).kind === 'source-segmented-history-event')
+      const source = segmentedEvent
+        ? await reduceSegmentedProjectionInvocationChatBodySources(message.events, message.messageFacts, {
+          segmented: segmentedEvent.payload as SegmentedSourceHistoryPayload, reducerSpecVersion: staging.reducerSpecVersion })
+        : reduceProjectionInvocationChatBodySources(message.events, message.messageFacts)
       let identity: { sessionGeneration?: unknown; sourceRevision?: unknown; historyWatermark?: unknown; messageRevision?: unknown }
       try { identity = JSON.parse(staging.sourceIdentityJson) as typeof identity }
       catch { throw new Error('PROJECTION_SOURCE_ARTIFACT_IDENTITY_INVALID') }

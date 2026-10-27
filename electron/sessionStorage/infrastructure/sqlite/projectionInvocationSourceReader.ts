@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact } from '../../domain/projectionSource'
 import type { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
@@ -8,10 +9,12 @@ import { readProjectionHistoryChunkInWorker } from './projectionHistoryChunkWork
 
 type WorkerStagingBlobStore = Pick<ReturnType<typeof createSessionProjectionBlobStore>, 'withWorkerStaging'>
 const MAX_MATERIALIZED_SEGMENTED_SOURCE_PAGE_BYTES = 32 * 1024 * 1024
+const MAX_SEGMENTED_SOURCE_PAGE_BYTES = 128 * 1024 * 1024
 
 export type ProjectionInvocationSourceInput = Readonly<{
   events: readonly ProjectionHistoryChunkEvent[]
   messageFacts: readonly ProjectionMessageFact[]
+  releaseSourceSegments?: () => Promise<void>
 }>
 
 /** Production source stream: read one bounded page per worker and expose invocation-sized batches. */
@@ -67,7 +70,7 @@ export function readProjectionHistoryInvocationsInWorker(input: Readonly<{
 async function readSegmentedHistoryChunk(
   result: Extract<ProjectionHistoryChunkResult, { kind: 'staged-chunk' }>, payload: unknown, root: string,
 ): Promise<ProjectionHistoryChunkResult> {
-  if (result.sourceByteLength > MAX_MATERIALIZED_SEGMENTED_SOURCE_PAGE_BYTES || !payload || typeof payload !== 'object' ||
+  if (result.sourceByteLength > MAX_SEGMENTED_SOURCE_PAGE_BYTES || !payload || typeof payload !== 'object' ||
     Array.isArray(payload)) throw new Error('PROJECTION_SOURCE_BACKFILL_SEGMENTED_PAGE_TOO_LARGE')
   const manifest = payload as Record<string, unknown>
   const event = manifest.event as Partial<ProjectionHistoryChunkEvent> | undefined
@@ -79,7 +82,17 @@ async function readSegmentedHistoryChunk(
     !Number.isSafeInteger(event.sequence) || !Number.isSafeInteger(event.sessionSequence) ||
     event.sessionSequence !== result.nextSessionSequence || typeof event.eventId !== 'string' || !event.eventId ||
     typeof event.idempotencyKey !== 'string' || !event.idempotencyKey || !Number.isSafeInteger(event.schemaVersion) ||
-    typeof event.kind !== 'string' || !Number.isSafeInteger(event.commitOrder) || !Number.isSafeInteger(event.createdAt)) {
+    (event.kind !== 'invocation-context-committed' && event.kind !== 'transcript-compacted') ||
+    !Number.isSafeInteger(event.commitOrder) || !Number.isSafeInteger(event.createdAt)) {
+    throw new Error('PROJECTION_SOURCE_BACKFILL_SEGMENTED_PAGE_SHAPE_INVALID')
+  }
+  const messageDescriptors = manifest.messageSegments as ProjectionHistorySegmentDescriptor[]
+  const factDescriptors = manifest.factSegments as ProjectionHistorySegmentDescriptor[]
+  const requiredDescriptors = Array.isArray(manifest.requiredUserSegments)
+    ? manifest.requiredUserSegments as ProjectionHistorySegmentDescriptor[] : []
+  if ((manifest.messageCount as number) < 1 || (manifest.factCount as number) < 0 || messageDescriptors.length < 1 ||
+    messageDescriptors.length > 15 || factDescriptors.length > 15 || requiredDescriptors.length > 15 ||
+    messageDescriptors.length + factDescriptors.length + requiredDescriptors.length > 15) {
     throw new Error('PROJECTION_SOURCE_BACKFILL_SEGMENTED_PAGE_SHAPE_INVALID')
   }
   const segmentByLocator = new Map((result.stagedSegments ?? []).map((segment) => [segment.locator, segment]))
@@ -98,6 +111,46 @@ async function readSegmentedHistoryChunk(
       throw new Error('PROJECTION_SOURCE_BACKFILL_SEGMENT_DIGEST_MISMATCH')
     }
     return bytes
+  }
+  if (result.sourceByteLength > MAX_MATERIALIZED_SEGMENTED_SOURCE_PAGE_BYTES) {
+    const sourceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-projection-source-segments-'))
+    const copySegments = async (descriptors: readonly ProjectionHistorySegmentDescriptor[]) => {
+      const promoted: ProjectionHistorySegmentDescriptor[] = []
+      for (const descriptor of descriptors) {
+        const staged = segmentByLocator.get(descriptor.locator)
+        if (!staged || staged.byteLength !== descriptor.byteLength || staged.payloadDigest !== descriptor.payloadDigest) {
+          throw new Error('PROJECTION_SOURCE_BACKFILL_SEGMENT_REFERENCE_INVALID')
+        }
+        const bytes = await readVerified(descriptor)
+        const destination = path.join(sourceRoot, staged.tempLocator.replace(/^\.projection-/, 'projection-').replace(/\.tmp$/, '.blob'))
+        await fs.writeFile(destination, bytes, { flag: 'wx', mode: 0o600 })
+        promoted.push({ ...descriptor, locator: path.basename(destination) })
+      }
+      return promoted
+    }
+    try {
+      const messageSegments = await copySegments(messageDescriptors)
+      const factSegments = await copySegments(factDescriptors)
+      const requiredUserSegments = requiredDescriptors.length ? await copySegments(requiredDescriptors) : undefined
+      const payloadRef = Object.freeze({ kind: 'source-segmented-history-event' as const, root: sourceRoot, messageCount: manifest.messageCount as number,
+        messageSegments: Object.freeze(messageSegments), factCount: manifest.factCount as number, factSegments: Object.freeze(factSegments),
+        extraPayload: manifest.extraPayload as Record<string, unknown>,
+        ...(manifest.requiredUserMessage !== undefined ? { requiredUserMessage: manifest.requiredUserMessage } : {}),
+        ...(manifest.requiredUserMessageRef !== undefined ? { requiredUserMessageRef: manifest.requiredUserMessageRef } : {}),
+        ...(requiredUserSegments ? { requiredUserSegments: Object.freeze(requiredUserSegments) } : {}) })
+      const hydratedEvent: ProjectionHistoryChunkEvent = { ...event as ProjectionHistoryChunkEvent,
+        payloadJson: JSON.stringify({ ...payloadRef.extraPayload, messages: [] }), payload: payloadRef, sourceDigest: event.sourceDigest }
+      const chunk = { kind: 'chunk' as const, permit: result.permit, afterSessionSequence: result.afterSessionSequence,
+        nextSessionSequence: result.nextSessionSequence, events: Object.freeze([hydratedEvent]), messageFacts: Object.freeze([]),
+        byteLength: result.sourceByteLength, hasMore: result.hasMore,
+        sourceSegmentResources: Object.freeze({ invocationId: event.invocationId!, release: async () => {
+          await fs.rm(sourceRoot, { recursive: true, force: true })
+        } }) }
+      return Object.freeze(chunk) as unknown as ProjectionHistoryChunkResult
+    } catch (error) {
+      await fs.rm(sourceRoot, { recursive: true, force: true }).catch(() => undefined)
+      throw error
+    }
   }
   const messages: unknown[] = []
   for await (const message of readProjectionHistorySegmentItems<unknown>({ segments:
@@ -149,21 +202,34 @@ export async function* iterateProjectionHistoryInvocations(
   let currentInvocationId: string | undefined
   let currentEvents: ProjectionHistoryChunkEvent[] = []
   let currentFacts = new Map<string, ProjectionMessageFact>()
+  let currentResources: Array<Readonly<{ invocationId: string; release(): Promise<void> }>> = []
   let previousInvocationSequence = 0
   let previousSessionSequence = initialSessionSequence
+  const sourceResources = new Set<Readonly<{ invocationId: string; release(): Promise<void> }>>()
+  const releasedResources = new Set<Readonly<{ invocationId: string; release(): Promise<void> }>>()
+  const releaseResource = async (resource: Readonly<{ invocationId: string; release(): Promise<void> }>) => {
+    if (releasedResources.has(resource)) return
+    releasedResources.add(resource)
+    await resource.release()
+  }
 
   const finishInvocation = (): ProjectionInvocationSourceInput | undefined => {
     if (!currentInvocationId) return undefined
+    const invocationResources = [...currentResources]
     const result = Object.freeze({ events: Object.freeze(currentEvents),
-      messageFacts: Object.freeze([...currentFacts.values()].sort((left, right) => left.sequence - right.sequence)) })
+      messageFacts: Object.freeze([...currentFacts.values()].sort((left, right) => left.sequence - right.sequence)),
+      ...(invocationResources.length ? { releaseSourceSegments: async () => {
+        for (const resource of invocationResources) await releaseResource(resource)
+      } } : {}) })
     currentInvocationId = undefined
     currentEvents = []
     currentFacts = new Map()
+    currentResources = []
     previousInvocationSequence = 0
     return result
   }
 
-  while (true) {
+  try { while (true) {
     const page = await readPage(cursor)
     if (page.afterSessionSequence !== cursor) throw new Error('PROJECTION_SOURCE_BACKFILL_PAGE_CURSOR_MISMATCH')
     if (page.kind === 'complete') {
@@ -175,6 +241,9 @@ export async function* iterateProjectionHistoryInvocations(
     if (page.kind !== 'chunk') {
       throw new Error(`PROJECTION_SOURCE_BACKFILL_PAGE_${page.kind.toUpperCase()}:${page.reason ?? 'unavailable'}`)
     }
+    const pageResource = (page as ProjectionHistoryChunkResult & { sourceSegmentResources?:
+      Readonly<{ invocationId: string; release(): Promise<void> }> }).sourceSegmentResources
+    if (pageResource) sourceResources.add(pageResource)
     if (!page.events.length || page.nextSessionSequence <= cursor || page.nextSessionSequence !== page.events.at(-1)!.sessionSequence) {
       throw new Error('PROJECTION_SOURCE_BACKFILL_PAGE_ORDER_INVALID')
     }
@@ -191,7 +260,9 @@ export async function* iterateProjectionHistoryInvocations(
     }
     for (const [invocationId, ids] of idsByInvocation) {
       const selected = new Map<string, ProjectionMessageFact>()
-      for (const fact of page.messageFacts) if (ids.has(fact.id)) selected.set(fact.id, fact)
+      const segmentedSource = page.events.some((event) => event.invocationId === invocationId && event.payload &&
+        typeof event.payload === 'object' && (event.payload as { kind?: unknown }).kind === 'source-segmented-history-event')
+      for (const fact of page.messageFacts) if (segmentedSource || ids.has(fact.id)) selected.set(fact.id, fact)
       factsByInvocation.set(invocationId, selected)
     }
 
@@ -201,6 +272,9 @@ export async function* iterateProjectionHistoryInvocations(
         if (completed) yield completed
       }
       if (currentInvocationId === undefined) currentInvocationId = event.invocationId
+      if (pageResource && event.invocationId === pageResource.invocationId && !currentResources.includes(pageResource)) {
+        currentResources.push(pageResource)
+      }
       if (event.sequence !== previousInvocationSequence + 1) throw new Error('PROJECTION_SOURCE_BACKFILL_INVOCATION_ORDER_INVALID')
       previousInvocationSequence = event.sequence
       currentEvents.push(event)
@@ -218,6 +292,8 @@ export async function* iterateProjectionHistoryInvocations(
       if (completed) yield completed
       return
     }
+  } } finally {
+    for (const resource of sourceResources) await releaseResource(resource).catch(() => undefined)
   }
 }
 

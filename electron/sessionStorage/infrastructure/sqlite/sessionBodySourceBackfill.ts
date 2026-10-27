@@ -27,7 +27,8 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
   sessionId: string
   reducerSpecVersion: number
   signal?: AbortSignal
-  invocations: AsyncIterable<Readonly<{ events: readonly ProjectionHistoryChunkEvent[]; messageFacts: readonly ProjectionMessageFact[] }>>
+  invocations: AsyncIterable<Readonly<{ events: readonly ProjectionHistoryChunkEvent[]; messageFacts: readonly ProjectionMessageFact[];
+    releaseSourceSegments?: () => Promise<void> }>>
   now?: () => number
 }>): Promise<Readonly<{ kind: 'complete'; invocationCount: number; messageCount: number }>> {
   if (!input.sessionId || !Number.isSafeInteger(input.reducerSpecVersion) || input.reducerSpecVersion < 1) {
@@ -69,6 +70,7 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
   let invocationCount = 0
   let previousSessionSequence = 0
   for await (const invocation of input.invocations) {
+    try {
     throwIfAborted(input.signal)
     if (!invocation || !Array.isArray(invocation.events) || !invocation.events.length ||
       invocation.events[0]!.sessionSequence <= previousSessionSequence) throw new Error('PROJECTION_SOURCE_BACKFILL_ORDER_INVALID')
@@ -103,6 +105,9 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
     })
     previousSessionSequence = lastSessionSequence
     invocationCount += 1
+    } finally {
+      await invocation.releaseSourceSegments?.()
+    }
   }
 
   let messageCount = 0

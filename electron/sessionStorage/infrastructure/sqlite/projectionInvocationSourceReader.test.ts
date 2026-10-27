@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import type { ProjectionHistoryChunkEvent, ProjectionMessageFact, ProjectionHistoryChunkResult } from '../../domain/projectionSource'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { appendMessage, createSession } from '../../../database/operations'
@@ -8,6 +10,7 @@ import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
 import { projectionSourceEventDigest } from './projectionSourceDependencyReader'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
+import { reduceAndPublishProjectionInvocationChatBodySourcesInWorker } from './projectionHistoryReducerWorkerClient'
 import { iterateProjectionHistoryInvocations, readProjectionHistoryInvocationsInWorker,
   type ProjectionInvocationSourceInput } from './projectionInvocationSourceReader'
 
@@ -54,6 +57,19 @@ describe('projection invocation source reader', () => {
       afterSessionSequence: 0, eventSequence: 1, observedByteLength: 512 * 1024 }), 0)
 
     await expect(invocations.next()).rejects.toThrow('PROJECTION_SOURCE_BACKFILL_PAGE_DEFERRED-LARGE')
+  })
+
+  it('releases source segment files when invocation assembly rejects a malformed page', async () => {
+    const permit = { dbPath: '/tmp/db', sessionId: 'session', sessionGeneration: 'generation', scopeKey: 'source',
+      specVersion: 1, sourceIdentityJson: '{}', connectionEpoch: 0, processGeneration: 0, rebuildToken: 'token' }
+    let released = 0
+    const page = { kind: 'chunk' as const, permit, afterSessionSequence: 0, nextSessionSequence: 2,
+      events: [event('inv-a', 1, 1)], messageFacts: [], byteLength: 1, hasMore: false,
+      sourceSegmentResources: { invocationId: 'inv-a', release: async () => { released += 1 } } }
+    const invocations = iterateProjectionHistoryInvocations(async () => page, 0)
+
+    await expect(invocations.next()).rejects.toThrow('PROJECTION_SOURCE_BACKFILL_PAGE_ORDER_INVALID')
+    expect(released).toBe(1)
   })
 
   it('reads canonical History in a Worker and groups invocation boundaries across one-row pages', async () => {
@@ -171,6 +187,63 @@ describe('projection invocation source reader', () => {
       expect(readInvocation?.events[0]?.payloadJson).toContain(content.slice(0, 1_024))
       expect(readInvocation?.messageFacts[0]?.storedContent).toBe(content)
       expect(readInvocation?.events[0]?.sourceDigest).toBe(projectionSourceEventDigest(stored))
+    } finally {
+      temp.cleanup()
+      await fs.rm(blobRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('passes source pages above 32 MiB to the source Worker as verified segment references', async () => {
+    const temp = createTempDatabase('projection-invocation-source-reader-over-32m-')
+    const blobRoot = `${temp.dbPath}.blobs`
+    try {
+      const conn = getDbConnection(temp.db)
+      const session = createSession(temp.db, { name: 'over 32 MiB segmented source reader' })
+      const content = 'x'.repeat(17 * 1024 * 1024)
+      appendMessage(temp.db, { id: 'segmented-over-limit', sessionId: session.id, role: 'user', content, timestamp: 1, status: 'sent' })
+      const history = new SqliteAgentHistory(conn, 1, () => 10, session.id)
+      await history.appendBatch([{ invocationId: 'reader-over-limit', turnId: 'turn-over-limit', sequence: 1, schemaVersion: 1,
+        eventId: 'reader-over-limit-1', idempotencyKey: 'reader-over-limit-1', kind: 'invocation-context-committed',
+        payload: { messages: [{ id: 'segmented-over-limit', role: 'user', content, timestamp: 1 }] } }], 0)
+      const sourceIdentityJson = readProjectionSourceIdentity(conn, session.id, session.generation)!
+      const invocations = readProjectionHistoryInvocationsInWorker({ blobs: createSessionProjectionBlobStore(blobRoot), permit: {
+        dbPath: temp.dbPath, sessionId: session.id, sessionGeneration: session.generation,
+        scopeKey: 'source-backfill', specVersion: 1, sourceIdentityJson, connectionEpoch: 0,
+        processGeneration: 0, rebuildToken: 'reader-over-limit-token',
+      } })
+      const iterator = invocations[Symbol.asyncIterator]()
+      const first = await iterator.next()
+      const invocation = first.value as ProjectionInvocationSourceInput | undefined
+      const eventPayload = invocation?.events[0]?.payload as { kind?: unknown; root?: unknown; messageSegments?: unknown[] } | undefined
+      expect(first.done).toBe(false)
+      expect(eventPayload?.kind).toBe('source-segmented-history-event')
+      expect(invocation?.messageFacts).toHaveLength(0)
+      expect(invocation?.events[0]?.payloadJson.length).toBeLessThan(1_000)
+      expect(JSON.stringify(invocation).length).toBeLessThan(20_000)
+      expect(Array.isArray(eventPayload?.messageSegments)).toBe(true)
+      for (const segment of eventPayload!.messageSegments as Array<{ locator: string; byteLength: number; payloadDigest: string }>) {
+        const bytes = await fs.readFile(path.join(eventPayload!.root as string, segment.locator))
+        expect(bytes.byteLength).toBe(segment.byteLength)
+        expect(createHash('sha256').update(bytes).digest('hex')).toBe(segment.payloadDigest)
+      }
+      const sourceRoot = eventPayload!.root as string
+      const identity = JSON.parse(sourceIdentityJson) as { sourceRevision: number; historyWatermark: unknown }
+      const backfill = await reduceAndPublishProjectionInvocationChatBodySourcesInWorker({ events: invocation!.events,
+        messageFacts: invocation!.messageFacts, blobs: createSessionProjectionBlobStore(blobRoot),
+        context: { sessionId: session.id, sessionGeneration: session.generation, sourceRevision: identity.sourceRevision,
+          sourceIdentityJson, historyWatermarkJson: JSON.stringify(identity.historyWatermark), reducerSpecVersion: 1 },
+        publish: async (source, artifacts) => {
+          expect(source.messages.map(({ id, sequence }) => [id, sequence])).toEqual([['segmented-over-limit', 0]])
+          const fragment = artifacts?.fragmentsByMessage.get('segmented-over-limit')
+          expect(fragment).toBeDefined()
+          const payload = JSON.parse(await fs.readFile(path.join(blobRoot, fragment!.locator), 'utf8'))
+          return { byteLength: payload.message.content.length,
+            digest: createHash('sha256').update(payload.message.content).digest('hex') }
+        } })
+      expect(backfill.byteLength).toBe(content.length)
+      expect(backfill.digest).toBe(createHash('sha256').update(content).digest('hex'))
+      await iterator.return?.()
+      await expect(fs.lstat(sourceRoot)).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       temp.cleanup()
       await fs.rm(blobRoot, { recursive: true, force: true })
