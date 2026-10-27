@@ -185,26 +185,19 @@ export function createSessionProjectionBlobStore(root: string) {
     },
     async readVerified(input: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>): Promise<string> {
       const locator = assertLocator(input.locator)
-      const releaseFence = await acquireFence()
-      let operationFailed = false
-      try {
-        let content: Buffer
-        try { content = await fs.readFile(path.join(root, locator)) }
-        catch (cause) {
-          if ((cause as NodeJS.ErrnoException)?.code === 'ENOENT') throw blobError('PROJECTION_BLOB_MISSING', 'projection blob is missing')
-          throw cause
-        }
-        if (content.byteLength !== input.byteLength || digest(content) !== input.payloadDigest) {
-          throw blobError('PROJECTION_BLOB_CORRUPT', 'projection blob length or digest mismatch')
-        }
-        return content.toString('utf8')
-      } catch (error) {
-        operationFailed = true
-        throw error
-      } finally {
-        try { await releaseFence() }
-        catch (error) { if (!operationFailed) throw error }
+      // Blob locators are immutable. Reads do not need the exclusive writer/GC
+      // fence; taking it here makes foreground history reads fail with ELOCKED
+      // whenever a projection worker stages or publishes another blob.
+      let content: Buffer
+      try { content = await fs.readFile(path.join(root, locator)) }
+      catch (cause) {
+        if ((cause as NodeJS.ErrnoException)?.code === 'ENOENT') throw blobError('PROJECTION_BLOB_MISSING', 'projection blob is missing')
+        throw cause
       }
+      if (content.byteLength !== input.byteLength || digest(content) !== input.payloadDigest) {
+        throw blobError('PROJECTION_BLOB_CORRUPT', 'projection blob length or digest mismatch')
+      }
+      return content.toString('utf8')
     },
     async withVerifiedReadStream<T>(
       input: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>,
@@ -214,8 +207,6 @@ export function createSessionProjectionBlobStore(root: string) {
       if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 1 || !/^[a-f0-9]{64}$/.test(input.payloadDigest)) {
         throw blobError('PROJECTION_BLOB_REFERENCE_INVALID', 'projection blob length or digest is invalid')
       }
-      const releaseFence = await acquireFence()
-      let operationFailed = false
       const filePath = path.join(root, locator)
       let source: ReturnType<typeof createReadStream> | undefined
       let verified: Transform | undefined
@@ -241,17 +232,13 @@ export function createSessionProjectionBlobStore(root: string) {
           }
           callback()
         } })
-        source.once('error', (error) => verified?.destroy(error))
+        source.once('error', (error: NodeJS.ErrnoException) => verified?.destroy(error.code === 'ENOENT'
+          ? blobError('PROJECTION_BLOB_MISSING', 'projection blob is missing') : error))
         source.pipe(verified)
         return await consume(verified)
-      } catch (error) {
-        operationFailed = true
-        throw error
       } finally {
         source?.destroy()
         verified?.destroy()
-        try { await releaseFence() }
-        catch (error) { if (!operationFailed) throw error }
       }
     },
     async collectGarbage(conn: DatabaseSync, input: Readonly<{ afterLocator?: string; maxEntries?: number }> = {}): Promise<Readonly<{

@@ -132,7 +132,7 @@ describe('session projection derived blob store', () => {
     await expect(blobs.collectGarbage(conn)).resolves.toMatchObject({ removedCount: 2 })
   })
 
-  it('streams a verified blob while holding the GC fence until the consumer reaches EOF', async () => {
+  it('lets GC unlink an unreferenced blob while an open verified stream reaches EOF', async () => {
     temp = createTempDatabase('projection-verified-stream-')
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')
     const blobs = createSessionProjectionBlobStore(root)
@@ -153,16 +153,13 @@ describe('session projection derived blob store', () => {
       return Buffer.concat(chunks).toString('utf8')
     })
     await enteredRead
-    let gcSettled = false
-    const gc = blobs.collectGarbage(getDbConnection(temp.db)).then((result) => { gcSettled = true; return result })
-    await new Promise((resolve) => setTimeout(resolve, 40))
-    expect(gcSettled).toBe(false)
+    const gc = await blobs.collectGarbage(getDbConnection(temp.db))
+    expect(gc).toMatchObject({ removedCount: 1 })
     resume()
     await expect(reading).resolves.toBe(payload)
-    await expect(gc).resolves.toMatchObject({ removedCount: 1 })
   })
 
-  it('rejects a streamed digest mismatch and releases the GC fence', async () => {
+  it('rejects a streamed digest mismatch and leaves the blob available for GC', async () => {
     temp = createTempDatabase('projection-verified-stream-corrupt-')
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')
     const blobs = createSessionProjectionBlobStore(root)
@@ -226,6 +223,70 @@ describe('session projection derived blob store', () => {
     await work
     await expect(fs.stat(path.join(stage.root, stage.tempLocator))).rejects.toMatchObject({ code: 'ENOENT' })
     expect(await gc).toMatchObject({ removedCount: 0 })
+  }, 10_000)
+
+  it('reads an immutable referenced blob while a projection worker holds the write fence', async () => {
+    temp = createTempDatabase('projection-read-during-build-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const session = createSession(temp.db, { name: 'read during projection build', model: 'test' })
+    const payload = 'canonical source body'
+    const reference = await blobs.write(payload)
+    getDbConnection(temp.db).prepare(`INSERT INTO session_message_body_locator
+      (session_id,message_id,sequence,fragment_locator,byte_length,sha256) VALUES(?,?,?,?,?,?)`)
+      .run(session.id, 'message-1', 1, reference.locator, reference.byteLength, reference.payloadDigest)
+    await reference.release()
+
+    let entered!: () => void
+    let continueWork!: () => void
+    const fenceHeld = new Promise<void>((resolve) => { entered = resolve })
+    const workGate = new Promise<void>((resolve) => { continueWork = resolve })
+    const build = blobs.withWorkerTransientStaging(async () => {
+      entered()
+      await workGate
+    })
+
+    await fenceHeld
+    try {
+      await expect(blobs.readVerified(reference)).resolves.toBe(payload)
+    } finally {
+      continueWork()
+      await build
+    }
+  }, 10_000)
+
+  it('streams an immutable referenced blob while a projection worker holds the write fence', async () => {
+    temp = createTempDatabase('projection-stream-during-build-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const session = createSession(temp.db, { name: 'stream during projection build', model: 'test' })
+    const payload = 'canonical source body '.repeat(200)
+    const reference = await blobs.write(payload)
+    getDbConnection(temp.db).prepare(`INSERT INTO session_message_body_locator
+      (session_id,message_id,sequence,fragment_locator,byte_length,sha256) VALUES(?,?,?,?,?,?)`)
+      .run(session.id, 'message-1', 1, reference.locator, reference.byteLength, reference.payloadDigest)
+    await reference.release()
+
+    let entered!: () => void
+    let continueWork!: () => void
+    const fenceHeld = new Promise<void>((resolve) => { entered = resolve })
+    const workGate = new Promise<void>((resolve) => { continueWork = resolve })
+    const build = blobs.withWorkerTransientStaging(async () => {
+      entered()
+      await workGate
+    })
+
+    await fenceHeld
+    try {
+      await expect(blobs.withVerifiedReadStream(reference, async (stream) => {
+        const chunks: Buffer[] = []
+        for await (const chunk of stream) chunks.push(Buffer.from(chunk))
+        return Buffer.concat(chunks).toString('utf8')
+      })).resolves.toBe(payload)
+    } finally {
+      continueWork()
+      await build
+    }
   }, 10_000)
 
   it('removes a transient worker input when the consumer fails', async () => {
