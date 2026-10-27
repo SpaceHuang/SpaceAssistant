@@ -72,6 +72,16 @@ describe('session context semantic summary', () => {
     }), undefined)
   })
 
+  it('sends an oversized shadowed transcript in one summary call without entering a recursive compaction path', async () => {
+    const oversizedTranscript = [{ role: 'user' as const, content: 'oversized history '.repeat(20_000) }]
+    messagesCreate.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({ task: 'Task', completed: 'Done', decisions: 'Decision', constraints: 'Constraint', pending: 'Pending', blockers: 'None', nextStep: 'Continue' }) }] })
+
+    await summarizeSessionContext({ model: 'test-model', apiKey: 'test-key', locale: 'en-US', messages: oversizedTranscript })
+
+    expect(messagesCreate).toHaveBeenCalledOnce()
+    expect(messagesCreate.mock.calls[0]?.[0]).toMatchObject({ messages: [{ role: 'user', content: JSON.stringify(oversizedTranscript) }] })
+  })
+
   it('passes canonical recovery facts separately from quoted transcript prose', async () => {
     const recoveryFacts = { unresolvedEffects: [{ id: 'origin:tool-1', originInvocationId: 'origin', toolCallId: 'tool-1' }], toolOutcomes: [] }
     messagesCreate.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({ task: 'Task', completed: 'Done', decisions: 'Decision', constraints: 'Constraint', pending: 'Pending', blockers: 'Blocker', nextStep: 'Next' }) }] })
