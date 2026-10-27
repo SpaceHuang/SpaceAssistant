@@ -18,6 +18,36 @@ describe('session body source backfill task', () => {
   afterEach(async () => { taskStop?.(); taskStop = undefined; cleanup?.(); cleanup = undefined
     if (blobRoot) await fs.rm(blobRoot, { recursive: true, force: true }); blobRoot = undefined })
 
+  it('completes an empty current message set without replaying stale History snapshots', async () => {
+    const temp = createTempDatabase('session-body-source-backfill-empty-current-set-')
+    cleanup = temp.cleanup
+    blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
+    const conn = getDbConnection(temp.db)
+    const session = createSession(temp.db, { name: 'empty current message set' })
+    const history = new SqliteAgentHistory(conn, 1, () => 10, session.id)
+    await history.appendBatch([
+      { invocationId: 'stale-context-invocation', turnId: 'stale-context-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'stale-context', idempotencyKey: 'stale-context', kind: 'invocation-context-committed', payload: {
+          messages: [{ id: 'already-removed-message', role: 'user', content: 'stale body', timestamp: 1 }],
+        } },
+      { invocationId: 'stale-context-invocation', turnId: 'stale-context-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'stale-context-complete', idempotencyKey: 'stale-context-complete', kind: 'invocation-completed',
+        payload: { status: 'completed' } },
+    ], 0)
+
+    const result = new Promise<{ sessionId: string; status: string; messageCount?: number; error?: string }>((resolve) => {
+      const task = createSessionBodySourceBackfillTask({ db: temp.db, blobRoot: blobRoot!,
+        idleDelayMs: 60_000, retryDelayMs: 60_000, onResult: resolve })
+      taskStop = task.start()!.stop
+    })
+
+    await expect(result).resolves.toMatchObject({ sessionId: session.id, status: 'complete', messageCount: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_message_body_locator WHERE session_id=?').get(session.id))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT status,checkpoint_json FROM session_body_source_state WHERE session_id=?').get(session.id))
+      .toEqual({ status: 'complete', checkpoint_json: null })
+  })
+
   it('backfills an old pending session from worker-read History and publishes complete locators', async () => {
     const temp = createTempDatabase('session-body-source-backfill-task-')
     cleanup = temp.cleanup

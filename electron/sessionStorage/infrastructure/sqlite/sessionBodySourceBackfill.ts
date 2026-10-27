@@ -69,7 +69,9 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
 
   let invocationCount = 0
   let previousSessionSequence = 0
-  for await (const invocation of input.invocations) {
+  const hasCanonicalMessages = conn.prepare('SELECT 1 FROM messages WHERE session_id=? LIMIT 1').get(input.sessionId) !== undefined
+  const invocations = hasCanonicalMessages ? input.invocations : emptyInvocations()
+  for await (const invocation of invocations) {
     try {
     throwIfAborted(input.signal)
     if (!invocation || !Array.isArray(invocation.events) || !invocation.events.length ||
@@ -141,3 +143,5 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('PROJECTION_SOURCE_BACKFILL_CANCELLED')
 }
+
+async function* emptyInvocations(): AsyncGenerator<never> {}
