@@ -47,6 +47,7 @@ import { assertContinuationExecutionConfigUnchanged, fingerprintContinuationExec
 import type { SessionStorage } from './sessionStorage/contracts'
 import { SessionContextSummaryCache, sessionContextSummaryCacheKey, summarizeSessionContext, waitForSessionContextSummary } from './sessionContextSummary'
 import { createSessionContextCheckpointMessage, isSessionContextCheckpointWorthCompacting, type SessionContextSummary } from './sessionContextCompaction'
+import { safeSummaryContentText } from '../src/shared/safeSummaryText'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -646,7 +647,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             }))
             const shadowSource = replayMessages.filter((_message, index) => shadowedIds.has(messageIdentities[index]!))
             const recoveryFacts = sessionStorage.queries.continuationSources.readRecoveryFacts(sessionId)
-            const summaryMessages = shadowSource.map((message) => ({ role: message.role, content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content) ?? '' }))
+            const summaryMessages = shadowSource.map((message) => ({ role: message.role, content: safeSummaryContentText(message.content) }))
             const summaryLocale = isAppLocale(frozen.locale ?? '') && frozen.locale === 'en-US' ? 'en-US' : 'zh-CN'
             const summaryCacheKey = sessionContextSummaryCacheKey({ sessionId, model, serviceId: creds.serviceId, locale: summaryLocale, messages: summaryMessages })
             const cachedSummary = automaticSummaryCache.get(summaryCacheKey)

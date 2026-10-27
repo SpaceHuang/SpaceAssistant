@@ -4,25 +4,13 @@ import { computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectRepl
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { planUserCompactionSurface } from '../src/shared/turnBoundaryCompaction'
 import type { ContextFrame, ContextTransformationProof, JsonValue, SessionContextAdapter } from '../packages/agent-sdk/src/context'
+import { safeSummaryContentText } from '../src/shared/safeSummaryText'
 
 export type SessionContextSurfaceMessage = { id?: string; role: 'user' | 'assistant'; content: unknown; [key: string]: unknown }
 type SurfaceMessage = SessionContextSurfaceMessage
 export type SessionContextCompactionResult =
   | { status: 'committed'; compactionId: string; windowId: string; outputSurfaceFingerprint: string }
   | { status: 'no-op' | 'uncompressible' | 'busy' | 'failed' | 'stale' }
-
-function safeSummaryContent(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(safeSummaryContent)
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    if (record.type === 'image' || record.type === 'image_url') return { type: record.type, note: 'image payload omitted from text summary' }
-    return Object.fromEntries(Object.entries(record).map(([key, item]) => [
-      key,
-      ['data', 'base64', 'bytes'].includes(key.toLowerCase()) ? '[binary payload omitted]' : safeSummaryContent(item)
-    ]))
-  }
-  return value
-}
 
 export type SessionContextSummary = { task: string; completed: string; decisions: string; constraints: string; pending: string; blockers: string; nextStep: string }
 export type SessionContextSummaryInput = readonly { role: SurfaceMessage['role']; content: string }[]
@@ -48,8 +36,7 @@ export function isSessionContextCheckpointWorthCompacting(message: { content: un
 }
 
 function textOf(message: SurfaceMessage): string {
-  if (typeof message.content === 'string') return message.content
-  return JSON.stringify(safeSummaryContent(message.content)) ?? ''
+  return safeSummaryContentText(message.content)
 }
 
 export async function compactSessionContext(input: {
