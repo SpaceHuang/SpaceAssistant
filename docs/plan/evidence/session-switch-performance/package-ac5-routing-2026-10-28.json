@@ -1,0 +1,955 @@
+{
+  "date": "2026-10-28",
+  "buildId": "e4aca912-a3e7-4d0b-8d43-2cb820057f02",
+  "appAsarSha256": "3330eda77d36f8c8b82e15bafa55ea4e25daa0e1b942bf3f81db70a13f48bb82",
+  "profile": "/tmp/spaceassistant-p4-validation/copies/package-ac5-smoke",
+  "method": "CDP Runtime.evaluate invoking packaged window.api.chatGetMessagePage; no UI click",
+  "sessions": {
+    "large": {
+      "id": "d4f29521-8672-486e-93fa-df56c7a8e5f2",
+      "messageCount": 64
+    },
+    "ordinary": {
+      "id": "ef0fe307-b4d1-4502-8a58-9a80d34f7e60",
+      "messageCount": 8
+    }
+  },
+  "aba": {
+    "cycles": 30,
+    "calls": 90,
+    "bad": 0,
+    "durationMs": 307
+  },
+  "concurrent": {
+    "calls": 40,
+    "bad": 0,
+    "empty": 0,
+    "durationMs": 108.89999997615814
+  },
+  "mainTraceSummary": {
+    "calls": 130,
+    "allOk": true,
+    "allReadyCache": true,
+    "pageSizeCounts": {
+      "8": 50,
+      "20": 80
+    },
+    "durationMs": {
+      "p50": 3.76,
+      "p95": 5.61,
+      "max": 13.61
+    }
+  },
+  "mainTraces": [
+    {
+      "requestOrdinal": 5,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 13.61
+    },
+    {
+      "requestOrdinal": 6,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 1.93
+    },
+    {
+      "requestOrdinal": 7,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 7.54
+    },
+    {
+      "requestOrdinal": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 7.72
+    },
+    {
+      "requestOrdinal": 9,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 1.19
+    },
+    {
+      "requestOrdinal": 10,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 6.32
+    },
+    {
+      "requestOrdinal": 11,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 5.55
+    },
+    {
+      "requestOrdinal": 12,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 1.1
+    },
+    {
+      "requestOrdinal": 13,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 5.92
+    },
+    {
+      "requestOrdinal": 14,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 5.61
+    },
+    {
+      "requestOrdinal": 15,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.97
+    },
+    {
+      "requestOrdinal": 16,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 5.23
+    },
+    {
+      "requestOrdinal": 17,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 5.02
+    },
+    {
+      "requestOrdinal": 18,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.86
+    },
+    {
+      "requestOrdinal": 19,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.64
+    },
+    {
+      "requestOrdinal": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.31
+    },
+    {
+      "requestOrdinal": 21,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.76
+    },
+    {
+      "requestOrdinal": 22,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.19
+    },
+    {
+      "requestOrdinal": 23,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.11
+    },
+    {
+      "requestOrdinal": 24,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.78
+    },
+    {
+      "requestOrdinal": 25,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.01
+    },
+    {
+      "requestOrdinal": 26,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.89
+    },
+    {
+      "requestOrdinal": 27,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.73
+    },
+    {
+      "requestOrdinal": 28,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.92
+    },
+    {
+      "requestOrdinal": 29,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.86
+    },
+    {
+      "requestOrdinal": 30,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.69
+    },
+    {
+      "requestOrdinal": 31,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.8
+    },
+    {
+      "requestOrdinal": 32,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.83
+    },
+    {
+      "requestOrdinal": 33,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.67
+    },
+    {
+      "requestOrdinal": 34,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.82
+    },
+    {
+      "requestOrdinal": 35,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.74
+    },
+    {
+      "requestOrdinal": 36,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.71
+    },
+    {
+      "requestOrdinal": 37,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.86
+    },
+    {
+      "requestOrdinal": 38,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.75
+    },
+    {
+      "requestOrdinal": 39,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.69
+    },
+    {
+      "requestOrdinal": 40,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.84
+    },
+    {
+      "requestOrdinal": 41,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.81
+    },
+    {
+      "requestOrdinal": 42,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.71
+    },
+    {
+      "requestOrdinal": 43,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.77
+    },
+    {
+      "requestOrdinal": 44,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.86
+    },
+    {
+      "requestOrdinal": 45,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.76
+    },
+    {
+      "requestOrdinal": 46,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.83
+    },
+    {
+      "requestOrdinal": 47,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.76
+    },
+    {
+      "requestOrdinal": 48,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.67
+    },
+    {
+      "requestOrdinal": 49,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.79
+    },
+    {
+      "requestOrdinal": 50,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.78
+    },
+    {
+      "requestOrdinal": 51,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.69
+    },
+    {
+      "requestOrdinal": 52,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.82
+    },
+    {
+      "requestOrdinal": 53,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.72
+    },
+    {
+      "requestOrdinal": 54,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.65
+    },
+    {
+      "requestOrdinal": 55,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.8
+    },
+    {
+      "requestOrdinal": 56,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.69
+    },
+    {
+      "requestOrdinal": 57,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.67
+    },
+    {
+      "requestOrdinal": 58,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.79
+    },
+    {
+      "requestOrdinal": 59,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.76
+    },
+    {
+      "requestOrdinal": 60,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.65
+    },
+    {
+      "requestOrdinal": 61,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.76
+    },
+    {
+      "requestOrdinal": 62,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.83
+    },
+    {
+      "requestOrdinal": 63,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.66
+    },
+    {
+      "requestOrdinal": 64,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.82
+    },
+    {
+      "requestOrdinal": 65,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.73
+    },
+    {
+      "requestOrdinal": 66,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.7
+    },
+    {
+      "requestOrdinal": 67,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.84
+    },
+    {
+      "requestOrdinal": 68,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.76
+    },
+    {
+      "requestOrdinal": 69,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.68
+    },
+    {
+      "requestOrdinal": 70,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.79
+    },
+    {
+      "requestOrdinal": 71,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.72
+    },
+    {
+      "requestOrdinal": 72,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.66
+    },
+    {
+      "requestOrdinal": 73,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.77
+    },
+    {
+      "requestOrdinal": 74,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.03
+    },
+    {
+      "requestOrdinal": 75,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.67
+    },
+    {
+      "requestOrdinal": 76,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.85
+    },
+    {
+      "requestOrdinal": 77,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.7
+    },
+    {
+      "requestOrdinal": 78,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.65
+    },
+    {
+      "requestOrdinal": 79,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.8
+    },
+    {
+      "requestOrdinal": 80,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.69
+    },
+    {
+      "requestOrdinal": 81,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.65
+    },
+    {
+      "requestOrdinal": 82,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.84
+    },
+    {
+      "requestOrdinal": 83,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.74
+    },
+    {
+      "requestOrdinal": 84,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.69
+    },
+    {
+      "requestOrdinal": 85,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.84
+    },
+    {
+      "requestOrdinal": 86,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.74
+    },
+    {
+      "requestOrdinal": 87,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.67
+    },
+    {
+      "requestOrdinal": 88,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.77
+    },
+    {
+      "requestOrdinal": 89,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.67
+    },
+    {
+      "requestOrdinal": 90,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.68
+    },
+    {
+      "requestOrdinal": 91,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.74
+    },
+    {
+      "requestOrdinal": 92,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.73
+    },
+    {
+      "requestOrdinal": 93,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.65
+    },
+    {
+      "requestOrdinal": 94,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.74
+    },
+    {
+      "requestOrdinal": 95,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.68
+    },
+    {
+      "requestOrdinal": 96,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.77
+    },
+    {
+      "requestOrdinal": 97,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.74
+    },
+    {
+      "requestOrdinal": 98,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.33
+    },
+    {
+      "requestOrdinal": 99,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.7
+    },
+    {
+      "requestOrdinal": 100,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.05
+    },
+    {
+      "requestOrdinal": 101,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.69
+    },
+    {
+      "requestOrdinal": 102,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.01
+    },
+    {
+      "requestOrdinal": 103,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.71
+    },
+    {
+      "requestOrdinal": 104,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4
+    },
+    {
+      "requestOrdinal": 105,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.69
+    },
+    {
+      "requestOrdinal": 106,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4
+    },
+    {
+      "requestOrdinal": 107,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.82
+    },
+    {
+      "requestOrdinal": 108,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.58
+    },
+    {
+      "requestOrdinal": 109,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.85
+    },
+    {
+      "requestOrdinal": 110,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.63
+    },
+    {
+      "requestOrdinal": 111,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.82
+    },
+    {
+      "requestOrdinal": 112,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.39
+    },
+    {
+      "requestOrdinal": 113,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.8
+    },
+    {
+      "requestOrdinal": 114,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.33
+    },
+    {
+      "requestOrdinal": 115,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.81
+    },
+    {
+      "requestOrdinal": 116,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.32
+    },
+    {
+      "requestOrdinal": 117,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.79
+    },
+    {
+      "requestOrdinal": 118,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.26
+    },
+    {
+      "requestOrdinal": 119,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.78
+    },
+    {
+      "requestOrdinal": 120,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.28
+    },
+    {
+      "requestOrdinal": 121,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.77
+    },
+    {
+      "requestOrdinal": 122,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.36
+    },
+    {
+      "requestOrdinal": 123,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.8
+    },
+    {
+      "requestOrdinal": 124,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 9.95
+    },
+    {
+      "requestOrdinal": 125,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.78
+    },
+    {
+      "requestOrdinal": 126,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.87
+    },
+    {
+      "requestOrdinal": 127,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.8
+    },
+    {
+      "requestOrdinal": 128,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.06
+    },
+    {
+      "requestOrdinal": 129,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.72
+    },
+    {
+      "requestOrdinal": 130,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.67
+    },
+    {
+      "requestOrdinal": 131,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.71
+    },
+    {
+      "requestOrdinal": 132,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 3.77
+    },
+    {
+      "requestOrdinal": 133,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 8,
+      "durationMs": 0.71
+    },
+    {
+      "requestOrdinal": 134,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 20,
+      "durationMs": 4.37
+    }
+  ]
+}

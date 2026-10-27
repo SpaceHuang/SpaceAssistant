@@ -315,3 +315,12 @@ Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 sel
 30/30 次首次页面请求均为 `cachePath=cold`、`outcome=ok`、`pageSize=20`。main handler p50/p95/max 为 46.78/67.47/123.74 ms；renderer `renderer-page-request` 为 49/314.8/316.9 ms；按记录阶段相加至 renderer `next-paint` 为 67.1/335.8/338.6 ms。该口径是进程启动后的首个页面请求，不是可信点击、会话切换或目标消息正文 ready；少数 renderer 离群值说明 main handler 时间不能代表 renderer 等待。采样没有 Long Task/LoAF observer。首个页面 trace 完成 1.5 秒后，库中仍无 `session_projection_state` 行；本轮不据此宣称完成投影维护或测得其完成时间。
 
 本轮设备由用户确认已解锁；桌面自动化仍返回锁屏错误，系统辅助功能只能列出应用进程、没有可操作窗口，因此没有设置页点击或真实切换数据。该样本补足了打包应用 cold-cache 首页面的 30 次诊断记录，但不满足 AC-7 的安装包真实点击/正文 ready 矩阵，也不关闭维护开关/竞争/峰值 RSS 与剩余 AC-5/AC-6 包内场景。P4-02/P4-03 保持进行中。
+
+
+### arm64 包 A→B→A 与并发页读取（2026-10-28）
+
+对应用目录包（build ID `e4aca912-a3e7-4d0b-8d43-2cb820057f02`，`app.asar` SHA-256 `3330eda77d36f8c8b82e15bafa55ea4e25daa0e1b942bf3f81db70a13f48bb82`）使用隔离 profile `/tmp/spaceassistant-p4-validation/copies/package-ac5-smoke`。测试夹具包含一个 64 条消息的大会话与一个 8 条消息的普通会话，数据由隔离副本中的 canonical-backed 样本构成。通过 CDP `Runtime.evaluate` 调用打包应用预加载的 `window.api.chatGetMessagePage`，未执行窗口点击。
+
+30 轮 A→B→A 共 90 次串行请求，跨会话返回数为 0，总耗时 307 ms；另执行 40 次并发页请求，跨会话返回数和空页数均为 0，总耗时 108.9 ms。对应 main trace 共 130 条，130/130 成功且 `cachePath=ready`；handler p50/p95/max 为 3.76/5.61/13.61 ms。逐条结果见 [package-ac5-routing-2026-10-28.json](package-ac5-routing-2026-10-28.json)。
+
+这验证的是包内预加载 API 在重复切换顺序和并发读取下的会话路由隔离，不测量用户点击后的界面响应、消息正文 ready 或渲染主线程任务；也未覆盖取消等待者、维护与前台竞争、关闭/切库。因此它只补齐 AC-5 的路由子场景，P4-03 仍未完成。
