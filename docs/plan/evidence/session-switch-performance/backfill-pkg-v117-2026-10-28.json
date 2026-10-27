@@ -1,0 +1,52 @@
+{
+  "dateLocal": "2026-10-28",
+  "sourceCommit": "6a77e0874035819c9cdda2855828ce3b61616e9c",
+  "package": {
+    "path": "release/SpaceAssistant-0.2.9-arm64.pkg",
+    "sha256": "abd5b8fd1e1555d92a719f85ca99f8eeb7235c0cf283ee0b37fb44146fcc98cf",
+    "buildId": "eb0aac8b-6f5b-496c-ba11-f45f194f9584",
+    "appAsarSha256": "c5f6801ea483b11ec01b94ff1ee3c87c34ab609434b8a319f3589c8d4a078cc6",
+    "pkgPayloadAppAsarSha256": "c5f6801ea483b11ec01b94ff1ee3c87c34ab609434b8a319f3589c8d4a078cc6",
+    "signatureStatus": "unsigned pkg; app bundle ad-hoc signed"
+  },
+  "execution": {
+    "method": "Ran the packaged app bundle executable with --user-data-dir against an isolated APFS clone; the PKG payload app.asar hash matches the runtime app.asar.",
+    "userDataClone": "/tmp/spaceassistant-p4-validation/copies/backfill-park-v117-20261028",
+    "sourceProfile": "/tmp/spaceassistant-p4-validation/copies/pkg-candidate-schema102",
+    "run1Log": "/tmp/spaceassistant-p4-validation/backfill-park-run1.log",
+    "run2Log": "/tmp/spaceassistant-p4-validation/backfill-park-run2.log"
+  },
+  "before": {
+    "schemaVersion": 116,
+    "backfillingSessions": 34,
+    "completeSessions": 631,
+    "backfillingSessionsWithMessagesButNoHistoryStreamOrEvent": 16
+  },
+  "firstRun": {
+    "schemaVersion": 117,
+    "backfillingSessions": 34,
+    "completeSessions": 631,
+    "failedAttempts": {
+      "CHAT_BODY_MESSAGE_ID_MISSING": 5,
+      "CHAT_BODY_SOURCE_FACT_MISSING": 1,
+      "PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH": 28
+    },
+    "terminalMarkersAtSameSourceRevision": 22,
+    "retryableBackfillingSessions": 12
+  },
+  "restartRun": {
+    "failedAttempts": {
+      "CHAT_BODY_MESSAGE_ID_MISSING": 0,
+      "CHAT_BODY_SOURCE_FACT_MISSING": 0,
+      "PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH": 12
+    },
+    "terminalMarkersAtSameSourceRevision": 22,
+    "retryableBackfillingSessions": 12
+  },
+  "conclusion": "The six deterministic payload-shape failures and 16 sessions with no History source were not retried after restart. Twelve coverage-mismatch sessions with retained History stream/event evidence remained retryable. Adding History to a session parked for having no History source advances source_revision and the regression test confirms the backfill completes.",
+  "limitations": [
+    "No trusted window click, session-switch timing, or Long Task/LoAF measurement was collected.",
+    "The produced PKG was expanded for payload hash verification but not installed; the app bundle with identical app.asar was run directly.",
+    "The PKG has no installer signature because no Developer ID Application identity is available."
+  ]
+}

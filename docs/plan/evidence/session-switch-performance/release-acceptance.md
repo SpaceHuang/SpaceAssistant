@@ -102,3 +102,11 @@ P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通
 后续提交 `6b4ab574` 补上调度器拒绝回填请求的回退边界。RED 用例证明旧包装器忽略 `false` 后会等待到 `PROJECTION_SOURCE_BACKFILL_WAIT_TIMEOUT`；修复后该请求立即返回未准备状态，交由现有读取路径继续处理。三项定向回归共 20 项通过，增量构建和边界门禁通过。该 follow-up 同样未进入安装包。
 
 再后续提交 `f262cf76` 将持久化失败白名单收窄为上述两个数据形状错误。新增 RED 用例证明无 History 的 `PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH` 可能在 source revision 不变时通过 spill 恢复而变得可回填，因此继续使用可重试退避、不落终止标记。相同三项定向回归仍为 20 项通过，增量构建和边界门禁通过；未运行全仓测试。
+
+## arm64 PKG 中的 source backfill 重启行为（2026-10-28）
+
+提交 `6a77e087` 在确定性回填失败基础上，增加了“当前有消息但 session 完全没有 History stream/event”这一可判定状态的停放规则。该条件不覆盖仍有 stream/event 证据的 coverage mismatch，后者继续保留退避和重试；新写入 History 会触发 source revision 变化并重新排队。
+
+arm64 PKG build ID `eb0aac8b-6f5b-496c-ba11-f45f194f9584`，PKG SHA-256 `abd5b8fd1e1555d92a719f85ca99f8eeb7235c0cf283ee0b37fb44146fcc98cf`，app.asar SHA-256 `c5f6801ea483b11ec01b94ff1ee3c87c34ab609434b8a319f3589c8d4a078cc6`。由旧 v116 profile `/tmp/spaceassistant-p4-validation/copies/pkg-candidate-schema102` 创建 APFS 克隆 `/tmp/spaceassistant-p4-validation/copies/backfill-park-v117-20261028`，未触碰默认用户目录。运行前有 34 个 `backfilling`、631 个 `complete`，其中 16 个有消息但无 History stream/event。运行后数据库迁移到 v117，34 个待处理会话仍保持 `backfilling`：首轮 5 个 `CHAT_BODY_MESSAGE_ID_MISSING`、1 个 `CHAT_BODY_SOURCE_FACT_MISSING`、28 个 `PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH`；22 个 session 被标记为当前 source revision 的停放项（16 个无 History 来源 + 6 个数据形状错误），另 12 个 coverage mismatch 可重试。重启后只重新尝试那 12 个 coverage mismatch；两个确定性错误类别均为 0 次，22 个标记保持不变。测试还验证给无来源会话追加 History 后 revision 上升并成功完成 backfill。
+
+原始计数与哈希：[backfill-pkg-v117-2026-10-28.json](backfill-pkg-v117-2026-10-28.json)。PKG payload 的 app.asar 与运行 bundle 完全同哈希；实际运行的是 electron-builder 生成的 app bundle，未执行安装。PKG 当前无 Installer 签名（本机没有 Developer ID Application identity）。这次是维护回填/重启证据，没有真实窗口点击、session-switch 延迟或 Long Task/LoAF 测量。本轮按用户确认已解锁后重试 CUA：`getApp("SpaceAssistant")` 约 121 秒超时，`getState()` 约 30 秒超时并重置 kernel，未获得可交互窗口。P4-02、P4-03 与 AC-7 不关闭。
