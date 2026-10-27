@@ -660,13 +660,22 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
           ? failureMessages?.find((message) => message.role === 'assistant' && message.id === input.assistantMessageId)
           : undefined
         const mirroredFailureContent = mirroredFailureMessage ? assistantTextForLegacyProjection(mirroredFailureMessage.content) : undefined
+        const mirroredFailureThinking = mirroredFailureMessage && Array.isArray(mirroredFailureMessage.content)
+          ? mirroredFailureMessage.content
+              .filter((block): block is Extract<CanonicalContentBlock, { type: 'thinking' }> =>
+                Boolean(block && typeof block === 'object' && 'type' in block && block.type === 'thinking'))
+              .map((block) => block.thinking)
+              .filter(Boolean)
+              .join('')
+          : ''
         const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined && failureMessages
           ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: transcriptOutcome,
               messages: failureMessages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[],
               ...(input.assistantMessageId ? { messageMirror: {
                 messageId: input.assistantMessageId,
                 status: error instanceof AgentTurnCancelledError ? 'cancelled' as const : 'failed' as const,
-                ...(mirroredFailureContent !== undefined ? { content: mirroredFailureContent } : {})
+                ...(mirroredFailureContent !== undefined ? { content: mirroredFailureContent } : {}),
+                ...(mirroredFailureThinking ? { thinking: { content: mirroredFailureThinking, isVisible: true, startTime: Date.now() } } : {})
               } } : {}) }
           : undefined
         await appendTerminalHistory(terminalKind, terminalPayload, sessionLedger, transcriptCommit)

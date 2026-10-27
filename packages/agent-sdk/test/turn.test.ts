@@ -1540,7 +1540,8 @@ describe('runAgentTurn', () => {
 
     expect(terminalCommits).toHaveLength(1)
     expect(terminalCommits[0]).toMatchObject({ outcome: 'failed', messageMirror: {
-      messageId: 'failed-block-message-assistant', status: 'failed', content: 'partial canonical answer'
+      messageId: 'failed-block-message-assistant', status: 'failed', content: 'partial canonical answer',
+      thinking: { content: 'private reasoning', isVisible: true }
     } })
   })
 
