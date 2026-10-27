@@ -13,6 +13,7 @@ import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../d
 import { createSqliteSessionStorage } from '../../sqliteSessionStorage'
 import { readChatPageAfterPreparation } from '../../public/readMessages'
 import { createSessionQueries } from '../../queries'
+import { CHAT_BODY_PROJECTION_SPEC_VERSION } from '../../domain/scopeKey'
 
 describe('session body source backfill', () => {
   let cleanup: (() => void) | undefined
@@ -243,6 +244,29 @@ describe('session body source backfill', () => {
 
     await expect(storage.queries.readSourceChatPage?.({ sessionId: session.id, limit: 10 })).resolves.toBeUndefined()
     expect(requestBackfill).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a parked legacy-only conversation immediately readable through its existing reader', async () => {
+    const temp = createTempDatabase('session-body-source-parked-legacy-read-')
+    cleanup = temp.cleanup
+    const conn = getDbConnection(temp.db)
+    const session = createSession(temp.db, { name: 'parked legacy reader' })
+    appendMessage(temp.db, { id: 'parked-legacy-message', sessionId: session.id, role: 'user', content: 'still readable',
+      timestamp: 1, status: 'sent' })
+    conn.prepare(`UPDATE session_body_source_state SET status='backfilling',terminal_source_revision=source_revision,
+      terminal_reducer_spec_version=? WHERE session_id=?`).run(CHAT_BODY_PROJECTION_SPEC_VERSION, session.id)
+    blobRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-body-source-parked-legacy-blobs-'))
+    const requestBackfill = vi.fn()
+    const storage = createSqliteSessionStorage(temp.db, { projectionBlobRoot: blobRoot, requestBodySourceBackfill: requestBackfill,
+      sourceBackfillWaitMs: 60_000 })
+    const startedAt = performance.now()
+
+    const page = await readChatPageAfterPreparation(storage, { sessionId: session.id, limit: 10 })
+
+    expect(page.entries.map(({ message }) => ({ id: message.id, content: message.content })))
+      .toEqual([{ id: 'parked-legacy-message', content: 'still readable' }])
+    expect(performance.now() - startedAt).toBeLessThan(1_000)
+    expect(requestBackfill).not.toHaveBeenCalled()
   })
 
   it('discards a locator page if the selected message window changes during body materialization', async () => {
