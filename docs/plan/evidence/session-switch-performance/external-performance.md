@@ -144,7 +144,7 @@ IM 项经用户澄清标为不适用：项目没有专用私聊或群聊 sandbox
 
 额外打开 `PerformanceObserver` 后，在 DevTools 关闭期间快速切换观察到 74/50/62 ms long task 和 104.6/57.8/52.0 ms long animation frame；受控的大/普通切换还观察到 94.2/56.4 ms long animation frame。至少一组长帧时间与一次 44 条后台读取及失败原因补齐时间相邻，说明分页 trace 之外仍有切换期工作可能影响响应；目前没有脚本 attribution 或调用级关联，不能把该相邻关系当成因果结论。候选主进程 25 秒采样的 RSS 峰值约 529,792 KiB（约 517.4 MiB），单进程样本，不含 Electron helper。
 
-为补计划指定的真实基线，已在临时 detached worktree 从 `109a938404124235d632e4cdbd4f9e06eaa48728` 完整构建并生成 arm64 PKG。基线 build ID `ebeaacf2-9a50-4773-8d98-b851e2b1c385`，`sourceTreeClean=true`；PKG SHA-256 `c4da0479b8a200f7170917f0df1e8729b1d73ef856f9d99c575cf5d681e3a098`，app.asar SHA-256 `bf70ebe8b402d7c3b2387f428a6e5f1dd4779362d580a3d3446c153eca107d0b`。打包目录与展开 PKG 的 app.asar 哈希相同，`codesign --verify --deep --strict` 通过。该基线包尝试在隔离 `baseline-v4` 副本启动时，因库 `schema_version=115` 高于二进制支持的 107 而拒绝打开。已检查的其余基线副本也为 schema 115，候选副本为 116；不能降级或篡改 schema 来强行运行。因此这次构建固定了基线二进制身份，但没有产生可采信的同库 UI 对照数据。
+为补计划指定的真实基线，已在临时 detached worktree 从 `109a938404124235d632e4cdbd4f9e06eaa48728` 完整构建并生成 arm64 PKG。基线 build ID `ebeaacf2-9a50-4773-8d98-b851e2b1c385`，`sourceTreeClean=true`；PKG SHA-256 `c4da0479b8a200f7170917f0df1e8729b1d73ef856f9d99c575cf5d681e3a098`，app.asar SHA-256 `bf70ebe8b402d7c3b2387f428a6e5f1dd4779362d580a3d3446c153eca107d0b`。打包目录与展开 PKG 的 app.asar 哈希相同，`codesign --verify --deep --strict` 通过。该基线包尝试在隔离 `baseline-v4` 副本启动时，因库 `schema_version=115` 高于二进制支持的 107 而拒绝打开。其他可读取的基线副本也为 schema 115，候选副本为 116；另有一份 baseline-v3 数据库无法只读校验。不能降级或篡改 schema 来强行运行。因此这次构建固定了基线二进制身份，但没有产生可采信的同库 UI 对照数据。
 
 此前记录“设备仍锁定、无法点击”已被本次真实窗口测量取代；旧 AX/screenshot 计时仍只作为无效校准，不计入新样本。候选实例目前唯一运行，仍指向隔离副本；基线实例已因版本拒绝退出。IM 仍不适用：用户说明项目没有私聊或群聊测试会话，未发送任何消息。
 
