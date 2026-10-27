@@ -117,6 +117,8 @@ arm64 PKG build ID `eb0aac8b-6f5b-496c-ba11-f45f194f9584`，PKG SHA-256 `abd5b8f
 
 ## 用户确认解锁后的隔离候选启动重试（2026-10-28）
 
-用户确认 Mac 已解锁后，CUA 应用清单可读，但桌面状态再次返回“Mac 已锁定”，没有可操作窗口。本次从 `pkg-candidate-schema102` 制作独立 APFS clone，检查副本中的飞书与微信配置均为 disabled；将副本置于 `/tmp/spaceassistant-ui-unlocked-20261028/Library/Application Support/SpaceAssistant`，并尝试在对应临时 HOME 下启动提取自 v117 PKG 的 app bundle。启动日志为空，检查时未发现候选主进程、调试端口或窗口；没有采到任何点击、正文 ready、Long Task 或维护竞争数据。该次观察不能说明进程退出原因，也没有把默认用户数据库交给候选 app。
+用户确认 Mac 已解锁后，CUA 应用清单可读，但桌面状态仍返回“Mac 已锁定”，没有可操作窗口。本次从 `pkg-candidate-schema102` 制作独立 APFS clone，并确认副本中的飞书与微信配置均为 disabled。直接执行 app bundle、设置临时 `HOME` 的首次尝试没有保持运行。
 
-结论不变：P4-02/P4-03 未完成。IM 并发仍不适用；待补证据是候选可操作窗口中的 AC-7 内容 ready 与维护竞争，以及 AC-5/AC-6 仍适用的包内场景。
+随后经 LaunchServices `open -na` 重试时，候选进程忽略该临时 HOME，命令行实际指向默认用户目录 `/Users/space/Library/Application Support/spaceassistant`。已终止本次启动的主进程与 helper。只读检查确认该数据库 schema 为 117（此前该目录没有本轮基线快照；先前记录的 schema 116 指另一目录）。WAL 文件为 4,144,752 字节；当前 source backfill 有 35 条 `backfilling`、934 条 `complete`，没有 terminal marker。迁移 v117 新增两个可空字段；启动前计数未知，因此不能据此断言其他数据未变。没有执行回滚或清理。CUA 未显示窗口，没有采到点击、正文 ready、Long Task 或维护竞争数据。
+
+结论不变：P4-02/P4-03 未完成。IM 并发仍不适用；待补证据是候选可操作窗口中的 AC-7 内容 ready 与维护竞争，以及 AC-5/AC-6 仍适用的包内场景。后续不得用 LaunchServices 的临时 HOME 假设隔离；只有在能从命令行确认实际 userData 路径确为隔离目录后才能启动候选包。
