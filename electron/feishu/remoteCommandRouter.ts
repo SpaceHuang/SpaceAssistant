@@ -7,7 +7,7 @@ import type { ToolsConfig } from '../../src/shared/domainTypes'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
 import { FeishuImChannel } from './feishuImChannel'
 import { shouldAcceptInbound } from './feishuInboundParser'
-import { registerInboundFeishuAttachments } from './feishuAttachmentRegistry'
+import { feishuMessageAttachments, registerInboundFeishuAttachments } from './feishuAttachmentRegistry'
 import type { LarkCliRunner } from './larkCliRunner'
 import { sendFeishuRemoteOutbound as sendFeishuRemoteOutboundRaw } from './feishuRemoteOutbound'
 import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
@@ -521,6 +521,7 @@ export class RemoteCommandRouter {
       const queueScope = buildImQueueScope('feishu', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
       appendImInboxMessageWithWakeEvent(this.deps.db, {
         sessionId, channel: 'feishu', queueScope, channelMessageId: message.messageId, content,
+        attachments: feishuMessageAttachments(message),
         ...(trackContext ? { trackId: trackContext.trackId, trackEventId: trackContext.attributionEventId } : {})
       })
       return true
@@ -1022,7 +1023,7 @@ export class RemoteCommandRouter {
           if (!context.originSessionId) throw new Error('FEISHU_TRACK_INBOX_SESSION_MISSING')
           const trackQueueScope = buildImQueueScope('feishu', context.originSessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
           appendImInboxMessageWithWakeEvent(this.deps.db, { sessionId: context.originSessionId, channel: 'feishu', queueScope: trackQueueScope,
-            channelMessageId: msg.messageId, content, trackId: context.trackId, trackEventId: context.attributionEventId })
+            channelMessageId: msg.messageId, content, attachments: feishuMessageAttachments(msg), trackId: context.trackId, trackEventId: context.attributionEventId })
         } })
         if (attribution.kind === 'unresolved') {
           if (attribution.decision.kind === 'ambiguous' && attribution.decision.candidateTrackIds.length <= 5 && trackGates.clarification) {
@@ -1047,7 +1048,7 @@ export class RemoteCommandRouter {
             const expiresAt = now + 5 * 60_000
             const queueScope = buildImQueueScope('feishu', sessionId)
             parkImInboxMessageForClarification(this.deps.db, { sessionId, channel: 'feishu', queueScope,
-              channelMessageId: msg.messageId, content, clarificationId, identityKey: msg.chatId,
+              channelMessageId: msg.messageId, content, attachments: feishuMessageAttachments(msg), clarificationId, identityKey: msg.chatId,
               ownerId: authSnapshot.owner, authorizationEpoch: epoch, handle, candidates, expiresAt, now })
             const sendAttemptId = randomUUID()
             startClarificationSendAttempt(this.deps.db, { sendAttemptId, clarificationId, version: 1, startedAt: Date.now() })
@@ -1272,10 +1273,12 @@ export class RemoteCommandRouter {
         }
 
         const executionConfig = await resolveTrustedTurnExecutionConfig(this.deps.db, this.deps.sessionStorage!.queries, this.deps.sessionStorage!.commands, sessionId, 'feishu')
+        const messageAttachments = feishuMessageAttachments(msg)
+        const registeredAttachments = registerInboundFeishuAttachments(msg)
         const prepared = this.deps.turnRuntime?.prepare({
           ...(replay
             ? { mode: 'reuse-user' as const, requestId, sessionId, userMessageId: replay.userMessageId, excludeMessageIds: [], config: executionConfig }
-            : { mode: 'create-user' as const, requestId, sessionId, input: { text: content }, config: executionConfig })
+            : { mode: 'create-user' as const, requestId, sessionId, input: { text: content, attachments: messageAttachments }, config: executionConfig })
         })
         if (!prepared) throw new Error('REMOTE_TURN_PREPARE_REQUIRED')
         if (!bindRemoteSessionExecutionId(sessionId, requestId, prepared.turnId)) {
@@ -1299,7 +1302,7 @@ export class RemoteCommandRouter {
           source: 'feishu' as const,
           messageId: msg.messageId,
           feishuConfig: config,
-          feishuAttachments: registerInboundFeishuAttachments(msg),
+          feishuAttachments: registeredAttachments,
           imChannel: this.deps.imChannel,
           confirmTimeoutMessage: FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
           larkCliRunner: this.deps.runner,

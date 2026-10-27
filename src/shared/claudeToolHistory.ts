@@ -1,4 +1,4 @@
-import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes'
+import { isChatImageAttachment, type ChatImageAttachment, type Message, type ToolCallRecord } from './domainTypes'
 import type { ClaudeChatMessageWithBlocks } from './api'
 import { MAX_CHAT_API_MESSAGES } from './chatApiMessageLimits'
 import { toolIdToOpenAiCompatibleApiToolName } from './anthropicToolSanitize'
@@ -83,7 +83,7 @@ export function formatHistoricalImagePlaceholder(attachments: ChatImageAttachmen
 
 /** 策略 A：有 attachments 即 full hydrate；staging 不可读时由 buildUserMessageContent 输出失效文案 */
 function resolveHydrationMode(msg: Message): ImageHydrationMode {
-  if (!msg.attachments?.length) return 'text-placeholder-only'
+  if (!msg.attachments?.some(isChatImageAttachment)) return 'text-placeholder-only'
   return 'full'
 }
 
@@ -145,9 +145,10 @@ export function buildClaudeToolChatMessages(
     if (m.role === 'user' && m.status === 'queued') continue
     if (m.role === 'user') {
       let content: string | ClaudeUserContentBlock[]
-      if (m.attachments?.length) {
+      const imageAttachments = m.attachments?.filter(isChatImageAttachment)
+      if (imageAttachments?.length) {
         const hydrationMode = resolveHydrationMode(m)
-        content = buildUserMessageContent(m.content, m.attachments, { hydrationMode, resolveImage })
+        content = buildUserMessageContent(m.content, imageAttachments, { hydrationMode, resolveImage })
       } else {
         content = ensureApiTextContent(m.content)
       }
@@ -264,5 +265,5 @@ export function trimClaudeToolChatMessages(
 }
 
 export function messageHasImageAttachments(msg: Message): boolean {
-  return msg.role === 'user' && (msg.attachments?.length ?? 0) > 0
+  return msg.role === 'user' && (msg.attachments?.some(isChatImageAttachment) ?? false)
 }

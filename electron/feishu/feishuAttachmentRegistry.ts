@@ -1,5 +1,6 @@
 import path from 'path'
 import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
+import type { ExternalMessageAttachment } from '../../src/shared/domainTypes'
 
 export const MAX_FEISHU_ATTACHMENT_BYTES = 32 * 1024 * 1024
 
@@ -7,6 +8,7 @@ export type RegisteredFeishuAttachment = {
   id: string
   messageId: string
   localPath: string
+  kind: 'image' | 'file'
   fileName?: string
   mimeType?: string
 }
@@ -20,10 +22,18 @@ export function registerInboundFeishuAttachments(message: FeishuInboundMessage):
       id: `attachment-${index + 1}`,
       messageId: message.messageId,
       localPath,
+      kind: attachment.kind,
       ...(attachment.fileName ? { fileName: path.basename(attachment.fileName) } : {}),
       ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {})
     }]
   })
+}
+
+/** Session messages retain only display metadata. Tool dispatch keeps the local path request-scoped. */
+export function feishuMessageAttachments(message: FeishuInboundMessage): ExternalMessageAttachment[] {
+  return registerInboundFeishuAttachments(message).map(({ id, kind, fileName, mimeType }) => ({
+    id, source: 'feishu', kind, fileName: fileName ?? (kind === 'image' ? 'image' : 'file'), ...(mimeType ? { mimeType } : {})
+  }))
 }
 
 export function findRegisteredFeishuAttachment(

@@ -855,6 +855,21 @@ export interface ChatImageAttachment {
   height?: number
 }
 
+/** 可回看的外部 IM 附件元数据；不含临时缓存路径或凭据。 */
+export interface ExternalMessageAttachment {
+  id: string
+  source: 'feishu'
+  kind: 'image' | 'file'
+  fileName: string
+  mimeType?: string
+}
+
+export type MessageAttachment = ChatImageAttachment | ExternalMessageAttachment
+
+export function isChatImageAttachment(attachment: MessageAttachment): attachment is ChatImageAttachment {
+  return 'stagingKey' in attachment && typeof attachment.stagingKey === 'string'
+}
+
 export interface Message {
   id: string
   sessionId: string
@@ -862,7 +877,7 @@ export interface Message {
   content: string
   timestamp: number
   /** 用户消息附带的图片元数据（无 base64） */
-  attachments?: ChatImageAttachment[]
+  attachments?: MessageAttachment[]
   /**
    * 该条用户消息的图片 block 已成功送达 API。
    * 为 true 时后续 build 仅输出文本占位，不再 re-hydrate base64。

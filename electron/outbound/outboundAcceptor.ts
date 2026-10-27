@@ -638,7 +638,7 @@ export function computeContextPressureWarnings(
     .find((m) => m.role === 'assistant' && m.thinking)?.thinking
   const thinkingTokensToExclude = estimateThinkingTokensFromMessage(lastAssistantThinking)
   const occupancy = usage ? computeEstimatedOccupancy(usage, { thinkingTokensToExclude }) : 0
-  const pendingImageTokens = estimateTokensFromImageAttachments(attachments ?? [])
+  const pendingImageTokens = estimateTokensFromImageAttachments((attachments ?? []).filter((attachment) => 'stagingKey' in attachment))
   const historyImageTokens = estimateTokensFromHistoryImages(messages)
   const modelEntry = readStoredModels(db).find((entry) => entry.name === session.model)
   const cap = resolveEffectiveMaximumContext(session.model, modelEntry?.maximumContext ?? 0)
