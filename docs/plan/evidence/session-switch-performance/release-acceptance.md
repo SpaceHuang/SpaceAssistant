@@ -98,3 +98,5 @@ P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通
 新增 TDD 回归覆盖失败标记持久化、同版本重启不重扫、reducer 版本升级后重试、source 更新后成功回填，以及 v116 → v117 schema 迁移。定向命令 `npm exec vitest run electron/sessionStorage/infrastructure/sqlite/sessionBodySourceBackfillTask.test.ts electron/database/migrations.sessionBodyLocator.test.ts`：11 项通过；`npm run build:electron:incremental` 通过，包含 session-storage 与 cleanup 边界门禁。本次没有重跑全仓测试。
 
 该修复目前只在源码工作树中，尚未打入 arm64 安装包，也没有新的包内隔离库或界面样本。本轮 CUA 在用户确认解锁后仍报告 Mac 锁屏，无法启动可操作窗口；P4-02/03 与 AC-7 维持未完成。
+
+后续提交 `6b4ab574` 补上调度器拒绝回填请求的回退边界。RED 用例证明旧包装器忽略 `false` 后会等待到 `PROJECTION_SOURCE_BACKFILL_WAIT_TIMEOUT`；修复后该请求立即返回未准备状态，交由现有读取路径继续处理。三项定向回归共 20 项通过，增量构建和边界门禁通过。该 follow-up 同样未进入安装包。
