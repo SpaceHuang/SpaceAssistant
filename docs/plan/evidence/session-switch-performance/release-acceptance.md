@@ -112,3 +112,5 @@ arm64 PKG build ID `eb0aac8b-6f5b-496c-ba11-f45f194f9584`，PKG SHA-256 `abd5b8f
 原始计数与哈希：[backfill-pkg-v117-2026-10-28.json](backfill-pkg-v117-2026-10-28.json)。PKG payload 的 app.asar 与运行 bundle 完全同哈希；实际运行的是 electron-builder 生成的 app bundle，未执行安装。PKG 当前无 Installer 签名（本机没有 Developer ID Application identity）。这次是维护回填/重启证据，没有真实窗口点击、session-switch 延迟或 Long Task/LoAF 测量。本轮按用户确认已解锁后重试 CUA：`getApp("SpaceAssistant")` 约 121 秒超时，`getState()` 约 30 秒超时并重置 kernel，未获得可交互窗口。P4-02、P4-03 与 AC-7 不关闭。
 
 后续测试提交 `6efddbf6` 增加停放会话的读取回归：真实 SQLite storage 中，已有 legacy 消息的会话即使 source 状态被标为当前 revision 停放，`readChatPageAfterPreparation` 仍在 1 秒内经现有 reader 返回原正文，且不请求回填。三项定向回归共 21 项通过；此测试改动不改变已构建 PKG 内的源码。
+
+桌面工具超时时的副作用核对：`cua.getApp("SpaceAssistant")` 在约 121 秒后超时，但仍启动了 `/Applications/SpaceAssistant.app` 并打开默认用户目录。该进程已退出；只读核对默认库仍为 schema 116、没有 v117 标记列，数据库主文件修改时间仍为 `2026-10-27 22:24:11`，WAL 为 0 字节。该进程不属于隔离 PKG 验收样本，没有证据显示它提交过 SQLite 写事务；之后不再用 `getApp` 自动启动默认实例。
