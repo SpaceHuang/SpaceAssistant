@@ -10,6 +10,7 @@ import { projectionSourceEventDigest } from './projectionSourceDependencyReader'
 import type { AppDatabase } from '../../../database/sqliteStore'
 import { createSqliteSessionStorageHost } from '../../sqliteSessionStorage'
 import { createSessionBodySourceBackfillTask } from './sessionBodySourceBackfillTask'
+import { CHAT_BODY_PROJECTION_SPEC_VERSION } from '../../domain/scopeKey'
 
 describe('session body source backfill task', () => {
   let cleanup: (() => void) | undefined
@@ -115,6 +116,53 @@ describe('session body source backfill task', () => {
     ])), { timeout: 10_000 })
     expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(healthy.id))
       .toEqual({ status: 'complete' })
+  })
+
+  it('persists deterministic source rejection across restart and retries after the source revision changes', async () => {
+    const temp = createTempDatabase('session-body-source-backfill-terminal-rejection-')
+    cleanup = temp.cleanup
+    blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
+    const conn = getDbConnection(temp.db)
+    const session = createSession(temp.db, { name: 'deterministically rejected source' })
+    appendMessage(temp.db, { id: 'rejected-user', sessionId: session.id, role: 'user', content: 'body', timestamp: 1, status: 'sent' })
+    await new SqliteAgentHistory(conn, 1, () => 10, session.id).appendBatch([{ invocationId: 'rejected-invocation',
+      turnId: 'rejected-turn', sequence: 1, schemaVersion: 1, eventId: 'rejected-context', idempotencyKey: 'rejected-context',
+      kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'body', timestamp: 1 }] } } as never], 0)
+    const results: Array<{ sessionId: string; status: string; error?: string }> = []
+    const startTask = (reducerSpecVersion = CHAT_BODY_PROJECTION_SPEC_VERSION) => createSessionBodySourceBackfillTask({
+      db: temp.db, blobRoot: blobRoot!, reducerSpecVersion, idleDelayMs: 60_000, retryDelayMs: 20,
+      onResult: (result) => results.push(result) }).start()!
+    let handle = startTask()
+    taskStop = () => handle.stop()
+
+    await vi.waitFor(() => expect(results.filter(({ status }) => status === 'failed')).toHaveLength(1), { timeout: 10_000 })
+    const rejected = conn.prepare(`SELECT source_revision,terminal_source_revision,terminal_reducer_spec_version
+      FROM session_body_source_state WHERE session_id=?`).get(session.id) as
+      { source_revision: number; terminal_source_revision: number | null; terminal_reducer_spec_version: number | null }
+    expect(rejected.terminal_source_revision).toBe(rejected.source_revision)
+    expect(rejected.terminal_reducer_spec_version).toBe(CHAT_BODY_PROJECTION_SPEC_VERSION)
+
+    handle.stop()
+    handle = startTask()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(results.filter(({ status }) => status === 'failed')).toHaveLength(1)
+
+    handle.stop()
+    const upgradedReducerSpecVersion = CHAT_BODY_PROJECTION_SPEC_VERSION + 1
+    handle = startTask(upgradedReducerSpecVersion)
+    await vi.waitFor(() => expect(results.filter(({ status }) => status === 'failed')).toHaveLength(2), { timeout: 10_000 })
+
+    conn.prepare(`UPDATE agent_history_events SET payload_json=? WHERE event_id='rejected-context'`)
+      .run(JSON.stringify({ messages: [{ id: 'rejected-user', role: 'user', content: 'body', timestamp: 1 }] }))
+    handle.request()
+    await vi.waitFor(() => expect(results.at(-1)).toMatchObject({ sessionId: session.id, status: 'complete' }), { timeout: 10_000 })
+    const recovered = conn.prepare(`SELECT source_revision,status,terminal_source_revision,terminal_reducer_spec_version
+      FROM session_body_source_state WHERE session_id=?`).get(session.id) as
+      { source_revision: number; status: string; terminal_source_revision: number | null; terminal_reducer_spec_version: number | null }
+    expect(recovered.status).toBe('complete')
+    expect(recovered.source_revision).toBeGreaterThan(rejected.source_revision)
+    expect(recovered.terminal_source_revision).toBe(rejected.source_revision)
+    expect(recovered.terminal_reducer_spec_version).toBe(upgradedReducerSpecVersion)
   })
 
   it('reduces and publishes a segmented large context body through the production maintenance task', async () => {

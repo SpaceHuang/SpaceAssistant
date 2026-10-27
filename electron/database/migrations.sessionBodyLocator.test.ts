@@ -7,7 +7,7 @@ import { runMigrations } from './migrations'
 import { DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
 
-describe('session body locator schema v116', () => {
+describe('session body locator schema v117', () => {
   const databases: ReturnType<typeof createTempDatabase>[] = []
   afterEach(() => { for (const database of databases.splice(0)) database.cleanup() })
 
@@ -24,14 +24,16 @@ describe('session body locator schema v116', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(116)
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '116' })
+    expect(DB_SCHEMA_VERSION).toBe(117)
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '117' })
     expect(conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?').get('pre-migration-event'))
       .toMatchObject({ payload_json: expect.stringContaining('retained canonical history') })
     const initial = conn.prepare('SELECT source_revision,status,checkpoint_json FROM session_body_source_state WHERE session_id=?')
       .get(session.id) as { source_revision: number; status: string; checkpoint_json: string | null }
     expect(initial).toMatchObject({ status: 'pending', checkpoint_json: null })
     expect(initial.source_revision).toBeGreaterThanOrEqual(0)
+    expect(conn.prepare('SELECT terminal_source_revision,terminal_reducer_spec_version FROM session_body_source_state WHERE session_id=?')
+      .get(session.id)).toEqual({ terminal_source_revision: null, terminal_reducer_spec_version: null })
 
     appendSqliteAgentHistoryBatchInTransaction(conn, [{ invocationId: 'locator-write-invocation', turnId: 'turn', sequence: 1,
       schemaVersion: 1, eventId: 'locator-write-event', idempotencyKey: 'locator-write-event', kind: 'invocation-context-committed',
@@ -60,11 +62,30 @@ describe('session body locator schema v116', () => {
     runMigrations(conn)
 
     expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
-      .toEqual({ value: '116' })
+      .toEqual({ value: '117' })
     expect(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_message_body_locator'").get())
       .toBeDefined()
     expect(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='bump_session_body_source_after_history_insert'").get())
       .toBeUndefined()
+    conn.close()
+  })
+
+  it('adds rejection markers when upgrading an existing v116 locator table', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES ('schema_version','116');
+      CREATE TABLE session_body_source_state (
+        session_id TEXT PRIMARY KEY NOT NULL, source_revision INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending', checkpoint_json TEXT, updated_at INTEGER NOT NULL
+      );`)
+
+    runMigrations(conn)
+
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
+      .toEqual({ value: '117' })
+    const columns = conn.prepare('PRAGMA table_info(session_body_source_state)').all() as Array<{ name: string }>
+    expect(columns.map(({ name }) => name)).toContain('terminal_source_revision')
+    expect(columns.map(({ name }) => name)).toContain('terminal_reducer_spec_version')
     conn.close()
   })
 })

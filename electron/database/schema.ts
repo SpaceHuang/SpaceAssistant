@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 116
+export const DB_SCHEMA_VERSION = 117
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -2200,6 +2200,14 @@ CREATE TABLE IF NOT EXISTS session_projection_blob_references (
 CREATE INDEX IF NOT EXISTS idx_session_projection_blob_references_locator
   ON session_projection_blob_references(locator);
 
+`
+
+/** v116 → v117: remember source revisions that cannot produce complete body locators. */
+export const MIGRATION_V117_SESSION_BODY_LOCATOR_REJECTION_SQL = `
+ALTER TABLE session_body_source_state ADD COLUMN terminal_source_revision INTEGER
+  CHECK(terminal_source_revision IS NULL OR terminal_source_revision >= 0);
+ALTER TABLE session_body_source_state ADD COLUMN terminal_reducer_spec_version INTEGER
+  CHECK(terminal_reducer_spec_version IS NULL OR terminal_reducer_spec_version > 0);
 `
 
 export const MIGRATION_V116_SESSION_BODY_LOCATOR_SESSION_TRIGGERS_SQL = `

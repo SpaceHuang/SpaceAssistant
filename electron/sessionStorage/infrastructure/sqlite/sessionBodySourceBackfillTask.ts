@@ -9,6 +9,11 @@ import { runSessionBodySourceBackfill } from './sessionBodySourceBackfill'
 
 type PendingSourceSession = Readonly<{ session_id: string; generation: string; updated_at: number; created_at: number }>
 
+function isDeterministicSourceRejection(message: string): boolean {
+  return message === 'CHAT_BODY_MESSAGE_ID_MISSING' || message === 'CHAT_BODY_SOURCE_FACT_MISSING' ||
+    message === 'PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH'
+}
+
 /** Runs locator backfills as cancellable derived-index maintenance, one session at a time. */
 export function createSessionBodySourceBackfillTask(input: Readonly<{
   db: AppDatabase
@@ -47,13 +52,18 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
           const query = candidateCursor
             ? conn.prepare(`SELECT sessions.id AS session_id,sessions.generation,state.updated_at,sessions.created_at
               FROM session_body_source_state state JOIN sessions ON sessions.id=state.session_id
-              WHERE state.status IN ('pending','backfilling') AND (state.updated_at,sessions.created_at,sessions.id)>(?,?,?)
+              WHERE state.status IN ('pending','backfilling') AND
+                (state.terminal_source_revision IS NULL OR state.terminal_source_revision<>state.source_revision OR
+                  state.terminal_reducer_spec_version IS NULL OR state.terminal_reducer_spec_version<>?) AND
+                (state.updated_at,sessions.created_at,sessions.id)>(?,?,?)
               ORDER BY state.updated_at ASC,sessions.created_at ASC,sessions.id ASC LIMIT 64`)
-              .all(candidateCursor.updated_at, candidateCursor.created_at, candidateCursor.session_id)
+              .all(reducerSpecVersion, candidateCursor.updated_at, candidateCursor.created_at, candidateCursor.session_id)
             : conn.prepare(`SELECT sessions.id AS session_id,sessions.generation,state.updated_at,sessions.created_at
               FROM session_body_source_state state JOIN sessions ON sessions.id=state.session_id
-              WHERE state.status IN ('pending','backfilling')
-              ORDER BY state.updated_at ASC,sessions.created_at ASC,sessions.id ASC LIMIT 64`).all()
+              WHERE state.status IN ('pending','backfilling') AND
+                (state.terminal_source_revision IS NULL OR state.terminal_source_revision<>state.source_revision OR
+                  state.terminal_reducer_spec_version IS NULL OR state.terminal_reducer_spec_version<>?)
+              ORDER BY state.updated_at ASC,sessions.created_at ASC,sessions.id ASC LIMIT 64`).all(reducerSpecVersion)
           const candidates = query as PendingSourceSession[]
           let session: PendingSourceSession | undefined
           const now = Date.now()
@@ -79,6 +89,7 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
             return
           }
           candidateCursor = undefined
+          let attemptedSourceRevision: number | undefined
           try {
             const sourceIdentityJson = readProjectionSourceIdentity(conn, session.session_id, session.generation)
             if (!sourceIdentityJson) throw new Error('PROJECTION_SOURCE_IDENTITY_UNAVAILABLE')
@@ -88,6 +99,7 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
               (Array.isArray(sourceIdentity.historyWatermark) && Number.isSafeInteger(sourceIdentity.historyWatermark[0])))) {
               throw new Error('PROJECTION_SOURCE_IDENTITY_INVALID')
             }
+            attemptedSourceRevision = sourceRevision as number
             const permit = Object.freeze({ dbPath: input.db.filePath, sessionId: session.session_id,
               sessionGeneration: session.generation,
               scopeKey: encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: reducerSpecVersion }),
@@ -103,6 +115,11 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
             const message = error instanceof Error ? error.message : 'unknown-error'
             const current = conn.prepare('SELECT updated_at FROM session_body_source_state WHERE session_id=?')
               .get(session.session_id) as { updated_at: number } | undefined
+            if (attemptedSourceRevision !== undefined && isDeterministicSourceRejection(message)) {
+              conn.prepare(`UPDATE session_body_source_state SET terminal_source_revision=?,terminal_reducer_spec_version=?,updated_at=?
+                WHERE session_id=? AND source_revision=?`).run(attemptedSourceRevision, reducerSpecVersion, Date.now(),
+                  session.session_id, attemptedSourceRevision)
+            }
             delayedSessions.set(session.session_id, { retryAt: Date.now() + (input.retryDelayMs ?? 5 * 60_000),
               updatedAt: current?.updated_at ?? session.updated_at })
               reportResult({ sessionId: session.session_id, status: 'failed', error: message })

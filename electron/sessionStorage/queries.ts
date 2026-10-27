@@ -125,7 +125,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
   currentAuthoritySourceIdentity?(sessionId: string, sessionGeneration: string): string | undefined
   readSourceBodies?(input: Readonly<{ sessionId: string; sessionGeneration: string; sourceIdentityJson: string; messageIds: readonly string[];
     expectedSequences: readonly Readonly<{ id: string; sequence: number }>[]; recordStage?: (name: string, durationMs: number) => void }>): Promise<PreparedChatBodySelection | undefined>
-  requestSourceBackfill?(): boolean | void
+  requestSourceBackfill?(sessionId: string): boolean | void
   waitForSourceBackfill?(input: Readonly<{ sessionId: string; sessionGeneration: string; sourceRevision: number }>): Promise<'complete' | 'changed' | 'missing' | 'timeout'>
   readBodies(view: PreparedChatBodyView, messageIds: readonly string[], signal?: AbortSignal, recordWorkerTiming?: (stage:
     'source-spill-discovery' | 'worker-startup' | 'worker-queue' | 'worker-read' | 'source-spill-verify' |
@@ -270,7 +270,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         messageIds: selected.canonicalIds, expectedSequences, recordStage }))
       const waitForBodies = async (): Promise<PreparedChatBodySelection | undefined> => {
         let canWait: boolean | void = undefined
-        try { canWait = preparedChatBody.requestSourceBackfill?.() } catch { /* Scheduling must not alter the read result. */ }
+        try { canWait = preparedChatBody.requestSourceBackfill?.(sessionId) } catch { /* Scheduling must not alter the read result. */ }
         if (canWait === false) return undefined
         const sourceRevision = sourceRevisionFromIdentity(selected.sourceIdentityJson)
         const result = sourceRevision === undefined ? 'changed' : await preparedChatBody.waitForSourceBackfill?.({

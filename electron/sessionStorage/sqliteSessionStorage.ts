@@ -235,7 +235,15 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   }
   const queries = createSessionQueries(db, {
     ...(cacheBlobs && options.requestBodySourceBackfill ? { readSourceBodies,
-      requestSourceBackfill: options.requestBodySourceBackfill,
+      requestSourceBackfill: (sessionId) => {
+        const state = getDbConnection(db).prepare(`SELECT source_revision,terminal_source_revision,terminal_reducer_spec_version
+          FROM session_body_source_state WHERE session_id=?`).get(sessionId) as
+          { source_revision: number; terminal_source_revision: number | null; terminal_reducer_spec_version: number | null } | undefined
+        if (state && state.terminal_source_revision === state.source_revision &&
+          state.terminal_reducer_spec_version === CHAT_BODY_PROJECTION_SPEC_VERSION) return false
+        options.requestBodySourceBackfill?.()
+        return true
+      },
       waitForSourceBackfill: async ({ sessionId, sessionGeneration, sourceRevision }) => {
         const timeoutMs = options.sourceBackfillWaitMs ?? 10 * 60_000
         if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) throw new Error('PROJECTION_SOURCE_BACKFILL_WAIT_BUDGET_INVALID')

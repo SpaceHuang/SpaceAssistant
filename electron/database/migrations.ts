@@ -44,6 +44,7 @@ import {
   MIGRATION_V116_SESSION_BODY_LOCATOR_HISTORY_TRIGGERS_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_STREAM_TRIGGERS_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_CUTOVER_TRIGGERS_SQL,
+  MIGRATION_V117_SESSION_BODY_LOCATOR_REJECTION_SQL,
   SCHEMA_META_KEYS, WIKI_PROJECTS_TABLE_SQL
 } from './schema'
 import { runInTransaction } from './transaction'
@@ -2359,6 +2360,14 @@ export function runMigrations(conn: DatabaseSync): void {
       conn.exec(MIGRATION_V116_SESSION_BODY_LOCATOR_CUTOVER_TRIGGERS_SQL)
     }
     version = 116
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v116 → v117: avoid rescanning source revisions with deterministic locator failures.
+  if (version === 116) runInTransaction(conn, () => {
+    if (hasTable(conn, 'session_body_source_state') && !hasColumn(conn, 'session_body_source_state', 'terminal_source_revision')) {
+      conn.exec(MIGRATION_V117_SESSION_BODY_LOCATOR_REJECTION_SQL)
+    }
+    version = 117
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {
