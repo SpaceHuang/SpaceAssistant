@@ -1177,6 +1177,7 @@ describe('runAgentTurn', () => {
     const contextProjectionCommitter = vi.fn(async () => {
       expect((await history.read('preflight-request')).events.at(-1)?.kind).toBe('transcript-compacted')
     })
+    const onContextReplacementSettled = vi.fn()
 
     await runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'preflight-request', history,
@@ -1187,12 +1188,14 @@ describe('runAgentTurn', () => {
       observer: { prepareModelRequest: ({ request }) => ({
         requestPatch: { messages: [instructionMessage, ...request.messages] },
         requestMetadata: { agentsMdSnapshot: { status: 'loaded', content: 'AGENTS_SENTINEL' } }
-      }) },
+      }), onContextReplacementSettled },
       planContextReplacement, contextProjectionCommitter
     })
 
     expect(planContextReplacement.mock.calls.map(([call]) => call.phase)).toEqual(['preflight', 'turn-boundary'])
     expect(contextProjectionCommitter).toHaveBeenCalledOnce()
+    expect(onContextReplacementSettled).toHaveBeenCalledOnce()
+    expect(onContextReplacementSettled).toHaveBeenCalledWith(expect.objectContaining({ phase: 'preflight', status: 'committed' }))
     expect(providerRequests).toEqual([[instructionMessage, currentMessage]])
     const requestStarted = (await history.read('preflight-request')).events.find(({ kind }) => kind === 'model-request-started')!
     expect(requestStarted.payload).toMatchObject({

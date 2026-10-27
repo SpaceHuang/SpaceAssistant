@@ -1,12 +1,51 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAnthropicClient } from './anthropicClientFactory'
-import { summarizeSessionContext } from './sessionContextSummary'
+import { SessionContextSummaryCache, sessionContextSummaryCacheKey, summarizeSessionContext, waitForSessionContextSummary } from './sessionContextSummary'
 
 vi.mock('./anthropicClientFactory', () => ({ createAnthropicClient: vi.fn() }))
 
 const messagesCreate = vi.fn()
 
 describe('session context semantic summary', () => {
+  it('scopes reusable model summaries to session, model, service, locale, prompt version, and transcript', () => {
+    const base = { sessionId: 's1', model: 'm1', serviceId: 'svc1', locale: 'zh-CN' as const, messages: [{ role: 'user' as const, content: 'history' }] }
+    const key = sessionContextSummaryCacheKey(base)
+    expect(sessionContextSummaryCacheKey({ ...base, sessionId: 's2' })).not.toBe(key)
+    expect(sessionContextSummaryCacheKey({ ...base, serviceId: 'svc2' })).not.toBe(key)
+    expect(sessionContextSummaryCacheKey({ ...base, messages: [{ role: 'user', content: 'changed' }] })).not.toBe(key)
+    expect(sessionContextSummaryCacheKey({ ...base, model: 'm2' })).not.toBe(key)
+    expect(sessionContextSummaryCacheKey({ ...base, locale: 'en-US' })).not.toBe(key)
+  })
+
+  it('caches only committed or no-gain valid summaries and allows retry after every discarded outcome', () => {
+    const cache = new SessionContextSummaryCache(2)
+    const summary = { task: 'Task', completed: 'Done', decisions: 'Decision', constraints: 'Constraint', pending: 'Pending', blockers: 'None', nextStep: 'Continue' }
+    cache.settle('stale', summary, 'stale')
+    cache.settle('cancelled', summary, 'cancelled')
+    cache.settle('failed', summary, 'failed')
+    expect(cache.get('stale')).toBeUndefined()
+    expect(cache.get('cancelled')).toBeUndefined()
+    expect(cache.get('failed')).toBeUndefined()
+    cache.settle('committed', summary, 'committed')
+    cache.settle('no-gain', summary, 'no-gain')
+    expect(cache.get('committed')).toEqual(summary)
+    expect(cache.get('no-gain')).toEqual(summary)
+    cache.settle('next', summary, 'committed')
+    expect(cache.get('committed')).toBeUndefined()
+    expect(cache.get('next')).toEqual(summary)
+  })
+
+  it('stops waiting on parent cancellation even when summary work ignores abort and resolves late', async () => {
+    const controller = new AbortController()
+    let resolveLate!: (value: string) => void
+    const work = new Promise<string>((resolve) => { resolveLate = resolve })
+    const waiting = waitForSessionContextSummary(work, controller.signal)
+    controller.abort()
+    await expect(waiting).rejects.toThrow('SESSION_CONTEXT_SUMMARY_CANCELLED')
+    resolveLate('late success')
+    await expect(waiting).rejects.toThrow('SESSION_CONTEXT_SUMMARY_CANCELLED')
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(createAnthropicClient).mockReturnValue({ messages: { create: messagesCreate } } as never)

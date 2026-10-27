@@ -63,6 +63,7 @@ export function buildActivityItemTimestampResolver(message: {
   thinking?: ThinkingData
   toolCalls?: ToolCallRecord[]
   skillHints?: SkillHintRecord[]
+  systemOperations?: import('./domainTypes').SystemOperationRecord[]
 }): (item: AssistantActivityItem) => number {
   const thinkingSegs = message.thinking ? thinkingSegmentsForRender(message.thinking) : []
   const textSegs = contentSegmentsForRender(message)
@@ -70,6 +71,7 @@ export function buildActivityItemTimestampResolver(message: {
   const skills = message.skillHints ?? []
   const toolById = new Map(tools.map((tc) => [tc.id, tc]))
   const skillById = new Map(skills.map((h) => [h.id, h]))
+  const operationById = new Map((message.systemOperations ?? []).map((operation) => [operation.id, operation]))
   const toolIndexById = new Map(tools.map((tc, i) => [tc.id, i]))
 
   return (item) => {
@@ -85,6 +87,7 @@ export function buildActivityItemTimestampResolver(message: {
       const hint = skillById.get(item.hintId)
       return hint?.shownAt ?? message.timestamp
     }
+    if (item.kind === 'system-operation') return operationById.get(item.operationId)?.startedAt ?? message.timestamp
     const tc = toolById.get(item.toolId)
     const idx = toolIndexById.get(item.toolId) ?? 0
     // 发起序 fallback（同 buildAssistantActivityTimeline）：completedAt 不得参与，
@@ -101,6 +104,7 @@ export function findBatchHighlightItem(
   ctx: {
     thinkingSegments: ReturnType<typeof thinkingSegmentsForRender>
     toolById: Map<string, ToolCallRecord>
+    systemOperationById?: Map<string, import('./domainTypes').SystemOperationRecord>
   }
 ): AssistantActivityItem | null {
   for (let i = items.length - 1; i >= 0; i--) {
@@ -112,6 +116,10 @@ export function findBatchHighlightItem(
     if (item.kind === 'tool') {
       const tc = ctx.toolById.get(item.toolId)
       if (tc != null && IN_PROGRESS_TOOL_STATUSES.has(tc.status)) return item
+    }
+    if (item.kind === 'system-operation') {
+      const operation = ctx.systemOperationById?.get(item.operationId)
+      if (operation?.status === 'running') return item
     }
   }
   return items[items.length - 1] ?? items[0] ?? null
@@ -134,6 +142,7 @@ export function isActivityBatchInProgress(
     streaming: boolean
     thinkingSegments: ReturnType<typeof thinkingSegmentsForRender>
     toolById: Map<string, ToolCallRecord>
+    systemOperationById?: Map<string, import('./domainTypes').SystemOperationRecord>
   }
 ): boolean {
   if (batchContainsConfirmingTool(items, ctx.toolById)) return true
@@ -147,6 +156,7 @@ export function isActivityBatchInProgress(
       const tc = ctx.toolById.get(item.toolId)
       return tc != null && IN_PROGRESS_TOOL_STATUSES.has(tc.status)
     }
+    if (item.kind === 'system-operation') return ctx.systemOperationById?.get(item.operationId)?.status === 'running'
     return false
   })
 }

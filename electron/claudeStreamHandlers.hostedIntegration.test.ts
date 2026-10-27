@@ -36,7 +36,7 @@ import { capabilityRegistry } from './capabilities/registry'
 import { invalidateSkillsCache } from './skills/skillCache'
 import { isTruncatedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { getUsageStepFactsForTurn, getUsageTurnFact } from './database/operations'
+import { getUsageStepFactsForTurn, getUsageTurnFact, updatePersistedTurnState, updateSession } from './database/operations'
 import { queryUsageAttribution } from './usageStats/usageStatsQueries'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { logAgentEvent } from './agentLogger/agentLogger'
@@ -64,6 +64,10 @@ function expectLifecycleTerminal(events: readonly { kind: string; payload: unkno
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
+const summaryStub = vi.hoisted(() => ({ enabled: false, call: vi.fn() }))
+vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicClient: () => ({ messages: { create: (...args: unknown[]) => summaryStub.call(...args) } })
+}))
 vi.mock('electron', () => ({
   app: { getLocale: vi.fn(() => 'en-US') },
   safeStorage: { isEncryptionAvailable: vi.fn(() => true), decryptString: vi.fn((value: Buffer) => value.toString()) },
@@ -190,6 +194,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    summaryStub.enabled = true
+    summaryStub.call.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({ task: 'Continue task', completed: 'Reviewed history', decisions: 'Keep constraints', constraints: 'Preserve required messages', pending: 'Continue work', blockers: 'None', nextStep: 'Proceed' }) }] })
     vi.mocked(waitForToolConfirm).mockReset().mockResolvedValue('approved' as never)
     vi.mocked(runApprovalAgent).mockReset().mockResolvedValue({
       ok: true,
@@ -764,7 +770,9 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     seedTrustedModel(db, modelId)
     const endpoint = 'https://hosted.example.test'
-    const routeProfile = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    const contextWindow = 150_000
+    const maxTokens = MODEL_BASELINE[modelId]!.maxTokens
+    const routeProfile = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow, maxOutputTokens: maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning })
     const routeId = routeProfile.routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
     const requests: unknown[] = []
@@ -851,7 +859,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
   })
 
-  it('compacts an over-budget initial Desktop request in Hosted SDK before provider dispatch', async () => {
+  it('compacts an over-budget initial Desktop request in Hosted SDK before provider dispatch even if activity cards cannot be written', async () => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     seedTrustedModel(db, modelId)
     const endpoint = 'https://hosted.example.test'
@@ -885,12 +893,16 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'preflight-start-token',
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: contextWindow, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, enableThinking: false, locale: 'en-US' }
     })
+    const turnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn((_requestId: string, fact: unknown) => {
+      if (fact && typeof fact === 'object' && (fact as { type?: string }).type === 'system-operation-updated') throw new Error('activity projection failed')
+    }) }
+    const emitFactEvent = vi.fn(() => { throw new Error('fact projection failed') })
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
-      turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
+      turnRuntime: turnRuntime as never, emitFactEvent
     })
 
     const result = await execute(makeSender(), { requestId: 'preflight-request', turnId: 'preflight-turn', turnStartToken: 'preflight-start-token', sessionId: session.id })
@@ -905,6 +917,211 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     expect(history.events.at(-1)?.kind).toBe('invocation-completed')
     const sessionEventsModule = await import('./sessionEvents')
     expect(sessionEventsModule.appendCompactionTransaction).toHaveBeenCalledOnce()
+    expect(turnRuntime.consumeForRequest).toHaveBeenCalled()
+    expect(emitFactEvent).toHaveBeenCalled()
+  })
+
+  it('continues the request and reports skipped when a valid automatic summary has no token savings', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const contextWindow = 150_000
+    const maxTokens = MODEL_BASELINE[modelId]!.maxTokens
+    const routeProfile = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow, maxOutputTokens: maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    const routeId = routeProfile.routeId
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
+    const requests: unknown[] = []
+    runtime.modelProviders.register({ routeId, protocol: routeProfile.protocol, dialect: routeProfile.dialect, adapterVersion: routeProfile.adapterVersion, modelId: routeProfile.modelId, endpoint: routeProfile.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
+      stream: async function* (input) {
+        providerCalls += 1
+        requests.push(input.request.messages)
+        yield { type: 'text-delta', text: 'request continues without a wasteful replacement' } as const
+        yield { type: 'usage', inputTokens: 900_000, outputTokens: 8 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      }
+    })
+    const register = runtime.modelProviders.register.bind(runtime.modelProviders)
+    runtime.modelProviders.register = (profile, provider) => profile.routeId === routeId ? routeId : register(profile, provider)
+    setDefaultAgentRuntime(runtime)
+    const session = createSession(db, { name: 'hosted-no-gain', model: modelId, maxTokens })
+    appendMessage(db, { id: 'no-gain-prior-user', sessionId: session.id, role: 'user', content: 'brief old question', timestamp: 0, status: 'sent' })
+    appendMessage(db, { id: 'no-gain-prior-assistant', sessionId: session.id, role: 'assistant', content: 'brief old answer', timestamp: 0.5, status: 'sent' })
+    const user = appendMessage(db, { id: 'no-gain-current-user', sessionId: session.id, role: 'user', content: 'current request survives', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'no-gain-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'no-gain-turn', requestId: 'no-gain-request', sessionId: session.id, userMessageId: user.message.id, assistantMessageId: assistant.message.id, contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'no-gain-start', executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: contextWindow, maxTokens, enableThinking: false, locale: 'en-US' } })
+    const turnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn() }
+    const verbose = 'word '.repeat(400)
+    summaryStub.call.mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify({ task: verbose, completed: verbose, decisions: verbose, constraints: verbose, pending: verbose, blockers: verbose, nextStep: verbose }) }] })
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
+      getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }), turnRuntime: turnRuntime as never
+    })
+
+    const result = await execute(makeSender(), { requestId: 'no-gain-request', turnId: 'no-gain-turn', turnStartToken: 'no-gain-start', sessionId: session.id })
+
+    expect(result).toMatchObject({ ok: true })
+    expect(providerCalls).toBe(1)
+    expect(JSON.stringify(requests[0])).toContain('brief old question')
+    const history = await new SqliteAgentHistory(getDbConnection(db)).read('no-gain-request')
+    expect(history.events.some((event) => event.kind === 'transcript-compacted')).toBe(false)
+    expect(appendCompactionTransaction).not.toHaveBeenCalled()
+    const operations = turnRuntime.consumeForRequest.mock.calls.flatMap(([requestId, fact]) => requestId === 'no-gain-request' && fact && typeof fact === 'object' && (fact as { type?: string }).type === 'system-operation-updated' ? [(fact as { operation: { status: string; reason?: string; beforePercent?: number; afterPercent?: number } }).operation] : [])
+    expect(operations).toContainEqual(expect.objectContaining({ status: 'skipped', reason: 'NO_GAIN' }))
+    expect(operations.find((operation) => operation.status === 'skipped')).not.toHaveProperty('beforePercent')
+    expect(operations.find((operation) => operation.status === 'skipped')).not.toHaveProperty('afterPercent')
+  })
+
+  it('cancels a turn-boundary summary wait without committing the proposed replacement', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const routeProfile = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    const routeId = routeProfile.routeId
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry(), chatCancels: new ChatCancelRegistry() })
+    runtime.modelProviders.register({ routeId, protocol: routeProfile.protocol, dialect: routeProfile.dialect, adapterVersion: routeProfile.adapterVersion, modelId: routeProfile.modelId, endpoint: routeProfile.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
+      stream: async function* () { providerCalls += 1; yield { type: 'text-delta', text: 'first response' } as const; yield { type: 'usage', inputTokens: 900_000, outputTokens: 8 } as const; yield { type: 'finish', reason: 'stop' } as const }
+    })
+    const register = runtime.modelProviders.register.bind(runtime.modelProviders)
+    runtime.modelProviders.register = (profile, provider) => profile.routeId === routeId ? routeId : register(profile, provider)
+    setDefaultAgentRuntime(runtime)
+    const session = createSession(db, { name: 'boundary-summary-cancel', model: modelId, maxTokens: MODEL_BASELINE[modelId]!.maxTokens })
+    appendMessage(db, { id: 'boundary-cancel-old-user', sessionId: session.id, role: 'user', content: 'older user context '.repeat(9000), timestamp: 0, status: 'sent' })
+    appendMessage(db, { id: 'boundary-cancel-old-assistant', sessionId: session.id, role: 'assistant', content: 'older assistant context '.repeat(9000), timestamp: 0.5, status: 'sent' })
+    const user = appendMessage(db, { id: 'boundary-cancel-current-user', sessionId: session.id, role: 'user', content: 'current request must survive', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'boundary-cancel-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'boundary-cancel-turn', requestId: 'boundary-cancel-request', sessionId: session.id, userMessageId: user.message.id, assistantMessageId: assistant.message.id, contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'boundary-cancel-start', executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: MODEL_BASELINE[modelId]!.maximumContext, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, enableThinking: false, locale: 'en-US' } })
+    let resolveLate!: (value: unknown) => void
+    let observedSummarySignal: AbortSignal | undefined
+    const turnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn() }
+    summaryStub.call.mockImplementationOnce((_input: unknown, options: { signal?: AbortSignal }) => { observedSummarySignal = options?.signal; return new Promise((resolve) => { resolveLate = resolve }) })
+    const execute = registerClaudeStreamHandlers(ipcMain, { getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: ['read_file'] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }), getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }), getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }), turnRuntime: turnRuntime as never })
+    const execution = execute(makeSender(), { requestId: 'boundary-cancel-request', turnId: 'boundary-cancel-turn', turnStartToken: 'boundary-cancel-start', sessionId: session.id })
+    await vi.waitFor(() => expect(summaryStub.call).toHaveBeenCalledOnce())
+    runtime.chatCancels.signalChatCancel('boundary-cancel-turn')
+    await vi.waitFor(() => expect(observedSummarySignal?.aborted).toBe(true))
+    const result = await execution
+    expect(result).toMatchObject({ ok: false })
+    expect(providerCalls).toBe(1)
+    expect(turnRuntime.consumeForRequest.mock.calls.flatMap(([requestId, fact]) => requestId === 'boundary-cancel-request' && fact && typeof fact === 'object' && (fact as { type?: string }).type === 'system-operation-updated' ? [(fact as { operation: { status: string } }).operation.status] : [])).toContain('cancelled')
+    const sessionEventsModule = await import('./sessionEvents')
+    expect(sessionEventsModule.appendCompactionTransaction).not.toHaveBeenCalled()
+    resolveLate({ content: [{ type: 'text', text: JSON.stringify({ task: 'Task', completed: 'Done', decisions: 'Decision', constraints: 'Constraint', pending: 'Pending', blockers: 'None', nextStep: 'Continue' }) }] })
+    const nextSession = createSession(db, { name: 'after-cancel', model: modelId, maxTokens: MODEL_BASELINE[modelId]!.maxTokens })
+    const nextUser = appendMessage(db, { id: 'boundary-cancel-next-user', sessionId: nextSession.id, role: 'user', content: 'follow-up after cancellation', timestamp: 1, status: 'sent' })
+    const nextAssistant = appendMessage(db, { id: 'boundary-cancel-next-assistant', sessionId: nextSession.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'boundary-cancel-next-turn', requestId: 'boundary-cancel-next-request', sessionId: nextSession.id, userMessageId: nextUser.message.id, assistantMessageId: nextAssistant.message.id, contextBoundarySequence: nextUser.sequence, state: 'prepared', startToken: 'boundary-cancel-next-start', executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: MODEL_BASELINE[modelId]!.maximumContext, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, enableThinking: false, locale: 'en-US' } })
+    const nextResult = await execute(makeSender(), { requestId: 'boundary-cancel-next-request', turnId: 'boundary-cancel-next-turn', turnStartToken: 'boundary-cancel-next-start', sessionId: nextSession.id })
+    if (!nextResult.ok) throw new Error(`Follow-up turn after cancellation failed: ${nextResult.error}`)
+    expect(nextResult).toMatchObject({ ok: true })
+    expect(providerCalls).toBe(2)
+  })
+
+  it('aborts semantic summary wait immediately and never dispatches or commits a late summary', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const contextWindow = 150_000
+    const maxTokens = MODEL_BASELINE[modelId]!.maxTokens
+    const routeProfile = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow, maxOutputTokens: maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    const routeId = routeProfile.routeId
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry(), chatCancels: new ChatCancelRegistry() })
+    runtime.modelProviders.register({ routeId, protocol: routeProfile.protocol, dialect: routeProfile.dialect, adapterVersion: routeProfile.adapterVersion, modelId: routeProfile.modelId, endpoint: routeProfile.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
+      stream: async function* () { providerCalls += 1; yield { type: 'text-delta', text: 'should not send' } as const; yield { type: 'usage', inputTokens: 1, outputTokens: 1 } as const; yield { type: 'finish', reason: 'stop' } as const }
+    })
+    const register = runtime.modelProviders.register.bind(runtime.modelProviders)
+    runtime.modelProviders.register = (profile, provider) => profile.routeId === routeId ? routeId : register(profile, provider)
+    setDefaultAgentRuntime(runtime)
+    const session = createSession(db, { name: 'cancel-summary', model: modelId, maxTokens })
+    for (let index = 0; index < 8; index += 1) {
+      appendMessage(db, { id: `cancel-summary-user-${index}`, sessionId: session.id, role: 'user', content: `old-user-${index} `.repeat(3000), timestamp: index * 2, status: 'sent' })
+      appendMessage(db, { id: `cancel-summary-assistant-${index}`, sessionId: session.id, role: 'assistant', content: `old-assistant-${index} `.repeat(3000), timestamp: index * 2 + 1, status: 'sent' })
+    }
+    const user = appendMessage(db, { id: 'cancel-summary-current', sessionId: session.id, role: 'user', content: 'current request', timestamp: 17, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'cancel-summary-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 18, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'cancel-summary-turn', requestId: 'cancel-summary-request', sessionId: session.id, userMessageId: user.message.id, assistantMessageId: assistant.message.id, contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'cancel-summary-start', executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: contextWindow, maxTokens, enableThinking: false, locale: 'en-US' } })
+    let resolveLate!: (value: unknown) => void
+    let observedSummarySignal: AbortSignal | undefined
+    const turnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn() }
+    summaryStub.call.mockImplementationOnce((_input: unknown, options: { signal?: AbortSignal }) => { observedSummarySignal = options?.signal; return new Promise((resolve) => { resolveLate = resolve }) })
+    const execute = registerClaudeStreamHandlers(ipcMain, { getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }), getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }), getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }), turnRuntime: turnRuntime as never })
+    const execution = execute(makeSender(), { requestId: 'cancel-summary-request', turnId: 'cancel-summary-turn', turnStartToken: 'cancel-summary-start', sessionId: session.id })
+    await vi.waitFor(async () => {
+      if (providerCalls + summaryStub.call.mock.calls.length > 0) return
+      const result = await Promise.race([execution, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 100))])
+      if (result && !result.ok) throw new Error(`Hosted cancellation fixture ended before dispatch: ${result.error}`)
+      expect(providerCalls + summaryStub.call.mock.calls.length).toBeGreaterThan(0)
+    })
+    await vi.waitFor(() => expect(summaryStub.call).toHaveBeenCalledOnce())
+    runtime.chatCancels.signalChatCancel('cancel-summary-turn')
+    await vi.waitFor(() => expect(observedSummarySignal?.aborted).toBe(true))
+    const result = await execution
+    expect(result).toMatchObject({ ok: false })
+    expect(providerCalls).toBe(0)
+    expect(turnRuntime.consumeForRequest.mock.calls.flatMap(([requestId, fact]) => requestId === 'cancel-summary-request' && fact && typeof fact === 'object' && (fact as { type?: string }).type === 'system-operation-updated' ? [(fact as { operation: { status: string } }).operation.status] : [])).toContain('cancelled')
+    const eventModule = await import('./sessionEvents')
+    expect(eventModule.appendCompactionTransaction).not.toHaveBeenCalled()
+    resolveLate({ content: [{ type: 'text', text: JSON.stringify({ task: 'Task', completed: 'Done', decisions: 'Decision', constraints: 'Constraint', pending: 'Pending', blockers: 'None', nextStep: 'Continue' }) }] })
+  })
+
+  it('continues an in-budget request after automatic summary timeout and reports the failed card', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const contextWindow = 40_000
+    const maxTokens = 512
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: modelId, name: modelId, maximumContext: contextWindow, maximumContextSource: 'user', maxTokens: 512, isDefault: false, isFast: false, isVision: false, enabled: true }]))
+    const routeProfile = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow, maxOutputTokens: maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    const routeId = routeProfile.routeId
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry(), chatCancels: new ChatCancelRegistry() })
+    const requests: unknown[] = []
+    runtime.modelProviders.register({ routeId, protocol: routeProfile.protocol, dialect: routeProfile.dialect, adapterVersion: routeProfile.adapterVersion, modelId: routeProfile.modelId, endpoint: routeProfile.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
+      stream: async function* (input) { providerCalls += 1; requests.push(input.request.messages); yield { type: 'text-delta', text: 'accepted after summary timeout' } as const; yield { type: 'usage', inputTokens: 18_500, outputTokens: 2 } as const; yield { type: 'finish', reason: 'stop' } as const }
+    })
+    const register = runtime.modelProviders.register.bind(runtime.modelProviders)
+    runtime.modelProviders.register = (profile, provider) => profile.routeId === routeId ? routeId : register(profile, provider)
+    setDefaultAgentRuntime(runtime)
+    const session = createSession(db, { name: 'summary-timeout', model: modelId, maxTokens })
+    updateSession(db, session.id, { maxTokens })
+    expect(session.maxTokens).toBe(512)
+    for (let index = 0; index < 8; index += 1) {
+      const oldUser = appendMessage(db, { id: `summary-timeout-user-${index}`, sessionId: session.id, role: 'user', content: `old-user-${index} `.repeat(160), timestamp: index * 2, status: 'sent' })
+      const oldAssistant = appendMessage(db, { id: `summary-timeout-assistant-${index}`, sessionId: session.id, role: 'assistant', content: `old-assistant-${index} `.repeat(160), timestamp: index * 2 + 1, status: 'completed' })
+      createPersistedTurn(db, { turnId: `summary-timeout-old-turn-${index}`, requestId: `summary-timeout-old-request-${index}`, sessionId: session.id, userMessageId: oldUser.message.id, assistantMessageId: oldAssistant.message.id, contextBoundarySequence: oldUser.sequence, state: 'terminal', outcome: 'completed', startToken: `summary-timeout-old-start-${index}`, executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: contextWindow, maxTokens, enableThinking: false, locale: 'en-US' } })
+    }
+    for (let index = 0; index < 8; index += 1) updatePersistedTurnState(db, `summary-timeout-old-turn-${index}`, 'terminal', { outcome: 'completed' })
+    const user = appendMessage(db, { id: 'summary-timeout-current-user', sessionId: session.id, role: 'user', content: 'current request survives', timestamp: 17, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'summary-timeout-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 18, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'summary-timeout-turn', requestId: 'summary-timeout-request', sessionId: session.id, userMessageId: user.message.id, assistantMessageId: assistant.message.id, contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'summary-timeout-start', executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: contextWindow, maxTokens, enableThinking: false, locale: 'en-US' } })
+    let resolveLate!: (value: unknown) => void
+    let summarySignal: AbortSignal | undefined
+    const turnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn() }
+    summaryStub.call.mockImplementationOnce((_input: unknown, options: { signal?: AbortSignal }) => { summarySignal = options?.signal; return new Promise((resolve) => { resolveLate = resolve }) })
+    vi.useFakeTimers()
+    const execute = registerClaudeStreamHandlers(ipcMain, { getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }), getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }), getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }), turnRuntime: turnRuntime as never })
+    let result: Awaited<ReturnType<typeof execute>>
+    try {
+      const execution = execute(makeSender(), { requestId: 'summary-timeout-request', turnId: 'summary-timeout-turn', turnStartToken: 'summary-timeout-start', sessionId: session.id })
+      await vi.waitFor(() => expect(summaryStub.call).toHaveBeenCalled())
+      await vi.advanceTimersByTimeAsync(90_000)
+      expect(summarySignal?.aborted).toBe(true)
+      result = await execution
+    }
+    finally { vi.useRealTimers() }
+    expect(summaryStub.call).toHaveBeenCalled()
+    expect(summarySignal?.aborted).toBe(true)
+    if (!result.ok) throw new Error(`In-budget request failed after summary timeout: ${result.error}`)
+    expect(providerCalls).toBe(1)
+    expect(JSON.stringify(requests[0])).toContain('old-user-0 ')
+    const operations = turnRuntime.consumeForRequest.mock.calls.flatMap(([requestId, fact]) => requestId === 'summary-timeout-request' && fact && typeof fact === 'object' && (fact as { type?: string }).type === 'system-operation-updated' ? [(fact as { operation: { status: string; reason?: string } }).operation] : [])
+    if (!operations.some((operation) => operation.status === 'failed')) throw new Error(`Compaction activity facts missing: ${JSON.stringify(turnRuntime.consumeForRequest.mock.calls)}`)
+    expect(operations).toContainEqual(expect.objectContaining({ status: 'failed', reason: 'SUMMARY_TIMEOUT' }))
+    resolveLate({ content: [{ type: 'text', text: JSON.stringify({ task: 'Task', completed: 'Done', decisions: 'Decision', constraints: 'Constraint', pending: 'Pending', blockers: 'None', nextStep: 'Continue' }) }] })
   })
 
   it('fails closed through Hosted SDK when the required current user cannot fit the request budget', async () => {

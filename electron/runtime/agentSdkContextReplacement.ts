@@ -4,6 +4,7 @@ import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { toLegacyBoundaryMessages } from './canonicalHistory'
 
 export type AgentSdkBoundaryReplacementInput = Readonly<{
+  signal?: AbortSignal
   invocationId: string
   modelTurn: number
   response: CanonicalModelMessage
@@ -31,6 +32,7 @@ export type AgentSdkBoundaryReplacementContext = Readonly<{
 }>
 
 export type AgentSdkPreflightRequestInput = Readonly<{
+  signal?: AbortSignal
   invocationId: string
   modelTurn: number
   messages: readonly CanonicalModelMessage[]
@@ -42,6 +44,7 @@ export type AgentSdkPreflightRequestInput = Readonly<{
 /** Adapts request-time compaction to the same Desktop planner without inventing a model response. */
 export function createAgentSdkPreflightAdapter(context: Readonly<{
   compact(input: Readonly<{
+    signal?: AbortSignal
     requestId: string
     windowId: string
     system: string
@@ -61,7 +64,7 @@ export function createAgentSdkPreflightAdapter(context: Readonly<{
     let legacyMessages: ClaudeChatMessageWithBlocks[]
     try { legacyMessages = toLegacyBoundaryMessages(input.messages, input.requiredUserMessage) }
     catch { return undefined }
-    const result = await context.compact({ ...projection, messages: legacyMessages })
+    const result = await context.compact({ signal: input.signal, ...projection, messages: legacyMessages })
     if (!result) {
       const projectedTokens = projection.contextUsage?.projectedTokens ?? projection.surfaceSnapshot.surfaceTokens
       return projectedTokens > projection.budget.totalInputBudget

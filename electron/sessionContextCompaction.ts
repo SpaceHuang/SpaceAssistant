@@ -31,6 +31,22 @@ export type SessionContextRecoveryFacts = Readonly<{
   toolOutcomes: readonly Readonly<{ id: string; toolName?: string; outcome: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched' }>[]
 }>
 
+export function createSessionContextCheckpointMessage(id: string, summary: SessionContextSummary, recoveryFacts: SessionContextRecoveryFacts = { unresolvedEffects: [], toolOutcomes: [] }) {
+  return {
+    id,
+    role: 'user' as const,
+    content: JSON.stringify({
+      kind: 'context_checkpoint', ...summary,
+      unresolvedEffectIds: recoveryFacts.unresolvedEffects.map(({ id: effectId }) => effectId),
+      toolOutcomes: recoveryFacts.toolOutcomes.slice(-20)
+    })
+  }
+}
+
+export function isSessionContextCheckpointWorthCompacting(message: { content: unknown }, shadowedTokenCount: number): boolean {
+  return estimateTokensFromUtf8Text(JSON.stringify(message)) < shadowedTokenCount
+}
+
 function textOf(message: SurfaceMessage): string {
   if (typeof message.content === 'string') return message.content
   return JSON.stringify(safeSummaryContent(message.content)) ?? ''
@@ -83,9 +99,7 @@ export async function compactSessionContext(input: {
       const value = checkpointSummary[key as keyof SessionContextSummary]
       return typeof value === 'string' && Boolean(value.trim()) && value.length <= 2_000
     })) return { status: 'failed' }
-    const toolOutcomes = (input.recoveryFacts?.toolOutcomes ?? []).slice(-20)
-    const unresolvedEffectIds = (input.recoveryFacts?.unresolvedEffects ?? []).map(({ id }) => id)
-    checkpointMessage.content = JSON.stringify({ kind: 'context_checkpoint', ...checkpointSummary, unresolvedEffectIds, toolOutcomes })
+    checkpointMessage.content = createSessionContextCheckpointMessage(checkpointId, checkpointSummary, input.recoveryFacts).content
     const checkpointTokens = estimateTokensFromUtf8Text(JSON.stringify(checkpointMessage))
     if (checkpointTokens >= shadowedTokenCount) return { status: 'no-op' }
     const retainedTokens = items.filter((item) => !shadowedIds.has(item.id)).reduce((sum, item) => sum + item.tokens, 0)

@@ -35,6 +35,7 @@ export function createAgentSdkDesktopObserver(input: {
   stageAssistantContentUntilTurnFinished?: boolean
   onRemoteTextActivity?(text: string): void
   assistantMessageId?: string
+  onContextReplacementSettled?: NonNullable<AgentTurnObserver['onContextReplacementSettled']>
   onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
   emitSessionEvent?(event: SessionEventInput): void | Promise<void>
   emitFactEvent?(event: AssistantFactEvent): void
@@ -351,6 +352,7 @@ export function createAgentSdkDesktopObserver(input: {
   }
 
   return {
+    ...(input.onContextReplacementSettled ? { onContextReplacementSettled: input.onContextReplacementSettled } : {}),
     criticalModelRequestProjection: true,
     criticalModelResponseProjection: true,
     criticalModelAttemptUsageProjection: true,

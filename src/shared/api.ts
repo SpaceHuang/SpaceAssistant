@@ -409,6 +409,7 @@ export type SpaceAssistantApi = {
       models: import('./domainTypes').ModelEntry[]
       thinkingEnabled: boolean
       thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
+      contextCompactionTriggerRatio?: number
       workDir: string
       apiKey: string
       llmServices: import('./domainTypes').LlmServiceProfile[]

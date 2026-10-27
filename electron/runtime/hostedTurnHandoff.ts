@@ -34,6 +34,7 @@ type HostedRuntimeFactory = Readonly<{
 
 type HandoffInput = Readonly<{
   request: PreparedModelCall['request']
+  signal?: AbortSignal
   authorizedToolNames: ReadonlySet<string>
   /** FR3：延迟名集合（不在 request.tools、在授权面）。 */
   deferredToolNames?: ReadonlySet<string>
@@ -54,6 +55,7 @@ type HandoffInput = Readonly<{
   currentUserMessageId?: string
   assistantMessageId?: string
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
+  planContextReplacement?: import('../../packages/agent-sdk/src/invocation').AgentHostPorts['planContextReplacement']
 }>
 
 function bindAssistantMessageIdentity(history: HistoryPort, assistantMessageId: string): HistoryPort {
@@ -160,6 +162,7 @@ export function createHostedTurnHandoff(input: {
   continuationContext?: ContinuationContext
   /** When true, request.messages is already built from a verified Track view. */
   trackScopedModelInput?: boolean
+  planContextReplacement?: import('../../packages/agent-sdk/src/invocation').AgentHostPorts['planContextReplacement']
 }): NonNullable<RunToolChatSessionArgs['onHostedTurnHandoff']> {
   if (input.sessionExecution && !input.sessionQueries) throw new Error('SESSION_QUERIES_REQUIRED')
   if (input.acceptedTurn && (input.acceptedTurn.turnId !== input.turnId || input.acceptedTurn.sessionId !== input.sessionId ||
@@ -333,7 +336,8 @@ export function createHostedTurnHandoff(input: {
       ...(handoff.beforeDispatchLease ? { beforeDispatchLease: handoff.beforeDispatchLease } : {}),
       ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
       ...(input.refreshExecutionContext ? { refreshExecutionContext: input.refreshExecutionContext } : {}),
-      ...(input.recoverProviderAttempt ? { recoverProviderAttempt: input.recoverProviderAttempt } : {})
+      ...(input.recoverProviderAttempt ? { recoverProviderAttempt: input.recoverProviderAttempt } : {}),
+      ...(handoff.planContextReplacement ? { planContextReplacement: handoff.planContextReplacement } : {})
     })
     try {
       if (ownership && !input.sessionExecution!.markExecutionStarted(ownership)) throw new Error('SESSION_EXECUTION_CLAIM_FENCED')
@@ -348,7 +352,7 @@ export function createHostedTurnHandoff(input: {
         ...(terminalAssistantMessageId ? { assistantMessageId: terminalAssistantMessageId } : {}),
         requiredUserMessage: handoff.requiredUserMessage,
         routeId: input.routeId,
-        request,
+        request: handoff.signal ? { ...request, signal: handoff.signal } : request,
         ...(ownership && checkpoint ? { sessionTranscriptBaseVersion: checkpoint.version } : {}),
         ...(transcriptFailureMessages ? { sessionTranscriptFailureMessages: transcriptFailureMessages } : {}),
         ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),

@@ -350,5 +350,21 @@
       "max": "Max",
       "notSupported": "This model does not support thinking"
     }
+  },
+  "systemOperation": {
+    "title": "Automatic compaction",
+    "running": "Compacting context…",
+    "succeeded": "Compacted, usage {{before}}% → {{after}}%",
+    "failed": "Compaction failed",
+    "skippedNoGain": "Not compacted (no savings)",
+    "skippedUncompressible": "Not compacted (no savings possible)",
+    "skippedDiscarded": "Not compacted (context changed)",
+    "cancelled": "Cancelled",
+    "showReason": "Show reason",
+    "hideReason": "Hide reason",
+    "reasonTimeout": "The summary request timed out. The current request will continue if it fits the remaining context budget.",
+    "reasonInvalid": "The summary format was invalid. The current request will continue if it fits the remaining context budget.",
+    "reasonUnavailable": "The summary model or credentials are unavailable. The current request will continue if it fits the remaining context budget.",
+    "reasonFailed": "The summary could not be completed. The current request will continue if it fits the remaining context budget."
   }
 }
