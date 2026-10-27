@@ -93,10 +93,12 @@ P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通
 
 ## 确定性 locator 回填失败不再跨启动重复扫描（2026-10-28）
 
-源码提交 `e220942e` 将 `CHAT_BODY_MESSAGE_ID_MISSING`、`CHAT_BODY_SOURCE_FACT_MISSING` 与 `PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH` 记录为当前 source revision 与 reducer spec version 的确定性失败。任务查询跳过同一版本的失败项；History source revision 变化或 reducer spec 升级后恢复尝试。失败只在实际扫描的 source revision 仍是当前版本时记录，避免并发更新被误标。既有瞬时错误仍走进程内退避并保留后续重试。
+源码提交 `e220942e` 将 `CHAT_BODY_MESSAGE_ID_MISSING` 与 `CHAT_BODY_SOURCE_FACT_MISSING` 记录为当前 source revision 与 reducer spec version 的确定性失败。任务查询跳过同一版本的失败项；History source revision 变化或 reducer spec 升级后恢复尝试。失败只在实际扫描的 source revision 仍是当前版本时记录，避免并发更新被误标。既有瞬时错误仍走进程内退避并保留后续重试。
 
 新增 TDD 回归覆盖失败标记持久化、同版本重启不重扫、reducer 版本升级后重试、source 更新后成功回填，以及 v116 → v117 schema 迁移。定向命令 `npm exec vitest run electron/sessionStorage/infrastructure/sqlite/sessionBodySourceBackfillTask.test.ts electron/database/migrations.sessionBodyLocator.test.ts`：11 项通过；`npm run build:electron:incremental` 通过，包含 session-storage 与 cleanup 边界门禁。本次没有重跑全仓测试。
 
 该修复目前只在源码工作树中，尚未打入 arm64 安装包，也没有新的包内隔离库或界面样本。本轮 CUA 在用户确认解锁后仍报告 Mac 锁屏，无法启动可操作窗口；P4-02/03 与 AC-7 维持未完成。
 
 后续提交 `6b4ab574` 补上调度器拒绝回填请求的回退边界。RED 用例证明旧包装器忽略 `false` 后会等待到 `PROJECTION_SOURCE_BACKFILL_WAIT_TIMEOUT`；修复后该请求立即返回未准备状态，交由现有读取路径继续处理。三项定向回归共 20 项通过，增量构建和边界门禁通过。该 follow-up 同样未进入安装包。
+
+再后续提交 `f262cf76` 将持久化失败白名单收窄为上述两个数据形状错误。新增 RED 用例证明无 History 的 `PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH` 可能在 source revision 不变时通过 spill 恢复而变得可回填，因此继续使用可重试退避、不落终止标记。相同三项定向回归仍为 20 项通过，增量构建和边界门禁通过；未运行全仓测试。
