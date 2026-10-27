@@ -292,7 +292,7 @@ export class SqliteAgentHistory implements HistoryPort {
 
   /** Rebuilds the surface-compaction replay from committed, session-owned History facts. */
   readCanonicalCompactionReplay(sessionId: string): CompactionReplay | undefined {
-    const rows = this.readValidatedSessionHistoryRows(sessionId)
+    const rows = this.readValidatedCanonicalCompactionRows(sessionId)
     if (!rows) return undefined
 
     const events: Array<{ seq: number; type: 'compaction_start' | 'compaction_summary' | 'compaction_end'; payload: Record<string, unknown> }> = []
@@ -335,6 +335,71 @@ export class SqliteAgentHistory implements HistoryPort {
     })
     const replay = foldCompactionEvents(events)
     return { committed: replay.committed, rejected: [...rejected, ...replay.rejected] }
+  }
+
+  /**
+   * Compaction replay is a session-switch side read. Resolve and validate only marker-bearing History
+   * streams; reading and parsing every message body or checking every global cursor made hydration
+   * grow with unrelated session and database history.
+   */
+  private readValidatedCanonicalCompactionRows(sessionId: string): OrderedSessionEventRow[] | undefined {
+    if (!sessionId.trim() || (this.sessionId && this.sessionId !== sessionId)) {
+      throw new HistoryBatchError('sessionId is required or does not match this History port')
+    }
+    if (!this.conn.prepare('SELECT 1 FROM sessions WHERE id=?').get(sessionId)) return undefined
+
+    const hasCanonicalStreams = this.conn.prepare('SELECT 1 FROM agent_history_streams WHERE session_id=? LIMIT 1').get(sessionId)
+    if (!hasCanonicalStreams) return undefined
+    const hasOwnedEvents = this.conn.prepare(`SELECT 1 FROM agent_history_events events
+      JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
+      WHERE events.session_id=? AND streams.session_id=? LIMIT 1`).get(sessionId, sessionId)
+    if (!hasOwnedEvents) throw new HistoryCorruptionError(sessionId, 'canonical session History streams have no owned events')
+
+    const ownerMismatch = this.conn.prepare(`SELECT events.invocation_id FROM agent_history_events events
+      LEFT JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
+      WHERE events.kind='transcript-compacted' AND events.session_id=? AND streams.session_id IS NOT ? LIMIT 1`).get(sessionId, sessionId)
+    const streamMismatch = this.conn.prepare(`SELECT events.invocation_id FROM agent_history_streams streams
+      JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
+      WHERE streams.session_id=? AND events.kind='transcript-compacted' AND events.session_id IS NOT ? LIMIT 1`).get(sessionId, sessionId)
+    if (ownerMismatch || streamMismatch) throw new HistoryCorruptionError(sessionId, 'canonical session History owner mismatch')
+
+    const markerInvocations = this.conn.prepare(`SELECT events.invocation_id,events.session_seq,events.commit_order,
+        EXISTS(SELECT 1 FROM agent_history_commit_cursor cursor WHERE cursor.id=events.commit_order) AS has_commit_cursor
+      FROM agent_history_events events JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
+      WHERE events.session_id=? AND streams.session_id=? AND events.kind='transcript-compacted'
+      ORDER BY events.session_seq,events.commit_order`).all(sessionId, sessionId) as Array<{
+        invocation_id: string; session_seq: number; commit_order: number; has_commit_cursor: number
+      }>
+    if (markerInvocations.length === 0) return []
+    const cursor = this.conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId) as { next_seq: number } | undefined
+    if (!cursor || markerInvocations.some((row, index) =>
+      !Number.isSafeInteger(row.session_seq) || row.session_seq < 1 || row.session_seq > cursor.next_seq ||
+      !Number.isSafeInteger(row.commit_order) || row.commit_order < 1 || row.has_commit_cursor !== 1 ||
+      (index > 0 && (row.session_seq <= markerInvocations[index - 1]!.session_seq ||
+        row.commit_order <= markerInvocations[index - 1]!.commit_order)))) {
+      throw new HistoryCorruptionError(sessionId, 'canonical compaction History order is invalid')
+    }
+
+    const readInvocationRows = this.conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,
+        payload_json,session_seq,commit_order,session_id,created_at FROM agent_history_events
+      WHERE invocation_id=? ORDER BY sequence`)
+    const validatedRows: OrderedSessionEventRow[] = []
+    const seenInvocations = new Set<string>()
+    for (const { invocation_id: invocationId } of markerInvocations) {
+      if (seenInvocations.has(invocationId)) continue
+      seenInvocations.add(invocationId)
+      const invocationRows = readInvocationRows.all(invocationId) as OrderedSessionEventRow[]
+      if (!this.isCanonicalSessionInvocationRowsValid(sessionId, invocationId, invocationRows)) {
+        throw new HistoryCorruptionError(invocationId, 'canonical session History stream is invalid')
+      }
+      const events = invocationRows.map((row) => ({ invocationId, sequence: row.sequence, eventId: row.event_id,
+        idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version,
+        kind: row.kind as HistoryEvent['kind'], payload: JSON.parse(row.payload_json) as unknown })) as HistoryEvent[]
+      try { validateHistoryTransition([], events) }
+      catch { throw new HistoryCorruptionError(invocationId, 'canonical session History transition is invalid') }
+      validatedRows.push(...invocationRows.filter((row) => row.kind === 'transcript-compacted'))
+    }
+    return validatedRows.sort((left, right) => left.session_seq - right.session_seq || left.commit_order - right.commit_order)
   }
 
   /** Rebuilds the request facts consumed by ContextMeter from session-owned canonical History. */

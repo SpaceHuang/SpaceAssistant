@@ -84,6 +84,40 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('reads compaction replay without validating unrelated history bodies', async () => {
+    const conn = createDb()
+    const sessionId = 'compaction-replay-bounded-session'
+    const workDir = '/workspace/compaction-replay-bounded'
+    conn.prepare(`INSERT INTO sessions(id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+    await history.appendBatch([
+      { invocationId: 'marker-invocation', turnId: 'marker-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'marker-compacted', idempotencyKey: 'marker-compacted', kind: 'transcript-compacted', payload: {
+          compactionId: 'marker-compaction', messages: [{ id: 'current', role: 'user', content: 'current' }],
+          sessionLedger: { location: { workDir, sessionId, createdAt: 1 },
+            start: { compactionId: 'marker-compaction', windowId: 'window' },
+            summary: { compactionId: 'marker-compaction', outputWindowId: 'window', outputSurfaceFingerprint: 'fingerprint' } }
+        } },
+      { invocationId: 'marker-invocation', turnId: 'marker-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'marker-completed', idempotencyKey: 'marker-completed', kind: 'invocation-completed', payload: { status: 'completed', completedAt: 2 } }
+    ], 0)
+    await history.appendBatch([{
+      invocationId: 'unrelated-invocation', turnId: 'unrelated-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'unrelated-context', idempotencyKey: 'unrelated-context', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'unrelated-user', role: 'user', content: 'unrelated history' }] }
+    }], 0)
+    conn.prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?').run('{malformed', 'unrelated-context')
+    const globalCursorCheck = vi.spyOn(history, 'isGlobalCommitCursorContiguous')
+
+    expect(history.readCanonicalCompactionReplay(sessionId)?.committed.map(({ compactionId }) => compactionId))
+      .toEqual(['marker-compaction'])
+    expect(globalCursorCheck).not.toHaveBeenCalled()
+    conn.prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?').run('{malformed', 'marker-completed')
+    expect(() => history.readCanonicalCompactionReplay(sessionId)).toThrow()
+    conn.close()
+  })
+
   it('registers tool-result projection obligations with the canonical completion transaction', async () => {
     const conn = createDb()
     const sessionId = 'outbox-canonical-session'
