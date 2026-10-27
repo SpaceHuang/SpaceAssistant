@@ -347,6 +347,32 @@ describe('session projection derived blob store', () => {
     expect(await gc).toMatchObject({ removedCount: 1 })
   }, 10_000)
 
+  it('queues independent same-process blob stores instead of exhausting the file-lock retry budget', async () => {
+    temp = createTempDatabase('projection-blob-same-process-lock-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const firstStore = createSessionProjectionBlobStore(root)
+    const secondStore = createSessionProjectionBlobStore(root)
+    let entered!: () => void
+    const enteredFirstFence = new Promise<void>((resolve) => { entered = resolve })
+    let release!: () => void
+    const releaseFirstFence = new Promise<void>((resolve) => { release = resolve })
+    const first = firstStore.withWorkerTransientStaging(async () => {
+      entered()
+      await releaseFirstFence
+      return 'first'
+    })
+    await enteredFirstFence
+    const second = secondStore.withWorkerTransientStaging(async () => 'second')
+      .then((value) => ({ status: 'fulfilled' as const, value }), (error: unknown) => ({ status: 'rejected' as const, error }))
+
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    release()
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      'first', { status: 'fulfilled', value: 'second' },
+    ])
+  }, 10_000)
+
   it('keeps chunks referenced only by a durable build checkpoint', async () => {
     temp = createTempDatabase('projection-blob-checkpoint-')
     const session = createSession(temp.db, { name: 'checkpoint blob root', model: 'test' })
