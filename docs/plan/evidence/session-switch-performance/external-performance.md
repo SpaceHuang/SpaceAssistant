@@ -216,3 +216,52 @@ PerformanceObserver 同时记录到基线 4 个 Long Task（4 个与点击至 re
 对同一候选包再用 Chromium tracing 采集 15 轮大/普通会话交替切换，临时生成 renderer source map 将编译栈映回依赖源码。Renderer 主线程最大 `RunTask` 为 35.2 ms；最长的 24.2 ms 函数调用位于 `react-virtuoso` 的滚动状态处理（`Zn`，内部使用 `flushSync`），动画帧中的尺寸回调约 8.3 ms；React DOM 的一次 microtask/render 约 30 ms。该 trace 没有复现此前 115 ms renderer Long Task，不能推翻前述有效观测，也不能把它归因到某一个调用。Browser 主线程另有两次 54.6/71.7 ms `RunMicrotasks`，属于不同进程线程，不计作 renderer Long Task。
 
 当前证据把常规切换的同步工作收窄到 Virtuoso 滚动/尺寸处理和 React 更新，但仍没有捕获到 AC-7 超 50 ms renderer 长任务的完整因果栈。没有据此改动 Virtuoso 行为；需要在出现长任务的样本中取得可归因 trace 后再选源码修复点。该补充 trace 不关闭 AC-7 或 P4-02。
+
+### 当前运行候选包的分段日志复核（2026-10-27）
+
+在唯一运行的隔离候选包（build ID `3b2b677b-89aa-4d52-ae71-3cc4dae23559`，数据目录 `/tmp/spaceassistant-p4-validation/copies/pkg-candidate-schema102`）中，按 main/renderer 的 `(rendererProcessId, requestOrdinal)` 关联 ordinal 59–78，共 20 次交替切换：`Agent Runtime调度化` 大历史 10 次、8 条消息普通会话 10 次，均成功。未打开默认用户数据库。
+
+这 20 次不是同一缓存路径的大小对照：大历史样本全部 `cachePath=ready`，普通会话样本全部 `cachePath=cold`。按 renderer 已记录阶段相加估算点击至下一次绘制机会（selection-to-page-request + renderer-page-request + store-commit + render-commit + next-paint），普通/大历史 p50/p95/max 分别为 44.3/47.6/47.6 ms、67.5/78.8/97.0 ms。大历史组 renderer IPC 等待 p50/p95/max 为 21.3/25.5/27.5 ms；小样本和缓存路径差异使该组数据不用于 AC-7 通过判定。
+
+普通/大历史 main IPC handler p50/p95/max 为 5.89/6.32/7.33 ms、8.03/9.95/14.25 ms；`next-paint` p50/p95/max 为 6.9/11.1/11.4 ms、29.4/34.0/52.1 ms。大历史 main handler 较快，但该项不覆盖 IPC 序列化、renderer 接收和绘制的整体成本。
+
+日志的 `failure-reason-hydration` 时长不等于补水逻辑的 CPU 时间。两个样本页都没有 `failed` 消息，`loadTurnFailureReasons` 因而没有调用 `chatGetTurnErrors`，直接返回空结果。该计时普通/大历史 p50/p95/max 为 5.9/6.0/6.2 ms、22.7/27.6/44.5 ms，包含 Promise 恢复前 renderer 主线程等待；不能据此认定补水查询消耗了这些时间。
+
+观察时数据库有 629 个 `complete`、32 个 `backfilling`，后者的 `updated_at` 没有在本次测量期间前进，因此该轮不是维护活跃时的竞争样本。AC-7 的同路径冷/热矩阵、维护竞争与长任务因果归因仍未完成。
+
+### 同为 cold 页路径的 30 次交替复测（2026-10-27）
+
+在同一隔离候选包中，通过实际窗口对 88 条与 64 条消息会话交替切换 30 次（各 15 次）；结束后恢复原先打开的会话。ordinal 79–108 均为 `pageSize=20`、`cachePath=cold`、`outcome=ok`，30/30 成功。两个目标的当前页正文/工具/思考/分段字段合计分别约 379,412 与 470,449 个字符。与前一组大历史 `ready` / 普通 `cold` 的 20 次观测相比，这一组在页大小和 cachePath 上相同，但仍是两个不同会话、不同 payload 的小型单机样本。
+
+按相同 renderer 阶段和相加口径，点击至绘制机会 p50/p95/max 为 44.3/50.1/77.3 ms；main IPC p50/p95/max 为 4.01/6.49/17.72 ms；renderer IPC 请求为 18.1/24.1/31.5 ms；render commit 为 3.6/4.0/5.2 ms；next-paint 为 8.7/16.2/24.9 ms。本轮没有同步长任务观察器，因此不对 50 ms 同步阻塞判据作结论。
+
+### 长帧时间关联与重内容会话复测（2026-10-27）
+
+使用同一 build 的 CDP PerformanceObserver 同时监听 `longtask` 与 `long-animation-frame`。在 14:57:05.354 UTC 记录到 134 ms LoAF（blocking duration 70.7 ms），并于 14:57:05.371 UTC 记录到 118 ms Long Task；这与切回 8 条消息会话（ordinal 32，main handler 11.82 ms、renderer `next-paint` 105 ms）时间重叠。该会话一条 assistant 消息含约 295,293 字符 `tool_calls`、98,746 字符 `thinking`。这是一次时间相关性，不足以确认内容复杂度就是原因。
+
+随后同一隔离包对该 8 条消息会话与 64 条消息会话交替切换 20 次，各 10 次；两者分别均走 `pageSize=8/20`、`cachePath=cold`，全部成功。该轮 p50/p95/max 点击至绘制阶段和 Long Task/LoAF 结果：8 条会话 34.0/36.9/40.2 ms、20 条页 44.4/48.6/53.3 ms；观察器没有在这 20 次期间记录新的 Long Task 或 LoAF。一次长帧未能在后续复测中重现，仍需捕获可归因调用栈。
+
+另在远程调试端口启用期间，对两条中型会话的 `pageSize=20`、`cachePath=cold` 路径交替点击 30 次（各 15 次），均成功。ordinal 33–62 点击至绘制估算 p50/p95/max 为 44.6/66.8/73.9 ms，main IPC 为 4.40/6.29/7.83 ms。该轮 14:58:51–14:59:25 UTC 未观察到 Long Task/LoAF；测试结束后恢复原先打开的会话。开启远程调试会影响时序，此组只作诊断，不用于与无调试包样本直接比较。
+
+
+### 64/150 条最大真实历史的 CPU 采样（2026-10-27）
+
+在同一 arm64 候选包与隔离副本上，交替打开 64 条消息的「我先读这份 in-flight 计划，确认它描述的具体改动」和 150 条消息的「Agent Runtime调度化」，各 15 次；末尾恢复普通会话。两组当前页均为 `pageSize=20`，64 条会话走 `cachePath=cold`，150 条走 `cachePath=ready`，因此仍不是同一缓存路径的 A/B。数据库中两会话全部正文/工具/思考字段分别约 3.39 MB 与 3.11 MB；思考字段约 1.28 MB 与 1.93 MB。对应 main/renderer 日志 ordinal 50–79，30/30 次成功。
+
+renderer 已记录阶段相加的点击至绘制机会 p50/p95/max：64 条 `cold` 为 33.9/37.3/74.6 ms，150 条 `ready` 为 40.5/50.7/55.4 ms。main IPC handler：64 条 p50/p95/max 4.5/6.7/14.0 ms；150 条 9.3/16.6/17.4 ms。renderer IPC 请求：分别为 12.2/15.0/22.4 ms 与 15.3/25.8/30.0 ms。开启 PerformanceObserver 的有效切换区间没有记录 Long Task 或 LoAF；另有一次 117 ms Long Task / 132.3 ms LoAF 出现在最后一次计入切换约 76 秒后，时间不重叠、没有脚本 attribution，不归因到会话切换。
+
+通过 Node Inspector 对候选包 Browser 主线程采样 31.1 秒，覆盖 20 次 150/8 条会话交替切换。CPU self time 中 `getContextHistorySummaryBaseline` 约 127 ms、其中 `deserializeThinkingFromDb` 约 56 ms；`getChatMessagePage` 约 40 ms。该摘要查询逐条扫描会话内 thinking/attachments 并反序列化 thinking，但同一个 IPC 调用与摘要读取函数已存在于基线提交 `109a9384` 的 `ChatView.tsx`/`operations.ts`，故它是仍会发生的全历史工作，不是本次重构新加的工作。候选新增分页读取本身的 CPU 样本约 40 ms/20 次；采样是 CPU profile self time，不包含完整 IPC wall time。
+
+Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 self time 的热点包括 `react-virtuoso` 约 62 ms、React/reconciliation 与 `i18next` 多个函数，以及 `ContextUsageRing` 的格式化/tooltip；Markdown parser 多个函数合计也有样本。它们是整段 profile 的累计 CPU 样本，不能据此说单次切换花了相同时间。此 profile 和上述包内测试均开启 Node Inspector/CDP，结果只供调用路径诊断，不用于发布性能比较。
+
+因此，本次 64/150 条真实历史没有复现点击期间的长任务；之前真实安装包样本仍记录过与切换重叠的 115 ms renderer Long Task 和 127.4 ms LoAF，未获得其因果栈。当前样本不能推翻该有效观测，AC-7 仍未通过；也没有新的 TDD 源码修复点可以由这一轮证据支持。包内 cold/hot 同路径对照、损坏缓存、维护开关/竞争/耗时与维护期间全进程 RSS 仍缺，P4-02/P4-03 保持进行中。
+
+### 解锁后的隔离 PKG 可信点击补测（2026-10-27）
+
+候选仍为 arm64 PKG build ID `3b2b677b-89aa-4d52-ae71-3cc4dae23559`（源码 `76cb2b7812d2c7a00e4d997a3c37fa10751e7611`）。应用使用隔离目录 `/tmp/spaceassistant-p4-validation/copies/pkg-candidate-cold-copy`；该目录由真实库副本派生，缺失投影缓存行的探针只作用于副本。对照中切换 150 条「Agent Runtime调度化」和 8 条「分析微信链路工具调用均需用户确认且安全审核Agent未被调用的原因并输出报告」各 10 次，实际通过 CUA 点击，renderer 捕获的 20 个 click 事件全部 `isTrusted=true`。每次切换后检查了窗口 AX 状态，并在测试结束恢复普通会话。
+
+本轮额外注入只存在于运行时页面的 observer，记录可信 click 到 `.chat-message-list` 首次出现非空且不同于切换前文本的时长；这只是正文列表发生变化的响应代理，不能等同于目标消息首屏 ready。普通/大历史各 10 次：普通 p50/p95/max 为 49.5/51.9/51.9 ms，大历史为 58.3/83.6/83.6 ms（每组 n=10，p95 按 nearest-rank，因此等于最大样本）。这 20 次中没有 ≥50 ms Long Task；observer 记录 4 个 50–64 ms LoAF，blocking duration 均为 0。此前 181 ms 和 105 ms Long Task 均发生在本轮样本窗口之外，不据本轮结果将其归因到会话切换或关闭 AC-7。
+
+另对先前 181 ms Long Task 的 `App.tsx` 5 秒 reconciliation 定时器设置运行时断点，命中时 `TurnDisplayStore` 的 display 数与 known 数均为 0。栈映射只能确认该长任务发生在定时器触发的 `reconcile()` 调用期间；由于活动项为空且缺少能说明 CPU 占用来源的可靠采样，不足以认定 timer / `activeKnown()` 是根因，本轮不据此改动源码。`App.tsx` 中的 5 秒轮询在基线 `109a9384` 已存在。
+
+测试时另有一个独立的 `/Applications/SpaceAssistant.app` 窗口报告默认用户数据目录数据库版本 116 高于该程序支持的 115。进程检查确认它不是本轮启动的候选（候选 PID 79106，带隔离 `--user-data-dir`；独立窗口 PID 81740 指向默认目录）；本轮没有在该窗口操作，也没有打开或改写默认数据库。当前产品没有私聊、群聊或专用 IM 测试会话，故 IM 并发项不适用，也没有发送消息。P4-02/AC-7 仍未关闭；缓存与维护矩阵、维护竞争/耗时/RSS 及首屏 ready 口径仍待验收。
