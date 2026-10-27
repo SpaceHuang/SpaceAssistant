@@ -16,12 +16,18 @@ describe('session body locator schema v116', () => {
     databases.push(database)
     const session = createSession(database.db, { name: 'locator migration' })
     const conn = getDbConnection(database.db)
+    appendSqliteAgentHistoryBatchInTransaction(conn, [{ invocationId: 'pre-migration-history', turnId: 'legacy-turn', sequence: 1,
+      schemaVersion: 1, eventId: 'pre-migration-event', idempotencyKey: 'pre-migration-event', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'pre-migration-message', role: 'assistant', content: 'retained canonical history', timestamp: 1 }] } }], 0,
+    { sessionId: session.id })
     conn.prepare('UPDATE schema_meta SET value=? WHERE key=?').run('115', SCHEMA_META_KEYS.schemaVersion)
 
     runMigrations(conn)
 
     expect(DB_SCHEMA_VERSION).toBe(116)
     expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '116' })
+    expect(conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?').get('pre-migration-event'))
+      .toMatchObject({ payload_json: expect.stringContaining('retained canonical history') })
     const initial = conn.prepare('SELECT source_revision,status,checkpoint_json FROM session_body_source_state WHERE session_id=?')
       .get(session.id) as { source_revision: number; status: string; checkpoint_json: string | null }
     expect(initial).toMatchObject({ status: 'pending', checkpoint_json: null })
