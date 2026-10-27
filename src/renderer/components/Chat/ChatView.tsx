@@ -1226,6 +1226,7 @@ export function ChatView() {
       {compactionMarkers.length > 0 ? <CompactionMarker count={compactionMarkers.length} /> : null}
       <ChatMessageViewport
         ref={viewportRef}
+        sessionId={sessionId}
         messages={visibleMessages}
         stickToBottom={stickToBottomRef.current}
         onStickToBottomChange={handleStickToBottomChange}

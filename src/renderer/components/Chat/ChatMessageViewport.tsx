@@ -19,6 +19,7 @@ export type ChatMessageViewportHandle = {
 }
 
 type Props = {
+  sessionId: string
   messages: Message[]
   stickToBottom: boolean
   onStickToBottomChange: (nearBottom: boolean) => void
@@ -37,6 +38,7 @@ type Props = {
 export const ChatMessageViewport = memo(
   forwardRef<ChatMessageViewportHandle, Props>(function ChatMessageViewport(
     {
+      sessionId,
       messages,
       stickToBottom,
       onStickToBottomChange,
@@ -52,18 +54,26 @@ export const ChatMessageViewport = memo(
   ) {
     const virtuosoRef = useRef<VirtuosoHandle>(null)
     const [firstItemIndex, setFirstItemIndex] = useState(FIRST_ITEM_INDEX_BASE)
+    const prevSessionIdRef = useRef(sessionId)
     const prevFirstIdRef = useRef<string | null>(null)
     const prevLenRef = useRef(0)
     const stickRef = useRef(stickToBottom)
     stickRef.current = stickToBottom
 
     useEffect(() => {
+      const messagesBelongToSession = messages.every((message) => message.sessionId === sessionId)
+      if (!messagesBelongToSession) {
+        if (sessionId !== prevSessionIdRef.current) setFirstItemIndex(FIRST_ITEM_INDEX_BASE)
+        return
+      }
+
+      const sessionChanged = sessionId !== prevSessionIdRef.current
       const firstId = messages[0]?.id ?? null
       const len = messages.length
       const prevFirst = prevFirstIdRef.current
       const prevLen = prevLenRef.current
 
-      if (len === 0) {
+      if (sessionChanged || len === 0) {
         setFirstItemIndex(FIRST_ITEM_INDEX_BASE)
       } else if (prevLen === 0) {
         setFirstItemIndex(FIRST_ITEM_INDEX_BASE)
@@ -72,9 +82,10 @@ export const ChatMessageViewport = memo(
         setFirstItemIndex((idx) => idx - added)
       }
 
+      prevSessionIdRef.current = sessionId
       prevFirstIdRef.current = firstId
       prevLenRef.current = len
-    }, [messages])
+    }, [messages, sessionId])
 
     useImperativeHandle(
       ref,
