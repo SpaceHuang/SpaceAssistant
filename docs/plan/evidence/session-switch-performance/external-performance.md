@@ -307,3 +307,11 @@ Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 sel
 另在新隔离副本 `/tmp/spaceassistant-p4-validation/copies/maintenance-canonical15-1793129059` 上，以 100 ms 间隔采样同一应用启动，按主进程 PID 19019 汇总主进程与 3 个 helper。数据库 `session_projection_state` 标为 `rebuilding` 的 640 ms 内采到 6 点，RSS p50 为 895.8 MiB、nearest-rank p95/max 为 899.1 MiB；下一次采样时状态已为 `valid`，最终 `attempts=0`。该采样证实有效 slice 期间的进程树 RSS，但只有约 0.64 秒有效窗口，且没有 Long Task observer；它不代表完整维护过程峰值或 AC-7。
 
 这关闭了隔离包中的首轮锁竞争复现，不代表其他维护场景或 AC-7 已通过。本轮没有在有效重建期间取得设置页点击响应与 RSS 同窗数据；CUA 仍报告 Mac 锁定，不能据此声称已完成 UI 竞争验收。缓存/维护矩阵、长任务指标与 P4-02/P4-03 仍保持进行中。
+
+### arm64 包冷缓存首次页面 30 样本（2026-10-28）
+
+使用当前 arm64 应用目录包，build ID `e4aca912-a3e7-4d0b-8d43-2cb820057f02`，`app.asar` SHA-256 `3330eda77d36f8c8b82e15bafa55ea4e25daa0e1b942bf3f81db70a13f48bb82`。从同一隔离 canonical 合成夹具创建 30 份独立用户目录副本；每份都把工作目录改到副本自身，并删除副本中的 projection blob reference、cache 和 state 记录，保留 canonical 消息、History 与 source locator。逐个启动打包应用（未启用远程调试），收集 renderer 的首次消息页 trace。原始逐样本数据：[cold-package-first-page-2026-10-28.json](cold-package-first-page-2026-10-28.json)。
+
+30/30 次首次页面请求均为 `cachePath=cold`、`outcome=ok`、`pageSize=20`。main handler p50/p95/max 为 46.78/67.47/123.74 ms；renderer `renderer-page-request` 为 49/314.8/316.9 ms；按记录阶段相加至 renderer `next-paint` 为 67.1/335.8/338.6 ms。该口径是进程启动后的首个页面请求，不是可信点击、会话切换或目标消息正文 ready；少数 renderer 离群值说明 main handler 时间不能代表 renderer 等待。采样没有 Long Task/LoAF observer。首个页面 trace 完成 1.5 秒后，库中仍无 `session_projection_state` 行；本轮不据此宣称完成投影维护或测得其完成时间。
+
+本轮设备由用户确认已解锁；桌面自动化仍返回锁屏错误，系统辅助功能只能列出应用进程、没有可操作窗口，因此没有设置页点击或真实切换数据。该样本补足了打包应用 cold-cache 首页面的 30 次诊断记录，但不满足 AC-7 的安装包真实点击/正文 ready 矩阵，也不关闭维护开关/竞争/峰值 RSS 与剩余 AC-5/AC-6 包内场景。P4-02/P4-03 保持进行中。

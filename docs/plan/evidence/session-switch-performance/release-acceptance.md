@@ -18,7 +18,7 @@
 
 ## 尚未执行的安装包验收
 
-设备现已解锁，桌面自动化可以操作候选窗口；候选单边真实切换已有样本。完整矩阵、可运行的基线二进制和包内故障场景仍待完成，因此本报告不把单边数据写成完整界面验收。
+用户已确认设备解锁；候选单边真实切换已有样本。本轮桌面自动化仍报告锁屏错误，系统辅助功能能枚举应用进程但没有可操作的应用窗口，故未取得新一轮真实窗口交互。完整矩阵、可运行的基线二进制和包内故障场景仍待完成，因此本报告不把单边数据写成完整界面验收。
 
 以下项目仍未完成：
 
@@ -72,6 +72,12 @@ P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通
 对 32 个 backfilling 的 legacy-only 会话，26 个 coverage mismatch 有源数据缺口证据（16 个无 History stream、10 个有 stream 但无 event）；另外 5 个 message ID 缺失及 1 个 source fact 缺失仍未查明根因。它们不计作完成回填。P4-02/P4-03 继续未完成；缓存与维护矩阵、维护竞争/耗时/RSS、其余 AC-5/AC-6 包内场景均未齐。无专用 IM sandbox，会话消息测试不适用。
 
 对候选包额外采集的 15 轮 Chromium trace 将常规切换工作定位到 `react-virtuoso` 滚动/尺寸回调与 React 更新，但没有复现此前的 115 ms renderer Long Task，尚不能解释该长任务或关闭 AC-7。详见 [external-performance.md](external-performance.md)。
+
+## arm64 包 cold-cache 首页面补测（2026-10-28）
+
+当前 arm64 应用目录包 build ID `e4aca912-a3e7-4d0b-8d43-2cb820057f02`、`app.asar` SHA-256 `3330eda77d36f8c8b82e15bafa55ea4e25daa0e1b942bf3f81db70a13f48bb82`。在隔离 canonical 合成夹具上创建 30 份独立用户目录，删除各副本的投影派生记录后逐个启动候选包。首次消息页请求 30/30 成功且标记为 cold。main handler p50/p95/max 为 46.78/67.47/123.74 ms；renderer 页面请求为 49/314.8/316.9 ms；记录阶段相加到 next-paint 为 67.1/335.8/338.6 ms。原始逐样本数据见 [cold-package-first-page-2026-10-28.json](cold-package-first-page-2026-10-28.json)，数据含义与限制见 [external-performance.md](external-performance.md) 的同名小节。
+
+这组数据测量的是应用进程启动后的首个消息页请求，不是可信点击、会话切换、正文 ready 或 Long Task/LoAF；因此它补充 cold-cache 包内诊断，不关闭 AC-7。测试中桌面自动化仍报告锁屏错误，系统辅助功能未给出可操作窗口，设置页与真实点击证据仍未新增。P4-02/P4-03 保持未完成。
 
 ## 同源基线与最大历史窗口点击补充（2026-10-27）
 
