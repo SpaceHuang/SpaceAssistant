@@ -121,4 +121,6 @@ arm64 PKG build ID `eb0aac8b-6f5b-496c-ba11-f45f194f9584`，PKG SHA-256 `abd5b8f
 
 随后经 LaunchServices `open -na` 重试时，候选进程忽略该临时 HOME，命令行实际指向默认用户目录 `/Users/space/Library/Application Support/spaceassistant`。已终止本次启动的主进程与 helper。只读检查确认该数据库 schema 为 117（此前该目录没有本轮基线快照；先前记录的 schema 116 指另一目录）。WAL 文件为 4,144,752 字节；当前 source backfill 有 35 条 `backfilling`、934 条 `complete`，没有 terminal marker。迁移 v117 新增两个可空字段；启动前计数未知，因此不能据此断言其他数据未变。没有执行回滚或清理。CUA 未显示窗口，没有采到点击、正文 ready、Long Task 或维护竞争数据。
 
+之后直接启动 app bundle 并设置临时 HOME，Electron 辅进程仍使用同一默认目录。启动日志达到 renderer `ready-to-show`，但 recovery report 为 `degraded`、包含 2,302 项 `SESSION_LEDGER_REPAIR_PENDING`。未执行会话读取或点击，进程已终止。只读 `PRAGMA quick_check(10)` 返回 `ok`（4.7 秒）；schema 117、WAL 4,144,752 字节，source-state 为 35 `backfilling` / 934 `complete`。这些状态没有启动前快照可对照，不能归因给本次运行，也不能据此认定默认库其余数据未变化。停止后没有应用进程或数据库连接。
+
 结论不变：P4-02/P4-03 未完成。IM 并发仍不适用；待补证据是候选可操作窗口中的 AC-7 内容 ready 与维护竞争，以及 AC-5/AC-6 仍适用的包内场景。后续不得用 LaunchServices 的临时 HOME 假设隔离；只有在能从命令行确认实际 userData 路径确为隔离目录后才能启动候选包。

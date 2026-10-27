@@ -340,4 +340,6 @@ Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 sel
 
 随后尝试通过 LaunchServices `open -na` 启动同一 app。进程命令行显示它实际使用默认目录 `/Users/space/Library/Application Support/spaceassistant`，临时 `HOME` 未生效。该进程存活约 13 秒后由本次验收终止。只读复核看到该数据库 schema 为 117、WAL 为 4,144,752 字节；此前记录的 schema 116 来自另一 userData 路径，不能作为此目录的启动前基线。schema v117 定义为新增两个可空的 locator 失败版本列。终止后只读计数为 35 条 source backfill `backfilling`、934 条 `complete`，没有终止标记。缺少本次启动前该目录的数据库快照，无法判断这些任务计数是否由本次启动改变；不据此宣称其余数据未变，也不擅自回滚。
 
+后续直接以前台命令启动并设置同一临时 `HOME`，Electron 辅进程仍报告 `--user-data-dir=/Users/space/Library/Application Support/spaceassistant`。应用日志显示 `database.open-and-migrations` 与 renderer/window `ready-to-show` 完成，但启动恢复为 `degraded`，记录 2,302 项 `SESSION_LEDGER_REPAIR_PENDING`；这不是隔离样本，未做页面读取或会话操作。进程已终止。默认数据库主文件最后修改时间为 04:32:56，WAL 为 4,144,752 字节；只读 `PRAGMA quick_check(10)` 耗时 4.7 秒并返回 `ok`，schema 仍为 117，source-state 计数为 35 `backfilling` / 934 `complete`。无启动前快照，不能归因上述回填或 ledger 状态变化。本次之后不再启动该候选包。
+
 CUA 仍未提供窗口，因此没有新的交互、性能或维护竞争样本。P4-02/P4-03 与 AC-7 保持未完成；维护期间前台竞争及可信窗口内容 ready 仍需在可操作窗口中采集。
