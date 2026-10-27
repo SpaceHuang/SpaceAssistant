@@ -66,6 +66,8 @@ print('cache/outcomes', sorted(set(r[3] for r in rows)), sorted(set(r[4] for r i
 
 后续按 `artifactBuildId` 重新过滤同一隔离日志，避免把跨版本累积日志混算：`410a14dd` 共记录 15 次 ledger recovery，全部是 `proof-reused`、没有 `baseline`；同一份文件中另有 126 次 baseline 来自旧 build ID `8d5d96b8` 与 `6763709d`，不属于修复包。修复包 15 次中最后一次会话切换 trace 在 2026-10-27 07:47:38.815Z，845 ms watchdog 告警在 07:47:47.732Z；其间记录的定时 transcript revalidation 是空队列（drained/revalidated/deferred/skipped 均为 0）。watchdog 事件没有任务关联字段，所以证据排除了“这次已知 blocked baseline 扫描”，但还不能确定残余 845 ms 的来源。此处不能把 page-read/next-paint 分段通过外推成主线程无卡顿。
 
+另审查了切换时触发的 `chat:get-session-compaction-markers` 旁路：当 ledger 可写时它会读取并解析整个 `events.jsonl`，而不是只读压缩标记。对隔离副本中最大的该文件（1,196,023 bytes），直接调用最新 PKG app.asar 中的 `readCompactionReplay` 30 次，p50 5.01 ms、p95 5.97 ms、max 7.19 ms。该样本尚不足以代表更大的事件日志；测量值也不能解释 845 ms watchdog 告警，但此全文件解析路径仍应纳入更大文件与 UI 验收。
+
 P4-02 **保持进行中**。代码修复已提交，但不按局部候选分段数据关闭 AC-7。下一步要继续调查候选包 residual event-loop delay，并实现基线与候选同口径端到端采集（同时固定可验证基线二进制身份）；覆盖方案 §2 的首次访问、热缓存、损坏缓存、维护开/关，每个适用矩阵格至少 30 次；补充长任务、内存与维护完成数据。若同口径测量证实目标未达，返回相应源码任务处理。
 
 ### 第二项切换期主线程扫描：canonical compaction 回放（2026-10-27）
