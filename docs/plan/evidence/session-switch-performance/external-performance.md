@@ -186,3 +186,15 @@ AC-6 包内仍未验证：投影块截断、发布边界故障及源编辑/追�
 候选在切换到 150 条会话后立即点击设置，设置视图成功出现；用户可继续操作，不能据此关闭整体验收。候选库在测试期间后台 source locator 回填状态仍包含数百条 backfilling，故这组数据不是维护完成后的稳定态；尚未取得逐项失败原因和回填完成时间。
 
 P4-02 仍进行中。该对照补足了实际窗口与旧版可启动的同源库证据，但不满足 AC-7 的 ready 首屏指标或缓存/维护矩阵。继续定位 source backfill 长时间 backfilling 的原因，并采集首次/热/损坏缓存及维护开关适用场景、切换与维护竞争、维护耗时和峰值 RSS；若回填无法在合理时间完成，应记录其失败类别及影响，不能把持续回填状态当作已完成维护。
+
+### 空消息回填修复后的候选包复测（2026-10-27）
+
+提交 `76cb2b7812d2c7a00e4d997a3c37fa10751e7611` 修复 source backfill 对“当前消息表为空”的会话仍重放旧 History 并失败的问题。回归先在旧实现下 RED：过期 History 消息导致状态 `failed`；实现后联合定向测试 `npm exec vitest run electron/sessionStorage/infrastructure/sqlite/sessionBodySourceBackfillTask.test.ts electron/sessionStorage/infrastructure/sqlite/sessionBodySourceBackfill.test.ts` 通过（2 文件、15 项），`npm run build:electron:incremental` 通过，包含存储边界门禁和 TypeScript 编译。
+
+从该干净提交构建并运行 arm64 PKG：build ID `3b2b677b-89aa-4d52-ae71-3cc4dae23559`，版本 `0.2.9`；PKG SHA-256 `90333659cac14e42d09729b4b3ee8c53580e3e5e5609939276ce5121f4c459c5`，app.asar SHA-256 `8a8f2e91e271fedfd9b21c9e69f9929108fb43bae101306c8fcedb155cdc7514`。`codesign --verify --deep --strict` 通过；包为 ad-hoc 签名，仅作隔离验收，不代表公证或可分发。
+
+候选在隔离数据库副本 `/tmp/spaceassistant-p4-validation/copies/pkg-candidate-schema102` 上运行，未打开原始用户数据库。启动后 352 个空消息会话完成回填，用时约 13.7 秒；数据库观察为 `complete=629`、`backfilling=32`。剩余 32 个会话的全部消息均为 legacy（603 行，canonical-backed 行为 0），失败日志归类为 `CHAT_BODY_MESSAGE_ID_MISSING` 5 项、`PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH` 26 项、`CHAT_BODY_SOURCE_FACT_MISSING` 1 项。它们不是该修复声称关闭的空消息场景；此观察也没有验证这 32 个任务会自动收敛，故仍是维护问题待查证据。
+
+通过 CUA 对包内实际窗口做 20 次交替会话点击（150 条消息的 `Agent Runtime调度化` 与普通会话 `分析微信链路工具调用均需用户确认且安全审核Agent未被调用的原因`，各 10 次）。浏览器事件均为 `isTrusted=true`。点击至双 `requestAnimationFrame` 的响应代理：大/普通会话 p50 为 23.5/34.4 ms，p95 为 52.9/38.8 ms；大历史点击样本中有一次与 110 ms Long Task 及 126.6 ms LoAF 重叠。此口径只到双帧回调，不是正文首屏 ready；样本量也不足以估计稳定 p95。隔离副本部分 legacy 历史在 UI 中报告缺失 History 文件/ledger 错误，因此本轮数据不能证明消息内容完整，也不纳入 AC-7 通过率。测试后已退出候选进程。
+
+该补测只验证候选包启动、空消息回填修复在真实 Electron 包中的维护结果，并提供一组小样本交互响应观察。AC-7 的缓存/维护矩阵、内容 ready、同口径基线与维护竞争仍缺，P4-02 保持进行中。
