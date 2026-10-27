@@ -12,8 +12,8 @@
 - 最新包内 `readCanonicalCompactionReplay` 在同一真实库副本上，大/普通会话各 10 次 p50 为 13.65/8.19 ms。此前包 `410a14dd` 的 15 次 ledger 检查均为 proof reuse，没有重复 baseline；该包仍记录一次 845 ms event-loop delay，来源未确定。
 - P4-02 的完整证据和限制见 [external-performance.md](external-performance.md)。本地定向回归、完整构建、边界门禁与 PKG 校验结果分别记于该报告与提交 `d117424e`。
 - 用户确认已解锁 Mac；但桌面自动化服务仍返回“Mac 已锁定”，无法向窗口发送点击或采集真实交互。通过 `open -n` 启动最新候选解包应用，PID `36040`，仅使用隔离目录 `/tmp/spaceassistant-p4-validation/copies/candidate-v6`；基线使用独立目录 `/tmp/spaceassistant-p4-validation/copies/baseline-v4`。完成日志采集后已向两个由本任务启动的实例发送 TERM 并确认进程退出。
-- 最新候选启动后日志确认 build ID `c3d37a41-8a08-46e0-b327-52800a4d494d`。单次**启动初始页** trace：main `durationMs=9.94`（page-select 9.35、source-page-read 9.54、main-ipc 9.86）；renderer page request 40.8 ms；store commit 0.4 ms、render commit 21.9 ms、next paint 14.7 ms。另有启动期 ledger proof reuse 135 ms、recovery completed 6 ms。此为启动观测，**不是会话切换样本**，不纳入 AC-7 的点击到首帧统计。日志位置：`/tmp/spaceassistant-p4-validation/copies/candidate-v6/workspaces/2/.agent/logs/Agent-20261027.log`。
-- 当前桌面控制接口多次报锁屏，因此未做点击切换、设置响应、热/损坏缓存矩阵、主线程长任务或前台/维护竞争测量。候选启动日志已采集，进程现已停止；这不能替代 GUI 验收。
+- 最新候选启动后日志确认 build ID `c3d37a41-8a08-46e0-b327-52800a4d494d`。两次启动都自动请求初始会话页（各自 `requestOrdinal=1`），观测值分别为：main 9.94/3.86 ms、renderer page request 40.8/66.2 ms、render commit 21.9/6.4 ms、next paint 14.7/11 ms。启动期另观测到 ledger proof reuse 135 ms 与 41 ms，recovery completed 6 ms 与 5 ms。辅助功能看到进程可见但没有窗口，故两条 trace 都只是启动初始页，**不是会话切换样本**，不纳入 AC-7 的点击到首帧统计。日志位置：`/tmp/spaceassistant-p4-validation/copies/candidate-v6/workspaces/2/.agent/logs/Agent-20261027.log`。
+- CUA 多次报告锁屏；macOS 辅助功能脚本能看到候选进程，但无法取得或激活任何应用窗口。未做点击切换、设置响应、热/损坏缓存矩阵、主线程长任务或前台/维护竞争测量。候选启动日志已采集，进程现已停止；这不能替代 GUI 验收。
 - IM 验收经用户澄清后标为**不适用**：本项目没有专用私聊或群聊 sandbox 会话。此前授权仅限 sandbox 测试消息；不向任何真实会话发送测试消息，也不再把提供 sandbox 账号/会话作为继续条件。
 
 ## 尚未执行的安装包验收
