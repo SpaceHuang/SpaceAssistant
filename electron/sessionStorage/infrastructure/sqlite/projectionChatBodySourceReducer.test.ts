@@ -57,6 +57,71 @@ describe('projection chat body source reducer', () => {
     expect(output.dependenciesByMessage.get('tool-assistant')?.map(({ eventId }) => eventId)).toEqual(rows.map(({ eventId }) => eventId))
   })
 
+  it('matches the canonical reducer for replay, tool lifecycle, assistant chunks and compaction dependencies', () => {
+    const firstInvocation = [
+      event('turn-1', 1, 'invocation-context-committed', { messages: [
+        { id: 'u1', role: 'user', content: 'prompt', timestamp: 1 },
+      ] }),
+      event('turn-1', 2, 'model-response-committed', { message: { id: 'a1', role: 'assistant', content: [
+        { type: 'text', text: 'new ' },
+      ], timestamp: 2 } }),
+      event('turn-1', 3, 'model-response-committed', { message: { id: 'a1', role: 'assistant', content: [
+        { type: 'text', text: 'answer' },
+      ], timestamp: 2 } }),
+      event('turn-1', 4, 'invocation-completed', { status: 'completed' }),
+    ]
+    const firstFacts: ProjectionMessageFact[] = [
+      { id: 'u1', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy',
+        writeMode: null, storedContent: 'prompt' },
+      { id: 'a1', role: 'assistant', timestamp: 2, sequence: 1, queueScope: 'desktop', contentStorageState: 'legacy',
+        writeMode: null, storedContent: 'new answer' },
+    ]
+    const secondInvocation = [
+      event('turn-2', 1, 'invocation-context-committed', { messages: [
+        { id: 'u1', role: 'user', content: 'prompt', timestamp: 1 },
+        { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'new answer' }], timestamp: 2 },
+        { id: 'u2', role: 'user', content: 'next prompt', timestamp: 3 },
+      ] }),
+      event('turn-2', 2, 'transcript-compacted', { messages: [
+        { id: 'u1', role: 'user', content: 'summary of prompt', timestamp: 1 },
+        { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'summary answer' }], timestamp: 2 },
+        { id: 'u2', role: 'user', content: 'next prompt', timestamp: 3 },
+      ] }),
+      event('turn-2', 3, 'replay-message-committed', { message: { id: 'u3', role: 'user', content: [
+        { type: 'text', text: 'image prompt' }, { type: 'image', mimeType: 'image/png', data: 'YQ==' },
+      ], timestamp: 4 } }),
+      event('turn-2', 4, 'model-response-committed', { message: { id: 'a2', role: 'assistant', content: [
+        { type: 'image', mimeType: 'image/png', data: 'YQ==' }, { type: 'text', text: 'final answer' },
+      ], toolCalls: [{ id: 'call-1', name: 'lookup', input: { q: 'x' } }], timestamp: 5 } }),
+      event('turn-2', 5, 'tool-call-started', { toolCallId: 'call-1', toolName: 'lookup' }),
+      event('turn-2', 6, 'tool-call-finished', { toolCallId: 'call-1', replayContent: 'lookup result' }),
+      event('turn-2', 7, 'invocation-completed', { status: 'completed' }),
+    ]
+    const secondFacts: ProjectionMessageFact[] = [
+      { id: 'u1', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy',
+        writeMode: null, storedContent: 'summary of prompt' },
+      { id: 'a1', role: 'assistant', timestamp: 2, sequence: 1, queueScope: 'desktop', contentStorageState: 'canonical-backed-only',
+        writeMode: 'canonical', storedContent: '' },
+      { id: 'u2', role: 'user', timestamp: 3, sequence: 2, queueScope: 'desktop', contentStorageState: 'canonical-backed-dual-write',
+        writeMode: 'canonical', storedContent: 'next prompt' },
+      { id: 'u3', role: 'user', timestamp: 4, sequence: 3, queueScope: 'desktop', contentStorageState: 'legacy',
+        writeMode: null, storedContent: 'image prompt' },
+      { id: 'a2', role: 'assistant', timestamp: 5, sequence: 4, queueScope: 'desktop', contentStorageState: 'canonical-backed-only',
+        writeMode: 'canonical', storedContent: '' },
+    ]
+
+    const first = reduceProjectionInvocationChatBodySources(firstInvocation, firstFacts)
+    const second = reduceProjectionInvocationChatBodySources(secondInvocation, secondFacts)
+
+    expect(first.messages.map(({ id, content }) => [id, content])).toEqual([['u1', 'prompt'], ['a1', 'new answer']])
+    expect(second.replacesPriorMessages).toBe(true)
+    expect(second.messages.map(({ id, content }) => [id, content])).toEqual([
+      ['u1', 'summary of prompt'], ['a1', 'summary answer'], ['u2', 'next prompt'], ['u3', 'image prompt'], ['a2', 'final answer'],
+    ])
+    expect(second.dependenciesByMessage.get('a1')?.map(({ eventId }) => eventId)).toEqual(secondInvocation.map(({ eventId }) => eventId))
+    expect(second.dependenciesByMessage.get('a2')?.map(({ eventId }) => eventId)).toEqual(secondInvocation.map(({ eventId }) => eventId))
+  })
+
   it('rejects missing message facts, duplicate sequences and incomplete invocation event order', () => {
     const rows = [event('invalid', 1, 'invocation-context-committed', { messages: [{ id: 'one', role: 'user', content: 'body', timestamp: 1 }] }),
       event('invalid', 2, 'invocation-completed', { status: 'completed' })]
