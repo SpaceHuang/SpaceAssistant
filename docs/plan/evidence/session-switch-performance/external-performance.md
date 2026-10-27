@@ -287,3 +287,11 @@ Renderer CPU profile 覆盖另 20 次同类切换（约 30.8 秒）。聚合 sel
 本轮只补足了 synthetic canonical cache 的冷/热/损坏路径证据。它不代替冻结真实库上的 ready 首屏对照，也没有完成维护开启/暂停矩阵、维护竞争、总完成时间、维护期间全进程 RSS 或 AC-7 的 Long Task/LoAF 目标；P4-02/P4-03 继续未完成。
 
 维护补测：在隔离副本 `/tmp/spaceassistant-p4-validation/copies/maintenance-light` 中使用 1000 条、每条正文 80 字符的 canonical-backed-only 合成消息。一次生产 PKG 启动成功完成 projection：首段 slice 149.24 ms（checkpointed），次段 241.47 ms（published），随后数据库状态为 `valid`。另一次紧贴窗口启动时点击“设置”，设置页正常显示，但该轮 1000 条任务最终记录为 `source-unavailable`，不能作为维护并发响应的有效样本。两次运行的时序没有形成同一轮“有效重建期间点击设置”的可核对证据；也没有取得有效重建窗口内的 RSS 峰值。因此维护竞争与内存验收仍未完成。
+
+### 隔离投影冷重建自动重试观察（2026-10-28）
+
+继续使用生产 arm64 应用目录包（源码提交 `0a5ed3ab`，`app.asar` SHA-256 `a92ef0b41dd63a26b80db41af8688640d9cded42d14c987bb89ec1359a5f288f`）与独立用户目录副本 `/tmp/spaceassistant-p4-validation/copies/maintenance-canonical12-1793121868`。目标为 1000 条 canonical-backed-only 合成消息；只清除此副本中该会话的 `session_projection_cache`、`session_projection_state`、`session_projection_blob_references`，保留消息、History 与 spill 源数据。未访问默认用户数据库。
+
+启动后首次投影准备记录 `CONTENT_UNAVAILABLE / WORKER_FAILED`，状态进入 `rejected`；持久化 `retry_after` 到期后，应用约 60 秒后自动重试，状态转为 `valid`，没有外部唤醒。另一份同源隔离副本在 `rejected` 期间调用 `chatGetMessagePage`，仍返回 20 条消息；renderer 记录 page request 约 368 ms、提交后下一绘制机会约 1 ms。该读数含页面已有工作与一次性冷路径，仅作可读性观察，不用于 AC-7 延迟验收。重试前后的日志未暴露 `WORKER_FAILED` 的底层原因，暂不能判定它是程序瞬态还是夹具身份变化造成。
+
+对发生自动重试的副本按正确主进程 PID 采样 75 秒，共 75 点、主进程及 3 个 Electron helper。进程树 RSS p50 为 821 MiB、p95/max 为 917 MiB。采样在首次失败后才开始；自动重试成功后只覆盖了状态变为 `valid` 的时段，没有采到有效重建 slice 的完整区间。因此该 RSS 不能作为维护期间峰值，也不关闭维护内存验收。当前 CUA 在本轮仍报告 Mac 锁定，无法在有效重建期间进行实际设置页点击；本轮没有设置并发响应样本。P4-02/AC-7 继续进行中，底层首次失败原因、维护期 RSS 及设置点击竞争仍待验收。
