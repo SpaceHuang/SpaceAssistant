@@ -5,15 +5,15 @@
 
 ## 已完成的本机准备与可采信证据
 
-- 基线与候选使用隔离数据副本；没有把原始数据库交给验收应用。此前候选只做启动 trace、进程已停止；解锁后已重新启动候选并完成真实会话点击测试，当前运行状态以文末补充为准。
-- 最新候选 build identity：`c3d37a41-8a08-46e0-b327-52800a4d494d`，版本 `0.2.9`，源码提交 `d117424ece9555f565d29af2a187012aa67d947d`，构建时工作树干净。
-- 最新 arm64 PKG：`release/SpaceAssistant-0.2.9-arm64.pkg`，SHA-256 `868e130b26943bf1cd0902222551c4be455263e1c4c5312670870ef4255f456c`。PKG 内 `app.asar` SHA-256 `d11b3528f82bfc2627773bd54ba6c1a6b262b9250d283492a5c9020335a9c529`；PKG 展开后的文件哈希与打包目录一致。`codesign --verify --deep --strict` 通过；没有 Developer ID 身份，故这是 ad-hoc 隔离候选，不代表已签名公证的发布包。
+- 所有运行验收均使用隔离数据库副本；未把用户原始数据库交给验收应用。
+- 最新候选 build identity：`3817abb0-b0b3-4bd6-9b34-964550c2d40f`，版本 `0.2.9`，源码提交 `6570771d54ba667b00c4436e83c6c6c1c903715b`，构建时工作树干净。
+- 最新 arm64 PKG SHA-256 为 `d21aa292afefcced83f2d49fbe78487a15ece142cebe80fe9138b4f24338ecc1`，PKG 内 `app.asar` SHA-256 为 `dbe16e0c955b0b143e34cc7283fff0db1f88c4d2e2256903ea2ea163be7e67c1`。`codesign --verify --deep --strict` 通过；无 Developer ID 身份，属于 ad-hoc 隔离候选，不是已签名公证的发布包。
 - 最新包内分页代码在隔离真实库 APFS clone 上执行 `readChatPageAfterPreparation`：大/普通会话 cold-projection source-page 各 30 次，p95 为 3.71/4.96 ms。这是 Electron 44.1.1 / Node 24.19.0 中的共享主进程读函数数据，不包含点击到首帧、React 渲染、跨进程等待或维护竞争。
 - 最新包内 `readCanonicalCompactionReplay` 在同一真实库副本上，大/普通会话各 10 次 p50 为 13.65/8.19 ms。此前包 `410a14dd` 的 15 次 ledger 检查均为 proof reuse，没有重复 baseline；该包仍记录一次 845 ms event-loop delay，来源未确定。
-- P4-02 的完整证据和限制见 [external-performance.md](external-performance.md)。本地定向回归、完整构建、边界门禁与 PKG 校验结果分别记于该报告与提交 `d117424e`。
-- 此前桌面自动化服务曾错误返回“Mac 已锁定”；该状态已于文末补充中修正。基线与候选均使用独立目录 `/tmp/spaceassistant-p4-validation/copies/baseline-v4`、`/tmp/spaceassistant-p4-validation/copies/candidate-v6`。当前窗口和进程状态以文末补充为准。
-- 最新候选启动后日志确认 build ID `c3d37a41-8a08-46e0-b327-52800a4d494d`。两次启动都自动请求初始会话页（各自 `requestOrdinal=1`），观测值分别为：main 9.94/3.86 ms、renderer page request 40.8/66.2 ms、render commit 21.9/6.4 ms、next paint 14.7/11 ms。启动期另观测到 ledger proof reuse 135 ms 与 41 ms，recovery completed 6 ms 与 5 ms。辅助功能看到进程可见但没有窗口，故两条 trace 都只是启动初始页，**不是会话切换样本**，不纳入 AC-7 的点击到首帧统计。日志位置：`/tmp/spaceassistant-p4-validation/copies/candidate-v6/workspaces/2/.agent/logs/Agent-20261027.log`。
-- 截至本段写入时，CUA 仍报告锁屏，未做点击切换、设置响应、热/损坏缓存矩阵、主线程长任务或前台/维护竞争测量；此状态已被文末“解锁后补充”更新。文末补充说明实际点击样本与当前唯一运行进程。
+- P4-02 的完整证据和限制见 [external-performance.md](external-performance.md)。视口回归修复的定向测试、类型检查、完整构建和新候选 PKG 校验均通过。
+- 较早的点击测量使用隔离目录 `/tmp/spaceassistant-p4-validation/copies/candidate-v6`；该状态已由下方最新候选 v7 的复测更新。
+- 前一候选启动后日志确认 build ID `c3d37a41-8a08-46e0-b327-52800a4d494d`。两次启动都自动请求初始会话页（各自 `requestOrdinal=1`），观测值分别为：main 9.94/3.86 ms、renderer page request 40.8/66.2 ms、render commit 21.9/6.4 ms、next paint 14.7/11 ms。启动期另观测到 ledger proof reuse 135 ms 与 41 ms，recovery completed 6 ms 与 5 ms。辅助功能看到进程可见但没有窗口，故两条 trace 都只是启动初始页，**不是会话切换样本**，不纳入 AC-7 的点击到首帧统计。日志位置：`/tmp/spaceassistant-p4-validation/copies/candidate-v6/workspaces/2/.agent/logs/Agent-20261027.log`。
+- 较早启动期辅助功能不可见窗口的限制已由后续真实界面点击样本取代，历史启动 trace 保留作启动数据，不纳入切换统计。
 - IM 验收经用户澄清后标为**不适用**：本项目没有专用私聊或群聊 sandbox 会话。此前授权仅限 sandbox 测试消息；不向任何真实会话发送测试消息，也不再把提供 sandbox 账号/会话作为继续条件。
 
 ## 尚未执行的安装包验收
@@ -24,8 +24,8 @@
 
 1. 最新包在当前 macOS arm64 设备上的首次访问、热缓存、损坏缓存和维护开/关矩阵；已采集的 105 次 cold 页切换不能代替这些矩阵，按方案 §2 对每个适用格采集至少 30 次、失败率、p50/p95/max。
 2. 同设备、同冻结库来源、同场景的基线/候选点击到首帧比较。计划基线 `109a9384` 已打包，但 schema 115 副本高于基线二进制支持的 107，无法启动；先前 CUA AX / screenshot 计时包含自动化等待和可访问性树读取，不可作为首帧证据。
-3. 切换期间主线程同步长任务（AC-7 暂定上限 50 ms）、设置响应、候选进程峰值 RSS、维护完成耗时及后台维护对前台的竞争数据。
-4. 最新安装包中的 AC-5/AC-6 代表性故障与并发场景复核。源码测试通过不能替代安装包真实运行证据。
+3. 切换期间长任务的调用级归因、候选全进程峰值 RSS、维护完成耗时及后台维护对前台的竞争数据。设置页响应已在大/普通上下文各测 20 次，详见“视口修复后的候选包复验”，但不覆盖维护竞争时的设置响应。
+4. 安装包 AC-5 的取消等待者、后台维护与前台竞争、关闭/切库场景，以及 AC-6 的源编辑/追加/压缩/删除、spill 损坏、块截断、发布边界故障。窗口 A→B→A 与重复切换已有本轮样本；源码测试通过不能替代剩余安装包场景证据。
 5. IM 并发项不适用：用户确认没有专用私聊或群聊 sandbox。当前不向真实 IM 会话发送测试消息。
 
 ## 继续验收步骤
@@ -38,11 +38,10 @@
 
 ## 结论
 
-P4-03 **未完成**。已具备最新候选包、隔离真实库、一次启动初始页 trace 与源码/包内函数级数据；真实会话切换 UI、完整 AC-7 矩阵、包内 AC-5/AC-6 场景仍缺。IM sandbox 并发因项目没有专用测试会话而不适用。当前结论不得解读为性能验收通过或允许发布。
+P4-03 **未完成**。最新候选包已经在隔离真实库上完成大/普通会话窗口切换与设置响应采样，并观察确认视口索引修复生效；首次/热/损坏缓存和维护开关矩阵、可兼容的基线对照、维护竞争与完整内存数据，以及 AC-5 的取消/维护/关闭切库和 AC-6 故障注入包内场景仍缺。IM 并发因产品没有私聊、群聊或专用测试会话而不适用。当前结论不表示 AC-7 全面通过，也不构成发布许可。
 
 ## 解锁后补充（2026-10-27）
 
-- 用户确认 Mac 已解锁后，桌面自动化已连接候选窗口并完成真实点击切换；候选包 build ID、隔离 `user-data-dir`、105 次有效页读取和 renderer/main 分段数据详见 [external-performance.md](external-performance.md) 的“解锁后的候选包交互测量与基线构建”。这修正了上文“无法取得或激活窗口”的旧状态。
 - 在候选包窗口实际观察到 94–104.6 ms 的 long animation frame 与 50–74 ms long task。它们足以说明仍存在可感知卡顿风险，但缺少脚本 attribution 和调用级关联；当前没有证据证明 20 条首屏页读取本身是长帧来源。候选单进程 RSS 采样峰值约 517.4 MiB。
 - 已从计划基线 `109a9384` 构建 arm64 PKG；构建与签名校验成功。但该二进制支持的最高数据库版本为 107，其他可读取的同数据副本均为 schema 115/116，启动被安全拒绝；另有一份 baseline-v3 副本无法只读校验。因此同库基线 UI 对照仍不可执行，也没有尝试降低 schema 或修改用户数据。
 - 当前唯一运行实例是候选 PKG，进程命令行明确带有 `--user-data-dir=/tmp/spaceassistant-p4-validation/copies/candidate-v6`；基线实例已退出。没有启动多个候选/基线窗口并行测试。
@@ -56,5 +55,6 @@ P4-03 **未完成**。已具备最新候选包、隔离真实库、一次启动�
 - 隔离真实库上的窗口点击样本：大历史 30/30 成功，点击到 renderer next-paint p50/p95/max 53.3/58.2/65.3 ms；普通历史 30/30 成功，41.7/46.7/47.0 ms。设置对话框在大历史上下文 20/20 成功，响应 p50/p95/max 33.4/47.6/49.0 ms；普通上下文 20/20 成功，26.2/28.1/29.6 ms。测试经 CDP 指针事件派发，表示实际 Electron 窗口交互路径，不等同于物理鼠标硬件端到端延迟。
 - 新构建 10 次交替切换均将 Virtuoso `firstItemIndex` 保持在 100000；旧构建曾连续递减。此回归由 TDD 测试和 PKG 运行观察支持。新构建 60 次会话切换中未观察到 ≥50 ms Long Task/LoAF。串行旧/新候选测量不具备随机交叉设计，且旧二进制无法打开同 schema 数据库，故不据此宣称 AC-7 全面通过。
 - 最新唯一运行进程是候选 PKG，隔离目录 `/tmp/spaceassistant-p4-validation/copies/candidate-v7`，未启用远程调试端口。没有向任何 IM 会话发消息；用户确认产品没有私聊、群聊或专用 IM 测试会话，因此 IM 并发验收不适用。
+- 用来尝试 AC-6 源片段缺失的副本只有 legacy 格式消息，故该尝试不计验收；细节与数据分布见 [external-performance.md](external-performance.md)。
 
-结论维持 **P4-03 未完成**。热/损坏缓存与维护开关矩阵、维护竞争和维护完成时间、全进程 RSS、可兼容的基线对照，以及安装包内 AC-5/AC-6 代表场景仍待验收。当前候选测量只关闭了本轮视口跨会话索引回归的运行观察，不构成整体验收或发布许可。
+结论维持 **P4-03 未完成**。热/损坏缓存与维护开关矩阵、维护竞争和维护完成时间、全进程 RSS、可兼容的基线对照，以及安装包内 AC-5 剩余并发场景和 AC-6 故障场景仍待验收。当前候选测量只关闭了本轮视口跨会话索引回归的运行观察，不构成整体验收或发布许可。
