@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database/sqliteStore'
-import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getSession, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage } from '../database/operations'
+import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getSession, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage, updateMessageContentIfStreaming } from '../database/operations'
 import { updateMessageContent } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { getProjectedMessage } from './infrastructure/sqlite/sessionTranscriptProjection'
@@ -12,6 +12,7 @@ import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../../s
 export function createSessionCommands(db: AppDatabase): SessionCommands {
   const commands: SessionCommands = {
     appendNonTurnMessage: (message) => appendMessage(db, message),
+    updateStreamingMessage: (messageId, patch) => updateMessageContentIfStreaming(db, messageId, patch),
     createSession: (input) => createSession(db, {
       ...input,
       metadata: { ...(input.metadata ?? {}) }

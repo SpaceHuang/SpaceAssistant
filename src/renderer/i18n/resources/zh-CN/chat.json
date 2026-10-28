@@ -356,5 +356,21 @@
       "max": "最高",
       "notSupported": "该模型不支持 Thinking"
     }
+  },
+  "systemOperation": {
+    "title": "自动压缩",
+    "running": "正在自动压缩…",
+    "succeeded": "已压缩，占用 {{before}}% → {{after}}%",
+    "failed": "压缩失败",
+    "skippedNoGain": "未压缩（无收益）",
+    "skippedUncompressible": "未压缩（无法获得收益）",
+    "skippedDiscarded": "未压缩（上下文已变化）",
+    "cancelled": "已取消",
+    "showReason": "查看原因",
+    "hideReason": "收起原因",
+    "reasonTimeout": "摘要请求超时。当前请求会按剩余上下文预算继续。",
+    "reasonInvalid": "摘要结果格式无效。当前请求会按剩余上下文预算继续。",
+    "reasonUnavailable": "摘要模型或凭据不可用。当前请求会按剩余上下文预算继续。",
+    "reasonFailed": "摘要未能完成。当前请求会按剩余上下文预算继续。"
   }
 }

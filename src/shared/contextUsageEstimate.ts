@@ -1,4 +1,4 @@
-import type { ChatImageAttachment, Message, ThinkingData } from './domainTypes'
+import { isChatImageAttachment, type ChatImageAttachment, type Message, type ThinkingData } from './domainTypes'
 import type { UsageCacheSemantics } from './usageCacheSemantics'
 
 /** API 返回的原始 usage 字段（与 chatSlice.LastUsage 非 null 形态一致） */
@@ -70,7 +70,7 @@ export function estimateTokensFromHistoryImages(messages: Message[]): number {
   let total = 0
   for (const m of messages) {
     if (m.role === 'user' && m.attachments?.length) {
-      total += estimateTokensFromImageAttachments(m.attachments)
+      total += estimateTokensFromImageAttachments(m.attachments.filter(isChatImageAttachment))
     }
   }
   return total

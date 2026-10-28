@@ -270,7 +270,7 @@ export type SpaceAssistantApi = {
     nextSequence: number
     hasMore: boolean
   }>
-  chatEnqueueQueuedMessage: (payload: { sessionId: string; requestId: string; content: string; attachments?: ChatImageAttachment[] }) => Promise<{ receipt: unknown; persisted: import('./displayOrder').PersistedMessageAck; duplicate: boolean }>
+  chatEnqueueQueuedMessage: (payload: { sessionId: string; requestId: string; content: string; attachments?: Message['attachments'] }) => Promise<{ receipt: unknown; persisted: import('./displayOrder').PersistedMessageAck; duplicate: boolean }>
   chatResolveRetryContext: (payload: {
     sessionId: string
     failedAssistantMessageId: string
@@ -409,6 +409,7 @@ export type SpaceAssistantApi = {
       models: import('./domainTypes').ModelEntry[]
       thinkingEnabled: boolean
       thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
+      contextCompactionTriggerRatio?: number
       workDir: string
       apiKey: string
       llmServices: import('./domainTypes').LlmServiceProfile[]

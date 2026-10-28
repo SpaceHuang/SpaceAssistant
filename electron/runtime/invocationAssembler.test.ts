@@ -1989,22 +1989,29 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
 
   it('projects the SDK turn boundary into the existing Desktop compaction planner contract', async () => {
     const onContextReplacementPlan = vi.fn(async () => undefined)
-    const { ports } = assembleInvocation({
+    const signal = new AbortController().signal
+    const { ports, agentSdk } = assembleInvocation({
       requestId: 'req-boundary-return', sessionId: 'session-boundary-return', turnId: 'turn-boundary-return',
       model: 'test-model', providerRouteId: 'test-route', contextWindow: 128, locale: 'zh-CN', messages: [],
       toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(), onContextReplacementPlan
     })
     const required = { id: 'required-user', message: { role: 'user' as const, content: 'current request' } }
-    await ports.observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'test-route', request: {
+    const preparedRequestProjection = await ports.observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'test-route', request: {
       messages: [{ role: 'system', content: 'real system prompt' }, required.message], maxTokens: 64,
       tools: [{ name: 'read_file', description: 'read', inputSchema: { type: 'object' } }]
     }, currentUserMessageId: required.id, requiredUserMessage: required })
+    await ports.planContextReplacement?.({
+      signal, phase: 'preflight', invocationId: 'req-boundary-return', modelTurn: 1,
+      messages: [required.message], requestProjection: preparedRequestProjection?.requestProjection as never,
+      currentUserMessageId: required.id, requiredUserMessage: required
+    })
     const responseProjection = await ports.observer.prepareContextBoundaryEvidence?.({
       modelTurn: 1, finishReason: 'stop', usage: { type: 'usage', inputTokens: 100, outputTokens: 4 },
       message: { role: 'assistant', content: 'answer' }
     })
     await expect(ports.planContextReplacement?.({
+      signal,
       phase: 'turn-boundary',
       invocationId: 'req-boundary-return', modelTurn: 1,
       response: { role: 'assistant', content: 'answer' },
@@ -2012,7 +2019,9 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       usage: { inputTokens: 100, outputTokens: 4 }, requestProjection: responseProjection?.contextBoundaryEvidence,
       currentUserMessageId: required.id, requiredUserMessage: required
     })).resolves.toBeUndefined()
-    expect(onContextReplacementPlan).toHaveBeenCalledOnce()
+    expect(onContextReplacementPlan).toHaveBeenCalledTimes(2)
+    expect(onContextReplacementPlan).toHaveBeenNthCalledWith(1, expect.objectContaining({ signal, phase: 'preflight' }))
+    expect(onContextReplacementPlan).toHaveBeenNthCalledWith(2, expect.objectContaining({ signal, phase: 'turn-boundary' }))
     expect(onContextReplacementPlan).toHaveBeenCalledWith(expect.objectContaining({
       requestId: 'req-boundary-return:round:1', windowId: 'session-boundary-return', system: expect.stringContaining('real system prompt'),
       tools: [{ name: 'read_file', description: 'read', input_schema: { type: 'object' } }],

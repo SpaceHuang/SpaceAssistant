@@ -7,8 +7,9 @@ export type AssistantActivityItem =
   | { kind: 'text'; segmentIndex: number }
   | { kind: 'tool'; toolId: string }
   | { kind: 'skill'; hintId: string }
+  | { kind: 'system-operation'; operationId: string }
 
-const KIND_ORDER = { thinking: 0, skill: 1, text: 2, tool: 3 } as const
+const KIND_ORDER = { thinking: 0, skill: 1, text: 2, 'system-operation': 3, tool: 4 } as const
 
 function zipInterleaveLegacy(
   thinkingSegs: ReturnType<typeof thinkingSegmentsForRender>,
@@ -34,18 +35,20 @@ export function buildAssistantActivityTimeline(message: {
   thinking?: ThinkingData
   toolCalls?: ToolCallRecord[]
   skillHints?: SkillHintRecord[]
+  systemOperations?: import('./domainTypes').SystemOperationRecord[]
   timestamp: number
 }): AssistantActivityItem[] {
   const thinkingSegs = message.thinking ? thinkingSegmentsForRender(message.thinking) : []
   const textSegs = contentSegmentsForRender(message)
   const tools = message.toolCalls ?? []
   const skills = message.skillHints ?? []
-  if (thinkingSegs.length === 0 && textSegs.length === 0 && tools.length === 0 && skills.length === 0) return []
+  const systemOperations = message.systemOperations ?? []
+  if (thinkingSegs.length === 0 && textSegs.length === 0 && tools.length === 0 && skills.length === 0 && systemOperations.length === 0) return []
 
   const toolsHaveTimeline = tools.some((t) => t.startedAt != null)
   const textHasTimeline = Boolean(message.contentSegments?.length)
-  const skillsHaveTimeline = skills.length > 0
-  if (!toolsHaveTimeline && !textHasTimeline && !skillsHaveTimeline) {
+  const hasTimeline = skills.length > 0 || systemOperations.length > 0
+  if (!toolsHaveTimeline && !textHasTimeline && !hasTimeline) {
     return zipInterleaveLegacy(thinkingSegs, tools, textSegs, skills)
   }
 
@@ -66,6 +69,9 @@ export function buildAssistantActivityTimeline(message: {
       sortAt: hint.shownAt,
       order: i * 4 + KIND_ORDER.skill
     })
+  })
+  systemOperations.forEach((operation, i) => {
+    items.push({ kind: 'system-operation', operationId: operation.id, sortAt: operation.startedAt, order: i * 4 + KIND_ORDER['system-operation'] })
   })
   textSegs.forEach((seg, i) => {
     items.push({
@@ -95,6 +101,7 @@ export function buildAssistantActivityTimeline(message: {
     if (item.kind === 'thinking') return { kind: 'thinking', segmentIndex: item.segmentIndex }
     if (item.kind === 'skill') return { kind: 'skill', hintId: item.hintId }
     if (item.kind === 'text') return { kind: 'text', segmentIndex: item.segmentIndex }
+    if (item.kind === 'system-operation') return { kind: 'system-operation', operationId: item.operationId }
     return { kind: 'tool', toolId: item.toolId }
   })
 }

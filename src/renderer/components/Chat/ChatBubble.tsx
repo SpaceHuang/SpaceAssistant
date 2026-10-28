@@ -21,6 +21,7 @@ import { formatChatTimestamp } from './formatChatTimestamp'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallCard } from './ToolCallCard'
 import { SkillHintRow } from './SkillHintRow'
+import { SystemOperationRow } from './SystemOperationRow'
 import { formatToolLabel, formatToolLabelTitle } from './toolCallDisplay'
 import {
   formatStreamingElapsed,
@@ -78,6 +79,7 @@ type Props = {
 function activityItemKey(item: AssistantActivityItem): string {
   if (item.kind === 'tool') return `tool:${item.toolId}`
   if (item.kind === 'skill') return `skill:${item.hintId}`
+  if (item.kind === 'system-operation') return `system-operation:${item.operationId}`
   return `${item.kind}:${item.segmentIndex}`
 }
 
@@ -263,6 +265,7 @@ export const ChatBubble = memo(function ChatBubble({
     const textSegments = contentSegmentsForRender(message)
     const toolById = new Map((message.toolCalls ?? []).map((tc) => [tc.id, tc]))
     const skillById = new Map((message.skillHints ?? []).map((h) => [h.id, h]))
+    const systemOperationById = new Map((message.systemOperations ?? []).map((operation) => [operation.id, operation]))
     const timeline =
       message.role !== 'user' && message.role !== 'system'
         ? (displayActivity ?? message.activity ?? buildAssistantActivityTimeline(message))
@@ -273,6 +276,7 @@ export const ChatBubble = memo(function ChatBubble({
       textSegments,
       toolById,
       skillById,
+      systemOperationById,
       activityTimeline: timeline,
       segments: groupActivityTimeline(timeline, getTimestamp)
     }
@@ -282,6 +286,7 @@ export const ChatBubble = memo(function ChatBubble({
     message.contentSegments,
     message.toolCalls,
     message.skillHints,
+    message.systemOperations,
     message.role,
     message.timestamp,
     message.id,
@@ -296,13 +301,14 @@ export const ChatBubble = memo(function ChatBubble({
     textSegments,
     toolById,
     skillById,
+    systemOperationById,
     activityTimeline,
     segments: activitySegments
   } = activityModel
 
   const batchProgressCtx = useMemo(
-    () => ({ streaming, thinkingSegments, toolById }),
-    [streaming, thinkingSegments, toolById]
+    () => ({ streaming, thinkingSegments, toolById, systemOperationById }),
+    [streaming, thinkingSegments, toolById, systemOperationById]
   )
 
   const handleArchiveToWiki = actions
@@ -406,6 +412,11 @@ export const ChatBubble = memo(function ChatBubble({
           <SkillHintRow text={hint.text} />
         </div>
       )
+    }
+    if (item.kind === 'system-operation') {
+      const operation = systemOperationById.get(item.operationId)
+      if (!operation) return null
+      return <div key={key} className="chat-system-track"><SystemOperationRow operation={operation} /></div>
     }
     const tc = toolById.get(item.toolId)
     if (!tc) return null

@@ -463,6 +463,7 @@ async function runButlerModelTurn(
   const sessionStorage = args.sessionStorage
   const session = sessionStorage.queries.readSession(args.sessionId)
   if (!session) return { ok: false, error: 'BUTLER_SESSION_MISSING' }
+  if (!args.assistantMessageId) return { ok: false, error: 'BUTLER_ASSISTANT_MESSAGE_REQUIRED' }
   if (sessionStorage.ensureLedgerReady && !(await sessionStorage.ensureLedgerReady(args.sessionId))) {
     return { ok: false, error: 'SESSION_LEDGER_BLOCKED' }
   }
@@ -526,6 +527,8 @@ async function runButlerModelTurn(
     taskId: args.runConfig.taskId,
     sessionId: args.sessionId,
     sessionCreatedAt: session.createdAt,
+    assistantMessageId: args.assistantMessageId,
+    sessionStorage,
     failClosedCriticalEvents: true
   })
   const hostedTurnId = args.acceptedTurn.turnId

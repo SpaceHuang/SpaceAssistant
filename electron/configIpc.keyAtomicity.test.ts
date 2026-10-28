@@ -73,6 +73,22 @@ function makeContext(db: AppIpcContext['db']): AppIpcContext {
 }
 
 describe('config:set API Key transaction boundary', () => {
+  it('uses the 80% default and rejects out-of-range compaction thresholds before persisting', async () => {
+    const temp = createTempDatabase('sa-config-compaction-threshold-')
+    cleanup = temp.cleanup
+    const ipc = makeIpc()
+    registerConfigIpc(ipc as unknown as IpcMain, makeContext(temp.db))
+    const read = ipc.getHandler('config:get')!
+    const save = ipc.getHandler('config:set')!
+    expect(await read()).toMatchObject({ contextCompactionTriggerRatio: 0.8 })
+    for (const value of [0.55, 0.95]) {
+      await expect(save({}, { contextCompactionTriggerRatio: value })).rejects.toThrow()
+      expect(await read()).toMatchObject({ contextCompactionTriggerRatio: 0.8 })
+    }
+    await save({}, { contextCompactionTriggerRatio: 0.6 })
+    expect(await read()).toMatchObject({ contextCompactionTriggerRatio: 0.6 })
+  })
+
   let cleanup: (() => void) | undefined;
 
   afterEach(() => {

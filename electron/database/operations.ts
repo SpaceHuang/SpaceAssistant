@@ -1577,7 +1577,7 @@ export function getContextHistorySummaryBaseline(
   for (const row of rows) {
     const attachments = deserializeAttachmentsFromDb(row.attachments)
     const imageTokens = row.role === 'user' && attachments?.length
-      ? estimateTokensFromImageAttachments(attachments)
+      ? estimateTokensFromImageAttachments(attachments.filter((attachment) => 'stagingKey' in attachment))
       : 0
     const thinkingTokens = estimateThinkingTokensFromMessage(deserializeThinkingFromDb(row.thinking))
     if (imageTokens <= 0 && thinkingTokens <= 0) continue

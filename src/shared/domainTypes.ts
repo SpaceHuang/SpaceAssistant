@@ -855,6 +855,21 @@ export interface ChatImageAttachment {
   height?: number
 }
 
+/** 可回看的外部 IM 附件元数据；不含临时缓存路径或凭据。 */
+export interface ExternalMessageAttachment {
+  id: string
+  source: 'feishu'
+  kind: 'image' | 'file'
+  fileName: string
+  mimeType?: string
+}
+
+export type MessageAttachment = ChatImageAttachment | ExternalMessageAttachment
+
+export function isChatImageAttachment(attachment: MessageAttachment): attachment is ChatImageAttachment {
+  return 'stagingKey' in attachment && typeof attachment.stagingKey === 'string'
+}
+
 export interface Message {
   id: string
   sessionId: string
@@ -862,7 +877,7 @@ export interface Message {
   content: string
   timestamp: number
   /** 用户消息附带的图片元数据（无 base64） */
-  attachments?: ChatImageAttachment[]
+  attachments?: MessageAttachment[]
   /**
    * 该条用户消息的图片 block 已成功送达 API。
    * 为 true 时后续 build 仅输出文本占位，不再 re-hydrate base64。
@@ -871,6 +886,7 @@ export interface Message {
   toolUse?: ToolUseData
   /** 新版内置工具调用记录；优先于 toolUse 展示 */
   toolCalls?: ToolCallRecord[]
+  systemOperations?: SystemOperationRecord[]
   thinking?: ThinkingData
   /** 助手正文分段（与 thinking / toolCalls 按时间线交错展示） */
   contentSegments?: ContentSegment[]
@@ -881,6 +897,17 @@ export interface Message {
   status: MessageStatus
   schemaVersion: number
 }
+
+export type SystemOperationRecord = Readonly<{
+  id: string
+  kind: 'context-compaction'
+  status: 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled'
+  startedAt: number
+  completedAt?: number
+  beforePercent?: number
+  afterPercent?: number
+  reason?: 'SUMMARY_TIMEOUT' | 'SUMMARY_INVALID' | 'SUMMARY_UNAVAILABLE' | 'SUMMARY_FAILED' | 'NO_GAIN' | 'UNCOMPRESSIBLE' | 'LATE_DISCARDED'
+}>
 
 export interface ModelEntry {
   /** P4（偏差 6）：模型能力标记——显式 false 表示不支持 thinking（effort 将被降级为 off 并落审计）。缺省视为支持。 */
@@ -944,6 +971,8 @@ export interface AppConfig {
   thinkingEnabled: boolean
   /** 全局 Thinking 强度（默认值提供者）；会话可按 Session.thinkingEffort 覆盖 */
   thinkingEffort: import('./agent/invocation').AgentReasoningEffort
+  /** 自动上下文压缩的触发比例（0.6–0.9）；缺省使用共享默认值 */
+  contextCompactionTriggerRatio: number
   workDir: string
   workDirProfiles: WorkDirProfile[]
   activeWorkDirProfileId: string

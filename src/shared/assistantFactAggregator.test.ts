@@ -14,6 +14,17 @@ function apply(events: AssistantFactEvent[]) {
 }
 
 describe('AssistantFactAggregator', () => {
+  it('keeps one system-operation timeline item while updating its terminal state', () => {
+    const running = { id: 'compact-1', kind: 'context-compaction' as const, status: 'running' as const, startedAt: 5 }
+    const succeeded = { ...running, status: 'succeeded' as const, completedAt: 20, beforePercent: 82, afterPercent: 41 }
+    const state = apply([
+      { type: 'system-operation-updated', operation: running },
+      { type: 'system-operation-updated', operation: succeeded }
+    ])
+    expect(state.systemOperations).toEqual([succeeded])
+    expect(state.activity).toEqual([{ kind: 'system-operation', operationId: 'compact-1' }])
+  })
+
   it('用权威最终正文替换流式草稿，避免完成时重复追加', () => {
     const result = apply([
       { type: 'content-delta', text: 'partial' },

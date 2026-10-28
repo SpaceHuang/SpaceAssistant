@@ -137,7 +137,10 @@
       "thinkingHint": "Only applies to models that support extended thinking",
       "effortLabel": "Thinking effort",
       "effortAria": "Choose the global thinking effort",
-      "effortHint": "For models that overthink, lower the default effort here; you can also adjust it per session in the chat."
+      "effortHint": "For models that overthink, lower the default effort here; you can also adjust it per session in the chat.",
+      "compactionTriggerLabel": "Automatic compaction threshold",
+      "compactionTriggerAria": "Automatic compaction threshold (percent)",
+      "compactionTriggerHint": "The system attempts a handoff summary when context use reaches this level. Range: 60%–90%; default: 80%."
     }
   },
   "llmService": {

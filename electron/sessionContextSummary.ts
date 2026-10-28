@@ -2,6 +2,22 @@ import { createAnthropicClient } from './anthropicClientFactory'
 import type { SessionContextRecoveryFacts, SessionContextSummary, SessionContextSummaryInput } from './sessionContextCompaction'
 
 const MAX_SUMMARY_FIELD_LENGTH = 2_000
+export const SESSION_CONTEXT_SUMMARY_PROMPT_VERSION = 'checkpoint-v1'
+export const SESSION_CONTEXT_SUMMARY_SCHEMA_VERSION = 'seven-fields-v1'
+
+export class SessionContextSummaryCache {
+  private readonly values = new Map<string, SessionContextSummary>()
+
+  constructor(private readonly maxEntries = 256) {}
+
+  get(key: string): SessionContextSummary | undefined { return this.values.get(key) }
+
+  settle(key: string, summary: SessionContextSummary, outcome: 'committed' | 'no-gain' | 'stale' | 'busy' | 'no-op' | 'uncompressible' | 'commit-uncertain' | 'cancelled' | 'failed'): void {
+    if (outcome !== 'committed' && outcome !== 'no-gain') return
+    this.values.set(key, summary)
+    if (this.values.size > this.maxEntries) this.values.delete(this.values.keys().next().value!)
+  }
+}
 
 function buildSystemPrompt(locale: 'zh-CN' | 'en-US'): string {
   if (locale === 'zh-CN') {
@@ -18,6 +34,34 @@ function parseSummary(value: unknown): SessionContextSummary {
     if (typeof parsed[key] !== 'string' || !parsed[key].trim() || parsed[key].length > MAX_SUMMARY_FIELD_LENGTH) throw new Error('SESSION_CONTEXT_SUMMARY_INVALID')
   }
   return { task: parsed.task!.trim(), completed: parsed.completed!.trim(), decisions: parsed.decisions!.trim(), constraints: parsed.constraints!.trim(), pending: parsed.pending!.trim(), blockers: parsed.blockers!.trim(), nextStep: parsed.nextStep!.trim() }
+}
+
+/** Waits for summary work only while the parent turn remains active; late service responses are discarded. */
+export async function waitForSessionContextSummary<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work
+  if (signal.aborted) throw new Error('SESSION_CONTEXT_SUMMARY_CANCELLED')
+  let onAbort: (() => void) | undefined
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(new Error('SESSION_CONTEXT_SUMMARY_CANCELLED'))
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    const value = await Promise.race([work, cancelled])
+    if (signal.aborted) throw new Error('SESSION_CONTEXT_SUMMARY_CANCELLED')
+    return value
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort)
+  }
+}
+
+export function sessionContextSummaryCacheKey(input: {
+  sessionId: string
+  model: string
+  serviceId: string
+  locale: 'zh-CN' | 'en-US'
+  messages: SessionContextSummaryInput
+}): string {
+  return JSON.stringify([input.sessionId, input.model, input.serviceId, input.locale, SESSION_CONTEXT_SUMMARY_PROMPT_VERSION, SESSION_CONTEXT_SUMMARY_SCHEMA_VERSION, input.messages])
 }
 
 export async function summarizeSessionContext(input: {

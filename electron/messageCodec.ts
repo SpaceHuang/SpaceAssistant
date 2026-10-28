@@ -1,5 +1,5 @@
 import { sanitizeCapabilityParamsForDisplay } from '../src/shared/capabilityParamSanitize'
-import type { ContentSegment, ChatImageAttachment, Message, SkillHintRecord, ThinkingData, ToolCallRecord, ToolCallResultPersisted, ToolUseData } from '../src/shared/domainTypes'
+import type { ContentSegment, Message, SkillHintRecord, ThinkingData, ToolCallRecord, ToolCallResultPersisted, ToolUseData } from '../src/shared/domainTypes'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { createCorruptedToolCallPlaceholder } from './database/streamingCleanup'
 import type { McpResultDisplay } from '../src/shared/mcpToolResultDisplay'
@@ -199,15 +199,15 @@ export function deserializeSkillHintsFromDb(raw: string | null | undefined): Ski
   }
 }
 
-export function serializeAttachmentsForDb(attachments: ChatImageAttachment[] | undefined): string | null {
+export function serializeAttachmentsForDb(attachments: Message['attachments']): string | null {
   if (!attachments?.length) return null
   return JSON.stringify(attachments)
 }
 
-export function deserializeAttachmentsFromDb(raw: string | null | undefined): ChatImageAttachment[] | undefined {
+export function deserializeAttachmentsFromDb(raw: string | null | undefined): Message['attachments'] {
   if (!raw) return undefined
   try {
-    const arr = JSON.parse(raw) as ChatImageAttachment[]
+    const arr = JSON.parse(raw) as Message['attachments']
     return Array.isArray(arr) ? arr : undefined
   } catch {
     return undefined

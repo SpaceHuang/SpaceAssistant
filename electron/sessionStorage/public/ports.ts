@@ -67,6 +67,7 @@ export type SessionHistoryRecoveryOptions = Readonly<{
 /** Business commands for one session storage instance; implementation details stay behind the adapter. */
 export interface SessionCommands {
   appendNonTurnMessage(message: Message): MessageEntry
+  updateStreamingMessage(messageId: string, patch: Partial<Message>): MessageEntry | null
   createSession(input: {
     name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number
     workDirProfileId?: string; fixedWorkDir?: string; ownership?: SessionOwnership; visibility?: SessionVisibility

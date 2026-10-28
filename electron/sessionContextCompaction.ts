@@ -4,25 +4,13 @@ import { computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectRepl
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { planUserCompactionSurface } from '../src/shared/turnBoundaryCompaction'
 import type { ContextFrame, ContextTransformationProof, JsonValue, SessionContextAdapter } from '../packages/agent-sdk/src/context'
+import { safeSummaryContentText } from '../src/shared/safeSummaryText'
 
 export type SessionContextSurfaceMessage = { id?: string; role: 'user' | 'assistant'; content: unknown; [key: string]: unknown }
 type SurfaceMessage = SessionContextSurfaceMessage
 export type SessionContextCompactionResult =
   | { status: 'committed'; compactionId: string; windowId: string; outputSurfaceFingerprint: string }
   | { status: 'no-op' | 'uncompressible' | 'busy' | 'failed' | 'stale' }
-
-function safeSummaryContent(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(safeSummaryContent)
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    if (record.type === 'image' || record.type === 'image_url') return { type: record.type, note: 'image payload omitted from text summary' }
-    return Object.fromEntries(Object.entries(record).map(([key, item]) => [
-      key,
-      ['data', 'base64', 'bytes'].includes(key.toLowerCase()) ? '[binary payload omitted]' : safeSummaryContent(item)
-    ]))
-  }
-  return value
-}
 
 export type SessionContextSummary = { task: string; completed: string; decisions: string; constraints: string; pending: string; blockers: string; nextStep: string }
 export type SessionContextSummaryInput = readonly { role: SurfaceMessage['role']; content: string }[]
@@ -31,9 +19,24 @@ export type SessionContextRecoveryFacts = Readonly<{
   toolOutcomes: readonly Readonly<{ id: string; toolName?: string; outcome: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched' }>[]
 }>
 
+export function createSessionContextCheckpointMessage(id: string, summary: SessionContextSummary, recoveryFacts: SessionContextRecoveryFacts = { unresolvedEffects: [], toolOutcomes: [] }) {
+  return {
+    id,
+    role: 'user' as const,
+    content: JSON.stringify({
+      kind: 'context_checkpoint', ...summary,
+      unresolvedEffectIds: recoveryFacts.unresolvedEffects.map(({ id: effectId }) => effectId),
+      toolOutcomes: recoveryFacts.toolOutcomes.slice(-20)
+    })
+  }
+}
+
+export function isSessionContextCheckpointWorthCompacting(message: { content: unknown }, shadowedTokenCount: number): boolean {
+  return estimateTokensFromUtf8Text(JSON.stringify(message)) < shadowedTokenCount
+}
+
 function textOf(message: SurfaceMessage): string {
-  if (typeof message.content === 'string') return message.content
-  return JSON.stringify(safeSummaryContent(message.content)) ?? ''
+  return safeSummaryContentText(message.content)
 }
 
 export async function compactSessionContext(input: {
@@ -83,9 +86,7 @@ export async function compactSessionContext(input: {
       const value = checkpointSummary[key as keyof SessionContextSummary]
       return typeof value === 'string' && Boolean(value.trim()) && value.length <= 2_000
     })) return { status: 'failed' }
-    const toolOutcomes = (input.recoveryFacts?.toolOutcomes ?? []).slice(-20)
-    const unresolvedEffectIds = (input.recoveryFacts?.unresolvedEffects ?? []).map(({ id }) => id)
-    checkpointMessage.content = JSON.stringify({ kind: 'context_checkpoint', ...checkpointSummary, unresolvedEffectIds, toolOutcomes })
+    checkpointMessage.content = createSessionContextCheckpointMessage(checkpointId, checkpointSummary, input.recoveryFacts).content
     const checkpointTokens = estimateTokensFromUtf8Text(JSON.stringify(checkpointMessage))
     if (checkpointTokens >= shadowedTokenCount) return { status: 'no-op' }
     const retainedTokens = items.filter((item) => !shadowedIds.has(item.id)).reduce((sum, item) => sum + item.tokens, 0)

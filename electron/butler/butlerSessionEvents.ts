@@ -3,10 +3,13 @@ import type { SessionEventInput } from '../sessionEvents'
 import { constants } from 'node:fs'
 import { access, lstat, mkdir, realpath } from 'node:fs/promises'
 import path from 'node:path'
+import { reduceAssistantFact, type AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
+import type { Message } from '../../src/shared/domainTypes'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 
 /**
  * 管家的无窗口事件出口（P1 出口契约的 automation 装配）：
- * UI 事实（invocation.events.onFact）→ no-op（无窗口可投）；
+ * UI 事实（invocation.events.onFact）→ assistant 消息账本（供自动化会话回看）；
  * 台账（emitSessionEvent）→ 照常落盘（重开窗口可回看，P1 行为语义）。
  */
 
@@ -15,8 +18,8 @@ export type ButlerSessionEvents = {
   sink: SessionEventSink
   /** runToolChatSession 的 invocation.events.onSessionEvent 实现。 */
   emitSessionEvent: (event: SessionEventInput) => Promise<void>
-  /** runToolChatSession 的 invocation.events.onFact 实现（no-op 是契约的一部分）。 */
-  emitFactEvent: () => void
+  /** runToolChatSession 的 invocation.events.onFact 实现。 */
+  emitFactEvent: (event: AssistantFactEvent) => void
   /** runToolChatSession.onFileTreeChanged 实现（管家无文件树 UI）。 */
   onFileTreeChanged: () => void
 }
@@ -26,6 +29,8 @@ export function createButlerSessionEvents(args: {
   taskId: string
   sessionId: string
   sessionCreatedAt: number
+  assistantMessageId: string
+  sessionStorage: SessionStorage
   failClosedCriticalEvents?: boolean
 }): Promise<ButlerSessionEvents> {
   const automationRoot = path.resolve(args.userDataDir, 'automation-sessions')
@@ -68,7 +73,14 @@ export function createButlerSessionEvents(args: {
   return {
     sink,
     emitSessionEvent,
-    emitFactEvent: () => undefined,
+    emitFactEvent: (event) => {
+      const current = args.sessionStorage.queries.readMessage({ sessionId: args.sessionId, messageId: args.assistantMessageId })
+      if (!current) throw new Error('AUTOMATION_ASSISTANT_MESSAGE_MISSING')
+      const next = reduceAssistantFact(current, event, { now: Date.now(), createId: () => crypto.randomUUID() })
+      if (next !== current && args.sessionStorage.commands.updateStreamingMessage(args.assistantMessageId, next) === null) {
+        throw new Error('AUTOMATION_ASSISTANT_MESSAGE_PROJECTION_FAILED')
+      }
+    },
     onFileTreeChanged: () => undefined
   }
   })

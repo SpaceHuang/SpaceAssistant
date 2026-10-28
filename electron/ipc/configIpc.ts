@@ -5,6 +5,7 @@ import path from 'path'
 import type { AppIpcContext } from '../appIpc'
 import type { IpcMain } from 'electron'
 import { AppConfig, LlmServiceProfile, ModelEntry, SkillsConfig, ToolsConfig } from '../../src/shared/domainTypes'
+import { CONTEXT_COMPACTION_TRIGGER_RATIO } from '../../src/shared/requestContext'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../src/shared/builtinToolDefinitions'
 import { CONFIG_KEYS, readAppLocale, stripPlanConfigFromDbIfNeeded, readSkillsConfig, readWikiConfig } from './ipcShared'
 import { mergeSkillsConfig, mergeToolsConfig, stripPlanFieldsFromAppConfig } from '../../src/shared/domainTypes'
@@ -117,6 +118,13 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         getConfigValue(ctx.db, CONFIG_KEYS.thinkingEffort),
         getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled)
       ),
+      contextCompactionTriggerRatio: (() => {
+        const raw = getConfigValue(ctx.db, CONFIG_KEYS.contextCompactionTriggerRatio)
+        const value = raw === undefined ? CONTEXT_COMPACTION_TRIGGER_RATIO.DEFAULT : Number(raw)
+        return Number.isFinite(value) && value >= CONTEXT_COMPACTION_TRIGGER_RATIO.MIN && value <= CONTEXT_COMPACTION_TRIGGER_RATIO.MAX
+          ? value
+          : CONTEXT_COMPACTION_TRIGGER_RATIO.DEFAULT
+      })(),
       workDir: wd,
       maxParallelChatSessions: clampMaxParallelChatSessions(maxParallelRaw ? Number(maxParallelRaw) : undefined),
       tools,
@@ -155,6 +163,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         models: AppConfig['models']
         thinkingEnabled: boolean
         thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort
+        contextCompactionTriggerRatio?: number
         workDir: string
         apiKey: string
         llmServices: LlmServiceProfile[]
@@ -180,6 +189,9 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       // §8.4 / 评审 C2:档位校验前置到任何写入之前,非法值整体拒绝、不产生部分写入
       if (payload.thinkingEffort !== undefined && !isThinkingEffort(payload.thinkingEffort)) {
         throw new Error(`无效的 Thinking 强度档位:${String(payload.thinkingEffort)}(允许 ${THINKING_EFFORT_LEVELS.join(' / ')})`)
+      }
+      if (payload.contextCompactionTriggerRatio !== undefined && (typeof payload.contextCompactionTriggerRatio !== 'number' || !Number.isFinite(payload.contextCompactionTriggerRatio) || payload.contextCompactionTriggerRatio < CONTEXT_COMPACTION_TRIGGER_RATIO.MIN || payload.contextCompactionTriggerRatio > CONTEXT_COMPACTION_TRIGGER_RATIO.MAX)) {
+        throw new Error(`无效的自动压缩触发比例（允许 ${CONTEXT_COMPACTION_TRIGGER_RATIO.MIN}–${CONTEXT_COMPACTION_TRIGGER_RATIO.MAX}）`)
       }
       const atomicKeySave = payload.llmServices !== undefined &&
         Object.values(payload.llmServiceKeys ?? {}).some((key) => typeof key === 'string' && key.trim().length > 0)
@@ -289,6 +301,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       if (payload.thinkingEnabled !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled, String(payload.thinkingEnabled))
       // 评审 C1:旧键仅为旧客户端兼容保留一个发布周期;新键 thinkingEffort 优先,迁移后此处可删
       if (payload.thinkingEffort !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEffort, payload.thinkingEffort)
+      if (payload.contextCompactionTriggerRatio !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.contextCompactionTriggerRatio, String(payload.contextCompactionTriggerRatio))
       if (payload.workDir !== undefined && payload.workDirProfiles === undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.workDir, payload.workDir)
         if (path.resolve(payload.workDir) !== path.resolve(previousWorkDir)) workDirAuthorizationChanged = true

@@ -28,6 +28,7 @@ export type ActivityDisplayItem =
   | { kind: 'thinking'; segmentIndex: number }
   | { kind: 'tool'; toolId: string }
   | { kind: 'skill'; hintId: string }
+  | { kind: 'system-operation'; operationId: string }
 
 export type TurnDisplay = {
   turnId: string
@@ -36,7 +37,7 @@ export type TurnDisplay = {
   version: number
   lifecycle: 'running' | 'awaiting-confirmation' | 'completed' | 'failed'
   outcome?: 'completed' | 'parked' | 'failed' | 'cancelled' | 'timed-out' | 'interrupted' | 'commit-uncertain'
-  message: Pick<Message, 'id' | 'content' | 'thinking' | 'skillHints'> & {
+  message: Pick<Message, 'id' | 'content' | 'thinking' | 'skillHints' | 'systemOperations'> & {
     contentSegments: Array<{ segmentIndex: number; start: number; end: number }>
     toolCalls: Array<Pick<ToolCallRecord, 'id' | 'toolName' | 'status' | 'startedAt' | 'completedAt' | 'duration'> & { display: ToolCallDisplaySummary }>
     activity: ActivityDisplayItem[]
@@ -193,7 +194,7 @@ export function toTurnDisplay(input: { turnId: string; requestId: string; versio
   return {
     turnId: input.turnId, sessionId: message.sessionId, requestId: input.requestId, version: input.version, lifecycle: input.lifecycle, ...(input.outcome ? { outcome: input.outcome } : {}),
     message: {
-      id: message.id, content: message.content, ...(message.thinking ? { thinking: message.thinking } : {}), ...(message.skillHints ? { skillHints: message.skillHints } : {}),
+      id: message.id, content: message.content, ...(message.thinking ? { thinking: message.thinking } : {}), ...(message.skillHints ? { skillHints: message.skillHints } : {}), ...(message.systemOperations ? { systemOperations: message.systemOperations } : {}),
       contentSegments: contentRanges.map((range, segmentIndex) => ({ segmentIndex, ...range })),
       toolCalls: (message.toolCalls ?? []).map((tool) => ({ id: tool.id, toolName: tool.toolName, status: tool.status, ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}), ...(tool.completedAt !== undefined ? { completedAt: tool.completedAt } : {}), ...(tool.duration !== undefined ? { duration: tool.duration } : {}), display: toolDisplay(tool, `${message.sessionId}:${input.turnId}`) })),
       activity

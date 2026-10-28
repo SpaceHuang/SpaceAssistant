@@ -28,12 +28,14 @@ export function createAgentSdkDesktopObserver(input: {
   lane?: ExecutionLane
   model?: string
   contextWindow?: number
+  contextCompactionTriggerRatio?: number
   windowId?: string
   sessionEventLocation?: { workDir: string; sessionId: string; createdAt: number }
   turnIdForRetry?: string
   stageAssistantContentUntilTurnFinished?: boolean
   onRemoteTextActivity?(text: string): void
   assistantMessageId?: string
+  onContextReplacementSettled?: NonNullable<AgentTurnObserver['onContextReplacementSettled']>
   onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
   emitSessionEvent?(event: SessionEventInput): void | Promise<void>
   emitFactEvent?(event: AssistantFactEvent): void
@@ -225,6 +227,7 @@ export function createAgentSdkDesktopObserver(input: {
       provider: 'anthropic',
       model: input.model ?? request.routeId,
       contextWindow: input.contextWindow,
+      triggerRatio: input.contextCompactionTriggerRatio,
       maxTokensEffective: request.request.maxTokens,
       surfaceSnapshot: {
         surfaceTokens: header.surfaceSnapshot.surfaceTokens,
@@ -313,6 +316,7 @@ export function createAgentSdkDesktopObserver(input: {
       provider: requestContext.context.provider,
       model: requestContext.context.model,
       contextWindow: contextWindow.tokens,
+      triggerRatio: input.contextCompactionTriggerRatio,
       maxTokensEffective: requestContext.context.maxTokensEffective,
       surfaceSnapshot: finalHeader.surfaceSnapshot,
       contextUsage: projection,
@@ -348,6 +352,7 @@ export function createAgentSdkDesktopObserver(input: {
   }
 
   return {
+    ...(input.onContextReplacementSettled ? { onContextReplacementSettled: input.onContextReplacementSettled } : {}),
     criticalModelRequestProjection: true,
     criticalModelResponseProjection: true,
     criticalModelAttemptUsageProjection: true,

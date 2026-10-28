@@ -111,6 +111,7 @@ export const CONFIG_KEYS = {
   models: 'config.models',
   thinkingEnabled: 'config.thinkingEnabled',
   thinkingEffort: 'config.thinkingEffort',
+  contextCompactionTriggerRatio: 'config.contextCompactionTriggerRatio',
   workDir: 'config.workDir',
   apiKeyEnc: LLM_SERVICE_CONFIG_KEYS.apiKeyEnc,
   llmServices: LLM_SERVICE_CONFIG_KEYS.llmServices,

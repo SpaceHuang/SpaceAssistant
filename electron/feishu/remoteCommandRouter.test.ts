@@ -1107,6 +1107,30 @@ describe('RemoteCommandRouter busy guard', () => {
       .toMatchObject({ lane: 'feishu', requestId: agentArgs.requestId })
   })
 
+  it('persists Feishu attachment metadata on the user message without persisting the temporary file path', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Feishu attachment ledger' })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '请看附件' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: '已查看', pendingConfirm: false, ok: true })
+    const attachmentPath = path.join(tempDir(), 'private-cache-photo.png')
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `feishu-attachment-${++turnSequence}` } })
+    const { router } = makeRouter(db, manager, { turnRuntime: runtime })
+
+    await router.handleInbound(makeInbound({ messageId: 'feishu-attachment-ledger', attachments: [{
+      kind: 'image', localPath: attachmentPath, fileName: '../photo.png', mimeType: 'image/png'
+    }] }))
+
+    const agentArgs = mockRunFeishuRemoteAgent.mock.calls[0]?.[0] as {
+      sessionId: string; acceptedTurn: { currentUserMessageId: string }; remoteContext: { feishuAttachments: Array<{ localPath: string }> }
+    }
+    const userMessage = createSqliteSessionStorage(db).queries.readMessage({ sessionId: agentArgs.sessionId, messageId: agentArgs.acceptedTurn.currentUserMessageId })
+    expect(userMessage?.attachments).toEqual([{ id: 'attachment-1', source: 'feishu', kind: 'image', fileName: 'photo.png', mimeType: 'image/png' }])
+    expect(JSON.stringify(userMessage?.attachments)).not.toContain(attachmentPath)
+    expect(agentArgs.remoteContext.feishuAttachments).toEqual([expect.objectContaining({ localPath: attachmentPath })])
+  })
+
   it('Feishu wake replay validates persisted Track attribution and forwards the scoped view', async () => {
     const { db, manager } = setup()
     const session = createSession(db, { name: 'Feishu Track wake' })

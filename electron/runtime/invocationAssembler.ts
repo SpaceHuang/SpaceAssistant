@@ -117,6 +117,7 @@ export interface AgentInvocationMaterials {
   providerRouteId?: string
   contextWindow?: number
   contextWindowTrusted?: boolean
+  contextCompactionTriggerRatio?: number
   baseUrl?: string
   messages: readonly unknown[]
   system?: string
@@ -195,6 +196,7 @@ export interface AgentInvocationMaterials {
   sessionEventLocation?: { workDir: string; sessionId: string; createdAt: number }
   contextMeter?: import('../toolChatLoop').RunToolChatSessionArgs['contextMeter']
   onContextReplacementPlan?: import('../toolChatLoop').HostedContextReplacementPlanner
+  onContextReplacementSettled?: NonNullable<import('../../packages/agent-sdk/src/turn').AgentTurnObserver['onContextReplacementSettled']>
   contextProjectionCommitter?: import('../../packages/agent-sdk/src/context').ContextProjectionCommitter
   /** Runtime facts needed by Hosted SDK gate evaluation that are resolved at tool-call time. */
   resolveAgentSdkGateSupplement?: (input: { binding: PermitBinding; toolName: string; toolInput: Record<string, unknown>; signal?: AbortSignal }) => Promise<Pick<ToolCallGateArgs, 'dangerAssessment' | 'currentPageUrl' | 'remoteBudgetState' | 'audit'> | undefined> | Pick<ToolCallGateArgs, 'dangerAssessment' | 'currentPageUrl' | 'remoteBudgetState' | 'audit'> | undefined
@@ -328,6 +330,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
       beforeDispatchLease?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
+      planContextReplacement?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['planContextReplacement']
       refreshExecutionContext?: (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>
     }): ReturnType<typeof createHostedAgentTurnHost>
     createHostedTurnRuntime(input: {
@@ -1478,6 +1481,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       maxToolRounds?: number
       confirmationAdapter?: Omit<Parameters<typeof createAgentSdkConfirmationPort>[0], 'onApproved' | 'publish' | 'createChannel'> & Partial<Pick<Parameters<typeof createAgentSdkConfirmationPort>[0], 'publish' | 'createChannel'>> & { agentChannelFactory?: NonNullable<import('../confirmation/channels').ResolveConfirmChannelArgs['agentChannelFactory']> }
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
+      planContextReplacement?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['planContextReplacement']
     }) => {
       const runtime = getDefaultAgentRuntime()
       const baseRegistry = input.registry ?? runtime.builtinRegistry as unknown as TypedToolRegistry
@@ -1579,6 +1583,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         policy,
         confirmation,
         recoverProviderAttempt: input.recoverProviderAttempt,
+        ...(input.planContextReplacement ? { planContextReplacement: input.planContextReplacement } : {}),
         ...(input.refreshExecutionContext ? { refreshExecutionContext: input.refreshExecutionContext } : {}),
         ...(materials.sessionEventLocation ? { sessionLedgerForInvocationTerminal: (terminal) => ({
           location: materials.sessionEventLocation,
@@ -1635,6 +1640,23 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   }
 
   const ports = {
+    ...(materials.onContextReplacementPlan !== undefined ? { planContextReplacement: createAgentSdkContextReplacementPlanner({
+      preflight: createAgentSdkPreflightAdapter({
+        compact: async (input) => materials.onContextReplacementPlan!({ ...input, signal: input.signal, phase: 'preflight', messages: input.messages as never })
+      }),
+      boundary: createAgentSdkBoundaryReplacementAdapter({
+        compact: async (input) => {
+          const projection = input.plannerInputs
+          if (!projection) return undefined
+          return materials.onContextReplacementPlan!({
+            signal: input.signal, phase: 'turn-boundary', requestId: projection.requestId, windowId: projection.windowId,
+            system: projection.system, tools: projection.tools, surfaceSnapshot: projection.surfaceSnapshot,
+            messages: input.legacyMessages as never, budget: projection.budget, contextUsage: projection.contextUsage,
+            toolExecutionCheckpoint: projection.toolExecutionCheckpoint, requiredSurfaceSet: projection.requiredSurfaceSet
+          })
+        }
+      })
+    }) } : {}),
     toolExecutionConcurrency: materials.toolExecutionConcurrency ?? (() => {
       try { return getDefaultAgentRuntime().toolExecutionConcurrency } catch { return 2 }
     })(),
@@ -1709,6 +1731,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       lane: materialsLane,
       model: materials.model,
       contextWindow: materials.contextWindow,
+      contextCompactionTriggerRatio: materials.contextCompactionTriggerRatio,
       getWorkDirSnapshot: () => {
         const snapshot = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
         return { workDir: snapshot.rootPath ?? materials.workDir, profileId: snapshot.profileId ?? '', key: snapshot.key ?? '', revision: snapshot.revision ?? 0 }
@@ -1719,6 +1742,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       stageAssistantContentUntilTurnFinished: materials.remoteContext !== undefined,
       onRemoteTextActivity: materials.onRemoteTextActivity,
       assistantMessageId: materials.assistantMessageId,
+      onContextReplacementSettled: materials.onContextReplacementSettled,
       emitSessionEvent: materials.emitSessionEvent,
       onProviderRetry: (retry) => materials.emitSessionEvent({
         type: 'request_retry',
@@ -1798,7 +1822,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     ...(materials.contextMeter !== undefined ? { contextMeter: materials.contextMeter } : {}),
     ...(materials.onContextReplacementPlan !== undefined ? { planContextReplacement: createAgentSdkContextReplacementPlanner({
       preflight: createAgentSdkPreflightAdapter({
-      compact: async (input) => materials.onContextReplacementPlan!({ ...input, phase: 'preflight', messages: input.messages as never })
+      compact: async (input) => materials.onContextReplacementPlan!({ ...input, signal: input.signal, phase: 'preflight', messages: input.messages as never })
       }),
       boundary: createAgentSdkBoundaryReplacementAdapter({
       compact: async (input) => {
@@ -1807,6 +1831,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         const system = projection.system
         const messages = input.legacyMessages
         return materials.onContextReplacementPlan!({
+          signal: input.signal,
+          phase: 'turn-boundary',
           requestId: projection.requestId, windowId: projection.windowId, system, tools: projection.tools,
           surfaceSnapshot: projection.surfaceSnapshot, messages: messages as never, budget: projection.budget,
           contextUsage: projection.contextUsage,

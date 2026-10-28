@@ -155,6 +155,7 @@ function createHostedInvocationHistory(
 export type RunToolChatSessionArgs = {
   onHostedTurnHandoff?: (input: Readonly<{
     request: PreparedModelCall['request']
+    signal?: AbortSignal
     authorizedToolNames: ReadonlySet<string>
     /** FR3：延迟名集合（并入 capabilities known + authorized，门禁簿记零上下文成本）。 */
     deferredToolNames?: ReadonlySet<string>
@@ -174,6 +175,7 @@ export type RunToolChatSessionArgs = {
     currentUserMessageId?: string
     assistantMessageId?: string
     requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
+    planContextReplacement?: AgentHostPorts['planContextReplacement']
   }>) => Promise<Readonly<{ result: RunToolChatSessionResult; finalization: HostedTurnFinalization }> | undefined>
   requestId: string
   /** 顶层父任务的绝对截止时间；缺省仅兼容旧入口，使用统一 10 分钟上限。 */
@@ -252,6 +254,7 @@ export type RunToolChatSessionArgs = {
   onTitleGenerated?: (session: import('../src/shared/domainTypes').Session) => void
   /** Core 以 session event ledger 提供的唯一上下文测量适配器。 */
   contextMeter?: ContextMeter
+  planContextReplacement?: AgentHostPorts['planContextReplacement']
   /** P1：events 出口对象随展开层注入（floatingNotificationManager 已收回为 events.notify，§5.5）。 */
   events?: AgentEventSink
   /** P2（B1）：门控端口材料（装配期解析注入；此处空对象仅类型占位，缺失会触发门控 fail-loud）。 */
@@ -302,6 +305,7 @@ export type RunToolChatSessionPorts = AgentHostPorts & { hostHistory?: HistoryPo
 
 /** Adapter input used only to preserve Desktop's existing compaction planner at the Hosted SDK boundary. */
 export type HostedContextReplacementPlanner = (input: {
+  signal?: AbortSignal
   phase?: 'turn-boundary' | 'preflight'
   requestId: string
   windowId: string
@@ -483,6 +487,7 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     onFileTreeChanged: invocation.events.onFileTreeChanged,
     onTitleGenerated: invocation.events.onTitleGenerated,
     contextMeter: ports.contextMeter as ContextMeter | undefined,
+    planContextReplacement: ports.planContextReplacement,
     events: invocation.events,
     gatePolicy: ports.policy as RunToolChatSessionArgs['gatePolicy'],
     hostDiagnostics: ports.diagnostics as RunToolChatSessionArgs['hostDiagnostics'],
@@ -1093,6 +1098,7 @@ async function runToolChatSessionInner(
         try {
           const handoff = await args.onHostedTurnHandoff({
             request: canonicalRequest,
+            signal: chatSignal,
             authorizedToolNames: hostedAuthorizedToolNames,
             deferredToolNames: hostedDeferredToolNames,
             dynamicToolsForNextRequest: () => [...surfacedWikiTools.values()],
@@ -1124,7 +1130,8 @@ async function runToolChatSessionInner(
             ...(args.hostHistory ? { hostHistory: args.hostHistory } : {}),
             ...(args.currentUserMessageId ? { currentUserMessageId: args.currentUserMessageId } : {}),
             ...(args.assistantMessageId ? { assistantMessageId: args.assistantMessageId } : {}),
-            ...(requiredUserMessage ? { requiredUserMessage } : {})
+            ...(requiredUserMessage ? { requiredUserMessage } : {}),
+            ...(args.planContextReplacement ? { planContextReplacement: args.planContextReplacement } : {})
           })
           if (!handoff) throw new Error('HOSTED_TURN_HANDOFF_MISSING_RESULT')
           if (handoff.result.ok && shouldScheduleTitleSuggestion) {

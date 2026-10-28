@@ -4,6 +4,7 @@ import { normalizeTurnExecutionConfig } from '../src/shared/turnCoordinator'
 import type { ModelEntry } from '../src/shared/domainTypes'
 import type { AgentReasoningEffort } from '../src/shared/agent/invocation'
 import { resolveGlobalThinkingEffort } from '../src/shared/thinkingEffort'
+import { normalizeContextCompactionTriggerRatio } from '../src/shared/requestContext'
 import { getAvailableModels, migrateBuiltinModelName, resolveModelContextWindow, resolvePreferredModelEntry } from '../src/shared/llmModelConfig'
 import { mergeFeishuConfig } from '../src/shared/feishuTypes'
 import { mergeWeChatConfig } from '../src/shared/wechatTypes'
@@ -12,6 +13,7 @@ import { THINKING_EFFORT_LEVELS } from '../src/shared/thinkingEffort'
 import { resolveVisionRouteForImageSend } from '../src/shared/visionModelRouting'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getConfigValue, type AppDatabase } from './database'
+import { CONFIG_KEYS } from './ipc/ipcShared'
 import { readActiveLlmServiceIds, readLlmServices, readStoredModels, resolveLlmCredentialsForModel, resolveLlmCredentialsForPair } from './llmServiceResolver'
 import { ensureRemoteImModelConfigMigrated, remoteImModelConfigDbKeys } from './remote/remoteImModelConfigDb'
 import type { AutomationTaskRunConfigSnapshot } from '../src/shared/automationTaskTypes'
@@ -222,6 +224,7 @@ export async function resolveTrustedTurnExecutionConfig(
     lane,
     model,
     ...(modelWindow.contextWindow !== undefined ? { maximumContext: modelWindow.contextWindow } : {}),
+    contextCompactionTriggerRatio: normalizeContextCompactionTriggerRatio(getConfigValue(db, CONFIG_KEYS.contextCompactionTriggerRatio) === undefined ? undefined : Number(getConfigValue(db, CONFIG_KEYS.contextCompactionTriggerRatio))),
     maximumContextTrusted: modelWindow.trusted,
     llmServiceId: credentials.serviceId || llmServiceId,
     maxTokens: session.maxTokens,

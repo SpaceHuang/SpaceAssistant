@@ -1,4 +1,5 @@
 import { computeTotalRequestInputTokens, type ContextUsageRaw } from './contextUsageEstimate'
+import { CONTEXT_COMPACTION_TRIGGER_RATIO } from './requestContext'
 
 export type ContextWindow = { tokens: number; source: 'config' | 'adapter' }
 export type SurfaceSnapshot = {
@@ -86,7 +87,7 @@ export function computeContextPressure(input: ContextInput): ContextPressureProj
 
 export function shouldCompact(projection: ContextPressureProjection, budget: ContextInput['budget']): boolean {
   if (projection.projectedTokens == null || budget.bodyBudget <= 0) return false
-  const ratio = Math.min(Math.max(0, budget.triggerRatio), 0.9)
+  const ratio = Math.min(Math.max(CONTEXT_COMPACTION_TRIGGER_RATIO.MIN, budget.triggerRatio), CONTEXT_COMPACTION_TRIGGER_RATIO.MAX)
   const projectedBodyTokens = Math.max(0, projection.projectedTokens - budget.prefixTokens)
   return projectedBodyTokens / budget.bodyBudget >= ratio
 }

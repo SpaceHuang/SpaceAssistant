@@ -1,4 +1,4 @@
-import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes'
+import type { Message, ToolCallRecord } from './domainTypes'
 import type { QueueScope } from './queueScope'
 import { appendProgressOutputRaw } from './terminalScrollback'
 
@@ -38,6 +38,7 @@ export type TurnExecutionConfig = {
   lane?: 'desktop' | 'feishu' | 'wechat' | 'automation'
   model?: string
   maximumContext?: number
+  contextCompactionTriggerRatio?: number
   maximumContextTrusted?: boolean
   llmServiceId?: string
   system?: string
@@ -65,7 +66,7 @@ export type TurnExecutionConfig = {
 }
 
 export type TurnIntent =
-  | { mode: 'create-user'; requestId: string; sessionId: string; input: { text: string; attachments?: ChatImageAttachment[] }; excludeMessageIds?: string[]; continuationIntent?: { kind: 'exact-continue' | 'follow-up'; requestId?: string; payloadSha256?: string; rawText?: string; route?: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; retryOfMessageId?: string; retryOfInvocationId?: string; config: TurnExecutionConfig }
+  | { mode: 'create-user'; requestId: string; sessionId: string; input: { text: string; attachments?: Message['attachments'] }; excludeMessageIds?: string[]; continuationIntent?: { kind: 'exact-continue' | 'follow-up'; requestId?: string; payloadSha256?: string; rawText?: string; route?: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; retryOfMessageId?: string; retryOfInvocationId?: string; config: TurnExecutionConfig }
   | { mode: 'reuse-user'; requestId: string; sessionId: string; userMessageId: string; excludeMessageIds: string[]; contextBoundarySequence?: number; config: TurnExecutionConfig; queueScope?: QueueScope }
 
 export type TurnTerminal = {
@@ -112,6 +113,7 @@ type AssistantFactEventPayload =
     }
   | { type: 'tool-confirmed'; id: string; approved: boolean; reason?: string }
   | { type: 'tool-result'; id: string; result: NonNullable<ToolCallRecord['result']> }
+  | { type: 'system-operation-updated'; operation: import('./domainTypes').SystemOperationRecord }
   | { type: 'usage-updated'; usage: unknown; projected?: boolean }
   | { type: 'context-projection-updated'; projection: import('./contextMeter').ContextPressureProjection }
   | { type: 'compaction-committed'; compactionId: string; windowId: string; outputSurfaceFingerprint: string }
@@ -302,9 +304,28 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
       : tool)
   } else if (event.type === 'skill-hint') {
     next.skillHints = [...(next.skillHints ?? []), { id: deps.createId(), text: event.text, shownAt: deps.now }]
+  } else if (event.type === 'system-operation-updated') {
+    const operations = [...(next.systemOperations ?? [])]
+    const index = operations.findIndex((operation) => operation.id === event.operation.id)
+    if (index < 0) operations.push({ ...event.operation })
+    else operations[index] = { ...event.operation }
+    next.systemOperations = operations
+    const activity = [...(next.activity ?? [])]
+    if (!activity.some((item) => item.kind === 'system-operation' && item.operationId === event.operation.id)) {
+      activity.push({ kind: 'system-operation', operationId: event.operation.id })
+    }
+    next.activity = activity
   } else if (event.type === 'usage-updated' || event.type === 'context-projection-updated' || event.type === 'compaction-committed') {
     // usage 属于会话级投影数据，不改变 assistant message 本身。
   } else {
+    if (event.type === 'source-completed' || event.type === 'source-parked' || event.type === 'source-failed' || event.type === 'source-uncertain' || event.type === 'source-cancelled' || event.type === 'source-timeout') {
+      next.systemOperations = next.systemOperations?.map((operation) => operation.status !== 'running' ? operation : {
+        ...operation,
+        status: event.type === 'source-cancelled' || event.type === 'source-timeout' ? 'cancelled' : event.type === 'source-failed' || event.type === 'source-uncertain' ? 'failed' : 'skipped',
+        completedAt: deps.now,
+        ...(event.type === 'source-cancelled' || event.type === 'source-timeout' ? {} : { reason: 'LATE_DISCARDED' as const })
+      })
+    }
     if (event.type === 'source-cancelled' || event.type === 'source-timeout' || event.type === 'source-failed' || event.type === 'source-uncertain') {
       Object.assign(next, restoreProvisionalSnapshot(state))
     }

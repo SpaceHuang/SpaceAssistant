@@ -18,6 +18,7 @@ export type ConfigModalSnapshotInput = {
   locale: AppLocale
   /** 全局 Thinking 强度（§5.5：替代原 thinkingEnabled 布尔入快照） */
   thinkingEffort: import('../../../shared/agent/invocation').AgentReasoningEffort
+  contextCompactionTriggerRatio: number
   models: ModelEntry[]
   llmState: LlmServiceTabState
   toolUi: ToolsSettingsUi
@@ -92,6 +93,7 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
     workDirProfiles: normalizeProfiles(input.workDirProfiles),
     locale: input.locale,
     thinkingEffort: input.thinkingEffort,
+    contextCompactionTriggerRatio: input.contextCompactionTriggerRatio,
     models: normalizeModels(input.models),
     llm: normalizeLlmState(input.llmState),
     preferredLanguageModelId: input.preferredLanguageModelId,
@@ -131,6 +133,7 @@ export function buildConfigModalSnapshotFromConfig(
     workDirProfiles: cfg.workDirProfiles ?? [],
     locale: cfg.locale,
     thinkingEffort: cfg.thinkingEffort,
+    contextCompactionTriggerRatio: cfg.contextCompactionTriggerRatio,
     models: cfg.models,
     preferredLanguageModelId: cfg.preferredLanguageModelId ?? '',
     preferredFastLanguageModelId: cfg.preferredFastLanguageModelId ?? '',

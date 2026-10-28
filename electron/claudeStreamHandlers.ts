@@ -44,6 +44,9 @@ import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './runtime/hostedTurnFinalization'
 import { assertContinuationExecutionConfigUnchanged, fingerprintContinuationExecutionConfig } from './runtime/continuationSafetySnapshot'
 import type { SessionStorage } from './sessionStorage/host/ports'
+import { SessionContextSummaryCache, sessionContextSummaryCacheKey, summarizeSessionContext, waitForSessionContextSummary } from './sessionContextSummary'
+import { createSessionContextCheckpointMessage, isSessionContextCheckpointWorthCompacting, type SessionContextSummary } from './sessionContextCompaction'
+import { safeSummaryContentText } from '../src/shared/safeSummaryText'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -66,6 +69,8 @@ export type ClaudeStreamDeps = {
   turnRuntime?: TurnRuntime
   sessionStorage?: SessionStorage
 }
+
+const automaticSummaryCache = new SessionContextSummaryCache()
 
 const admissionCancelControllers = new Map<string, AbortController>()
 export function cancelClaudeAdmission(turnId: string): void {
@@ -288,6 +293,8 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
   const injectedStorage = deps.sessionStorage
   if (!injectedStorage) throw new Error('SESSION_STORAGE_REQUIRED')
   const sessionStorage: SessionStorage = injectedStorage
+  const pendingCompactionCards = new Map<string, import('../src/shared/domainTypes').SystemOperationRecord>()
+  const pendingCompactionSummaries = new Map<string, { key: string; summary: SessionContextSummary }>()
   const executeClaudeRequest: ClaudeTurnExecution = async (_sender, payload) => {
       let requestId = ''
       let eventWriter: SessionEventSink | undefined
@@ -357,6 +364,18 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         if (!deps.turnRuntime || !turnId || !turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
         const authoritative = await loadAuthoritativeTurnContext(db, turnId, sessionId, requestId, turnStartToken, sessionStorage)
         eventTurnId = turnId
+        const emitSystemOperation = (operation: import('../src/shared/domainTypes').SystemOperationRecord): void => {
+          const fact: AssistantFactEvent = { type: 'system-operation-updated', operation }
+          try {
+            if (deps.turnRuntime) {
+              deps.turnRuntime.consumeForRequest(requestId, fact, turnId)
+              return
+            }
+          } catch {
+            // The activity card is a best-effort projection; it must not affect turn execution.
+          }
+          try { deps.emitFactEvent?.(requestId, fact) } catch { /* Best-effort activity projection. */ }
+        }
         const session = sessionStorage.queries.readSession(sessionId)
         if (session) {
           const ledgerReady = !sessionStorage.ensureLedgerReady || await sessionStorage.ensureLedgerReady(sessionId)
@@ -502,7 +521,24 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           model,
           providerRouteId,
           contextWindow: frozen.maximumContext,
+          contextCompactionTriggerRatio: frozen.contextCompactionTriggerRatio,
           contextWindowTrusted: frozen.maximumContextTrusted,
+          onContextReplacementSettled: ({ status, historyPayload }) => {
+            const ledger = historyPayload.sessionLedger
+            const summary = ledger && typeof ledger === 'object' && !Array.isArray(ledger) ? (ledger as { summary?: unknown }).summary : undefined
+            const compactionId = summary && typeof summary === 'object' && !Array.isArray(summary) ? (summary as { compactionId?: unknown }).compactionId : undefined
+            if (typeof compactionId !== 'string') return
+            const pending = pendingCompactionCards.get(compactionId)
+            const pendingSummary = pendingCompactionSummaries.get(compactionId)
+            if (pendingSummary) automaticSummaryCache.settle(pendingSummary.key, pendingSummary.summary, status)
+            pendingCompactionSummaries.delete(compactionId)
+            if (pending) {
+              if (status === 'committed') emitSystemOperation({ ...pending, status: 'succeeded', completedAt: Date.now() })
+              else if (status === 'commit-uncertain') emitSystemOperation({ ...pending, status: 'failed', completedAt: Date.now(), reason: 'SUMMARY_FAILED' })
+              else emitSystemOperation({ ...pending, status: 'skipped', completedAt: Date.now(), reason: 'LATE_DISCARDED' })
+            }
+            pendingCompactionCards.delete(compactionId)
+          },
           baseUrl,
           messages,
           system: frozen.system,
@@ -564,9 +600,22 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               throw new Error('HOSTED_CONTEXT_COMPACTION_TRANSACTION_INVALID')
             }
             if (!eventWriter) throw new Error('HOSTED_CONTEXT_COMPACTION_EVENT_WRITER_REQUIRED')
-            await appendCompactionTransaction(eventWriter, transaction.start as Record<string, unknown>, transaction.summary as Record<string, unknown>)
+            const compactionId = typeof (transaction.summary as { compactionId?: unknown }).compactionId === 'string' ? (transaction.summary as { compactionId: string }).compactionId : ''
+            const pending = pendingCompactionCards.get(compactionId)
+            try {
+              await appendCompactionTransaction(eventWriter, transaction.start as Record<string, unknown>, transaction.summary as Record<string, unknown>)
+              if (pending) emitSystemOperation({ ...pending, status: 'succeeded', completedAt: Date.now() })
+            } catch (error) {
+              if (pending) emitSystemOperation({ ...pending, status: 'failed', completedAt: Date.now(), reason: 'SUMMARY_FAILED' })
+              throw error
+            } finally {
+              pendingCompactionCards.delete(compactionId)
+            }
           },
-          onContextReplacementPlan: async ({ phase = 'turn-boundary', requestId: boundaryRequestId, windowId, system, tools, surfaceSnapshot, messages, budget, contextUsage, toolExecutionCheckpoint, requiredSurfaceSet }) => {
+          onContextReplacementPlan: async ({ signal, phase = 'turn-boundary', requestId: boundaryRequestId, windowId, system, tools, surfaceSnapshot, messages, budget, contextUsage, toolExecutionCheckpoint, requiredSurfaceSet }) => {
+            const operationId = `context-compaction:${boundaryRequestId}`
+            const updateOperation = (status: import('../src/shared/domainTypes').SystemOperationRecord['status'], extra: Partial<import('../src/shared/domainTypes').SystemOperationRecord> = {}) => emitSystemOperation({ id: operationId, kind: 'context-compaction', status, startedAt: summaryStartedAt || Date.now(), ...extra })
+            let summaryStartedAt = 0
             const projection = contextUsage && {
               ...contextUsage,
               anchorStatus: contextUsage.projectedTokens == null ? 'missing' as const : 'matched' as const,
@@ -589,7 +638,10 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             const checkpointPlanningTokens = estimateTokensFromUtf8Text(JSON.stringify({ kind: 'context_checkpoint', task: '', decisions: '', pending: '' }))
             const plan = planTurnBoundarySurfaceCompaction({ projection: projectionForPlanner, items, shouldCompact: true, summaryCount: countCommittedCompactions(compactionReplay, windowId), checkpointId: checkpointMessage.id, checkpointTokens: checkpointPlanningTokens })
             const record = plan.record
-            if (!record || plan.status === 'uncompressible' || !record.shadowedRanges.length) return
+            if (!record || plan.status === 'uncompressible' || !record.shadowedRanges.length) {
+              updateOperation('skipped', { startedAt: Date.now(), completedAt: Date.now(), reason: 'UNCOMPRESSIBLE' })
+              return
+            }
             const appliedAction = [...plan.actions].reverse().find((action) => action.status === 'applied')?.action
             const isReset = appliedAction === 'reset'
             const shadowedIds = new Set(record.shadowedRanges.flatMap((range) => {
@@ -598,7 +650,51 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               return start >= 0 && end >= start ? items.slice(start, end + 1).map((item) => item.id) : []
             }))
             const shadowSource = replayMessages.filter((_message, index) => shadowedIds.has(messageIdentities[index]!))
-            checkpointMessage.content = JSON.stringify({ kind: 'context_checkpoint', task: shadowSource.filter((message) => message.role === 'user').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), decisions: shadowSource.filter((message) => message.role === 'assistant').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), pending: '如需完整历史，使用 history.read 查询被压缩消息。' })
+            const recoveryFacts = sessionStorage.queries.continuationSources.readRecoveryFacts(sessionId)
+            const summaryMessages = shadowSource.map((message) => ({ role: message.role, content: safeSummaryContentText(message.content) }))
+            const summaryLocale = isAppLocale(frozen.locale ?? '') && frozen.locale === 'en-US' ? 'en-US' : 'zh-CN'
+            const summaryCacheKey = sessionContextSummaryCacheKey({ sessionId, model, serviceId: creds.serviceId, locale: summaryLocale, messages: summaryMessages })
+            const cachedSummary = automaticSummaryCache.get(summaryCacheKey)
+            const summaryController = new AbortController()
+            const abortSummary = () => summaryController.abort(signal?.reason)
+            if (signal?.aborted) return
+            summaryStartedAt = Date.now()
+            updateOperation('running', { startedAt: summaryStartedAt })
+            signal?.addEventListener('abort', abortSummary, { once: true })
+            const timeout = setTimeout(() => summaryController.abort(new Error('SUMMARY_TIMEOUT')), 90_000)
+            let checkpointSummary: SessionContextSummary | undefined = cachedSummary
+            try {
+              if (!checkpointSummary) {
+                const apiKey = await getApiKey()
+                if (!apiKey) throw new Error('SESSION_CONTEXT_SUMMARY_CREDENTIALS_UNAVAILABLE')
+                checkpointSummary = await waitForSessionContextSummary(summarizeSessionContext({
+                  model, apiKey, ...(typeof baseUrl === 'string' ? { baseUrl } : {}), locale: summaryLocale,
+                  messages: summaryMessages, recoveryFacts, signal: summaryController.signal
+                }), summaryController.signal)
+                if (signal?.aborted || summaryController.signal.aborted) throw new Error('SESSION_CONTEXT_SUMMARY_CANCELLED')
+              }
+            } catch (error) {
+              if (signal?.aborted) updateOperation('cancelled', { completedAt: Date.now() })
+              else updateOperation('failed', { completedAt: Date.now(), reason: summaryController.signal.aborted ? 'SUMMARY_TIMEOUT' : error instanceof Error && error.message.includes('SESSION_CONTEXT_SUMMARY_INVALID') ? 'SUMMARY_INVALID' : error instanceof Error && error.message.includes('CREDENTIALS_UNAVAILABLE') || error instanceof Error && error.message.includes('MODEL_UNAVAILABLE') ? 'SUMMARY_UNAVAILABLE' : 'SUMMARY_FAILED' })
+              return
+            } finally {
+              clearTimeout(timeout)
+              signal?.removeEventListener('abort', abortSummary)
+            }
+            if (signal?.aborted) {
+              updateOperation('cancelled', { completedAt: Date.now() })
+              return
+            }
+            checkpointMessage.content = createSessionContextCheckpointMessage(checkpointMessage.id, checkpointSummary, recoveryFacts).content
+            const shadowedTokenCount = items.filter((item) => shadowedIds.has(item.id)).reduce((sum, item) => sum + item.tokens, 0)
+            const checkpointTokenCount = estimateTokensFromUtf8Text(JSON.stringify(checkpointMessage))
+            if (!isSessionContextCheckpointWorthCompacting(checkpointMessage, shadowedTokenCount)) {
+              if (!cachedSummary) {
+                automaticSummaryCache.settle(summaryCacheKey, checkpointSummary, 'no-gain')
+              }
+              updateOperation('skipped', { completedAt: Date.now(), reason: 'NO_GAIN' })
+              return
+            }
             const shadowed = new Set(record.shadowedRanges.flatMap((range) => {
               const start = items.findIndex((item) => item.id === range.start)
               const end = items.findIndex((item) => item.id === range.end)
@@ -610,8 +706,10 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             const pairs = extractToolPairIds(outputMessages)
             const outputIdentities = surfaceItemIdentitiesForSubset(replayMessages, outputMessages)
             const outputRequiredIds = outputMessages.flatMap((message, index) => {
+              const identity = outputIdentities[index]
+              if (!identity) return []
               const messageId = (message as { id?: unknown }).id
-              return requiredSurfaceSet.includes(outputIdentities[index]!) || (typeof messageId === 'string' && requiredSurfaceSet.includes(messageId)) ? [outputIdentities[index]!] : []
+              return requiredSurfaceSet.includes(identity) || (typeof messageId === 'string' && requiredSurfaceSet.includes(messageId)) ? [identity] : []
             })
             const preflight = validateSurfaceForSend({
               ids: outputIdentities,
@@ -624,12 +722,20 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               toolUses: pairs.toolUses,
               toolResults: pairs.toolResults
             })
-            if (!preflight.ok) return
+            if (!preflight.ok) {
+              updateOperation('skipped', { completedAt: Date.now(), reason: 'UNCOMPRESSIBLE' })
+              return
+            }
             const compactionId = `${windowId}:boundary:${boundaryRequestId}`
+            if (!cachedSummary) pendingCompactionSummaries.set(compactionId, { key: summaryCacheKey, summary: checkpointSummary })
             const outputWindowId = isReset ? `${windowId}:reset:${boundaryRequestId}` : undefined
             const candidate = { kind: isReset ? 'reset' as const : 'summary' as const, checkpointMessage, checkpointReplayIdentity: outputIdentities[0], shadowedRanges }
             const start = { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(replayMessages), surfaceBoundaryId: messageIdentities[replayMessages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }
             const summary = { compactionId, windowId, turnId, ...(outputWindowId ? { inputWindowId: windowId, outputWindowId } : {}), summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint }
+            const beforePercent = Math.round(projection.bodyRatio * 100)
+            const afterBodyTokens = Math.max(0, outputHeader.surfaceSnapshot.surfaceTokens - budget.prefixTokens)
+            const afterPercent = budget.bodyBudget > 0 ? Math.round(afterBodyTokens / budget.bodyBudget * 100) : 0
+            pendingCompactionCards.set(compactionId, { id: operationId, kind: 'context-compaction', status: 'running', startedAt: summaryStartedAt, beforePercent, afterPercent })
             const location = { workDir: deps.getWorkDir(), sessionId, createdAt: session.createdAt }
             return {
               messages: toCanonicalModelMessages(outputMessages as import('../src/shared/api').ClaudeChatMessageWithBlocks[]),
@@ -653,7 +759,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           }
         })
         const hostedHandoffOptions = {
-          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, ...(authoritative.executionConfig?.continuationContext ? { continuationContext: authoritative.executionConfig.continuationContext } : {}), refreshExecutionContext: (_call, stage, current) => {
+          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, ...(turnPorts.planContextReplacement ? { planContextReplacement: turnPorts.planContextReplacement } : {}), ...(authoritative.executionConfig?.continuationContext ? { continuationContext: authoritative.executionConfig.continuationContext } : {}), refreshExecutionContext: (_call, stage, current) => {
             const toolsConfig = deps.getToolsConfig()
             const browserConfig = deps.getBrowserConfig()
             const shellConfig = deps.getShellConfig()

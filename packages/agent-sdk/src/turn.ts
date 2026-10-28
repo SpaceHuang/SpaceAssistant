@@ -79,6 +79,7 @@ function modelTurnLoopCheckMessage(completedModelTurns: number): CanonicalModelM
 }
 
 export type ContextReplacementPlanInput = Readonly<{
+  signal?: AbortSignal
   phase: 'preflight'
   invocationId: string
   modelTurn: number
@@ -89,6 +90,7 @@ export type ContextReplacementPlanInput = Readonly<{
   currentUserMessageId?: string
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
 }> | Readonly<{
+  signal?: AbortSignal
   phase: 'turn-boundary'
   invocationId: string
   modelTurn: number
@@ -122,6 +124,7 @@ export type AgentTurnObserver = Readonly<{
   criticalToolProjection?: boolean
   onModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): void | Promise<void>
   prepareUsageAttribution?(input: Readonly<{ modelTurn: number; request: PreparedModelCall['request'] }>): Record<string, unknown> | void
+  onContextReplacementSettled?(result: Readonly<{ phase: 'preflight' | 'turn-boundary'; status: 'committed' | 'stale' | 'busy' | 'no-op' | 'uncompressible' | 'commit-uncertain'; historyPayload: Record<string, import('./context').JsonValue> }>): void | Promise<void>
   prepareModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Readonly<{ sessionLedger?: unknown; requestProjection?: unknown; requestMetadata?: Readonly<Record<string, unknown>>; requestPatch?: Partial<PreparedModelCall['request']> }> | void | Promise<Readonly<{ sessionLedger?: unknown; requestProjection?: unknown; requestMetadata?: Readonly<Record<string, unknown>>; requestPatch?: Partial<PreparedModelCall['request']> }> | void>
   onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
   onModelAttemptDiscarded?(attempt: Readonly<{ attempt: number; modelTurn: number; reasonCode: string }>): void | Promise<void>
@@ -536,13 +539,25 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     }
     await projectTurnOutput(input.observer, result)
     const terminalPayload = { status: 'completed' as const, outputText: result.text, usage: result.usage }
+    const completedThinkingContent = input.assistantMessageId
+      ? result.messages
+          .filter((message) => message.role === 'assistant' && message.id === input.assistantMessageId && Array.isArray(message.content))
+          .flatMap((message) => (message as Extract<CanonicalTurnMessage, { role: 'assistant' }>).content as readonly CanonicalContentBlock[])
+          .filter((block) => block.type === 'thinking')
+          .map((block) => block.thinking)
+          .filter(Boolean)
+          .join('')
+      : ''
     const sessionLedger = input.sessionLedgerForInvocationTerminal
       ? await input.sessionLedgerForInvocationTerminal({ ...terminalPayload, turnId: input.turnId ?? input.invocationId })
       : undefined
     const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined
       ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: 'completed' as const,
           messages: result.messages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[],
-          ...(input.assistantMessageId ? { messageMirror: { messageId: input.assistantMessageId, status: 'completed' as const, content: result.text } } : {}) }
+          ...(input.assistantMessageId ? { messageMirror: {
+            messageId: input.assistantMessageId, status: 'completed' as const, content: result.text,
+            ...(completedThinkingContent ? { thinking: { content: completedThinkingContent, isVisible: true, startTime: Date.now() } } : {})
+          } } : {}) }
       : undefined
     await appendTerminalHistory('invocation-completed', terminalPayload, sessionLedger, transcriptCommit)
     await observe(input.observer, 'turn-finished', () => input.observer?.onTurnFinished?.(result))
@@ -648,13 +663,22 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
           ? failureMessages?.find((message) => message.role === 'assistant' && message.id === input.assistantMessageId)
           : undefined
         const mirroredFailureContent = mirroredFailureMessage ? assistantTextForLegacyProjection(mirroredFailureMessage.content) : undefined
+        const mirroredFailureThinking = mirroredFailureMessage && Array.isArray(mirroredFailureMessage.content)
+          ? mirroredFailureMessage.content
+              .filter((block): block is Extract<CanonicalContentBlock, { type: 'thinking' }> =>
+                Boolean(block && typeof block === 'object' && 'type' in block && block.type === 'thinking'))
+              .map((block) => block.thinking)
+              .filter(Boolean)
+              .join('')
+          : ''
         const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined && failureMessages
           ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: transcriptOutcome,
               messages: failureMessages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[],
               ...(input.assistantMessageId ? { messageMirror: {
                 messageId: input.assistantMessageId,
                 status: error instanceof AgentTurnCancelledError ? 'cancelled' as const : 'failed' as const,
-                ...(mirroredFailureContent !== undefined ? { content: mirroredFailureContent } : {})
+                ...(mirroredFailureContent !== undefined ? { content: mirroredFailureContent } : {}),
+                ...(mirroredFailureThinking ? { thinking: { content: mirroredFailureThinking, isVisible: true, startTime: Date.now() } } : {})
               } } : {}) }
           : undefined
         await appendTerminalHistory(terminalKind, terminalPayload, sessionLedger, transcriptCommit)
@@ -954,6 +978,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       }
       const overBudgetBeforeRecovery = requestExceedsBudget(preparedRequestProjection?.requestProjection)
       const preflight = await input.planContextReplacement({
+        signal: input.request.signal,
         phase: 'preflight',
         invocationId,
         modelTurn: modelTurns,
@@ -964,12 +989,14 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}),
         ...(input.requiredUserMessage ? { requiredUserMessage: structuredClone(input.requiredUserMessage) } : {})
       })
+      throwIfAborted(input.request.signal)
       if (preflight && 'rejected' in preflight) {
         throw new ModelPreflightRejectedError('OVER_BUDGET')
       }
       const preflightRecovery = preflight && 'messages' in preflight ? preflight : undefined
       const didRecover = Boolean(preflightRecovery?.messages && JSON.stringify(preflightRecovery.messages) !== JSON.stringify(messages))
       if (didRecover && preflightRecovery?.messages) {
+        throwIfAborted(input.request.signal)
         const compacted = structuredClone([...preflightRecovery.messages])
         if (input.currentUserMessageId && input.requiredUserMessage) {
           const required = JSON.stringify(input.requiredUserMessage.message)
@@ -1002,10 +1029,12 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             } : {})
           }
         })
+        throwIfAborted(input.request.signal)
         const result = await invocationContextPort.commitReplacement({
           operationId: `${invocationId}:preflight:${modelTurns}`,
           reason: output.windowId !== base.frame.windowId ? 'window-transition' : 'auto-compact', candidate
         })
+        await input.observer?.onContextReplacementSettled?.({ phase: 'preflight', status: result.status, historyPayload })
         if (result.status === 'commit-uncertain') throw new AgentTurnBoundaryProjectionError(result.error)
         call = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
         requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
@@ -1563,6 +1592,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       contextPendingTools = boundaryTools
       contextCaptureOverride = boundaryInputMessages
       const boundary = await input.planContextReplacement({
+        signal: input.request.signal,
         phase: 'turn-boundary',
         invocationId,
         modelTurn: modelTurns,
@@ -1574,6 +1604,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}),
         ...(input.requiredUserMessage ? { requiredUserMessage: structuredClone(input.requiredUserMessage) } : {})
       })
+      throwIfAborted(input.request.signal)
       if (boundary && 'rejected' in boundary) throw new InvalidTurnBoundaryError('turn-boundary planner returned a preflight rejection')
       if (boundary && 'messages' in boundary && boundary.messages) {
         const compacted = structuredClone(boundary.messages)
@@ -1592,6 +1623,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           }
         }
         if (input.history && (input.contextProjectionCommitter || JSON.stringify(compacted) !== JSON.stringify(boundaryInputMessages) || boundary.windowId !== undefined && boundary.windowId !== activeWindowId)) {
+          throwIfAborted(input.request.signal)
           const base = await invocationContextPort.readCurrent(contextScope)
           const historyPayload = (boundary.historyPayload ?? {}) as Record<string, import('./context').JsonValue>
           const output = contextFrameFromMessages(compacted, boundary.windowId ?? activeWindowId, input.requiredUserMessage, base.frame.pendingTools, base.frame, checkpointIdentityFromPayload(boundary.historyPayload))
@@ -1615,10 +1647,12 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
               } : {})
             }
           })
+          throwIfAborted(input.request.signal)
           const result = await invocationContextPort.commitReplacement({
             operationId: `${invocationId}:boundary:${modelTurns}`,
             reason: output.windowId !== base.frame.windowId ? 'window-transition' : 'auto-compact', candidate
           })
+          await input.observer?.onContextReplacementSettled?.({ phase: 'turn-boundary', status: result.status, historyPayload })
           if (result.status === 'commit-uncertain') throw new AgentTurnBoundaryProjectionError(result.error)
           if (result.status === 'committed') boundaryReplacedTranscript = true
         } else if (!input.history) {

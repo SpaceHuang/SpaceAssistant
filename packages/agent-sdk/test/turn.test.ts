@@ -27,6 +27,51 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('mirrors all thinking blocks from the completed turn into the assistant message', async () => {
+    const registry = new ModelProviderRegistry()
+    let requestCount = 0
+    registry.register(route, { providerId: 'terminal-thinking-mirror', stream: () => {
+      requestCount += 1
+      return requestCount === 1
+        ? stream(
+            { type: 'thinking-delta', text: 'first thought' },
+            { type: 'tool-call', toolCallId: 'thinking-tool', toolName: 'lookup', input: {} },
+            { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+          )
+        : stream(
+            { type: 'thinking-delta', text: 'second thought' }, { type: 'text-delta', text: 'answer' },
+            { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+          )
+    } })
+    const backing = new MemoryHistory()
+    let transcriptCommit: import('../src/history').SessionTranscriptCommitIntent | undefined
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], expectedVersion: number, commit?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (commit) transcriptCommit = commit
+        return backing.appendBatch(events, expectedVersion)
+      },
+      read: (invocationId: string) => backing.read(invocationId)
+    }
+    const invocationId = 'terminal-thinking-mirror'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, turnId: invocationId, sessionId: 'thinking-session',
+      sessionTranscriptBaseVersion: 0, assistantMessageId: 'thinking-assistant', history,
+      request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'auth-v1' }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'tool done' })), maxModelTurns: 3
+    })
+
+    expect(transcriptCommit?.messageMirror).toMatchObject({
+      messageId: 'thinking-assistant', status: 'completed', content: 'answer',
+      thinking: { content: 'first thoughtsecond thought', isVisible: true }
+    })
+  })
+
   it('freezes request patches and metadata across provider retry, then refreshes them for the next model turn', async () => {
     const registry = new ModelProviderRegistry()
     const providerRequests: CanonicalModelMessage[][] = []
@@ -1132,6 +1177,7 @@ describe('runAgentTurn', () => {
     const contextProjectionCommitter = vi.fn(async () => {
       expect((await history.read('preflight-request')).events.at(-1)?.kind).toBe('transcript-compacted')
     })
+    const onContextReplacementSettled = vi.fn()
 
     await runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'preflight-request', history,
@@ -1142,12 +1188,14 @@ describe('runAgentTurn', () => {
       observer: { prepareModelRequest: ({ request }) => ({
         requestPatch: { messages: [instructionMessage, ...request.messages] },
         requestMetadata: { agentsMdSnapshot: { status: 'loaded', content: 'AGENTS_SENTINEL' } }
-      }) },
+      }), onContextReplacementSettled },
       planContextReplacement, contextProjectionCommitter
     })
 
     expect(planContextReplacement.mock.calls.map(([call]) => call.phase)).toEqual(['preflight', 'turn-boundary'])
     expect(contextProjectionCommitter).toHaveBeenCalledOnce()
+    expect(onContextReplacementSettled).toHaveBeenCalledOnce()
+    expect(onContextReplacementSettled).toHaveBeenCalledWith(expect.objectContaining({ phase: 'preflight', status: 'committed' }))
     expect(providerRequests).toEqual([[instructionMessage, currentMessage]])
     const requestStarted = (await history.read('preflight-request')).events.find(({ kind }) => kind === 'model-request-started')!
     expect(requestStarted.payload).toMatchObject({
@@ -1399,7 +1447,7 @@ describe('runAgentTurn', () => {
       toolExecution: createPermitBoundToolExecutionPort({
         permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
         resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
-          capabilityId: call.toolName, authorizationVersion: prepareCount > 1 ? 'policy-v2' : 'policy-v1', phase: 'recheck' }),
+          capabilityId: call.toolName, phase: 'recheck' }),
         execute: async () => executor()
       }), confirmation
     })
@@ -1430,7 +1478,7 @@ describe('runAgentTurn', () => {
     const permits = new InMemorySafetyPermitStore()
     const history = new MemoryHistory()
     const executor = vi.fn(async () => ({ output: 'written' }))
-    const confirmation = vi.fn(async () => ({ kind: 'approved' as const, receipt: 'fresh-user-receipt', answerer: 'user' as const }))
+    const confirmation = vi.fn(async (_args: { call: { invocationId: string } }) => ({ kind: 'approved' as const, receipt: 'fresh-user-receipt', answerer: 'user' as const }))
     let prepareCount = 0
 
     await runAgentTurn({
@@ -1495,7 +1543,8 @@ describe('runAgentTurn', () => {
 
     expect(terminalCommits).toHaveLength(1)
     expect(terminalCommits[0]).toMatchObject({ outcome: 'failed', messageMirror: {
-      messageId: 'failed-block-message-assistant', status: 'failed', content: 'partial canonical answer'
+      messageId: 'failed-block-message-assistant', status: 'failed', content: 'partial canonical answer',
+      thinking: { content: 'private reasoning', isVisible: true }
     } })
   })
 
@@ -4585,7 +4634,7 @@ describe('runAgentTurn', () => {
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const history = new MemoryHistory()
     const execute = vi.fn(async () => ({ output: 'executed once under fresh policy' }))
-    const confirmation = vi.fn(async () => {
+    const confirmation = vi.fn(async (_args: { call: { invocationId: string } }) => {
       return { kind: 'approved' as const, receipt: 'fresh-policy-approval', answerer: 'user' as const }
     })
     let authorizationVersion = 'policy-v1'
@@ -4610,6 +4659,7 @@ describe('runAgentTurn', () => {
     })
     let invalidatedAtClaim = false
     const toolExecution = {
+      ...baseExecution,
       execute(call: Parameters<typeof baseExecution.execute>[0], permitId: string, onDispatchClaimed?: (cancel: () => void) => void | Promise<void>) {
         return baseExecution.execute(call, permitId, async (cancel) => {
           await onDispatchClaimed?.(cancel)
@@ -4705,6 +4755,7 @@ describe('runAgentTurn', () => {
       subscribeAuthorizationChange: (_call, listener) => { authorizationListener = listener; return () => undefined }, execute })
     let invalidatedAtClaim = false
     const toolExecution = {
+      ...baseExecution,
       execute(call: Parameters<typeof baseExecution.execute>[0], permitId: string, onDispatchClaimed?: (cancel: () => void) => void | Promise<void>) {
         return baseExecution.execute(call, permitId, async (cancel) => {
           await onDispatchClaimed?.(cancel)

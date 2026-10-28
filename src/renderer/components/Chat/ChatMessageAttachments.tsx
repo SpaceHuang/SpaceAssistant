@@ -1,10 +1,11 @@
 import { memo, useEffect, useState } from 'react'
-import type { ChatImageAttachment } from '../../../shared/domainTypes'
+import { File as FileIcon } from 'lucide-react'
+import { isChatImageAttachment, type MessageAttachment } from '../../../shared/domainTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   sessionId: string
-  attachments: ChatImageAttachment[]
+  attachments: MessageAttachment[]
 }
 
 function formatByteSize(bytes: number): string {
@@ -22,6 +23,7 @@ export const ChatMessageAttachments = memo(function ChatMessageAttachments({ ses
     const load = async () => {
       const next: Record<string, string> = {}
       for (const a of attachments) {
+        if (!isChatImageAttachment(a)) continue
         const res = await window.api.chatReadStagedImage({
           sessionId,
           stagingKey: a.stagingKey
@@ -43,13 +45,15 @@ export const ChatMessageAttachments = memo(function ChatMessageAttachments({ ses
     <div className="chat-message-attachments">
       {attachments.map((a) => (
         <div key={a.id} className="chat-message-attachment-chip" title={a.fileName}>
-          {urls[a.id] ? (
+          {!isChatImageAttachment(a) ? (
+            <span className="chat-message-attachment-thumb chat-message-attachment-thumb--loading" aria-hidden><FileIcon size={18} /></span>
+          ) : urls[a.id] ? (
             <img src={urls[a.id]} alt={t('attachment.alt', { name: a.fileName })} className="chat-message-attachment-thumb" />
           ) : (
             <span className="chat-message-attachment-thumb chat-message-attachment-thumb--loading" aria-hidden />
           )}
           <span className="chat-message-attachment-name">{a.fileName}</span>
-          <span className="chat-message-attachment-size">{formatByteSize(a.byteLength)}</span>
+          {'byteLength' in a && <span className="chat-message-attachment-size">{formatByteSize(a.byteLength)}</span>}
         </div>
       ))}
     </div>

@@ -76,6 +76,16 @@ describe('resolveTrustedTurnExecutionConfig', () => {
     db.close()
   })
 
+  it('读取可调上下文压缩触发比例并在配置缺失时使用默认值', async () => {
+    const db = createMemoryAppDb()
+    seedLlmConfig(db, [makeModel({ id: 'text', name: 'deepseek-chat' })])
+    const session = createSession(db, { name: 'trigger-ratio', model: 'deepseek-chat' })
+    await expect(resolveTrustedTurnExecutionConfig(db, session.id, 'desktop')).resolves.toMatchObject({ contextCompactionTriggerRatio: 0.8 })
+    setConfigValue(db, 'config.contextCompactionTriggerRatio', '0.6')
+    await expect(resolveTrustedTurnExecutionConfig(db, session.id, 'desktop')).resolves.toMatchObject({ contextCompactionTriggerRatio: 0.6 })
+    db.close()
+  })
+
   it.each(['desktop', 'feishu', 'wechat'] as const)('%s 从同一可信 session 配置生成规范化快照', async (lane) => {
     const db = createMemoryAppDb()
     seedLlmConfig(db, [makeModel({ id: 'text', name: 'deepseek-chat' })])

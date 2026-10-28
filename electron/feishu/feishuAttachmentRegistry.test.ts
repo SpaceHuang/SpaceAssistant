@@ -19,6 +19,7 @@ describe('registerInboundFeishuAttachments', () => {
       id: 'attachment-1',
       messageId: 'msg-1',
       localPath: '/user/feishu-media/cache/msg-1/pic.png',
+      kind: 'image',
       fileName: 'pic.png',
       mimeType: 'image/png'
     }])

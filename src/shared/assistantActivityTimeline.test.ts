@@ -66,6 +66,18 @@ describe('buildAssistantActivityTimeline', () => {
     ])
   })
 
+  it('keeps context compaction status in chronological activity order', () => {
+    const message = {
+      content: '', timestamp: 1,
+      toolCalls: [baseTool('t1', 200)],
+      systemOperations: [{ id: 'compact-1', kind: 'context-compaction' as const, status: 'running' as const, startedAt: 100 }]
+    }
+    expect(buildAssistantActivityTimeline(message)).toEqual([
+      { kind: 'system-operation', operationId: 'compact-1' },
+      { kind: 'tool', toolId: 't1' }
+    ])
+  })
+
   it('zip interleaves legacy thinking and tools then appends text', () => {
     const message = {
       content: 'final',

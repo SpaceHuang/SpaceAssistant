@@ -949,9 +949,10 @@ describe('queue input receipts', () => {
   it('claim queued turn 原子更新 user、assistant、turn 和 receipt', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'queue-claim' })
-    const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'claim-r', content: 'queued' })
+    const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'claim-r', content: 'queued', attachments: [{ id: 'inbound-file', source: 'feishu', kind: 'file', fileName: 'report.pdf', mimeType: 'application/pdf' }] })
     const claimed = claimQueuedTurnAtomically(db, { sessionId: session.id, userMessageId: queued.persisted.message.id, turnId: 'claim-t', assistantMessageId: 'claim-a', requestId: 'claim-r', startToken: 'claim-token', intentFingerprint: 'intent:claim' })
     expect(claimed.user.message.status).toBe('sent')
+    expect(claimed.user.message.attachments).toEqual([{ id: 'inbound-file', source: 'feishu', kind: 'file', fileName: 'report.pdf', mimeType: 'application/pdf' }])
     expect(claimed.assistant.message.status).toBe('streaming')
     expect(getQueueInputReceipt(db, session.id, 'claim-r')).toMatchObject({ state: 'claimed', turnId: 'claim-t' })
     expect(getPersistedTurn(db, 'claim-t')).toMatchObject({ userMessageId: queued.persisted.message.id, assistantMessageId: 'claim-a', startToken: 'claim-token', intentFingerprint: 'intent:claim' })

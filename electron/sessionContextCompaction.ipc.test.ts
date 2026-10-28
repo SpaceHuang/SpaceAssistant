@@ -14,7 +14,10 @@ vi.mock('./llmServiceResolver', async (importOriginal) => ({
   resolveLlmCredentialsForModel: vi.fn(async () => ({ getApiKey: async () => 'test-key' })),
   readStoredModels: vi.fn(() => [{ id: 'test-model', name: 'test-model', maximumContext: 12_000, maximumContextSource: 'user' }])
 }))
-vi.mock('./sessionContextSummary', () => ({ summarizeSessionContext: vi.fn(async () => ({ task: 'prior task', completed: 'completed', decisions: 'keep decision', constraints: 'constraints', pending: 'continue', blockers: 'none', nextStep: 'continue' })) }))
+vi.mock('./sessionContextSummary', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./sessionContextSummary')>(),
+  summarizeSessionContext: vi.fn(async () => ({ task: 'prior task', completed: 'completed', decisions: 'keep decision', constraints: 'constraints', pending: 'continue', blockers: 'none', nextStep: 'continue' }))
+}))
 vi.mock('./sessionEvents', async (importOriginal) => ({
   ...await importOriginal<typeof import('./sessionEvents')>(),
   getSessionEventSink: vi.fn(() => ({ eventsPath: '/tmp/session-context-ipc', indexPath: '/tmp/session-context-ipc-index', appendCritical: vi.fn(), appendChunk: vi.fn(), waitForCapacity: vi.fn(), flush: vi.fn(), close: vi.fn() })),

@@ -50,6 +50,7 @@ export function normalizeTurnExecutionConfig(config: TurnExecutionConfig): TurnE
     ...(config.lane ? { lane: config.lane } : {}),
     ...(config.model?.trim() ? { model: config.model.trim() } : {}),
     ...(Number.isFinite(config.maximumContext) && config.maximumContext! > 0 ? { maximumContext: config.maximumContext } : {}),
+    ...(Number.isFinite(config.contextCompactionTriggerRatio) ? { contextCompactionTriggerRatio: config.contextCompactionTriggerRatio } : {}),
     ...(config.maximumContextTrusted !== undefined ? { maximumContextTrusted: config.maximumContextTrusted } : {}),
     ...(config.llmServiceId?.trim() ? { llmServiceId: config.llmServiceId.trim() } : {}),
     ...(config.system?.trim() ? { system: config.system.trim() } : {}),

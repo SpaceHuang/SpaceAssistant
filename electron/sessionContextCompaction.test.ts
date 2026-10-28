@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { compactSessionContext } from './sessionContextCompaction'
+import { compactSessionContext, createSessionContextCheckpointMessage, isSessionContextCheckpointWorthCompacting } from './sessionContextCompaction'
 import { appendCompactionTransaction, type SessionEventSink } from './sessionEvents'
 import { computeReplaySurfaceFingerprint, projectReplaySurface, surfaceItemIdentities } from '../src/shared/surfaceReplay'
 import { createContextRegistrar, createSessionContextAdapter, type ContextPort } from '../packages/agent-sdk/src/context'
+import { safeSummaryContentText } from '../src/shared/safeSummaryText'
 
 function makeSink() {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = []
@@ -27,6 +28,21 @@ const messages = [
 ]
 const fingerprint = computeReplaySurfaceFingerprint('', projectReplaySurface(messages))
 const summarizeFixture = async () => ({ task: 'Prior task', completed: 'Earlier tasks', decisions: 'Prior decision', constraints: 'Keep exact IDs', pending: 'Next step', blockers: 'None', nextStep: 'Continue' })
+
+describe('safe summary text projection', () => {
+  it('omits image and nested binary payloads while retaining readable text', () => {
+    const imagePayload = 'aGVsbG8='.repeat(100)
+    const projected = safeSummaryContentText([
+      { type: 'text', text: 'please inspect this' },
+      { type: 'image', mimeType: 'image/png', data: imagePayload },
+      { type: 'file', metadata: { bytes: imagePayload, label: 'attachment' } }
+    ])
+    expect(projected).toContain('please inspect this')
+    expect(projected).toContain('image payload omitted from text summary')
+    expect(projected).toContain('attachment')
+    expect(projected).not.toContain(imagePayload)
+  })
+})
 function makeAdapter(sink: SessionEventSink, inputMessages: typeof messages, fp: () => Promise<string> = async () => computeReplaySurfaceFingerprint('', projectReplaySurface(inputMessages)), busy: () => boolean = () => false) {
   const registrar = createContextRegistrar()
   const surfaceMessages = projectReplaySurface(inputMessages)
@@ -46,6 +62,18 @@ function makeAdapter(sink: SessionEventSink, inputMessages: typeof messages, fp:
 }
 
 describe('manual session context compaction', () => {
+  it('reuses only the model summary while rebuilding current system facts and rejects checkpoints without token savings', () => {
+    const summary = { task: 'Task', completed: 'Done', decisions: 'Decision', constraints: 'Constraint', pending: 'Pending', blockers: 'None', nextStep: 'Continue' }
+    const firstFacts = { unresolvedEffects: [{ id: 'effect-old', originInvocationId: 'i1', toolCallId: 't1' }], toolOutcomes: [] }
+    const currentFacts = { unresolvedEffects: [{ id: 'effect-new', originInvocationId: 'i2', toolCallId: 't2' }], toolOutcomes: [{ id: 'i2:t2', outcome: 'unknown-after-dispatch' as const }] }
+    const first = createSessionContextCheckpointMessage('checkpoint', summary, firstFacts)
+    const reused = createSessionContextCheckpointMessage('checkpoint', summary, currentFacts)
+    expect(JSON.parse(reused.content)).toMatchObject({ task: 'Task', unresolvedEffectIds: ['effect-new'], toolOutcomes: [{ id: 'i2:t2', outcome: 'unknown-after-dispatch' }] })
+    expect(reused.content).not.toContain('effect-old')
+    expect(isSessionContextCheckpointWorthCompacting(first, 1)).toBe(false)
+    expect(isSessionContextCheckpointWorthCompacting(first, 100_000)).toBe(true)
+  })
+
   it('keeps recovery IDs and outcomes as host facts in the checkpoint without asking the summarizer to author them', async () => {
     const recoveryFacts = { unresolvedEffects: [{ id: 'origin:call-1', originInvocationId: 'origin', toolCallId: 'call-1' }], toolOutcomes: [{ id: 'origin:call-1', outcome: 'unknown-after-dispatch' as const }] }
     const summarize = vi.fn(async () => ({ task: 'Prior task', completed: 'Earlier tasks', decisions: 'Prior decision', constraints: 'Keep exact IDs', pending: 'Next step', blockers: 'None', nextStep: 'Continue' }))

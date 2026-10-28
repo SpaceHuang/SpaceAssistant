@@ -2,6 +2,7 @@ import type { Message } from '../src/shared/domainTypes'
 import type { ClaudeChatMessageWithBlocks } from '../src/shared/api'
 import { buildClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
 import { resolveChatAttachmentBase64 } from './chatAttachmentManager'
+import { isChatImageAttachment } from '../src/shared/domainTypes'
 import { logHistoryOversizedToolResult } from './oversizedToolResultLog'
 
 export async function buildToolChatMessagesFromSource(args: {
@@ -16,7 +17,7 @@ export async function buildToolChatMessagesFromSource(args: {
   const imageCache = new Map<string, { mimeType: string; data: string }>()
   for (const m of args.sourceMessages) {
     if (!m.attachments?.length) continue
-    for (const a of m.attachments) {
+    for (const a of m.attachments.filter(isChatImageAttachment)) {
       if (imageCache.has(a.stagingKey)) continue
       const resolved = await resolveChatAttachmentBase64(args.userDataDir, a.stagingKey)
       if (resolved) imageCache.set(a.stagingKey, resolved)

@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Form, Select } from 'antd'
+import { Form, Select, Slider } from 'antd'
 import type { LlmServiceProfile, ModelEntry } from '../../../shared/domainTypes'
 import {
   filterPreferredModelCandidates,
@@ -26,6 +26,7 @@ type PreferredSelectProps = {
 
 function PreferredModelSelect({ label, value, options, onChange, unavailable }: PreferredSelectProps) {
   const { t } = useTypedTranslation('config')
+  const form = Form.useFormInstance()
 
   return (
     <div className="config-models-preferred-field">
@@ -84,6 +85,8 @@ export function ModelsSettingsTab({
   onPreferredChange
 }: Props) {
   const { t } = useTypedTranslation('config')
+  const form = Form.useFormInstance()
+  const contextCompactionTriggerRatio = Form.useWatch('contextCompactionTriggerRatio', form)
 
   const enabledModels = useMemo(() => models.map((m) => ({ ...m, enabled: true })), [models])
 
@@ -183,6 +186,26 @@ export function ModelsSettingsTab({
                     value: level,
                     label: t(`models.effort.${level}`)
                   }))}
+                />
+              </Form.Item>
+            </div>
+            <div className="config-field-row config-models-thinking-row">
+              <div className="config-models-thinking-row__text">
+                <span className="config-field__label">{t('models.defaults.compactionTriggerLabel')}</span>
+                <p className="config-field__hint">{t('models.defaults.compactionTriggerHint')}</p>
+              </div>
+              <Form.Item name="contextCompactionTriggerRatio" noStyle>
+                <Slider
+                  value={contextCompactionTriggerRatio}
+                  ariaLabelForHandle={t('models.defaults.compactionTriggerAria')}
+                  ariaValueTextFormatterForHandle={(value) => `${value}%`}
+                  onChange={(value) => form.setFieldValue('contextCompactionTriggerRatio', value)}
+                  min={60}
+                  max={90}
+                  step={1}
+                  marks={{ 60: '60%', 80: '80%', 90: '90%' }}
+                  tooltip={{ formatter: (value) => `${value}%` }}
+                  style={{ width: 260, marginInline: 16 }}
                 />
               </Form.Item>
             </div>
