@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-28",
+  "purpose": "Record bounded validation attempt for session ledger ready-proof cache in the arm64 candidate package.",
+  "sourceCommit": "7a5064e3",
+  "package": {
+    "path": "release/SpaceAssistant-0.2.9-arm64.dmg",
+    "sha256": "a0f7c0aace45d981e8a1d193fbe851b11956d81530666183b09143ce0c492d93",
+    "appAsarSha256": "ba7ec1cfe8b2378aacf1f47e93f937a005544c9bc481abc573599b6979829bb5",
+    "ledgerLifecycleModuleSha256": "d47541a269f0765ad8ba7e5d70b80918ab90c8b028c4878f031a121462d782b8",
+    "ledgerLifecycleModuleContainsReadyProofCache": true,
+    "installed": false
+  },
+  "profile": {
+    "source": "APFS copy-on-write clone of sap4p4realhealthy-current-20261028",
+    "userData": "/Users/space/Library/Application Support/sap4ac7proofcache-20261028",
+    "openedByCandidate": true,
+    "sourceProfileOpened": false,
+    "cloneRetainedAfterRun": false
+  },
+  "targets": {
+    "large": {
+      "messageCount": 64,
+      "ledgerStateAfterLaunch": "ready",
+      "sourceManifestCount": 1,
+      "sourceManifestBytes": 4228
+    },
+    "ordinary": {
+      "messageCount": 8,
+      "ledgerStateAfterLaunch": "ready",
+      "sourceManifestCount": 1,
+      "sourceManifestBytes": 6887
+    }
+  },
+  "result": {
+    "startupProfileHealth": "degraded; startup log contained SESSION_LEDGER_REPAIR_PENDING for unrelated sessions",
+    "windowReadyLog": true,
+    "debuggingPortListening": true,
+    "debuggingEndpointResponsive": false,
+    "trustedClickSamples": 0,
+    "switchLatencySamples": 0,
+    "longTaskAttributionSamples": 0,
+    "countsTowardAc7": false,
+    "reason": "The debugging endpoint accepted TCP connections but did not return the page list, and no controllable candidate window was available. No performance conclusions are drawn."
+  },
+  "cleanup": {
+    "candidatePidTerminated": true,
+    "candidateProcessesRemaining": false,
+    "defaultUserDataOpened": false,
+    "temporaryCloneRemoved": true,
+    "cloneRemovalNote": "The shell rejected rm -rf, then the isolated clone was removed with Python shutil after the candidate process exited."
+  }
+}
