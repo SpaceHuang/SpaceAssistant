@@ -40,12 +40,28 @@
     "switchLatencySamples": 0,
     "longTaskAttributionSamples": 0,
     "countsTowardAc7": false,
-    "reason": "The debugging endpoint accepted TCP connections but did not return the page list, and no controllable candidate window was available. No performance conclusions are drawn."
+    "reason": "The debugging endpoint accepted TCP connections but did not return the page list. A later native automation lookup launched a second candidate instance without the isolated userData argument; it was terminated before any interaction. No performance conclusions are drawn."
+  },
+  "automationMislaunch": {
+    "trigger": "Native automation getApp with the candidate app bundle path",
+    "userDataArgument": false,
+    "openedDefaultDatabase": true,
+    "startupError": "Database schema 117 is newer than this package supports (115)",
+    "processTerminated": true,
+    "postExitReadOnlyCheck": {
+      "schemaMetaVersion": 117,
+      "integrityCheck": "ok",
+      "walPresent": false,
+      "shmPresent": false,
+      "mainDatabaseMtime": "2026-10-28T13:22:57.784331"
+    },
+    "mutationStatus": "Unknown: no pre-launch snapshot exists; no restore or write operation was performed."
   },
   "cleanup": {
     "candidatePidTerminated": true,
     "candidateProcessesRemaining": false,
-    "defaultUserDataOpened": false,
+    "defaultUserDataOpened": true,
+    "defaultDatabaseRestoredOrModifiedByAgent": false,
     "temporaryCloneRemoved": true,
     "cloneRemovalNote": "The shell rejected rm -rf, then the isolated clone was removed with Python shutil after the candidate process exited."
   }
