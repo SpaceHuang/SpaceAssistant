@@ -62,13 +62,15 @@ export async function readVerifiedChatBodyPayloadStream(
               if (wanted!.has(message.id)) selected.set(message.id, message)
             } else {
               const fact = candidateFacts!.get(message.id)
+              let isCandidate = false
               if (fact) {
                 if (fact.role !== message.role || fact.timestamp !== message.timestamp) {
                   throw new Error('PROJECTION_CHAT_BODY_CACHE_CANDIDATE_SOURCE_MISMATCH')
                 }
                 candidateFacts!.delete(message.id)
+                isCandidate = true
               }
-              if (needle && foldAscii(message.content).includes(needle)) {
+              if (isCandidate && needle && foldAscii(message.content).includes(needle)) {
                 matches.push({ message, ordinal: messageCount })
                 if (input.operation.limit >= 0 && matches.length > input.operation.limit) {
                   matches.sort(compareSearchMatches)

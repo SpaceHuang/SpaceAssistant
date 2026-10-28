@@ -26,7 +26,11 @@ describe('prepared chat body global search', () => {
       { id: 'non-ascii', role: 'user', content: 'Äneedle 100%_x', timestamp: 6 }
     ])
 
-    const result = searchVerifiedChatBodyPayload({ ...payload, query: 'needle 100%_x', limit: 10, candidateFacts: [] })
+    const result = searchVerifiedChatBodyPayload({ ...payload, query: 'needle 100%_x', limit: 10, candidateFacts: [
+      { id: 'older', role: 'user', timestamp: 1 }, { id: 'newer', role: 'assistant', timestamp: 3 },
+      { id: 'wrong-case', role: 'user', timestamp: 4 }, { id: 'wildcard-only', role: 'user', timestamp: 5 },
+      { id: 'non-ascii', role: 'user', timestamp: 6 }
+    ] })
 
     expect(result.map(({ id }) => id)).toEqual(['non-ascii', 'wrong-case', 'newer', 'older'])
     expect(result.map(({ content }) => content)).toEqual([
@@ -35,7 +39,8 @@ describe('prepared chat body global search', () => {
     const nonAsciiCase = payloadFor([
       { id: 'lower', role: 'user', content: 'äneedle', timestamp: 1 }
     ])
-    expect(searchVerifiedChatBodyPayload({ ...nonAsciiCase, query: 'Äneedle', limit: 10, candidateFacts: [] })).toEqual([])
+    expect(searchVerifiedChatBodyPayload({ ...nonAsciiCase, query: 'Äneedle', limit: 10,
+      candidateFacts: [{ id: 'lower', role: 'user', timestamp: 1 }] })).toEqual([])
   })
 
   it('applies a bounded result limit after ordering matches', () => {
@@ -44,6 +49,20 @@ describe('prepared chat body global search', () => {
       { id: 'new', role: 'assistant', content: 'match', timestamp: 2 }
     ])
 
-    expect(searchVerifiedChatBodyPayload({ ...payload, query: 'match', limit: 1, candidateFacts: [] }).map(({ id }) => id)).toEqual(['new'])
+    expect(searchVerifiedChatBodyPayload({ ...payload, query: 'match', limit: 1, candidateFacts: [
+      { id: 'old', role: 'user', timestamp: 1 }, { id: 'new', role: 'assistant', timestamp: 2 }
+    ] }).map(({ id }) => id)).toEqual(['new'])
+  })
+
+  it('applies the candidate message set before ordering and limiting matches', () => {
+    const payload = payloadFor([
+      { id: 'legacy-decoy', role: 'user', content: 'needle legacy', timestamp: 200 },
+      { id: 'canonical-candidate', role: 'assistant', content: 'needle canonical', timestamp: 100 }
+    ])
+
+    const result = searchVerifiedChatBodyPayload({ ...payload, query: 'needle', limit: 1,
+      candidateFacts: [{ id: 'canonical-candidate', role: 'assistant', timestamp: 100 }] })
+
+    expect(result.map(({ id }) => id)).toEqual(['canonical-candidate'])
   })
 })

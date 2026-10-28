@@ -51,9 +51,10 @@ describe('stream-verified chatBodyV1 payload reader', () => {
     }
 
     const result = await readVerifiedChatBodyPayloadStream(source(), { ...payload, byteLength: payload.bytes.byteLength,
-      operation: { kind: 'search', query: 'needle 100%_x', limit: 1, candidateFacts: [] } })
+      operation: { kind: 'search', query: 'needle 100%_x', limit: 1,
+        candidateFacts: [{ id: 'older', role: 'user', timestamp: 1 }] } })
 
-    expect(result.map(({ id }) => id)).toEqual(['wrong-case'])
+    expect(result.map(({ id }) => id)).toEqual(['older'])
   })
 
   it('rejects negative and unbounded search limits', async () => {

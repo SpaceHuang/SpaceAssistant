@@ -2124,6 +2124,47 @@ describe('session transcript projection P2 read path', () => {
     }
   })
 
+  it('does not let a newer legacy hit consume the prepared search limit for an older canonical hit in the same session', async () => {
+    const temp = createTempDatabase('prepared-mixed-storage-search-')
+    let host: ReturnType<typeof createSqliteSessionStorageHost> | undefined
+    try {
+      const db = temp.db
+      const session = createSession(db, { name: 'prepared mixed storage search' })
+      const canonicalBody = 'needle canonical older'
+      appendMessage(db, { id: 'mixed-canonical-user', sessionId: session.id, role: 'user', content: canonicalBody, timestamp: 100, status: 'sent' })
+      appendMessage(db, { id: 'mixed-legacy-user', sessionId: session.id, role: 'user', content: 'needle legacy newer', timestamp: 200, status: 'sent' })
+      const conn = getDbConnection(db)
+      await new SqliteAgentHistory(conn, 1, Date.now, session.id).appendBatch([{
+        invocationId: 'mixed-search-invocation', turnId: 'mixed-search-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'mixed-search-context', idempotencyKey: 'mixed-search-context', kind: 'invocation-context-committed',
+        payload: { messages: [
+          { id: 'mixed-canonical-user', role: 'user', content: canonicalBody, timestamp: 100 },
+          { id: 'mixed-legacy-user', role: 'user', content: 'needle legacy newer', timestamp: 200 }
+        ] }
+      }], 0)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run('mixed-canonical-user')
+      const blobRoot = path.join(path.dirname(temp.dbPath), 'prepared-mixed-search-blobs')
+      const processGeneration = advanceProcessGeneration(conn)
+      const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now })
+      host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: blobRoot },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+
+      const hits = await host.storage.queries.searchPreparedMessages!({ query: 'needle', activeProfileId: '', limit: 2,
+        prepareSession: async (sessionId) => await host!.storage.ensureChatBodyV1?.({ sessionId }) as
+          import('../sessionStorage/public/model').PreparedChatBodyView | undefined })
+
+      expect(hits.map(({ messageId, content }) => [messageId, content])).toEqual([
+        ['mixed-legacy-user', 'needle legacy newer'], ['mixed-canonical-user', canonicalBody]
+      ])
+    } finally {
+      await host?.lifecycle.stop({ deadlineMs: 5_000 })
+      temp.cleanup()
+    }
+  })
+
   it('selects a prepared latest retry target without replaying the full transcript', async () => {
     const temp = createTempDatabase('prepared-retry-target-')
     const blobRoot = path.join(path.dirname(temp.dbPath), 'retry-target-blobs')

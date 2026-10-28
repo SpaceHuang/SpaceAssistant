@@ -106,7 +106,7 @@ async function handle(input: Input, enqueuedAt: number): Promise<void> {
     }
     if (input.operation === 'search') verifyChatBodyCandidateFacts(entry.messages, input.candidateFacts!)
     const messages = input.operation === 'search'
-      ? searchVerifiedChatBodies(entry.messages, input.query!, input.limit!)
+      ? searchVerifiedChatBodies(entry.messages, input.query!, input.limit!, new Set(input.candidateFacts!.map(({ id }) => id)))
       : selectVerifiedChatBodies(entry.messages, input.messageIds!)
     parentPort!.postMessage({ requestId: input.requestId, result: { messages, workerThreadId: threadId,
       metrics: { 'worker-queue': Math.max(0, workerStartedAt - enqueuedAt), 'source-spill-verify': sourceSpillVerifyMs,

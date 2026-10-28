@@ -87,17 +87,19 @@ export function searchVerifiedChatBodyPayload(input: VerifiedPayloadInput & Read
   query: string; limit: number; candidateFacts: readonly ChatBodyCandidateFact[]
 }>): readonly VerifiedChatBody[] {
   if (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit)) throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
-  verifyChatBodyCandidateFacts(readVerifiedChatBodyPayload(input), input.candidateFacts)
+  const messages = readVerifiedChatBodyPayload(input)
+  verifyChatBodyCandidateFacts(messages, input.candidateFacts)
   if (!input.query || input.limit === 0) return Object.freeze([])
-  return searchVerifiedChatBodies(readVerifiedChatBodyPayload(input), input.query, input.limit)
+  return searchVerifiedChatBodies(messages, input.query, input.limit, new Set(input.candidateFacts.map(({ id }) => id)))
 }
 
-export function searchVerifiedChatBodies(messages: readonly VerifiedChatBody[], query: string, limit: number): readonly VerifiedChatBody[] {
+export function searchVerifiedChatBodies(messages: readonly VerifiedChatBody[], query: string, limit: number,
+  candidateIds?: ReadonlySet<string>): readonly VerifiedChatBody[] {
   if (typeof query !== 'string' || !Number.isSafeInteger(limit)) throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
   if (!query || limit === 0) return Object.freeze([])
   const foldAscii = (value: string) => value.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
   const needle = foldAscii(query)
-  const matches = messages.filter(({ content }) => foldAscii(content).includes(needle))
+  const matches = messages.filter(({ id, content }) => (!candidateIds || candidateIds.has(id)) && foldAscii(content).includes(needle))
     .sort((left, right) => right.timestamp - left.timestamp)
   return Object.freeze(limit < 0 ? matches : matches.slice(0, limit))
 }
