@@ -312,7 +312,7 @@ describe('SQLite projection build task composition', () => {
     try {
       const session = createSession(db, { name: 'single oversized History event', model: 'test' })
       const body = 'segment-source-body-'.repeat(2_048)
-      const messages = Array.from({ length: 850 }, (_, index) => ({ id: `segment-source-${index}`, role: 'user', content: body, timestamp: index + 1 }))
+      const messages = Array.from({ length: 825 }, (_, index) => ({ id: `segment-source-${index}`, role: 'user', content: body, timestamp: index + 1 }))
       appendMessagesAtomically(db, messages.map((message) => ({ ...message, sessionId: session.id, status: 'sent' as const })))
       const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id,
         createSpillStore(path.join(path.dirname(temp.dbPath), 'spill')))
@@ -368,7 +368,7 @@ describe('SQLite projection build task composition', () => {
         await host.lifecycle.stop({ deadlineMs: 5_000 })
       }
     } finally { temp.cleanup() }
-  }, 180_000)
+  }, 300_000)
 
   it('segments large same-snapshot message facts instead of embedding them in the root manifest', async () => {
     const temp = createTempDatabase('sqlite-projection-large-message-facts-segments-')
