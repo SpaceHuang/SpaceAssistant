@@ -4,6 +4,14 @@ import { runInTransaction } from './database/transaction'
 import { sessionLedgerLocationIdentity, type SessionLedgerLocationInput } from './sessionLedgerIdentity'
 
 export type SessionLedgerReadinessState = 'uninitialized' | 'initializing' | 'unknown' | 'checking' | 'ready' | 'dirty' | 'blocked'
+export type SessionLedgerLogicalState = 'absent' | 'usable' | 'stale'
+
+/** Maps the durable legacy state machine to the read-only three-state contract. */
+export function mapSessionLedgerPhysicalState(state: SessionLedgerReadinessState | undefined): SessionLedgerLogicalState {
+  if (state === undefined) return 'absent'
+  return state === 'ready' ? 'usable' : 'stale'
+}
+
 export type SessionLedgerReadiness = {
   ledgerLocationKey: string
   workDirIdentity: string

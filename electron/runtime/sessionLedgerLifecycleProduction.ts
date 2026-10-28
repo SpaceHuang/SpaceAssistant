@@ -6,9 +6,14 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import {
   bootstrapEmptySessionEventLedger,
-  createEmptySessionEventLedgerForCanonicalRebuild,
+  createSessionEventLedgerRebuildStage,
+  discardSessionEventLedgerRebuildStage,
   establishExistingSessionEventLedgerBaseline,
   getSessionEventSink,
+  publishSessionEventLedgerRebuildStage,
+  quarantineDegradedSessionEventLedger,
+  quarantineSessionEventLedgerForPhysicalMismatch,
+  recoverInterruptedSessionEventLedgerQuarantine,
   resolveSessionEventPaths
 } from '../sessionEvents'
 import { runInTransaction } from '../database/transaction'
@@ -192,6 +197,7 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
   }
   const dependencies: SessionLedgerLifecycleDependencies = {
     fileExists: async (location) => {
+      await recoverInterruptedSessionEventLedgerQuarantine(location)
       const eventPath = resolveSessionEventPaths(location.workDir, location.sessionId, location.createdAt).eventsPath
       try {
         const stat = await fs.lstat(eventPath)
@@ -255,10 +261,13 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
         conn.prepare(`UPDATE session_ledger_projection_outbox SET status='pending',acked_at=NULL WHERE ledger_location_key=?`)
           .run(identity.key)
       })
-      await createEmptySessionEventLedgerForCanonicalRebuild(location.workDir, location.sessionId, location.createdAt)
-      const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+      const stage = await createSessionEventLedgerRebuildStage(location)
+      const sink = getSessionEventSink(stage.workDir, location.sessionId, location.createdAt)
       try {
+        for (const target of targets) await projectCanonicalSessionLedgerTarget(sink, target)
         await sink.flush()
+        await sink.close()
+        await publishSessionEventLedgerRebuildStage(location, stage)
         const drained = await drainCanonicalLedgerProjectionOutbox(conn, identity.key, (target) => project(location, target))
         if (drained.failedTargetId) throw new Error('SESSION_LEDGER_REBUILD_PROJECTION_FAILED')
         const persistedTargets = conn.prepare(`SELECT target_id,status FROM session_ledger_projection_outbox WHERE ledger_location_key=?`)
@@ -270,10 +279,18 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
         }
       } catch (error) {
         await sink.close().catch(() => undefined)
+        await discardSessionEventLedgerRebuildStage(location, stage).catch(() => undefined)
         throw error
       }
-      await sink.close()
       return await proof(location) ?? Promise.reject(new Error('SESSION_LEDGER_REBUILD_PROOF_MISSING'))
+    },
+    quarantineDegradedLedger: async (location) => {
+      await quarantineDegradedSessionEventLedger(location)
+    },
+    rebuildPhysicalMismatch: async (location) => {
+      await quarantineSessionEventLedgerForPhysicalMismatch(location)
+      if (!dependencies.rebuildMissingLegacyLedger) throw new Error('SESSION_LEDGER_PHYSICAL_MISMATCH_REBUILD_UNAVAILABLE')
+      return dependencies.rebuildMissingLegacyLedger(location)
     },
     applyTarget: project,
     reconcilePreviousOwner: async (location) => {

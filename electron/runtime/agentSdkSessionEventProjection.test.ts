@@ -19,13 +19,16 @@ describe('createAgentSdkSessionEventProjector', () => {
   it('records but does not throw critical append failures in legacy compatibility mode', async () => {
     const error = new Error('legacy ledger unavailable')
     const onCriticalFailure = vi.fn()
+    const appendCritical = vi.fn(async () => { throw error })
     const projector = createAgentSdkSessionEventProjector({
-      turnId: 'turn-1', eventWriter: { appendCritical: vi.fn(async () => { throw error }) } as unknown as SessionEventSink,
+      turnId: 'turn-1', eventWriter: { appendCritical } as unknown as SessionEventSink,
       onCriticalFailure
     })
 
     await expect(projector({ type: 'tool_call', payload: { toolUseId: 'tool-1' } })).resolves.toBeUndefined()
+    await expect(projector({ type: 'tool_result', payload: { toolUseId: 'tool-1' } })).resolves.toBeUndefined()
     expect(onCriticalFailure).toHaveBeenCalledWith(error)
+    expect(appendCritical).toHaveBeenCalledOnce()
   })
 
   it('keeps assistant chunks droppable while preserving the normalized turn projection', async () => {

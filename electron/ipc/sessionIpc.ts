@@ -27,7 +27,8 @@ import { addSessionDirectoryGrant, listSessionDirectoryGrants, removeSessionDire
 import { probeReadPathFact } from '../confirmation/extractors/readPathFacts'
 import os from 'node:os'
 import { withSessionContextCompactionLock, registerSessionCompactionAdmissionBlocker } from '../sessionCompactionLock'
-import { compactSessionContext } from '../sessionContextCompaction'
+import { compactSessionContext, lostCompactionRepairFallback } from '../sessionContextCompaction'
+import { inspectLostCompactionRepairEvidence } from '../sessionCompactionEvidence'
 import { readApiBaselineAfterPreparation } from '../sessionStorage/public/readMessages'
 import { resolveWorkDirForSession } from '../workDirManager'
 import { readStoredModels } from '../llmServiceResolver'
@@ -36,6 +37,7 @@ import { summarizeSessionContext } from '../sessionContextSummary'
 import { resolveModelContextWindow } from '../../src/shared/llmModelConfig'
 import { readAppLocale } from './ipcShared'
 import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
+import { surfaceItemIdentities } from '../../src/shared/surfaceReplay'
 
 export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   const sessionStorage = ctx.sessionStorage
@@ -87,7 +89,14 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       if (initialMessages.length < 3) return { status: 'no-op' as const }
       const initialCurrentUser = [...initialMessages].reverse().find((message) => message.role === 'user')
       if (!initialCurrentUser) return { status: 'no-op' as const }
+      const sessionWorkDir = resolveWorkDirForSession(sessionQueries, sessionId, () => ctx.workDirManager.listProfiles(),
+        () => ctx.workDirManager.getActiveProfileId(), () => ctx.workDirManager.getActiveWorkDir())
+      if (!sessionWorkDir) return { status: 'unavailable' as const }
       const { adapter: sessionContextAdapter, messages, windowId } = await sessionStorage.contexts.createBoundAdapter({ sessionId, isBusy: busy })
+      const repairReplay = await sessionStorage.readCompactionReplay({ sessionId, workDir: sessionWorkDir.workDir })
+      const repairEvidence = inspectLostCompactionRepairEvidence({ replay: repairReplay, messages, surfaceIdentities: surfaceItemIdentities(messages) })
+      const repair = repairEvidence.branch ? { sourceVersion: repairEvidence.sourceVersion, lostWindow: repairEvidence.lostWindow,
+        ...(repairEvidence.lostRanges ? { lostRanges: repairEvidence.lostRanges } : {}), branch: repairEvidence.branch, replay: repairReplay } : undefined
       const modelWindow = resolveModelContextWindow(session.model, readStoredModels(ctx.db))
       const trustedContextWindow = modelWindow.trusted ? modelWindow.contextWindow : undefined
       const totalInputBudget = Math.max(1, (trustedContextWindow ?? 100_000) - session.maxTokens)
@@ -98,6 +107,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       result = await compactSessionContext({
         sessionId, requestId, windowId, messages, totalInputBudget,
         locale: readAppLocale(ctx.db) === 'en-US' ? 'en-US' : 'zh-CN', contextAdapter: { ...sessionContextAdapter, port: sessionStorage.contexts },
+        repair,
         recoveryFacts,
         summarize: async (summaryMessages, locale, summaryRecoveryFacts) => {
           const credentials = await resolveLlmCredentialsForModel(ctx.db, session.model, {
@@ -122,7 +132,8 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       } finally {
         unbindContext()
       }
-      return result.status === 'committed' ? { ...result, status: 'committed' as const } : result
+      const recovered = lostCompactionRepairFallback(repair?.branch, result)
+      return recovered.status === 'committed' ? { ...recovered, status: 'committed' as const } : recovered
     })
     return locked.status === 'busy' ? { status: 'busy' as const } : locked.value
   })

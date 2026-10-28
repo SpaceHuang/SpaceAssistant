@@ -9,8 +9,9 @@ export function createAgentSdkSessionEventProjector(input: {
   onChunkDropped?(): void
   onCriticalFailure?(error: unknown): void
 }): (event: SessionEventInput) => Promise<void> {
+  let eventWriter = input.eventWriter
   return async (event) => {
-    const writer = input.eventWriter
+    const writer = eventWriter
     if (!writer) return
     const stripped = stripPartialJsonForPersist(event)
     const normalized = { ...stripped, payload: { ...stripped.payload, turnId: input.turnId } }
@@ -28,6 +29,7 @@ export function createAgentSdkSessionEventProjector(input: {
       input.onCommitted?.(committed)
     } catch (error) {
       input.onCriticalFailure?.(error)
+      eventWriter = undefined
       if (input.failClosedCriticalEvents) throw error
     }
   }

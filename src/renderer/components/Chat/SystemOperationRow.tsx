@@ -9,7 +9,11 @@ export function SystemOperationRow({ operation }: { operation: SystemOperationRe
   const label = operation.status === 'running'
     ? t('systemOperation.running')
     : operation.status === 'succeeded'
-      ? operation.beforePercent != null && operation.afterPercent != null
+      ? operation.reason === 'REPAIR_ORIGINAL_WINDOW'
+        ? t('systemOperation.repairOriginalSucceeded')
+        : operation.reason === 'REPAIR_NEW_SPLIT'
+          ? t('systemOperation.repairNewSplitSucceeded')
+          : operation.beforePercent != null && operation.afterPercent != null
         ? t('systemOperation.succeeded', { before: operation.beforePercent, after: operation.afterPercent })
         : t('systemOperation.title')
       : operation.status === 'failed'
@@ -29,6 +33,8 @@ export function SystemOperationRow({ operation }: { operation: SystemOperationRe
         ? t('systemOperation.reasonUnavailable')
         : operation.reason === 'SUMMARY_FAILED'
           ? t('systemOperation.reasonFailed')
+          : operation.reason === 'REPAIR_FALLBACK_FULL_EXPAND'
+            ? t('systemOperation.repairFallbackFullExpand')
           : undefined
   const Icon = operation.status === 'running' ? LoaderCircle : operation.status === 'succeeded' ? Check : operation.status === 'skipped' ? SkipForward : CircleX
 

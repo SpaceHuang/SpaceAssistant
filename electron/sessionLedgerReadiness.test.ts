@@ -14,7 +14,8 @@ import {
   completeSessionLedgerCheck,
   ensureLegacyLedgerReadiness,
   markMissingLegacyLedgerBlocked,
-  recoverInterruptedSessionLedgerCheck
+  recoverInterruptedSessionLedgerCheck,
+  mapSessionLedgerPhysicalState
 } from './sessionLedgerReadiness'
 
 function createDb(): DatabaseSync {
@@ -26,6 +27,32 @@ function createDb(): DatabaseSync {
 }
 
 describe('session ledger readiness state', () => {
+  it('maps the physical seven-state schema to absent, usable, or stale without changing stored values', () => {
+    expect(mapSessionLedgerPhysicalState(undefined)).toBe('absent')
+    expect(mapSessionLedgerPhysicalState('ready')).toBe('usable')
+    for (const state of ['uninitialized', 'initializing', 'unknown', 'checking', 'dirty', 'blocked'] as const) {
+      expect(mapSessionLedgerPhysicalState(state)).toBe('stale')
+    }
+
+    const conn = createDb()
+    const location = { workDir: '/tmp/mapped-state', sessionId: 'mapped', createdAt: 3 }
+    const readiness = ensureLegacyLedgerReadiness(conn, location, 'g', 1)
+    expect(readiness.state).toBe('unknown')
+    expect(mapSessionLedgerPhysicalState(readiness.state)).toBe('stale')
+    for (const logicalState of ['absent', 'usable', 'stale'] as const) {
+      expect(() => conn.prepare(`UPDATE session_ledger_projection_state SET state=? WHERE ledger_location_key=?`)
+        .run(logicalState, readiness.ledgerLocationKey)).toThrow()
+    }
+    for (const physicalState of ['uninitialized', 'initializing', 'unknown', 'checking', 'ready', 'dirty', 'blocked'] as const) {
+      expect(() => conn.prepare(`UPDATE session_ledger_projection_state SET state=? WHERE ledger_location_key=?`)
+        .run(physicalState, readiness.ledgerLocationKey)).not.toThrow()
+    }
+    conn.prepare(`UPDATE session_ledger_projection_state SET state='unknown' WHERE ledger_location_key=?`).run(readiness.ledgerLocationKey)
+    expect(conn.prepare('SELECT state FROM session_ledger_projection_state WHERE ledger_location_key=?').get(readiness.ledgerLocationKey))
+      .toEqual({ state: 'unknown' })
+    conn.close()
+  })
+
   it('keeps unknown legacy state on missing baseline and blocks only that ledger-dependent gate', () => {
     const conn = createDb()
     const location = { workDir: '/tmp/legacy-root', sessionId: 'legacy', createdAt: 10 }

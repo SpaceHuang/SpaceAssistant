@@ -464,8 +464,10 @@ async function runButlerModelTurn(
   const session = sessionStorage.queries.readSession(args.sessionId)
   if (!session) return { ok: false, error: 'BUTLER_SESSION_MISSING' }
   if (!args.assistantMessageId) return { ok: false, error: 'BUTLER_ASSISTANT_MESSAGE_REQUIRED' }
-  // Ledger readiness is maintenance state; canonical History remains authoritative for this turn.
-  try { await sessionStorage.ensureLedgerReady?.(args.sessionId) } catch { /* availability is reported by session storage */ }
+  // Ledger readiness only gates the secondary JSONL projection; History remains authoritative.
+  let ledgerReady = true
+  try { ledgerReady = (await sessionStorage.ensureLedgerReady?.(args.sessionId)) !== false }
+  catch { ledgerReady = false }
   const toolsConfig = deps.getToolsConfig()
   let rawMessages: import('../../src/shared/domainTypes').Message[]
   if (args.turnId) {
@@ -527,11 +529,20 @@ async function runButlerModelTurn(
     sessionCreatedAt: session.createdAt,
     assistantMessageId: args.assistantMessageId,
     sessionStorage,
-    failClosedCriticalEvents: true
+    enableLedger: ledgerReady,
+    failClosedCriticalEvents: false,
+    onLedgerFailure: (error) => logAgentEvent('warn', 'tool.error', { requestId: args.requestId, toolName: 'butler-session-event', message: error instanceof Error ? error.message : String(error) })
   })
   const hostedTurnId = args.acceptedTurn.turnId
-  await butlerEvents.sink.appendCritical({ type: 'turn_start', payload: { turnId: hostedTurnId } })
-  await butlerEvents.sink.appendCritical({ type: 'step_start', payload: { turnId: hostedTurnId, stepId: args.requestId } })
+  const emitSessionEventBestEffort = async (event: import('../sessionEvents').SessionEventInput): Promise<void> => {
+    try { await butlerEvents.emitSessionEvent(event) }
+    catch (error) {
+      try { logAgentEvent('warn', 'tool.error', { requestId: args.requestId, toolName: 'butler-session-event', message: error instanceof Error ? error.message : String(error) }) }
+      catch { /* diagnostics must not alter the canonical turn result */ }
+    }
+  }
+  await emitSessionEventBestEffort({ type: 'turn_start', payload: { turnId: hostedTurnId } })
+  await emitSessionEventBestEffort({ type: 'step_start', payload: { turnId: hostedTurnId, stepId: args.requestId } })
   const workDir = args.runConfig.workDir!
   const approvalTaskEvidence = buildApprovalTaskEvidence(args.taskPrompt)
 
@@ -595,7 +606,7 @@ async function runButlerModelTurn(
     assistantMessageId: args.assistantMessageId,
     sessionEventLocation: { workDir: path.join(deps.getUserDataPath(), 'automation-sessions', args.runConfig.taskId), sessionId: args.sessionId, createdAt: session.createdAt },
     emitFactEvent: butlerEvents.emitFactEvent,
-    emitSessionEvent: butlerEvents.emitSessionEvent,
+    emitSessionEvent: emitSessionEventBestEffort,
     onFileTreeChanged: butlerEvents.onFileTreeChanged
   })
   let reason = 'failed'
@@ -611,13 +622,13 @@ async function runButlerModelTurn(
     if (error instanceof HostedTurnFinalizedError) reason = hostedTerminalSessionEventReason(error.outcome)
   } finally {
     try {
-      await butlerEvents.sink.appendCritical({ type: 'step_end', payload: { turnId: hostedTurnId, stepId: args.requestId, reason } })
-      await butlerEvents.sink.appendCritical({ type: 'turn_end', payload: { turnId: hostedTurnId, reason, ...(failure ? { error: failure instanceof Error ? failure.message : String(failure) } : !res?.ok ? { error: res?.error } : {}) } })
+      await emitSessionEventBestEffort({ type: 'step_end', payload: { turnId: hostedTurnId, stepId: args.requestId, reason } })
+      await emitSessionEventBestEffort({ type: 'turn_end', payload: { turnId: hostedTurnId, reason, ...(failure ? { error: failure instanceof Error ? failure.message : String(failure) } : !res?.ok ? { error: res?.error } : {}) } })
     } catch (error) {
       try { logAgentEvent('warn', 'tool.error', { requestId: args.requestId, toolName: 'butler-session-event-finalize', message: error instanceof Error ? error.message : String(error) }) }
       catch { /* Diagnostics must not replace the canonical Hosted turn outcome. */ }
     } finally {
-      try { await butlerEvents.sink.close() }
+      try { await butlerEvents.sink?.close() }
       catch (error) {
         try { logAgentEvent('warn', 'tool.error', { requestId: args.requestId, toolName: 'butler-session-event-close', message: error instanceof Error ? error.message : String(error) }) }
         catch { /* Diagnostics must not replace the canonical Hosted turn outcome. */ }

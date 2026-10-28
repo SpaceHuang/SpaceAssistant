@@ -60,7 +60,7 @@ import { signalChatCancel } from './chatCancelRegistry'
 import { cancelAllToolConfirmsForRequest } from './toolConfirmRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
-import { beginSessionEventShutdown, withSessionEventWriterDrain, flushAllSessionEventSinks, getSessionEventSink, hasActiveSessionEventSink, setSessionEventCommitObserver } from './sessionEvents'
+import { beginSessionEventShutdown, withSessionEventWriterDrain, flushAllSessionEventSinks, getSessionEventSink, hasActiveSessionEventSink, readCompactionReplay, retireSessionEventSink, setSessionEventCommitObserver, setSessionEventFailureObserver } from './sessionEvents'
 import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
@@ -83,7 +83,8 @@ import { createSessionStorageCleanupProductionBoundary } from './runtime/session
 import { SESSION_STORAGE_HISTORY_FORMAT_VERSION, SESSION_STORAGE_SPILL_FORMAT_VERSION } from './runtime/sessionStorageCleanupReleaseConfig'
 import { scheduleSessionMessageContentCleanupMaintenance } from './storage/sessionMessageContentCleanupMaintenance'
 import { scheduleSpillReferenceBackfill } from './storage/spillReferenceBackfillScheduler'
-import { ensureSessionLedgerReady } from './sessionLedgerLifecycle'
+import { ensureSessionLedgerReady, runOutsideSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
+import { createSessionLedgerRepairScheduler } from './sessionLedgerRepairScheduler'
 import { createProductionSessionLedgerLifecycleDependencies } from './runtime/sessionLedgerLifecycleProduction'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
 import { withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
@@ -522,6 +523,34 @@ app.whenReady().then(async () => {
   const recoveryWorkDirs = ledgerRecovery.getAllowedRoots({ configuredWorkDir: recoveryWorkDir, profilesJson: getConfigValue(db, 'config.workDirProfiles') })
   const sessionLedgerLifecycleDependencies = createProductionSessionLedgerLifecycleDependencies(getDbConnection(db))
   const processGeneration = currentProcessGeneration(getDbConnection(db))
+  let getSessionForLedgerRepair: ((sessionId: string) => { id: string; createdAt: number; generation: string } | undefined) | undefined
+  let sessionLedgerRepairRequestGeneration = 0
+  const sessionLedgerRepairScheduler = createSessionLedgerRepairScheduler({
+    repair: async (location, retireSink) => runOutsideSessionLedgerLifecycleLock(async () => {
+      if (!recoveryWorkDirs.some((root) => path.resolve(root) === path.resolve(location.workDir))) return true
+      const session = getSessionForLedgerRepair?.(location.sessionId)
+      if (!session || session.createdAt !== location.createdAt) return true
+      try {
+        if (retireSink) await retireSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        const result = await ensureSessionLedgerReady({ conn: getDbConnection(db), location,
+          sessionGeneration: session.generation, processGeneration, retryBlocked: true,
+          dependencies: sessionLedgerLifecycleDependencies, onTrace: logSessionLedgerGateTrace })
+        if (result.status !== 'ready') return false
+        // Reacquire immediately after successful repair; old references stay fenced by retire().
+        const repairedSink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        await readCompactionReplay(repairedSink.eventsPath)
+        return true
+      } catch {
+        return false
+      }
+    }),
+    onAttempt: ({ status, attempt, retryInMs }) => logAgentEvent(status === 'recovered' ? 'info' : 'warn', 'session.history.recovery', {
+      kind: 'session-ledger-auto-repair', status, attempt, retryInMs
+    })
+  })
+  setSessionEventFailureObserver((location, _error, kind) => sessionLedgerRepairScheduler.request(location, {
+    retireSink: kind === 'write', generation: ++sessionLedgerRepairRequestGeneration
+  }))
   setSessionEventCommitObserver(async (location) => {
     const identity = sessionLedgerLocationIdentity(location)
     const proof = await sessionLedgerLifecycleDependencies.readProof(location)
@@ -566,6 +595,10 @@ app.whenReady().then(async () => {
         sessionLedgerRepairFailureCount += 1
         logAgentEvent('warn', 'session.history.repair.failed', {
           kind: 'session-ledger-gate', reasonCode: result.readiness.failureClass ?? 'unknown'
+        })
+        sessionLedgerRepairScheduler.request({ workDir, sessionId: session.id, createdAt: session.createdAt }, {
+          retireSink: result.readiness.failureClass === 'ledger_missing' || result.readiness.failureClass === 'physical_proof_mismatch',
+          generation: `${result.readiness.ledgerGeneration}:${result.readiness.canonicalWatermark ?? ''}:${result.readiness.failureClass ?? ''}`
         })
       }
       return result.status === 'ready'
@@ -736,6 +769,10 @@ app.whenReady().then(async () => {
     quiesceMaintenance: async () => { await safeDatabaseMaintenanceInFlight }
   })
   const sessionStorage = sessionStorageHost.storage
+  getSessionForLedgerRepair = (sessionId) => {
+    const session = sessionStorage.queries.readSession(sessionId)
+    return session ? { id: session.id, createdAt: session.createdAt, generation: session.generation } : undefined
+  }
   setMcpArtifactCapacityRequest(() => requestMcpArtifactCapacitySweep?.())
   startWindowReadyMaintenance = () => {
     sessionStorageHost.lifecycle.allowBackgroundWork()
@@ -744,6 +781,7 @@ app.whenReady().then(async () => {
   }
   appSessionStorage = sessionStorage
   storageLifecycleStop = async (deadlineMs) => {
+    sessionLedgerRepairScheduler.stop()
     const [sessionResult, profileResult] = await Promise.allSettled([
       sessionStorageHost.lifecycle.stop({ deadlineMs }),
       storageProfileCoordinator?.shutdown({ deadlineMs }) ?? Promise.resolve({ status: 'quiescent' as const })
@@ -809,6 +847,12 @@ app.whenReady().then(async () => {
         ensureSessionLedgerReady: async ({ location, sessionGeneration }) => {
           const readiness = await ensureSessionLedgerReady({ conn: getDbConnection(db), location, sessionGeneration,
             processGeneration, retryBlocked: true, dependencies: sessionLedgerLifecycleDependencies, onTrace: logSessionLedgerGateTrace })
+          if (readiness.status !== 'ready') {
+            sessionLedgerRepairScheduler.request(location, {
+              retireSink: readiness.readiness.failureClass === 'ledger_missing' || readiness.readiness.failureClass === 'physical_proof_mismatch',
+              generation: `${readiness.readiness.ledgerGeneration}:${readiness.readiness.canonicalWatermark ?? ''}:${readiness.readiness.failureClass ?? ''}`
+            })
+          }
           return readiness.status === 'ready'
         },
         onLocationResolveError: (error, invocationId, sessionId) => {

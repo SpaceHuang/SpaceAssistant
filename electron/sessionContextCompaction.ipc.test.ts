@@ -46,6 +46,12 @@ describe('manual context compaction IPC ContextPort integration', () => {
       getSessionEventSink: () => sink as never, readCompactionReplay: async () => ({ committed: [], rejected: [] } as never)
     })
     await baseStorage.recovery.recover()
+    await baseStorage.execution.historyFor({ sessionId: session.id }).appendBatch([{
+      invocationId: 'invalid-compaction-sidecar', turnId: 'invalid-compaction-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'invalid-compaction-sidecar:event:1', idempotencyKey: 'invalid-compaction-sidecar:transcript-compacted:1',
+      kind: 'transcript-compacted', payload: { compactionId: 'legacy-compaction-without-boundary', messages: [{ role: 'user', content: 'x' }],
+        sessionLedger: { location: { workDir: '/tmp', sessionId: session.id, createdAt: session.createdAt }, start: { compactionId: 'legacy-compaction-without-boundary' } } }
+    }], 0)
     const observedAvailability = baseStorage.availability.inspect(session.id)
     const healthyAvailability = { ...observedAvailability,
       globalFence: { state: 'ready' as const, source: { recoveryState: 'ready' as const } },
@@ -73,17 +79,26 @@ describe('manual context compaction IPC ContextPort integration', () => {
       getApiKey: async () => null, setApiKey: async () => undefined, getBrowserDetectContext: () => ({ isPackaged: false, appPath: '/tmp', devRoot: '/tmp' })
     })
 
-    const result = await handlers.get('chat:compact-session-context')!({ sender: window.webContents }, { sessionId: session.id, requestId: 'ipc-compact-1' })
+    const [result, competing] = await Promise.all([
+      handlers.get('chat:compact-session-context')!({ sender: window.webContents }, { sessionId: session.id, requestId: 'ipc-compact-1' }),
+      handlers.get('chat:compact-session-context')!({ sender: window.webContents }, { sessionId: session.id, requestId: 'ipc-compact-1-duplicate' })
+    ])
 
-    expect(result).toMatchObject({ status: 'committed', windowId: expect.any(String), outputSurfaceFingerprint: expect.any(String) })
+    expect(result).toMatchObject({ status: 'committed', repairBranch: 'new-split', windowId: expect.any(String), outputSurfaceFingerprint: expect.any(String) })
+    expect(competing).toEqual({ status: 'busy' })
     expect(projectionReadEvents[0]).toBe('ensure')
     expect(projectionReadEvents.indexOf('ensure')).toBeLessThan(projectionReadEvents.indexOf('select'))
     expect(resolveLlmCredentialsForModel).toHaveBeenCalledOnce()
     expect(summarizeSessionContext).toHaveBeenCalledOnce()
     expect(appendCompactionTransaction).toHaveBeenCalledOnce()
-    expect(appendCompactionTransaction).toHaveBeenCalledWith(sink, expect.objectContaining({ reason: 'user_compact' }), expect.objectContaining({ candidate: expect.objectContaining({ kind: 'summary' }) }))
+    expect(appendCompactionTransaction).toHaveBeenCalledWith(sink, expect.objectContaining({ reason: 'lost_compaction_repair', repairIdentity: expect.objectContaining({ branch: 'new-split' }) }), expect.objectContaining({ candidate: expect.objectContaining({ kind: 'summary' }) }))
     expect(storage.contexts).toMatchObject({ readCurrent: expect.any(Function), commitReplacement: expect.any(Function) })
     expect(inspectAvailability).toHaveBeenCalledWith(session.id)
+    const retried = await handlers.get('chat:compact-session-context')!({ sender: window.webContents },
+      { sessionId: session.id, requestId: 'ipc-compact-1-retry' })
+    expect(retried).toEqual(result)
+    expect(summarizeSessionContext).toHaveBeenCalledOnce()
+    expect(appendCompactionTransaction).toHaveBeenCalledOnce()
     inspectAvailability.mockReturnValue({ ...healthyAvailability,
       globalFence: { state: 'pending', source: { recoveryState: 'pending' } } })
     await expect(handlers.get('chat:compact-session-context')!({ sender: window.webContents },

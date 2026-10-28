@@ -5,7 +5,7 @@ import {
   ensureLegacyLedgerReadiness, beginSessionLedgerCheck, completeSessionLedgerCheck,
   beginSessionLedgerTargetCheck, completeSessionLedgerTargetCheck, type SessionLedgerReadyProof
 } from './sessionLedgerReadiness'
-import { ensureSessionLedgerReady, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
+import { ensureSessionLedgerReady, isSessionLedgerLifecycleLockHeld, runOutsideSessionLedgerLifecycleLock, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 import { prepareSessionLedgerProcessLockTarget } from './sessionLedgerProcessLock'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -19,6 +19,18 @@ const proof: SessionLedgerReadyProof = { canonicalWatermark: 'seq:3', ledgerGene
   tailFrame: 'tail-hash', indexSeq: 3, indexEventCount: 3, indexBytes: 80, indexLastAt: 100 }
 
 describe('session ledger lifecycle lock', () => {
+  it('runs a scheduled repair outside the failure caller lock context', async () => {
+    const key = createHash('sha256').update(randomUUID()).digest('hex')
+    await withSessionLedgerLifecycleLock(key, async () => {
+      expect(isSessionLedgerLifecycleLockHeld(key)).toBe(true)
+      await runOutsideSessionLedgerLifecycleLock(async () => {
+        await Promise.resolve()
+        expect(isSessionLedgerLifecycleLockHeld(key)).toBe(false)
+      })
+      expect(isSessionLedgerLifecycleLockHeld(key)).toBe(true)
+    })
+  })
+
   it('serializes ledger maintenance with writers across processes', async () => {
     const key = createHash('sha256').update(randomUUID()).digest('hex')
     const target = await prepareSessionLedgerProcessLockTarget(key)
@@ -138,6 +150,41 @@ describe('session ledger lifecycle lock', () => {
         { operation: 'proof-reused', status: 'ready', baselineScanCount: 0, projectedCount: 0, durationMs: expect.any(Number) }
       ])
       expect(first.readiness.ledgerLocationKey).toBe(readiness.ledgerLocationKey)
+    } finally { db.close() }
+  })
+
+  it('rebuilds a physically mismatched ready ledger instead of accepting a shortened baseline', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const conn = getDbConnection(db)
+      const location = { workDir: '/tmp/lifecycle-physical-mismatch', sessionId: 'legacy-session', createdAt: 21 }
+      const readiness = ensureLegacyLedgerReadiness(conn, location, 'g1')
+      const fullProof = { ...proof, tailFrame: 'full:stable' }
+      const rebuildPhysicalMismatch = vi.fn(async () => fullProof)
+      const verifyPhysicalContinuity = vi.fn(async () => !shortened)
+      let shortened = false
+      const dependencies = {
+        fileExists: async () => true,
+        readProof: async () => shortened ? { ...fullProof, fileBytes: 12, indexBytes: 12, tailFrame: 'full:shortened' } : fullProof,
+        verifyPhysicalContinuity,
+        bootstrap: async () => fullProof,
+        baseline: async () => fullProof,
+        rebuildPhysicalMismatch,
+        applyTarget: async () => ({ eventIds: [], events: [] })
+      }
+      const first = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g1', processGeneration: 1, dependencies })
+      expect(first.status).toBe('ready')
+      expect(verifyPhysicalContinuity).not.toHaveBeenCalled()
+      shortened = true
+
+      const recovered = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g1', processGeneration: 1,
+        retryBlocked: true, dependencies })
+
+      expect(rebuildPhysicalMismatch).toHaveBeenCalledTimes(1)
+      expect(verifyPhysicalContinuity).toHaveBeenCalledTimes(1)
+      expect(recovered).toMatchObject({ status: 'ready', readiness: { state: 'ready' } })
+      expect(conn.prepare('SELECT ledger_generation FROM session_ledger_projection_state WHERE ledger_location_key=?').get(readiness.ledgerLocationKey))
+        .toEqual({ ledger_generation: 1 })
     } finally { db.close() }
   })
 

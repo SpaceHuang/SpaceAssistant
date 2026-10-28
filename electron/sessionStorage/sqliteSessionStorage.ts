@@ -10,7 +10,7 @@ import { createSessionQueries } from './queries'
 import { createSessionExecutionStore } from './execution'
 import { createSessionCommitService } from './application/sessionCommitService'
 import { createSessionStorageContextRouter } from './contextPortRegistry'
-import { getSessionEventSink, readCompactionReplay, readSessionEvents } from '../sessionEvents'
+import { getSessionEventSink, notifySessionEventLedgerFailure, readCompactionReplay, readSessionEvents } from '../sessionEvents'
 import type { CompactionReplay } from '../../src/shared/compactionEvents'
 import type { CanonicalContextMeterEvent, PreparedChatBodyView } from './public/model'
 import { createStorageSessionContextAdapter } from './contextAdapter'
@@ -104,7 +104,13 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     const canPersist = !options.ensureSessionLedgerReady || await options.ensureSessionLedgerReady({ session, workDir, retryBlocked: false })
     if (!canPersist) return { replay: queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }, canPersist: false }
     const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
-    const fileReplay = await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)
+    let fileReplay: CompactionReplay
+    try {
+      fileReplay = await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)
+    } catch (error) {
+      notifySessionEventLedgerFailure({ workDir, sessionId: session.id, createdAt: session.createdAt }, error)
+      throw error
+    }
     const canonicalReplay = queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }
     const canonicalIds = new Set(canonicalReplay.committed.map(({ compactionId }) => compactionId))
     const rejectedIds = new Set(canonicalReplay.rejected.flatMap(({ compactionId }) => compactionId ? [compactionId] : []))
@@ -170,7 +176,14 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     const stillHasLegacyOnlyCompaction = fileReplay.committed.some(({ compactionId }) => !refreshedCanonicalIds.has(compactionId) && !rejectedIds.has(compactionId))
     // Keep the file replay as the ordered compatibility source while it contains pre-canonical facts.
     // Once every file fact has a canonical owner, History supplies the replay without a JSONL dependency.
-    return { replay: stillHasLegacyOnlyCompaction ? fileReplay : refreshedCanonicalReplay, sink, canPersist: true }
+    const replay = stillHasLegacyOnlyCompaction ? fileReplay : refreshedCanonicalReplay
+    const replayCommittedIds = new Set(replay.committed.map(({ compactionId }) => compactionId))
+    const rejectedByIdentity = new Map<string, CompactionReplay['rejected'][number]>()
+    for (const rejected of [...refreshedCanonicalReplay.rejected, ...(fileReplay.rejected ?? [])]) {
+      if (rejected.compactionId && replayCommittedIds.has(rejected.compactionId)) throw new Error('CANONICAL_COMPACTION_REPLAY_INVALID')
+      rejectedByIdentity.set(`${rejected.compactionId ?? ''}\u0000${rejected.reason}`, rejected)
+    }
+    return { replay: { ...replay, rejected: [...rejectedByIdentity.values()] }, sink, canPersist: true }
   }
   const readContextMeterEventsForLocation = async (sessionId: string, workDir: string): Promise<readonly CanonicalContextMeterEvent[]> => {
     const session = queries.readSession(sessionId)

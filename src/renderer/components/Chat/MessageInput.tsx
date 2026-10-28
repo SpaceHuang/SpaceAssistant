@@ -447,9 +447,11 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
       if (result.status === 'committed') {
         dispatch(addCompactionMarker(result))
         dispatch(setContextProjection(null))
-        setDirectoryStatus(t('input.compactionCommitted'))
+        setDirectoryStatus(result.repairBranch === 'replay-original' ? t('input.compactionRepairReplayCommitted')
+          : result.repairBranch === 'new-split' ? t('input.compactionRepairResplitCommitted') : t('input.compactionCommitted'))
       } else if (result.status === 'no-op') setDirectoryStatus(t('input.compactionNoop'))
       else if (result.status === 'uncompressible') setDirectoryStatus(t('input.compactionUncompressible'))
+      else if (result.status === 'context-too-large') setDirectoryStatus(t('input.compactionRepairFullExpand'))
       else if (result.status === 'busy') setDirectoryStatus(t('input.compactionBusy'))
       else setDirectoryStatus(t('input.compactionFailed'))
     } catch {

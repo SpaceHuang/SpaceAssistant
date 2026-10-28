@@ -14,6 +14,12 @@ import {
   parseSessionEvent,
   readSessionEvents,
   readSessionEventsDetailed,
+  classifySessionEventLedgerCoverage,
+  quarantineDegradedSessionEventLedger,
+  quarantineSessionEventLedgerForPhysicalMismatch,
+  recoverInterruptedSessionEventLedgerQuarantine,
+  createSessionEventLedgerRebuildStage,
+  discardSessionEventLedgerRebuildStage,
   appendCompactionTransaction,
   ensureCompactionTransaction,
   ensureRequestRetryEvent,
@@ -29,6 +35,8 @@ import {
   bootstrapEmptySessionEventLedger,
   establishExistingSessionEventLedgerBaseline,
   resolveSessionEventPaths,
+  retireSessionEventSink,
+  setSessionEventFailureObserver,
   reconcileSessionEventFiles,
   reconcileSessionEventFilesDetailed,
   reconcileSessionEvents,
@@ -39,8 +47,150 @@ import {
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
 import { withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
+import { createSessionLedgerRepairScheduler } from './sessionLedgerRepairScheduler'
 
 describe('session events', () => {
+  it('preserves a complete ledger before physical-mismatch rebuild is allowed', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-physical-mismatch-'))
+    const sink = new SessionEventWriter(root, 'physical-mismatch', 4)
+    await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'preserve-before-rebuild' } })
+    await sink.close()
+    const original = await fs.readFile(sink.eventsPath, 'utf8')
+
+    const quarantine = await quarantineSessionEventLedgerForPhysicalMismatch({ workDir: root, sessionId: 'physical-mismatch', createdAt: 4 })
+
+    await expect(fs.readFile(sink.eventsPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await fs.readFile(quarantine.eventsPath, 'utf8')).toBe(original)
+    expect(JSON.parse(await fs.readFile(quarantine.manifestPath, 'utf8')))
+      .toMatchObject({ state: 'complete', reason: 'physical_proof_mismatch', eventCount: 1 })
+  })
+
+  it('classifies partial damage without treating readable events as complete coverage', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-coverage-'))
+    const eventsPath = path.join(root, 'events.jsonl')
+    const valid = JSON.stringify({ seq: 1, time: 1, type: 'turn_start', payload: { turnId: 'preserve-me' } })
+
+    await fs.writeFile(eventsPath, `${valid}\n`)
+    const complete = await readSessionEventsDetailed(eventsPath)
+    expect(classifySessionEventLedgerCoverage(complete)).toBe('complete')
+
+    await fs.writeFile(eventsPath, `${valid}\n{"seq":2,"type":"turn_end"`)
+    const tornTail = await readSessionEventsDetailed(eventsPath)
+    expect(classifySessionEventLedgerCoverage(tornTail)).toBe('repairable-tail')
+
+    await fs.writeFile(eventsPath, `${valid}\n{malformed-but-possibly-unique}\n`)
+    const damaged = await readSessionEventsDetailed(eventsPath)
+    expect(damaged.events).toHaveLength(1)
+    expect(classifySessionEventLedgerCoverage(damaged)).toBe('preserve-and-quarantine')
+  })
+
+  it('does not truncate a torn tail when an earlier complete malformed record requires quarantine', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-preserve-combined-damage-'))
+    const eventsPath = path.join(root, 'events.jsonl')
+    const original = [
+      JSON.stringify({ seq: 1, time: 1, type: 'turn_start', payload: { turnId: 'unique' } }),
+      '{complete-but-malformed}',
+      '{"seq":3,"type":"turn_end"'
+    ].join('\n')
+    await fs.writeFile(eventsPath, original)
+
+    const result = await readSessionEventsDetailed(eventsPath, { repairTail: true })
+
+    expect(result.integrity).toBe('degraded')
+    expect(await fs.readFile(eventsPath, 'utf8')).toBe(original)
+  })
+
+  it('quarantines degraded ledger artifacts without overwriting the unique source facts', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-quarantine-'))
+    const location = { workDir: root, sessionId: 'damaged-ledger', createdAt: 1 }
+    const paths = resolveSessionEventPaths(root, location.sessionId, location.createdAt)
+    await fs.mkdir(paths.directory, { recursive: true })
+    const original = `${JSON.stringify({ seq: 1, time: 1, type: 'turn_start', payload: { turnId: 'unique-fact' } })}\n{unreadable-record}\n`
+    const originalIndex = JSON.stringify({ formatVersion: 2, seq: 1, eventCount: 1, bytes: Buffer.byteLength(original), lastAt: 1 })
+    await fs.writeFile(paths.eventsPath, original)
+    await fs.writeFile(paths.indexPath, originalIndex)
+
+    const quarantine = await quarantineDegradedSessionEventLedger(location)
+
+    expect(await fs.readFile(quarantine.eventsPath, 'utf8')).toBe(original)
+    expect(await fs.readFile(quarantine.indexPath, 'utf8')).toBe(originalIndex)
+    await expect(fs.lstat(paths.eventsPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.lstat(paths.indexPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(JSON.parse(await fs.readFile(quarantine.manifestPath, 'utf8'))).toMatchObject({
+      formatVersion: 1,
+      ledgerLocationKey: expect.any(String),
+      state: 'complete',
+      integrity: 'degraded',
+      eventCount: 1,
+      issues: [{ line: 2, code: 'malformed-json' }]
+    })
+  })
+
+  it('resumes a partially completed quarantine in the same archive after an interrupted rename', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-quarantine-resume-'))
+    const location = { workDir: root, sessionId: 'resume-quarantine', createdAt: 1 }
+    const paths = resolveSessionEventPaths(root, location.sessionId, location.createdAt)
+    await fs.mkdir(paths.directory, { recursive: true })
+    const original = `${JSON.stringify({ seq: 1, time: 1, type: 'turn_start', payload: { turnId: 'preserve' } })}\n{broken}\n`
+    const originalIndex = JSON.stringify({ formatVersion: 2, seq: 1, eventCount: 1, bytes: Buffer.byteLength(original), lastAt: 1 })
+    await fs.writeFile(paths.eventsPath, original)
+    await fs.writeFile(paths.indexPath, originalIndex)
+    const originalRename = fs.rename.bind(fs)
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (from === paths.eventsPath) throw new Error('injected interruption after index quarantine')
+      return originalRename(from, to)
+    })
+    await expect(quarantineDegradedSessionEventLedger(location)).rejects.toThrow('injected interruption')
+    renameSpy.mockRestore()
+
+    const recovered = await recoverInterruptedSessionEventLedgerQuarantine(location)
+
+    expect(recovered).toBeDefined()
+    expect(await fs.readFile(recovered!.eventsPath, 'utf8')).toBe(original)
+    expect(await fs.readFile(recovered!.indexPath, 'utf8')).toBe(originalIndex)
+    expect(JSON.parse(await fs.readFile(recovered!.manifestPath, 'utf8'))).toMatchObject({ state: 'complete' })
+    expect(await fs.readdir(path.join(root, 'sessions', '.quarantine'))).toHaveLength(1)
+  })
+
+  it('finishes quarantine when the event rename succeeded but the manifest update was interrupted', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-quarantine-publish-window-'))
+    const location = { workDir: root, sessionId: 'quarantine-publish-window', createdAt: 1 }
+    const paths = resolveSessionEventPaths(root, location.sessionId, location.createdAt)
+    await fs.mkdir(paths.directory, { recursive: true })
+    const original = `${JSON.stringify({ seq: 1, time: 1, type: 'turn_start', payload: { turnId: 'preserve' } })}\n{broken}\n`
+    await fs.writeFile(paths.eventsPath, original)
+    await fs.writeFile(paths.indexPath, JSON.stringify({ formatVersion: 2, seq: 1, eventCount: 1, bytes: Buffer.byteLength(original), lastAt: 1 }))
+    const originalRename = fs.rename.bind(fs)
+    let manifestRenames = 0
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(to).endsWith('/manifest.json') && ++manifestRenames === 3) throw new Error('injected post-event-rename interruption')
+      return originalRename(from, to)
+    })
+    await expect(quarantineDegradedSessionEventLedger(location)).rejects.toThrow('injected post-event-rename interruption')
+    renameSpy.mockRestore()
+
+    const recovered = await recoverInterruptedSessionEventLedgerQuarantine(location)
+
+    expect(recovered).toBeDefined()
+    expect(await fs.readFile(recovered!.eventsPath, 'utf8')).toBe(original)
+    expect(JSON.parse(await fs.readFile(recovered!.manifestPath, 'utf8'))).toMatchObject({
+      state: 'complete', movedArtifacts: ['events.index.json', 'events.jsonl']
+    })
+  })
+
+  it('rejects a rebuild-stage cleanup path that escapes its ledger directory', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-stage-path-'))
+    const location = { workDir: root, sessionId: 'stage-path', createdAt: 1 }
+    const stage = await createSessionEventLedgerRebuildStage(location)
+    try {
+      await expect(discardSessionEventLedgerRebuildStage(location, { ...stage, stageRoot: root, workDir: root }))
+        .rejects.toThrow('SESSION_LEDGER_REBUILD_STAGE_IDENTITY_INVALID')
+      expect((await fs.stat(root)).isDirectory()).toBe(true)
+    } finally {
+      await discardSessionEventLedgerRebuildStage(location, stage)
+    }
+  })
+
   it('attaches filesystem and process diagnostics when a ledger path vanishes during append', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-enoent-diagnostics-'))
     const sink = getSessionEventSink(root, 'vanished-during-append', 1000)
@@ -891,6 +1041,79 @@ describe('session events', () => {
     const second = getSessionEventSink(root, 'close', 1)
     expect(second).not.toBe(first)
     await second.close()
+  })
+
+  it('retires a sink fail-stop and prevents old references from writing', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retire-'))
+    const first = getSessionEventSink(root, 'retire', 1)
+    await first.appendCritical({ type: 'turn_start', payload: { turnId: 'before-retire' } })
+
+    await first.retire()
+
+    expect(() => first.appendCritical({ type: 'turn_end', payload: { turnId: 'after-retire' } }))
+      .toThrow('SESSION_LEDGER_SINK_RETIRED')
+    const second = getSessionEventSink(root, 'retire', 1)
+    expect(second).not.toBe(first)
+    expect((await readSessionEvents(first.eventsPath)).map((event) => event.type)).toEqual(['turn_start'])
+    await second.close()
+  })
+
+  it('retires a failed sink so a repaired path gets a fresh writer instance', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retire-failed-'))
+    const first = getSessionEventSink(root, 'retire-failed', 1)
+    const appendSpy = vi.spyOn(fs, 'appendFile').mockRejectedValueOnce(new Error('disk temporarily unavailable'))
+    await expect(first.appendCritical({ type: 'turn_start', payload: {} })).rejects.toThrow('disk temporarily unavailable')
+    appendSpy.mockRestore()
+
+    await first.retire()
+
+    expect(() => first.appendCritical({ type: 'turn_end', payload: {} })).toThrow('SESSION_LEDGER_SINK_RETIRED')
+    const replacement = getSessionEventSink(root, 'retire-failed', 1)
+    expect(replacement).not.toBe(first)
+    await expect(replacement.appendCritical({ type: 'turn_start', payload: { turnId: 'new-owner' } })).resolves.toMatchObject({ seq: 1 })
+    await replacement.close()
+  })
+
+  it('notifies the host once when a sink enters fail-stop so recovery can be scheduled', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-failure-observer-'))
+    const observer = vi.fn()
+    const sink = getSessionEventSink(root, 'failure-observer', 7)
+    let replacement: ReturnType<typeof getSessionEventSink> | undefined
+    const repairErrors: unknown[] = []
+    const scheduler = createSessionLedgerRepairScheduler({
+      repair: async (location, retireSink) => {
+        try {
+          if (retireSink) await retireSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+          replacement = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+          await replacement.appendCritical({ type: 'turn_start', payload: { turnId: 'automatic-recovery' } })
+          return true
+        } catch (error) {
+          repairErrors.push(error)
+          return false
+        }
+      }
+    })
+    setSessionEventFailureObserver((location, error, kind) => {
+      observer(location, error, kind)
+      scheduler.request(location, { retireSink: kind === 'write' })
+    })
+    const appendSpy = vi.spyOn(fs, 'appendFile').mockRejectedValueOnce(new Error('disk temporarily unavailable'))
+    try {
+      await expect(sink.appendCritical({ type: 'turn_start', payload: {} })).rejects.toThrow('disk temporarily unavailable')
+      await vi.waitFor(() => expect(scheduler.pendingCount(), JSON.stringify(repairErrors.map((error) => String(error)))).toBe(0))
+      expect(observer).toHaveBeenCalledTimes(1)
+      expect(observer).toHaveBeenCalledWith({ workDir: root, sessionId: 'failure-observer', createdAt: 7 }, expect.any(Error), 'write')
+      expect(replacement).toBeDefined()
+      expect(replacement).not.toBe(sink)
+      expect((await readSessionEvents(sink.eventsPath)).map(({ payload }) => payload.turnId)).toEqual(['automatic-recovery'])
+      expect(() => sink.appendCritical({ type: 'turn_end', payload: {} })).toThrow('SESSION_LEDGER_SINK_RETIRED')
+    } finally {
+      scheduler.stop()
+      appendSpy.mockRestore()
+      setSessionEventFailureObserver(undefined)
+      await sink.retire()
+      await replacement?.close()
+    }
   })
 
   it('does not allow a second direct sink for an active event path', async () => {

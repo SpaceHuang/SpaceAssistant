@@ -28,6 +28,78 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value)
 }
 
+const CANONICAL_LEDGER_OUTBOX_PAYLOAD_V1 = '{"encoding":"canonical-v1"}'
+
+export type DecodedCanonicalLedgerProjectionPayload =
+  | { kind: 'legacy'; expectedEvents: SessionEventInput[]; expectedEventIds: string[] }
+  | { kind: 'canonical-v1'; payloadSha256: string }
+
+function assertExpectedProjectionPayload(expectedEvents: readonly SessionEventInput[], expectedEventIds: readonly string[]): void {
+  if (!expectedEvents.length || !expectedEventIds.length || expectedEvents.length !== expectedEventIds.length ||
+    expectedEventIds.some((id) => !id)) {
+    throw new Error('SESSION_LEDGER_OUTBOX_PAYLOAD_INVALID')
+  }
+}
+
+/** Digest of the canonical-derived projection material, independent of its persisted representation. */
+export function canonicalLedgerProjectionPayloadDigest(expectedEvents: readonly SessionEventInput[], expectedEventIds: readonly string[]): string {
+  assertExpectedProjectionPayload(expectedEvents, expectedEventIds)
+  return createHash('sha256').update(`${stableJson(expectedEvents)}\0${stableJson(expectedEventIds)}`).digest('hex')
+}
+
+/** Versioned identity-only representation; P4-T2 decides when producers start persisting it. */
+export function encodeCanonicalLedgerProjectionPayload(expectedEvents: readonly SessionEventInput[], expectedEventIds: readonly string[]) {
+  return {
+    expectedEventsJson: CANONICAL_LEDGER_OUTBOX_PAYLOAD_V1,
+    expectedEventIdsJson: CANONICAL_LEDGER_OUTBOX_PAYLOAD_V1,
+    payloadSha256: canonicalLedgerProjectionPayloadDigest(expectedEvents, expectedEventIds)
+  }
+}
+
+/** Decodes both the legacy JSON arrays and the identity-only v1 marker without conflating them. */
+export function decodeCanonicalLedgerProjectionPayload(expectedEventsJson: string, expectedEventIdsJson: string,
+  payloadSha256: string): DecodedCanonicalLedgerProjectionPayload {
+  if (!/^[a-f0-9]{64}$/.test(payloadSha256)) throw new Error('SESSION_LEDGER_OUTBOX_PAYLOAD_DIGEST_INVALID')
+  let expectedEvents: unknown
+  let expectedEventIds: unknown
+  try {
+    expectedEvents = JSON.parse(expectedEventsJson)
+    expectedEventIds = JSON.parse(expectedEventIdsJson)
+  } catch {
+    throw new Error('SESSION_LEDGER_OUTBOX_PAYLOAD_ENCODING_INVALID')
+  }
+
+  const eventMarker = record(expectedEvents)
+  const idMarker = record(expectedEventIds)
+  if (eventMarker || idMarker) {
+    const eventEncoding = eventMarker?.encoding
+    const idEncoding = idMarker?.encoding
+    if (eventEncoding === 'canonical-v1' && idEncoding === 'canonical-v1' &&
+      Object.keys(eventMarker!).length === 1 && Object.keys(idMarker!).length === 1) {
+      return { kind: 'canonical-v1', payloadSha256 }
+    }
+    if (eventEncoding === 'canonical-v1' || idEncoding === 'canonical-v1') {
+      throw new Error('SESSION_LEDGER_OUTBOX_PAYLOAD_ENCODING_INVALID')
+    }
+    if (eventEncoding !== undefined || idEncoding !== undefined) {
+      throw new Error('SESSION_LEDGER_OUTBOX_PAYLOAD_ENCODING_UNSUPPORTED')
+    }
+    throw new Error('SESSION_LEDGER_OUTBOX_PAYLOAD_ENCODING_INVALID')
+  }
+  if (!Array.isArray(expectedEvents) || !Array.isArray(expectedEventIds) ||
+    expectedEvents.some((event) => !event || typeof event !== 'object' || Array.isArray(event)) ||
+    expectedEventIds.some((id) => typeof id !== 'string')) {
+    throw new Error('SESSION_LEDGER_OUTBOX_PAYLOAD_ENCODING_INVALID')
+  }
+  const events = expectedEvents as SessionEventInput[]
+  const eventIds = expectedEventIds as string[]
+  assertExpectedProjectionPayload(events, eventIds)
+  if (canonicalLedgerProjectionPayloadDigest(events, eventIds) !== payloadSha256) {
+    throw new Error('SESSION_LEDGER_OUTBOX_PAYLOAD_DIGEST_MISMATCH')
+  }
+  return { kind: 'legacy', expectedEvents: events, expectedEventIds: eventIds }
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 }
@@ -236,10 +308,8 @@ export function buildCanonicalToolResultProjectionTargets(conn: DatabaseSync, ev
 
 /** Inserts a durable obligation in the caller's canonical History transaction. */
 export function enqueueCanonicalLedgerProjectionTargetInTransaction(conn: DatabaseSync, target: CanonicalLedgerProjectionTarget): string {
-  if (!target.expectedEvents.length || !target.expectedEventIds.length ||
-    target.expectedEvents.length !== target.expectedEventIds.length || target.expectedEventIds.some((id) => !id)) {
-    throw new Error('SESSION_LEDGER_PROJECTION_TARGET_INVALID')
-  }
+  try { assertExpectedProjectionPayload(target.expectedEvents, target.expectedEventIds) }
+  catch { throw new Error('SESSION_LEDGER_PROJECTION_TARGET_INVALID') }
   const location = conn.prepare(`SELECT session_id,session_generation FROM session_ledger_projection_state WHERE ledger_location_key=?`)
     .get(target.ledgerLocationKey) as { session_id: string; session_generation: string } | undefined
   if (!location || location.session_id !== target.sessionId || location.session_generation !== target.sessionGeneration) {
@@ -251,7 +321,7 @@ export function enqueueCanonicalLedgerProjectionTargetInTransaction(conn: Databa
   if (!canonical) throw new Error('SESSION_LEDGER_CANONICAL_EVENT_MISSING')
   const eventsJson = stableJson(target.expectedEvents)
   const eventIdsJson = stableJson(target.expectedEventIds)
-  const digest = createHash('sha256').update(`${eventsJson}\0${eventIdsJson}`).digest('hex')
+  const digest = canonicalLedgerProjectionPayloadDigest(target.expectedEvents, target.expectedEventIds)
   const id = canonicalLedgerProjectionTargetId(target)
   const existing = conn.prepare(`SELECT payload_sha256,expected_events_json,expected_event_ids_json,ledger_location_key,session_id,
       session_generation,canonical_event_id,projection_kind FROM session_ledger_projection_outbox WHERE target_id=?`)
@@ -263,7 +333,7 @@ export function enqueueCanonicalLedgerProjectionTargetInTransaction(conn: Databa
   if (existing) {
     const previousEvents = JSON.parse(existing.expected_events_json) as SessionEventInput[]
     const previousEventIds = JSON.parse(existing.expected_event_ids_json) as string[]
-    const previousDigest = createHash('sha256').update(`${stableJson(previousEvents)}\0${stableJson(previousEventIds)}`).digest('hex')
+    const previousDigest = canonicalLedgerProjectionPayloadDigest(previousEvents, previousEventIds)
     if (previousDigest !== existing.payload_sha256) throw new Error('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT')
     if (existing.payload_sha256 !== digest) {
       const compatibleEnrichment = isCanonicalToolCallAttributionEnrichment({

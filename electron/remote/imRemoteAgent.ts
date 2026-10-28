@@ -189,6 +189,15 @@ export async function runImRemoteAgent(args: {
   let confirmationFailureProjection: ConfirmationFailureProjection | undefined
   let sessionEventLocation: { workDir: string; sessionId: string; createdAt: number } | undefined
   let sessionEventSink: ReturnType<typeof getSessionEventSink> | undefined
+  const appendSessionEventBestEffort = async (event: import('../sessionEvents').SessionEventInput): Promise<void> => {
+    if (!sessionEventSink) return
+    try { await sessionEventSink.appendCritical(event) }
+    catch (error) {
+      try { args.logError?.(`remote session event append failed: ${error instanceof Error ? error.message : String(error)}`) }
+      catch { /* diagnostics must not replace the accepted turn outcome */ }
+      sessionEventSink = undefined
+    }
+  }
   try {
     const resolved = resolveWorkDirForSession(
       storage.queries,
@@ -215,13 +224,18 @@ export async function runImRemoteAgent(args: {
         catch { /* diagnostics must not block the accepted turn */ }
       }
     }
-    sessionEventSink = sessionEventLocation && ledgerReady
-      ? getSessionEventSink(sessionEventLocation.workDir, sessionEventLocation.sessionId, sessionEventLocation.createdAt)
-      : undefined
+    if (sessionEventLocation && ledgerReady) {
+      try { sessionEventSink = getSessionEventSink(sessionEventLocation.workDir, sessionEventLocation.sessionId, sessionEventLocation.createdAt) }
+      catch (error) {
+        sessionEventSink = undefined
+        try { args.logError?.(`remote session event sink unavailable: ${error instanceof Error ? error.message : String(error)}`) }
+        catch { /* diagnostics must not replace the accepted turn outcome */ }
+      }
+    }
     if (sessionEventSink) {
-      await sessionEventSink.appendCritical({ type: 'turn_start', payload: { turnId: turnIdForEvents } })
-      await sessionEventSink.appendCritical({ type: 'step_start', payload: { turnId: turnIdForEvents, stepId: requestId } })
       sessionEventStarted = true
+      await appendSessionEventBestEffort({ type: 'turn_start', payload: { turnId: turnIdForEvents } })
+      await appendSessionEventBestEffort({ type: 'step_start', payload: { turnId: turnIdForEvents, stepId: requestId } })
     }
 
     const toolsConfig = args.getToolsConfig()
@@ -492,7 +506,7 @@ export async function runImRemoteAgent(args: {
       locale: readAppLocale(args.db),
       ...args.toolChatExtras
       ,emitFactEvent: args.emitFactEvent ?? (() => undefined)
-      ,emitSessionEvent: async (event) => { await sessionEventSink?.appendCritical(event) }
+      ,emitSessionEvent: appendSessionEventBestEffort
     })
     const res = await runToolChatSession(invocation, ports, {
       onHostedTurnHandoff: createHostedTurnHandoff({
@@ -552,15 +566,8 @@ export async function runImRemoteAgent(args: {
     throw new Error(errorWithConfirmationFailure, { cause: e })
   } finally {
     if (sessionEventStarted) {
-      if (sessionEventLocation && sessionEventSink) {
-        try {
-          await sessionEventSink.appendCritical({ type: 'step_end', payload: { turnId: turnIdForEvents, stepId: requestId, reason: sessionEventReason } })
-          await sessionEventSink.appendCritical({ type: 'turn_end', payload: { turnId: turnIdForEvents, reason: sessionEventReason, ...(sessionEventError ? { error: sessionEventError } : {}) } })
-        } catch (error) {
-          try { args.logError?.(`remote session event finalization failed: ${error instanceof Error ? error.message : String(error)}`) }
-          catch { /* event diagnostics must not replace the turn outcome */ }
-        }
-      }
+      await appendSessionEventBestEffort({ type: 'step_end', payload: { turnId: turnIdForEvents, stepId: requestId, reason: sessionEventReason } })
+      await appendSessionEventBestEffort({ type: 'turn_end', payload: { turnId: turnIdForEvents, reason: sessionEventReason, ...(sessionEventError ? { error: sessionEventError } : {}) } })
     }
     stopRemoteProgressSession(args.sessionId)
     clearRemoteProgressSession(args.sessionId)

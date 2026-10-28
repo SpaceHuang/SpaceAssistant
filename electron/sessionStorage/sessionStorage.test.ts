@@ -17,7 +17,7 @@ import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
 import { getProjectedMessages, readSessionTranscriptProjection } from './infrastructure/sqlite/sessionTranscriptProjection'
 import * as sessionTranscriptProjection from './infrastructure/sqlite/sessionTranscriptProjection'
 import { drainCanonicalLedgerProjectionOutbox, enqueueCanonicalLedgerProjectionTargetInTransaction, listPendingCanonicalLedgerProjectionTargets } from '../sessionLedgerOutbox'
-import { appendCompactionTransaction, getSessionEventSink, readSessionEvents, resolveSessionEventPaths } from '../sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readSessionEvents, resolveSessionEventPaths, setSessionEventFailureObserver } from '../sessionEvents'
 import { ensureSessionLedgerReady } from '../sessionLedgerLifecycle'
 import { createProductionSessionLedgerLifecycleDependencies } from '../runtime/sessionLedgerLifecycleProduction'
 import { projectCanonicalSessionLedgerTarget } from '../runtime/sessionLedgerOutboxProjector'
@@ -517,6 +517,35 @@ describe('SQLite session storage public queries', () => {
     expect(readReplay).not.toHaveBeenCalled()
   })
 
+  it('preserves rejected file replay evidence when there are no committed file-only compactions', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'file-replay-damage-evidence' })
+    const sink = { eventsPath: '/unused-replay-evidence', indexPath: '/unused-replay-evidence-index', appendCritical: vi.fn(), appendChunk: vi.fn(), waitForCapacity: vi.fn(), flush: vi.fn(), close: vi.fn() }
+    const damaged = { committed: [], rejected: [{ compactionId: 'damaged-compaction', reason: 'invalid-commit-references' }] }
+    const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => '/tmp/replay-evidence', getUserDataDir: () => '/tmp',
+      getSessionEventSink: () => sink as never, readCompactionReplay: async () => damaged as never })
+    await expect(storage.readCompactionReplay({ sessionId: session.id, workDir: '/tmp/replay-evidence' })).resolves.toMatchObject({
+      committed: [], rejected: [{ compactionId: 'damaged-compaction', reason: 'invalid-commit-references' }]
+    })
+  })
+
+  it('notifies automatic repair when the event replay read fails', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'replay-read-failure-repair' })
+    const location = { workDir: '/tmp/replay-read-failure-repair', sessionId: session.id, createdAt: session.createdAt }
+    const sink = { eventsPath: '/unused-replay-read-failure', indexPath: '/unused-replay-read-failure-index', appendCritical: vi.fn(), appendChunk: vi.fn(), waitForCapacity: vi.fn(), flush: vi.fn(), close: vi.fn() }
+    const observer = vi.fn()
+    setSessionEventFailureObserver(observer)
+    try {
+      const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => location.workDir,
+        getSessionEventSink: () => sink as never, readCompactionReplay: async () => { throw new Error('ledger read failed') } })
+      await expect(storage.readCompactionReplay({ sessionId: session.id, workDir: location.workDir })).rejects.toThrow('ledger read failed')
+      expect(observer).toHaveBeenCalledWith(location, expect.any(Error), 'read')
+    } finally {
+      setSessionEventFailureObserver(undefined)
+    }
+  })
+
   it('does not retry a blocked ledger while reading compaction markers for a session switch', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'blocked-compaction-marker-read' })
@@ -808,7 +837,7 @@ describe('SQLite session storage public queries', () => {
         summarize: async () => ({ task: 'task', completed: 'done', decisions: 'decision', constraints: 'constraints',
           pending: 'pending', blockers: 'none', nextStep: 'continue' })
       })
-      expect(compacted.status).toBe('failed')
+      expect(compacted.status).toBe('commit-uncertain')
       const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
       const compactedStream = conn.prepare(`SELECT streams.invocation_id FROM agent_history_streams streams
         JOIN agent_history_events events ON events.invocation_id=streams.invocation_id

@@ -6,6 +6,7 @@ import { serializeErrorCauseChain } from './agentLogger/errorCauseChain'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
 import { type AppDatabase } from './database'
+import { getSessionMessageRevisionSnapshot } from './database/operations'
 import { LlmKeyAccessError, resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { requireInvocationAnthropicRoute } from './runtime/invocationProviderRoute'
 import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
@@ -29,11 +30,11 @@ import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assi
 import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, type SessionEventSink } from './sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, type SessionEventSink } from './sessionEvents'
 import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { ContextMeter } from '../src/shared/contextMeterService'
-import { computeCompactionSummaryHash, countCommittedCompactions, currentCompactionWindowId } from '../src/shared/compactionEvents'
+import { computeCompactionSummaryHash, countCommittedCompactions, currentCompactionWindowId, projectCompactionMarkers, type CompactionReplay } from '../src/shared/compactionEvents'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { estimateTokensFromUtf8Text } from '../src/shared/contextUsageEstimate'
 import { planTurnBoundarySurfaceCompaction } from '../src/shared/turnBoundaryCompaction'
@@ -45,7 +46,8 @@ import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './ru
 import { assertContinuationExecutionConfigUnchanged, fingerprintContinuationExecutionConfig } from './runtime/continuationSafetySnapshot'
 import type { SessionStorage } from './sessionStorage/host/ports'
 import { SessionContextSummaryCache, sessionContextSummaryCacheKey, summarizeSessionContext, waitForSessionContextSummary } from './sessionContextSummary'
-import { createSessionContextCheckpointMessage, isSessionContextCheckpointWorthCompacting, type SessionContextSummary } from './sessionContextCompaction'
+import { createLostCompactionRepairId, createSessionContextCheckpointMessage, isSessionContextCheckpointWorthCompacting, type SessionContextSummary } from './sessionContextCompaction'
+import { inspectLostCompactionRepairEvidence, isCompactionRepairSourceRevisionCurrent } from './sessionCompactionEvidence'
 import { safeSummaryContentText } from '../src/shared/safeSummaryText'
 
 export type ClaudeStreamDeps = {
@@ -305,22 +307,23 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
       // 这里只累计，由 finalizeTurn 统一上报为 eventPersistenceFailed。
       const eventAppendFailures: EventPersistenceFailure[] = []
       let droppedChunkEvents = 0
+      const appendSessionEventBestEffort = async (event: Parameters<SessionEventSink['appendCritical']>[0]): Promise<void> => {
+        if (!eventWriter) return
+        try {
+          await eventWriter.appendCritical(event)
+        } catch (error) {
+          eventAppendFailures.push(toEventPersistenceFailure(error))
+          eventWriter = undefined
+        }
+      }
       // A-8（§4.3 / turn-loop.md:207）：turn_end 透传终态 errorCode（如 TOOL_LOOP_MAX_ROUNDS_EXCEEDED、
       // 旧会话恢复重放的 SHELL_DIALECT_MISMATCH），不再只有裸 message
       const finalizeTurn = (turnId: string, reason: string, error?: string, finalSurfaceSnapshot?: unknown, errorCode?: string): Promise<FinalizeResult> => {
         if (finalizePromise) return finalizePromise
         finalizePromise = (async () => {
+          await appendSessionEventBestEffort({ type: 'step_end', payload: { turnId, stepId: requestId, reason } })
+          await appendSessionEventBestEffort({ type: 'turn_end', payload: { turnId, reason, ...(error ? { error } : {}), ...(errorCode ? { errorCode } : {}), ...(finalSurfaceSnapshot ? { finalSurfaceSnapshot } : {}) } })
           const failures: EventPersistenceFailure[] = [...eventAppendFailures]
-          try {
-            await eventWriter?.appendCritical({ type: 'step_end', payload: { turnId, stepId: requestId, reason } })
-          } catch (finalizeError) {
-            failures.push(toEventPersistenceFailure(finalizeError))
-          }
-          try {
-            await eventWriter?.appendCritical({ type: 'turn_end', payload: { turnId, reason, ...(error ? { error } : {}), ...(errorCode ? { errorCode } : {}), ...(finalSurfaceSnapshot ? { finalSurfaceSnapshot } : {}) } })
-          } catch (finalizeError) {
-            failures.push(toEventPersistenceFailure(finalizeError))
-          }
           if (droppedChunkEvents > 0) {
             try {
               logAgentEvent('warn', 'session.event.chunk_dropped', { requestId, turnId, droppedChunkEvents })
@@ -376,18 +379,31 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           }
           try { deps.emitFactEvent?.(requestId, fact) } catch { /* Best-effort activity projection. */ }
         }
+        let compactionReplay: CompactionReplay = { committed: [], rejected: [] }
         const session = sessionStorage.queries.readSession(sessionId)
         if (session) {
-          const ledgerReady = !sessionStorage.ensureLedgerReady || await sessionStorage.ensureLedgerReady(sessionId)
+          let ledgerReady = !sessionStorage.ensureLedgerReady
+          if (sessionStorage.ensureLedgerReady) {
+            try { ledgerReady = await sessionStorage.ensureLedgerReady(sessionId) }
+            catch (error) {
+              eventAppendFailures.push(toEventPersistenceFailure(error))
+              ledgerReady = false
+            }
+          }
           // SQLite History is canonical. If its JSONL projection is degraded, keep the
           // desktop turn on full canonical context and omit ledger-dependent compaction.
           if (ledgerReady) {
-            eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt)
-            await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
-            // reset 后 marker 的 output window 不再等于 sessionId；台账读取必须消费完整提交链。
-            const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath)
-            for (const marker of committedMarkers) deps.turnRuntime.consumeForRequest(requestId, { type: 'compaction-committed', ...marker }, turnId)
+            try { eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt) }
+            catch (error) { eventAppendFailures.push(toEventPersistenceFailure(error)) }
+            await appendSessionEventBestEffort({ type: 'turn_start', payload: { turnId } })
           }
+          try { compactionReplay = await sessionStorage.readCompactionReplay({ sessionId, workDir: deps.getWorkDir() }) }
+          catch (error) {
+            eventAppendFailures.push(toEventPersistenceFailure(error))
+            compactionReplay = sessionStorage.queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }
+          }
+          const committedMarkers = projectCompactionMarkers(compactionReplay)
+          for (const marker of committedMarkers) deps.turnRuntime.consumeForRequest(requestId, { type: 'compaction-committed', ...marker }, turnId)
         }
         const frozen = authoritative.executionConfig
         if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')
@@ -403,7 +419,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           config: frozen
         })
         const model = assertValidModel(frozen.model ?? '')
-        await eventWriter?.appendCritical({ type: 'step_start', payload: { turnId, stepId: requestId } })
+        await appendSessionEventBestEffort({ type: 'step_start', payload: { turnId, stepId: requestId } })
 
         const llmServiceId = frozen.llmServiceId
         const creds = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId })
@@ -423,15 +439,12 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         }, getDefaultAgentRuntime().modelProviders)
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
-        const compactionReplay = eventWriter
-          ? await readCompactionReplay(eventWriter.eventsPath)
-          : sessionStorage.queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }
         const contextWindowId = authoritative.executionConfig?.continuationSource
           ? `continuation:${authoritative.executionConfig.continuationSource.continuationId}`
           : currentCompactionWindowId(compactionReplay, sessionId)
-        const contextEventLedger = eventWriter
-          ? [...await sessionStorage.readContextMeterEvents({ sessionId, workDir: deps.getWorkDir() })]
-          : []
+        let contextEventLedger: Array<{ seq: number; type: 'request_header' | 'request_context' | 'request_usage' | 'request_retry'; payload: Record<string, unknown> }> = []
+        try { contextEventLedger = [...await sessionStorage.readContextMeterEvents({ sessionId, workDir: deps.getWorkDir() })] }
+        catch (error) { eventAppendFailures.push(toEventPersistenceFailure(error)) }
         const appendContextMeterEvent = (event: { seq: number; type: string; payload: Record<string, unknown> }) => {
           if (event.type !== 'request_header' && event.type !== 'request_context' && event.type !== 'request_usage' && event.type !== 'request_retry') return
           const nextSeq = Math.max(event.seq, (contextEventLedger.at(-1)?.seq ?? 0) + 1)
@@ -586,12 +599,14 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           emitSessionEvent: createAgentSdkSessionEventProjector({
             turnId,
             eventWriter,
-            // Hosted SDK projections are part of the committed History contract: if a critical
-            // JSONL projection fails, stop before dispatch and let startup recovery repair it.
-            failClosedCriticalEvents: true,
+            // SQLite History is authoritative; ledger projection failure is diagnostic only.
+            failClosedCriticalEvents: false,
             onCommitted: appendContextMeterEvent,
             onChunkDropped: () => { droppedChunkEvents += 1 },
-            onCriticalFailure: (error) => eventAppendFailures.push(toEventPersistenceFailure(error))
+            onCriticalFailure: (error) => {
+              eventAppendFailures.push(toEventPersistenceFailure(error))
+              eventWriter = undefined
+            }
           }),
           contextProjectionCommitter: async ({ historyPayload }) => {
             const ledger = historyPayload?.sessionLedger
@@ -612,8 +627,9 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               await appendCompactionTransaction(eventWriter, transaction.start as Record<string, unknown>, transaction.summary as Record<string, unknown>)
               if (pending) emitSystemOperation({ ...pending, status: 'succeeded', completedAt: Date.now() })
             } catch (error) {
-              if (pending) emitSystemOperation({ ...pending, status: 'failed', completedAt: Date.now(), reason: 'SUMMARY_FAILED' })
-              throw error
+              eventAppendFailures.push(toEventPersistenceFailure(error))
+              eventWriter = undefined
+              if (pending) emitSystemOperation({ ...pending, status: 'succeeded', completedAt: Date.now() })
             } finally {
               pendingCompactionCards.delete(compactionId)
             }
@@ -635,21 +651,55 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               const messageId = (replayMessages[index] as { id?: unknown }).id
               return typeof messageId === 'string' && replayIdentityByMessageId.has(messageId) ? replayIdentityByMessageId.get(messageId)! : identity
             })
+            const repairEvidence = inspectLostCompactionRepairEvidence({ replay: compactionReplay, messages: replayMessages, surfaceIdentities: messageIdentities })
+            let repairBranch = repairEvidence.branch
+            let repairId = repairBranch ? createLostCompactionRepairId({ sessionId, sourceVersion: repairEvidence.sourceVersion,
+              lostWindow: repairEvidence.lostWindow, lostRanges: repairEvidence.lostRanges, branch: repairBranch }) : undefined
+            const alreadyCommittedRepair = repairId ? compactionReplay.committed.find(({ compactionId }) => compactionId === repairId) : undefined
+            if (alreadyCommittedRepair) {
+              if (alreadyCommittedRepair.end.payload.outputSurfaceFingerprint === replayFingerprint(replayMessages)) {
+                updateOperation('skipped', { completedAt: Date.now(), reason: 'REPAIR_ALREADY_COMMITTED' })
+                return
+              }
+              // A later user turn changes the source surface; ordinary compaction may proceed independently.
+              repairBranch = undefined
+              repairId = undefined
+            }
+            const repairSourceRevision = repairBranch ? getSessionMessageRevisionSnapshot(db, sessionId) : undefined
             const items = replayMessages.map((message, index) => ({ id: messageIdentities[index]!, tokens: estimateTokensFromUtf8Text(JSON.stringify(message)), required: requiredSurfaceSet.includes(messageIdentities[index]!) || (typeof (message as { id?: unknown }).id === 'string' && requiredSurfaceSet.includes((message as { id: string }).id)) || messageIdentities[index] === authoritative.currentUserMessageId }))
             const projectedSurfaceTokens = contextUsage?.projectedTokens ?? surfaceSnapshot.surfaceTokens
             const projectionForPlanner = { surfaceTokens: surfaceSnapshot.surfaceTokens, bodyTokens: Math.max(0, projectedSurfaceTokens - budget.prefixTokens), requiredTokens: items.find((item) => item.required)?.tokens ?? 0, totalInputBudget: budget.totalInputBudget, bodyBudget: budget.bodyBudget, targetBodyRatio: budget.targetBodyRatio }
-            const checkpointMessage = { id: `${boundaryRequestId}:checkpoint`, role: 'user' as const, content: '' }
+            const checkpointMessage = { id: repairId ? `checkpoint:${repairId}` : `${boundaryRequestId}:checkpoint`, role: 'user' as const, content: '' }
             // 摘要正文在规划后组装；这里必须为固定 envelope 预留非零预算，
             // 否则 planner 会把 summarize 错判为没有收益。
             const checkpointPlanningTokens = estimateTokensFromUtf8Text(JSON.stringify({ kind: 'context_checkpoint', task: '', decisions: '', pending: '' }))
             const plan = planTurnBoundarySurfaceCompaction({ projection: projectionForPlanner, items, shouldCompact: true, summaryCount: countCommittedCompactions(compactionReplay, windowId), checkpointId: checkpointMessage.id, checkpointTokens: checkpointPlanningTokens })
-            const record = plan.record
-            if (!record || plan.status === 'uncompressible' || !record.shadowedRanges.length) {
-              updateOperation('skipped', { startedAt: Date.now(), completedAt: Date.now(), reason: 'UNCOMPRESSIBLE' })
+            let record = plan.record
+            if (repairBranch === 'replay-original') {
+              const exactRanges = repairEvidence.lostRanges ?? [repairEvidence.lostWindow]
+              let previousEnd = -1
+              let rangesValid = true
+              for (const range of exactRanges) {
+                const start = items.findIndex(({ id }) => id === range.start)
+                const end = items.findIndex(({ id }) => id === range.end)
+                if (start < 0 || end < start || start <= previousEnd || items.slice(start, end + 1).some(({ required }) => required)) { rangesValid = false; break }
+                previousEnd = end
+              }
+              if (rangesValid) record = { checkpointId: checkpointMessage.id, shadowedRanges: exactRanges.map((range) => ({ ...range })) }
+              else {
+                repairBranch = 'new-split'
+                repairId = createLostCompactionRepairId({ sessionId, sourceVersion: repairEvidence.sourceVersion,
+                  lostWindow: repairEvidence.lostWindow, branch: repairBranch })
+                checkpointMessage.id = `checkpoint:${repairId}`
+              }
+            }
+            if (!record || (plan.status === 'uncompressible' && repairBranch !== 'replay-original') || !record.shadowedRanges.length) {
+              updateOperation(repairBranch === 'new-split' ? 'failed' : 'skipped', { startedAt: Date.now(), completedAt: Date.now(),
+                reason: repairBranch === 'new-split' ? 'REPAIR_FALLBACK_FULL_EXPAND' : 'UNCOMPRESSIBLE' })
               return
             }
             const appliedAction = [...plan.actions].reverse().find((action) => action.status === 'applied')?.action
-            const isReset = appliedAction === 'reset'
+            const isReset = repairBranch ? false : appliedAction === 'reset'
             const shadowedIds = new Set(record.shadowedRanges.flatMap((range) => {
               const start = items.findIndex((item) => item.id === range.start)
               const end = items.findIndex((item) => item.id === range.end)
@@ -681,7 +731,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               }
             } catch (error) {
               if (signal?.aborted) updateOperation('cancelled', { completedAt: Date.now() })
-              else updateOperation('failed', { completedAt: Date.now(), reason: summaryController.signal.aborted ? 'SUMMARY_TIMEOUT' : error instanceof Error && error.message.includes('SESSION_CONTEXT_SUMMARY_INVALID') ? 'SUMMARY_INVALID' : error instanceof Error && error.message.includes('CREDENTIALS_UNAVAILABLE') || error instanceof Error && error.message.includes('MODEL_UNAVAILABLE') ? 'SUMMARY_UNAVAILABLE' : 'SUMMARY_FAILED' })
+              else updateOperation('failed', { completedAt: Date.now(), reason: repairBranch === 'new-split' ? 'REPAIR_FALLBACK_FULL_EXPAND' : summaryController.signal.aborted ? 'SUMMARY_TIMEOUT' : error instanceof Error && error.message.includes('SESSION_CONTEXT_SUMMARY_INVALID') ? 'SUMMARY_INVALID' : error instanceof Error && error.message.includes('CREDENTIALS_UNAVAILABLE') || error instanceof Error && error.message.includes('MODEL_UNAVAILABLE') ? 'SUMMARY_UNAVAILABLE' : 'SUMMARY_FAILED' })
               return
             } finally {
               clearTimeout(timeout)
@@ -691,6 +741,10 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               updateOperation('cancelled', { completedAt: Date.now() })
               return
             }
+            if (repairBranch && !isCompactionRepairSourceRevisionCurrent(repairSourceRevision, getSessionMessageRevisionSnapshot(db, sessionId))) {
+              updateOperation('skipped', { completedAt: Date.now(), reason: 'LATE_DISCARDED' })
+              return
+            }
             checkpointMessage.content = createSessionContextCheckpointMessage(checkpointMessage.id, checkpointSummary, recoveryFacts).content
             const shadowedTokenCount = items.filter((item) => shadowedIds.has(item.id)).reduce((sum, item) => sum + item.tokens, 0)
             const checkpointTokenCount = estimateTokensFromUtf8Text(JSON.stringify(checkpointMessage))
@@ -698,7 +752,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               if (!cachedSummary) {
                 automaticSummaryCache.settle(summaryCacheKey, checkpointSummary, 'no-gain')
               }
-              updateOperation('skipped', { completedAt: Date.now(), reason: 'NO_GAIN' })
+              updateOperation(repairBranch === 'new-split' ? 'failed' : 'skipped', { completedAt: Date.now(), reason: repairBranch === 'new-split' ? 'REPAIR_FALLBACK_FULL_EXPAND' : 'NO_GAIN' })
               return
             }
             const shadowed = new Set(record.shadowedRanges.flatMap((range) => {
@@ -729,19 +783,24 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               toolResults: pairs.toolResults
             })
             if (!preflight.ok) {
-              updateOperation('skipped', { completedAt: Date.now(), reason: 'UNCOMPRESSIBLE' })
+              updateOperation(repairBranch === 'new-split' ? 'failed' : 'skipped', { completedAt: Date.now(), reason: repairBranch === 'new-split' ? 'REPAIR_FALLBACK_FULL_EXPAND' : 'UNCOMPRESSIBLE' })
               return
             }
-            const compactionId = `${windowId}:boundary:${boundaryRequestId}`
+            const compactionId = repairId ?? `${windowId}:boundary:${boundaryRequestId}`
             if (!cachedSummary) pendingCompactionSummaries.set(compactionId, { key: summaryCacheKey, summary: checkpointSummary })
             const outputWindowId = isReset ? `${windowId}:reset:${boundaryRequestId}` : undefined
             const candidate = { kind: isReset ? 'reset' as const : 'summary' as const, checkpointMessage, checkpointReplayIdentity: outputIdentities[0], shadowedRanges }
-            const start = { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(replayMessages), surfaceBoundaryId: messageIdentities[replayMessages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }
+            const repairIdentity = repairBranch ? { sourceVersion: repairEvidence.sourceVersion, branch: repairBranch,
+              windowStart: repairEvidence.lostWindow.start, windowEnd: repairEvidence.lostWindow.end,
+              ranges: repairBranch === 'replay-original' ? repairEvidence.lostRanges ?? [repairEvidence.lostWindow] : [] } : undefined
+            const start = { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(replayMessages), surfaceBoundaryId: messageIdentities[replayMessages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio,
+              ...(repairBranch ? { reason: 'lost_compaction_repair', repairMarker: repairBranch === 'new-split' ? 'repair:new-split' : 'repair:original-window', repairIdentity } : {}) }
             const summary = { compactionId, windowId, turnId, ...(outputWindowId ? { inputWindowId: windowId, outputWindowId } : {}), summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint }
             const beforePercent = Math.round(projection.bodyRatio * 100)
             const afterBodyTokens = Math.max(0, outputHeader.surfaceSnapshot.surfaceTokens - budget.prefixTokens)
             const afterPercent = budget.bodyBudget > 0 ? Math.round(afterBodyTokens / budget.bodyBudget * 100) : 0
-            pendingCompactionCards.set(compactionId, { id: operationId, kind: 'context-compaction', status: 'running', startedAt: summaryStartedAt, beforePercent, afterPercent })
+            pendingCompactionCards.set(compactionId, { id: operationId, kind: 'context-compaction', status: 'running', startedAt: summaryStartedAt, beforePercent, afterPercent,
+              ...(repairBranch ? { reason: repairBranch === 'replay-original' ? 'REPAIR_ORIGINAL_WINDOW' : 'REPAIR_NEW_SPLIT' } : {}) })
             const location = { workDir: deps.getWorkDir(), sessionId, createdAt: session.createdAt }
             return {
               messages: toCanonicalModelMessages(outputMessages as import('../src/shared/api').ClaudeChatMessageWithBlocks[]),

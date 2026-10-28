@@ -41,15 +41,26 @@ export type SessionEventSink = {
   waitForCapacity(): Promise<void>
   flush(): Promise<FlushResult>
   close(): Promise<FlushResult>
+  retire(): Promise<void>
   readonly eventsPath: string
   readonly indexPath: string
 }
 
 let sessionEventCommitObserver: ((location: { workDir: string; sessionId: string; createdAt: number }) => Promise<void> | void) | undefined
+let sessionEventFailureObserver: ((location: { workDir: string; sessionId: string; createdAt: number }, error: unknown, kind: 'read' | 'write') => void) | undefined
 
 /** Installs the host's durable proof refresher for ordinary ledger-only appends. */
 export function setSessionEventCommitObserver(observer: typeof sessionEventCommitObserver): void {
   sessionEventCommitObserver = observer
+}
+
+/** Notifies the host that a ledger read/write failed and should enter automatic repair. */
+export function setSessionEventFailureObserver(observer: typeof sessionEventFailureObserver): void {
+  sessionEventFailureObserver = observer
+}
+
+export function notifySessionEventLedgerFailure(location: { workDir: string; sessionId: string; createdAt: number }, error: unknown, kind: 'read' | 'write' = 'read'): void {
+  try { sessionEventFailureObserver?.(location, error, kind) } catch { /* recovery scheduling must not replace the original error */ }
 }
 
 export async function appendCompactionTransaction(
@@ -391,6 +402,199 @@ export function hasActiveSessionEventSink(workDir: string, sessionId: string, cr
   return writerRegistry.has(eventPaths(workDir, sessionId, createdAt).eventsPath)
 }
 
+/** Applies the P3-T2 fail-stop retirement primitive to one stable location. */
+export async function retireSessionEventSink(workDir: string, sessionId: string, createdAt: number): Promise<void> {
+  const paths = eventPaths(workDir, sessionId, createdAt)
+  await writerRegistry.get(paths.eventsPath)?.retire()
+}
+
+type SessionEventQuarantineManifest = {
+  formatVersion: 1
+  ledgerLocationKey: string
+  reason: 'degraded' | 'physical_proof_mismatch'
+  state: 'moving' | 'complete'
+  integrity: SessionEventIntegrity
+  eventCount: number
+  issues: Array<Pick<SessionEventIssue, 'line' | 'code'>>
+  plannedArtifacts: string[]
+  movedArtifacts: string[]
+}
+
+async function persistSessionEventQuarantineManifest(manifestPath: string, manifest: SessionEventQuarantineManifest): Promise<void> {
+  const temporary = `${manifestPath}.${randomUUID()}.tmp`
+  const handle = await fs.open(temporary, 'wx', 0o600)
+  try { await handle.writeFile(JSON.stringify(manifest)); await handle.sync() }
+  finally { await handle.close() }
+  try { await fs.rename(temporary, manifestPath) }
+  finally { await fs.rm(temporary, { force: true }).catch(() => undefined) }
+}
+
+async function ensureCanonicalRebuildMarker(paths: ReturnType<typeof eventPaths>, locationKey: string): Promise<void> {
+  const markerPath = path.join(paths.directory, 'events.rebuild.json')
+  const content = JSON.stringify({ formatVersion: 1, ledgerLocationKey: locationKey })
+  try {
+    const marker = await fs.open(markerPath, 'wx', 0o600)
+    try { await marker.writeFile(content); await marker.sync() }
+    finally { await marker.close() }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    const stat = await fs.lstat(markerPath)
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) throw new Error('SESSION_LEDGER_REBUILD_MARKER_INVALID')
+    const existing = JSON.parse(await fs.readFile(markerPath, 'utf8')) as { formatVersion?: number; ledgerLocationKey?: string }
+    if (existing.formatVersion !== 1 || existing.ledgerLocationKey !== locationKey) throw new Error('SESSION_LEDGER_REBUILD_MARKER_MISMATCH')
+  }
+}
+
+/** Completes an interrupted quarantine by inspecting both sides of each atomic rename. */
+export async function recoverInterruptedSessionEventLedgerQuarantine(
+  location: { workDir: string; sessionId: string; createdAt: number }
+): Promise<QuarantinedSessionEventLedger | undefined> {
+  const locationKey = sessionLedgerLocationIdentity(location).key
+  if (!isSessionLedgerLifecycleLockHeld(locationKey)) {
+    return withSessionLedgerLifecycleLock(locationKey, () => recoverInterruptedSessionEventLedgerQuarantine(location))
+  }
+  const paths = eventPaths(location.workDir, location.sessionId, location.createdAt)
+  const identity = sessionLedgerLocationIdentity(location)
+  const rootStat = await fs.lstat(paths.sessionsRoot).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  })
+  if (!rootStat) return undefined
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('SESSION_LEDGER_QUARANTINE_ROOT_INVALID')
+  const realRoot = await fs.realpath(paths.sessionsRoot)
+  const quarantineRoot = path.join(paths.sessionsRoot, '.quarantine')
+  const quarantineRootStat = await fs.lstat(quarantineRoot).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  })
+  if (!quarantineRootStat) return undefined
+  if (quarantineRootStat.isSymbolicLink() || !quarantineRootStat.isDirectory()) throw new Error('SESSION_LEDGER_QUARANTINE_ROOT_INVALID')
+  const realQuarantineRoot = await fs.realpath(quarantineRoot)
+  if (!isPathInside(realRoot, realQuarantineRoot)) throw new Error('SESSION_LEDGER_QUARANTINE_PATH_OUTSIDE_ROOT')
+  const archivePrefix = `${createHash('sha256').update(identity.key).digest('hex').slice(0, 16)}-`
+  for (const entry of await fs.readdir(realQuarantineRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith(archivePrefix)) continue
+    const directory = path.join(realQuarantineRoot, entry.name)
+    const directoryStat = await fs.lstat(directory)
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) throw new Error('SESSION_LEDGER_QUARANTINE_DIRECTORY_INVALID')
+    const manifestPath = path.join(directory, 'manifest.json')
+    const manifestStat = await fs.lstat(manifestPath).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    })
+    if (manifestStat && (manifestStat.isSymbolicLink() || !manifestStat.isFile() || manifestStat.nlink !== 1)) {
+      throw new Error('SESSION_LEDGER_QUARANTINE_MANIFEST_INVALID')
+    }
+    let manifest: SessionEventQuarantineManifest
+    try { manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as SessionEventQuarantineManifest }
+    catch { continue }
+    if (manifest.formatVersion !== 1 || manifest.ledgerLocationKey !== identity.key || manifest.state !== 'moving') continue
+    if (!Array.isArray(manifest.plannedArtifacts) || !Array.isArray(manifest.movedArtifacts)) throw new Error('SESSION_LEDGER_QUARANTINE_MANIFEST_INVALID')
+    await ensureCanonicalRebuildMarker(paths, identity.key)
+    for (const name of manifest.plannedArtifacts) {
+      if (name !== 'events.jsonl' && name !== 'events.index.json') throw new Error('SESSION_LEDGER_QUARANTINE_MANIFEST_INVALID')
+      const sourcePath = name === 'events.jsonl' ? paths.eventsPath : paths.indexPath
+      const destinationPath = path.join(directory, name)
+      const sourceStat = await fs.lstat(sourcePath).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+        throw error
+      })
+      const destinationStat = await fs.lstat(destinationPath).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+        throw error
+      })
+      for (const stat of [sourceStat, destinationStat]) {
+        if (stat && (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1)) throw new Error('SESSION_LEDGER_QUARANTINE_FILE_INVALID')
+      }
+      if (sourceStat && destinationStat) throw new Error('SESSION_LEDGER_QUARANTINE_COLLISION')
+      if (!sourceStat && !destinationStat) throw new Error('SESSION_LEDGER_QUARANTINE_ARTIFACT_MISSING')
+      if (sourceStat) await fs.rename(sourcePath, destinationPath)
+      if (!manifest.movedArtifacts.includes(name)) manifest.movedArtifacts.push(name)
+      await persistSessionEventQuarantineManifest(manifestPath, manifest)
+    }
+    manifest.state = 'complete'
+    await persistSessionEventQuarantineManifest(manifestPath, manifest)
+    return { directory, eventsPath: path.join(directory, 'events.jsonl'), indexPath: path.join(directory, 'events.index.json'), manifestPath }
+  }
+  return undefined
+}
+
+/** Preserves every original byte before a damaged ledger can be replaced. */
+export async function quarantineDegradedSessionEventLedger(
+  location: { workDir: string; sessionId: string; createdAt: number }
+): Promise<QuarantinedSessionEventLedger> {
+  return quarantineSessionEventLedger(location, false)
+}
+
+/** Preserves the complete current bytes when the durable readiness proof says the file was shortened or replaced. */
+export async function quarantineSessionEventLedgerForPhysicalMismatch(
+  location: { workDir: string; sessionId: string; createdAt: number }
+): Promise<QuarantinedSessionEventLedger> {
+  return quarantineSessionEventLedger(location, true)
+}
+
+async function quarantineSessionEventLedger(
+  location: { workDir: string; sessionId: string; createdAt: number },
+  allowComplete: boolean
+): Promise<QuarantinedSessionEventLedger> {
+  const locationKey = sessionLedgerLocationIdentity(location).key
+  if (!isSessionLedgerLifecycleLockHeld(locationKey)) {
+    return withSessionLedgerLifecycleLock(locationKey, () => quarantineSessionEventLedger(location, allowComplete))
+  }
+  const paths = eventPaths(location.workDir, location.sessionId, location.createdAt)
+  const interrupted = await recoverInterruptedSessionEventLedgerQuarantine(location)
+  if (interrupted) return interrupted
+  const directoryStat = await fs.lstat(paths.directory)
+  if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) throw new Error('SESSION_LEDGER_QUARANTINE_DIRECTORY_INVALID')
+  const realRoot = await fs.realpath(paths.sessionsRoot)
+  const realDirectory = await fs.realpath(paths.directory)
+  if (!isPathInside(realRoot, realDirectory)) throw new Error('SESSION_LEDGER_QUARANTINE_PATH_OUTSIDE_ROOT')
+
+  const eventStat = await fs.lstat(paths.eventsPath)
+  if (eventStat.isSymbolicLink() || !eventStat.isFile() || eventStat.nlink !== 1) throw new Error('SESSION_LEDGER_QUARANTINE_FILE_INVALID')
+  const read = await readSessionEventsDetailed(paths.eventsPath)
+  if (!allowComplete && classifySessionEventLedgerCoverage(read) !== 'preserve-and-quarantine') {
+    throw new Error('SESSION_LEDGER_QUARANTINE_NOT_REQUIRED')
+  }
+  const indexStat = await fs.lstat(paths.indexPath).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  })
+  if (indexStat && (indexStat.isSymbolicLink() || !indexStat.isFile() || indexStat.nlink !== 1)) {
+    throw new Error('SESSION_LEDGER_QUARANTINE_INDEX_INVALID')
+  }
+
+  await writerRegistry.get(paths.eventsPath)?.retire()
+  const quarantineRoot = path.join(paths.sessionsRoot, '.quarantine')
+  await ensureDirectoryWithoutSymlink(quarantineRoot, paths.sessionsRoot)
+  const realQuarantineRoot = await fs.realpath(quarantineRoot)
+  if (!isPathInside(realRoot, realQuarantineRoot)) throw new Error('SESSION_LEDGER_QUARANTINE_PATH_OUTSIDE_ROOT')
+  const identity = sessionLedgerLocationIdentity(location)
+  const directory = path.join(realQuarantineRoot, `${createHash('sha256').update(identity.key).digest('hex').slice(0, 16)}-${randomUUID()}`)
+  await fs.mkdir(directory, { mode: 0o700 })
+  const quarantineEventsPath = path.join(directory, 'events.jsonl')
+  const quarantineIndexPath = path.join(directory, 'events.index.json')
+  const manifestPath = path.join(directory, 'manifest.json')
+  const manifest: SessionEventQuarantineManifest = {
+    formatVersion: 1, ledgerLocationKey: identity.key, reason: allowComplete ? 'physical_proof_mismatch' : 'degraded',
+    state: 'moving', integrity: read.integrity,
+    eventCount: read.events.length, issues: read.issues.map(({ line, code }) => ({ line, code })),
+    plannedArtifacts: [...(indexStat ? ['events.index.json'] : []), 'events.jsonl'], movedArtifacts: []
+  }
+  await persistSessionEventQuarantineManifest(manifestPath, manifest)
+  await ensureCanonicalRebuildMarker(paths, identity.key)
+  for (const name of manifest.plannedArtifacts) {
+    const sourcePath = name === 'events.jsonl' ? paths.eventsPath : paths.indexPath
+    const destinationPath = name === 'events.jsonl' ? quarantineEventsPath : quarantineIndexPath
+    await fs.rename(sourcePath, destinationPath)
+    manifest.movedArtifacts.push(name)
+    await persistSessionEventQuarantineManifest(manifestPath, manifest)
+  }
+  manifest.state = 'complete'
+  await persistSessionEventQuarantineManifest(manifestPath, manifest)
+  return { directory, eventsPath: quarantineEventsPath, indexPath: quarantineIndexPath, manifestPath }
+}
+
 export async function withSessionEventWriterDrain<T>(workDir: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
   const writers = [...writerRegistry.values()].filter((candidate) => candidate.matchesLocation(workDir, sessionId))
     .sort((left, right) => left.eventsPath.localeCompare(right.eventsPath))
@@ -488,7 +692,11 @@ export async function establishExistingSessionEventLedgerBaseline(workDir: strin
   }
   if (eventStat.isSymbolicLink() || !eventStat.isFile()) throw new Error('SESSION_LEDGER_PATH_NOT_REGULAR')
   const read = await readSessionEventsDetailed(paths.eventsPath, { repairTail: true })
-  if (read.integrity === 'degraded') throw new Error('SESSION_LEDGER_BASELINE_DEGRADED')
+  if (read.integrity === 'degraded') {
+    const error = new Error('SESSION_LEDGER_BASELINE_DEGRADED') as Error & { code?: string }
+    error.code = 'SESSION_LEDGER_BASELINE_DEGRADED'
+    throw error
+  }
   try {
     const indexStat = await fs.lstat(paths.indexPath)
     if (indexStat.isSymbolicLink() || !indexStat.isFile()) throw new Error('SESSION_LEDGER_INDEX_NOT_REGULAR')
@@ -520,6 +728,7 @@ export async function establishExistingSessionEventLedgerBaseline(workDir: strin
     try { await handle.writeFile(JSON.stringify({ formatVersion: 2, seq: 0, eventCount: 0, bytes: 0, lastAt: 0 })) }
     finally { await handle.close() }
   }
+  await cleanupSessionEventLedgerRebuildStages(paths.directory)
 }
 
 /** Creates an empty, path-validated ledger directory exclusively for a caller that will immediately replay canonical projections. */
@@ -564,6 +773,102 @@ export async function createEmptySessionEventLedgerForCanonicalRebuild(workDir: 
       }
     }
   }
+}
+
+export type SessionEventLedgerRebuildStage = {
+  workDir: string
+  stageRoot: string
+  eventsPath: string
+  indexPath: string
+}
+
+async function cleanupSessionEventLedgerRebuildStages(directory: string): Promise<void> {
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    if (!entry.name.startsWith('.ledger-rebuild-')) continue
+    const target = path.join(directory, entry.name)
+    const stat = await fs.lstat(target)
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('SESSION_LEDGER_REBUILD_STAGE_INVALID')
+    await fs.rm(target, { recursive: true, force: true })
+  }
+}
+
+/** Creates an isolated same-filesystem staging location; it never exposes a partial canonical ledger. */
+export async function createSessionEventLedgerRebuildStage(
+  location: { workDir: string; sessionId: string; createdAt: number }
+): Promise<SessionEventLedgerRebuildStage> {
+  const paths = eventPaths(location.workDir, location.sessionId, location.createdAt)
+  await ensureDirectoryWithoutSymlink(paths.sessionsRoot, path.dirname(paths.sessionsRoot))
+  await ensureDirectoryWithoutSymlink(paths.directory, paths.sessionsRoot)
+  const realRoot = await fs.realpath(paths.sessionsRoot)
+  const realDirectory = await fs.realpath(paths.directory)
+  if (!isPathInside(realRoot, realDirectory)) throw new Error('SESSION_LEDGER_REBUILD_PATH_OUTSIDE_ROOT')
+  for (const target of [paths.eventsPath, paths.indexPath]) {
+    await fs.lstat(target).then(() => { throw new Error('SESSION_LEDGER_REBUILD_TARGET_EXISTS') }).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    })
+  }
+  await ensureCanonicalRebuildMarker(paths, sessionLedgerLocationIdentity(location).key)
+  await cleanupSessionEventLedgerRebuildStages(paths.directory)
+  const stageRoot = path.join(paths.directory, `.ledger-rebuild-${randomUUID()}`)
+  await fs.mkdir(stageRoot, { mode: 0o700 })
+  const staged = eventPaths(stageRoot, location.sessionId, location.createdAt)
+  return { workDir: stageRoot, stageRoot, eventsPath: staged.eventsPath, indexPath: staged.indexPath }
+}
+
+/** Publishes complete staged bytes through one atomic JSONL rename, then the rebuildable index. */
+export async function publishSessionEventLedgerRebuildStage(
+  location: { workDir: string; sessionId: string; createdAt: number },
+  stage: SessionEventLedgerRebuildStage
+): Promise<void> {
+  const target = eventPaths(location.workDir, location.sessionId, location.createdAt)
+  const staged = eventPaths(stage.workDir, location.sessionId, location.createdAt)
+  if (staged.eventsPath !== stage.eventsPath || staged.indexPath !== stage.indexPath || stage.stageRoot !== stage.workDir ||
+    !path.basename(stage.stageRoot).startsWith('.ledger-rebuild-')) {
+    throw new Error('SESSION_LEDGER_REBUILD_STAGE_IDENTITY_INVALID')
+  }
+  const realRoot = await fs.realpath(target.sessionsRoot)
+  const realTargetDirectory = await fs.realpath(target.directory)
+  const realStageRoot = await fs.realpath(stage.stageRoot)
+  if (!isPathInside(realRoot, realTargetDirectory) || !isPathInside(realTargetDirectory, realStageRoot)) {
+    throw new Error('SESSION_LEDGER_REBUILD_STAGE_OUTSIDE_ROOT')
+  }
+  for (const source of [stage.eventsPath, stage.indexPath]) {
+    const stat = await fs.lstat(source)
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) throw new Error('SESSION_LEDGER_REBUILD_STAGE_FILE_INVALID')
+  }
+  for (const destination of [target.eventsPath, target.indexPath]) {
+    await fs.lstat(destination).then(() => { throw new Error('SESSION_LEDGER_REBUILD_TARGET_EXISTS') }).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    })
+  }
+  await fs.rename(stage.eventsPath, target.eventsPath)
+  await fs.rename(stage.indexPath, target.indexPath)
+  await fs.rm(stage.stageRoot, { recursive: true, force: true })
+}
+
+export async function discardSessionEventLedgerRebuildStage(
+  location: { workDir: string; sessionId: string; createdAt: number },
+  stage: SessionEventLedgerRebuildStage
+): Promise<void> {
+  const target = eventPaths(location.workDir, location.sessionId, location.createdAt)
+  const staged = eventPaths(stage.workDir, location.sessionId, location.createdAt)
+  if (stage.stageRoot !== stage.workDir || staged.eventsPath !== stage.eventsPath || staged.indexPath !== stage.indexPath ||
+    path.dirname(stage.stageRoot) !== target.directory || !path.basename(stage.stageRoot).startsWith('.ledger-rebuild-')) {
+    throw new Error('SESSION_LEDGER_REBUILD_STAGE_IDENTITY_INVALID')
+  }
+  const realTargetDirectory = await fs.realpath(target.directory)
+  const realStageRoot = await fs.realpath(stage.stageRoot).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  })
+  if (realStageRoot && !isPathInside(realTargetDirectory, realStageRoot)) throw new Error('SESSION_LEDGER_REBUILD_STAGE_OUTSIDE_ROOT')
+  const stat = await fs.lstat(stage.stageRoot).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  })
+  if (!stat) return
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('SESSION_LEDGER_REBUILD_STAGE_INVALID')
+  await fs.rm(stage.stageRoot, { recursive: true, force: true })
 }
 
 /** Reconciles only one fenced old-owner ledger. Callers must hold its lifecycle lock and complete canonical projection first. */
@@ -716,6 +1021,25 @@ export type SessionEventReadResult = {
   issues: SessionEventIssue[]
   integrity: SessionEventIntegrity
 }
+export type SessionEventLedgerCoverage = 'complete' | 'repairable-tail' | 'preserve-and-quarantine'
+export type QuarantinedSessionEventLedger = {
+  directory: string
+  eventsPath: string
+  indexPath: string
+  manifestPath: string
+}
+
+/**
+ * Classifies the only safe in-place repair case. Any complete malformed record
+ * leaves coverage unknown, even when other lines parsed successfully.
+ */
+export function classifySessionEventLedgerCoverage(result: SessionEventReadResult): SessionEventLedgerCoverage {
+  if (result.issues.length === 0) return 'complete'
+  if (result.issues.every((issue) => issue.code === 'torn-tail' && issue.truncated && !issue.dataLossPossible)) {
+    return 'repairable-tail'
+  }
+  return 'preserve-and-quarantine'
+}
 export type SessionRecoveryFailure = {
   sessionName: string
   eventsPath?: string
@@ -766,6 +1090,8 @@ export class SessionEventWriter implements SessionEventSink {
   private lostEvents = 0
   private lostBytes = 0
   private indexStale = false
+  private retiring = false
+  private retired = false
   private closing = false
   private closed = false
 
@@ -860,6 +1186,28 @@ export class SessionEventWriter implements SessionEventSink {
     }
   }
 
+  /** Fences this instance, drains already accepted commits, then removes it from the registry. */
+  async retire(): Promise<void> {
+    if (this.retired) return
+    this.retiring = true
+    this.clearFlushTimer()
+    await this.withLifecycleDrain(async () => {
+      if (this.retired) return
+      this.retired = true
+      const pending = this.takePendingChunks()
+      this.lostEvents += pending.inputs.length
+      this.lostBytes += pending.bytes
+      const failure = new Error('SESSION_LEDGER_SINK_RETIRED') as SessionEventFailure
+      failure.code = 'SESSION_LEDGER_SINK_RETIRED'
+      failure.eventsPath = this.eventsPath
+      failure.lostEvents = this.lostEvents
+      failure.lostBytes = this.lostBytes
+      this.failedError = failure
+      this.failureMessage = failure.message
+      if (writerRegistry.get(this.eventsPath) === this) writerRegistry.delete(this.eventsPath)
+    })
+  }
+
   /** @deprecated 兼容旧调用方；新代码使用 appendCritical。 */
   append(input: SessionEventInput): Promise<SessionEvent | undefined> {
     return this.appendCritical(input).catch(() => {
@@ -884,6 +1232,7 @@ export class SessionEventWriter implements SessionEventSink {
   }
 
   private assertOpen(): void {
+    if (this.retiring || this.retired) throw new Error('SESSION_LEDGER_SINK_RETIRED')
     this.assertNotClosed()
     if (this.closing) throw new Error('session event sink is closing')
   }
@@ -971,6 +1320,7 @@ export class SessionEventWriter implements SessionEventSink {
         this.pendingChunks = []
         this.pendingChunkCount = 0
         this.pendingChunkBytes = 0
+        notifySessionEventLedgerFailure(this.location, this.failedError, 'write')
         throw this.failedError
       }
       throw error
@@ -1201,7 +1551,7 @@ export async function readSessionEventsDetailed(
       }
       issues.push(issue)
       options?.onIssue?.(issue)
-      if (isTornTail && options?.repairTail) {
+      if (isTornTail && options?.repairTail && !issues.some((previous) => !previous.truncated)) {
         const lastCompleteNewline = text.lastIndexOf('\n', text.length - 1)
         await fs.truncate(eventsPath, Math.max(0, lastCompleteNewline + 1))
       }

@@ -907,6 +907,7 @@ export type SystemOperationRecord = Readonly<{
   beforePercent?: number
   afterPercent?: number
   reason?: 'SUMMARY_TIMEOUT' | 'SUMMARY_INVALID' | 'SUMMARY_UNAVAILABLE' | 'SUMMARY_FAILED' | 'NO_GAIN' | 'UNCOMPRESSIBLE' | 'LATE_DISCARDED'
+    | 'REPAIR_ALREADY_COMMITTED' | 'REPAIR_FALLBACK_FULL_EXPAND' | 'REPAIR_ORIGINAL_WINDOW' | 'REPAIR_NEW_SPLIT'
 }>
 
 export interface ModelEntry {
