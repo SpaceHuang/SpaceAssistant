@@ -143,6 +143,32 @@ describe('manual session context compaction', () => {
     expect(events[0]?.payload).toMatchObject({ compactionId: first.compactionId, reason: 'lost_compaction_repair', repairIdentity: { branch: 'new-split', sourceVersion: 'watermark:42' } })
   })
 
+  it('starts a fresh manual compaction for a new request after a repair checkpoint', async () => {
+    const { sink, events } = makeSink()
+    const repair = { sourceVersion: 'watermark:42', lostWindow: { start: 'lost-start', end: 'lost-end' }, branch: 'new-split' as const,
+      replay: { committed: [], rejected: [] } }
+    const summarize = vi.fn(summarizeFixture)
+    const repaired = await compactSessionContext({ sessionId: 's1', requestId: 'repair-request', windowId: 'window-1', messages,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, messages), repair, summarize })
+    expect(repaired.status).toBe('committed')
+
+    const currentMessages = [
+      { id: 'checkpoint-after-repair', role: 'user' as const, content: JSON.stringify({ kind: 'context_checkpoint', task: 'continue work' }) },
+      ...messages.slice(-2),
+      { id: 'u3', role: 'user' as const, content: 'New question '.repeat(120) },
+      { id: 'a3', role: 'assistant' as const, content: 'New answer '.repeat(120) }
+    ]
+    const manual = await compactSessionContext({ sessionId: 's1', requestId: 'manual-after-repair', windowId: 'window-2',
+      messages: currentMessages, totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, currentMessages), summarize })
+
+    expect(manual.status).toBe('committed')
+    expect(manual.compactionId).not.toBe(repaired.compactionId)
+    expect(manual.compactionId).toContain('user-compact:s1:manual-after-repair:')
+    expect(summarize).toHaveBeenCalledTimes(2)
+    expect(events.filter(({ type }) => type === 'compaction_start').map(({ payload }) => payload.reason))
+      .toEqual(['lost_compaction_repair', 'user_compact'])
+  })
+
   it('replays the exact verified source window when repair metadata is complete', async () => {
     const { sink, events } = makeSink()
     const identities = surfaceItemIdentities(projectReplaySurface(messages))

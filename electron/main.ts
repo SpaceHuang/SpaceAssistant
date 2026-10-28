@@ -90,6 +90,7 @@ import { createProductionSessionLedgerLifecycleDependencies } from './runtime/se
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
 import { withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 import { readSessionLedgerReadiness, refreshSessionLedgerReadyProof } from './sessionLedgerReadiness'
+import { handleSessionLedgerEventFailure } from './runtime/sessionLedgerRepairFailure'
 import { SCHEMA_META_KEYS } from './database/schema'
 import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
 import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
@@ -570,9 +571,8 @@ app.whenReady().then(async () => {
       kind: 'session-ledger-auto-repair', status, attempt, retryInMs
     })
   })
-  setSessionEventFailureObserver((location, _error, kind) => sessionLedgerRepairScheduler.request(location, {
-    retireSink: kind === 'write', generation: ++sessionLedgerRepairRequestGeneration
-  }))
+  setSessionEventFailureObserver((location) => handleSessionLedgerEventFailure({ conn: getDbConnection(db),
+    scheduler: sessionLedgerRepairScheduler, location, generation: ++sessionLedgerRepairRequestGeneration }))
   setSessionEventCommitObserver(async (location) => {
     const identity = sessionLedgerLocationIdentity(location)
     const proof = await sessionLedgerLifecycleDependencies.readProof(location)

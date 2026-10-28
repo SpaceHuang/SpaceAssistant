@@ -219,6 +219,8 @@ export async function ensureSessionLedgerReady(input: {
         operation = 'baseline'
         baselineScanCount += 1
         const ledgerExists = await input.dependencies.fileExists(input.location)
+        const rebuildMissingLedger = !ledgerExists && Boolean(input.dependencies.rebuildMissingLegacyLedger) &&
+          (current.origin === 'legacy' || input.retryBlocked === true)
         if (current.origin === 'legacy' && !ledgerExists && !input.dependencies.rebuildMissingLegacyLedger) {
           markMissingLegacyLedgerBlocked(input.conn, current.ledgerLocationKey, now())
           current = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
@@ -227,7 +229,7 @@ export async function ensureSessionLedgerReady(input: {
         const token = beginSessionLedgerCheck(input.conn, current.ledgerLocationKey, now())
         if (!token) return { status: 'blocked', readiness: readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)! }
         try {
-          const proof = current.origin === 'legacy' && !ledgerExists
+          const proof = rebuildMissingLedger
             ? await input.dependencies.rebuildMissingLegacyLedger!(input.location)
             : await input.dependencies.baseline(input.location)
           const afterBaseline = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!

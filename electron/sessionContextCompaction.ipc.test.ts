@@ -41,9 +41,10 @@ describe('manual context compaction IPC ContextPort integration', () => {
       { id: 'ipc-a2', sessionId: session.id, role: 'assistant', content: 'Current assistant context '.repeat(120), timestamp: 4, status: 'completed' }
     ])
     const sink = { eventsPath: '/tmp/session-context-ipc', indexPath: '/tmp/session-context-ipc-index', appendCritical: vi.fn(), appendChunk: vi.fn(), waitForCapacity: vi.fn(), flush: vi.fn(), close: vi.fn() }
+    let replayForStorage = { committed: [], rejected: [] } as unknown
     const baseStorage = createSqliteSessionStorage(db, {
       getWorkDirForSession: () => '/tmp', getUserDataDir: () => '/tmp',
-      getSessionEventSink: () => sink as never, readCompactionReplay: async () => ({ committed: [], rejected: [] } as never)
+      getSessionEventSink: () => sink as never, readCompactionReplay: async () => replayForStorage as never
     })
     await baseStorage.recovery.recover()
     await baseStorage.execution.historyFor({ sessionId: session.id }).appendBatch([{
@@ -94,8 +95,16 @@ describe('manual context compaction IPC ContextPort integration', () => {
     expect(appendCompactionTransaction).toHaveBeenCalledWith(sink, expect.objectContaining({ reason: 'lost_compaction_repair', repairIdentity: expect.objectContaining({ branch: 'new-split' }) }), expect.objectContaining({ candidate: expect.objectContaining({ kind: 'summary' }) }))
     expect(storage.contexts).toMatchObject({ readCurrent: expect.any(Function), commitReplacement: expect.any(Function) })
     expect(inspectAvailability).toHaveBeenCalledWith(session.id)
+    const startPayload = vi.mocked(appendCompactionTransaction).mock.calls[0]![1] as Record<string, unknown>
+    const summaryPayload = vi.mocked(appendCompactionTransaction).mock.calls[0]![2] as Record<string, unknown>
+    replayForStorage = { committed: [{ compactionId: (result as { compactionId: string }).compactionId,
+      start: { seq: 1, type: 'compaction_start', payload: startPayload },
+      summary: { seq: 2, type: 'compaction_summary', payload: summaryPayload },
+      end: { seq: 3, type: 'compaction_end', payload: { compactionId: (result as { compactionId: string }).compactionId,
+        status: 'committed', outputWindowId: (result as { windowId: string }).windowId,
+        outputSurfaceFingerprint: (result as { outputSurfaceFingerprint: string }).outputSurfaceFingerprint } } }], rejected: [] }
     const retried = await handlers.get('chat:compact-session-context')!({ sender: window.webContents },
-      { sessionId: session.id, requestId: 'ipc-compact-1-retry' })
+      { sessionId: session.id, requestId: 'ipc-compact-1' })
     expect(retried).toEqual(result)
     expect(summarizeSessionContext).toHaveBeenCalledOnce()
     expect(appendCompactionTransaction).toHaveBeenCalledOnce()

@@ -95,15 +95,19 @@ describe('inspectLostCompactionRepairEvidence', () => {
     expect(a.sourceVersion).toBe(b.sourceVersion)
   })
 
-  it('preserves an already committed repair identity even when its checkpoint is now available', () => {
+  it('does not reuse an old repair identity when a checkpoint is available for current messages', () => {
     const replay = { committed: [{ compactionId: 'repair-id',
-      start: { seq: 1, type: 'compaction_start' as const, payload: { compactionId: 'repair-id', repairIdentity: {
+      start: { seq: 1, type: 'compaction_start' as const, payload: { compactionId: 'repair-id', sourceRequestId: 'original-repair-request', repairIdentity: {
         sourceVersion: 'source-v', branch: 'new-split', windowStart: 'lost-window', windowEnd: 'lost-window', ranges: []
       } } },
       summary: { seq: 2, type: 'compaction_summary' as const, payload: { compactionId: 'repair-id' } },
       end: { seq: 3, type: 'compaction_end' as const, payload: { compactionId: 'repair-id', status: 'committed' } } }], rejected: [] }
-    expect(inspectLostCompactionRepairEvidence({ replay, messages: [{ id: 'checkpoint', content: '{"kind":"context_checkpoint"}' }] }))
-      .toMatchObject({ classification: 'checkpoint-available', branch: 'new-split', sourceVersion: 'source-v', lostWindow: { start: 'lost-window', end: 'lost-window' } })
+    const result = inspectLostCompactionRepairEvidence({ replay, requestId: 'manual-request', messages: [
+      { id: 'checkpoint', content: '{"kind":"context_checkpoint"}' },
+      { id: 'new-user', content: 'new request' }, { id: 'new-assistant', content: 'new answer' }
+    ] })
+    expect(result).toMatchObject({ classification: 'checkpoint-available', action: 'use-checkpoint' })
+    expect(result.branch).toBeUndefined()
   })
 })
 

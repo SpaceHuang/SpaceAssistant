@@ -40,6 +40,7 @@ export function inspectLostCompactionRepairEvidence(input: Readonly<{
   messages: readonly Readonly<{ id?: string; content: unknown }>[]
   surfaceIdentities?: readonly string[]
   tokenBudget?: number
+  requestId?: string
 }>): LostCompactionRepairEvidence {
   const canonicalize = (value: unknown): unknown => Array.isArray(value) ? value.map(canonicalize)
     : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value as Record<string, unknown>)
@@ -81,7 +82,10 @@ export function inspectLostCompactionRepairEvidence(input: Readonly<{
     const repairIdentity = start.payload.repairIdentity
     return Boolean(repairIdentity && typeof repairIdentity === 'object' && !Array.isArray(repairIdentity) &&
       typeof (repairIdentity as { sourceVersion?: unknown }).sourceVersion === 'string' &&
-      ((repairIdentity as { branch?: unknown }).branch === 'replay-original' || (repairIdentity as { branch?: unknown }).branch === 'new-split'))
+      ((repairIdentity as { branch?: unknown }).branch === 'replay-original' || (repairIdentity as { branch?: unknown }).branch === 'new-split') &&
+      (input.requestId !== undefined
+        ? start.payload.sourceRequestId === input.requestId
+        : classification.action !== 'use-checkpoint'))
   })
   const committedRepairIdentity = committedRepair?.start.payload.repairIdentity as Record<string, unknown> | undefined
   if (committedRepair && committedRepairIdentity && typeof committedRepairIdentity.windowStart === 'string' && typeof committedRepairIdentity.windowEnd === 'string') {

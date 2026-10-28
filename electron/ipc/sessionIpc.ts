@@ -94,7 +94,8 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       if (!sessionWorkDir) return { status: 'unavailable' as const }
       const { adapter: sessionContextAdapter, messages, windowId } = await sessionStorage.contexts.createBoundAdapter({ sessionId, isBusy: busy })
       const repairReplay = await sessionStorage.readCompactionReplay({ sessionId, workDir: sessionWorkDir.workDir })
-      const repairEvidence = inspectLostCompactionRepairEvidence({ replay: repairReplay, messages, surfaceIdentities: surfaceItemIdentities(messages) })
+      const repairEvidence = inspectLostCompactionRepairEvidence({ replay: repairReplay, messages,
+        surfaceIdentities: surfaceItemIdentities(messages), requestId })
       const repair = repairEvidence.branch ? { sourceVersion: repairEvidence.sourceVersion, lostWindow: repairEvidence.lostWindow,
         ...(repairEvidence.lostRanges ? { lostRanges: repairEvidence.lostRanges } : {}), branch: repairEvidence.branch, replay: repairReplay } : undefined
       const modelWindow = resolveModelContextWindow(session.model, readStoredModels(ctx.db))
