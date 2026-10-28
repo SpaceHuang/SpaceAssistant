@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-28",
+  "scenario": "follow-up launch of the existing arm64 PKG identity clone against the same isolated real-history COW profile; diagnostic only, no switch sample",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "6113fa88-2c21-41cf-b805-c0fb19115b2f",
+    "pkgSha256": "6a5a07831f591017bbfe09325298abe427d3affb68275d87ae3a707902962928",
+    "appAsarSha256": "5f09ef1980216bdad29e2d93ae1f992b74899aa1c9e87696cb7463edcf91a31a",
+    "identityCloneBundleId": "com.spaceassistant.p4healthyhistory28b",
+    "pkgInstalled": false
+  },
+  "isolation": {
+    "databaseProfile": "/Users/space/Library/Application Support/sap4perfhealthy28b",
+    "helperUserDataDirWasExplicitlySet": true,
+    "defaultUserAppWasNotInteractedWith": true,
+    "sourceProfileWasNotOpenedByApp": true,
+    "processExited": true
+  },
+  "profileHealth": {
+    "startupRecoveryStatus": "degraded",
+    "historyRepairFailureCount": 142,
+    "selectedStartupConversationTitle": "第 1 件：压缩摘要",
+    "selectedConversationUiError": "ENOENT opening /Users/space/Documents/Develop/SpaceAssistant/sessions/e78e8347-8627-4ed5-8466-5adefbf76679-20261018/events.jsonl",
+    "quickCheckBeforeRun": "ok",
+    "existingTargetSessionsPreviouslyHadCompleteSourceAndReadyLedger": true,
+    "profileAsAWholeMeetsHealthyRealHistoryAcceptance": false
+  },
+  "interaction": {
+    "sessionSwitchesPerformed": 0,
+    "switchLatencyRecorded": false,
+    "targetBodyMarkersChecked": false,
+    "classification": "excluded diagnostic; do not count toward AC-7"
+  },
+  "conclusion": "The prior 8-switch candidate trace remains a candidate-only latency sample for two target sessions, but this follow-up confirms the containing profile is globally degraded and the startup-selected conversation references a missing legacy events file. Do not describe this profile as a healthy real-history acceptance profile. Obtain or repair an isolated healthy snapshot before further AC-7 real-history measurements; do not alter the default user database or relax the baseline version guard."
+}

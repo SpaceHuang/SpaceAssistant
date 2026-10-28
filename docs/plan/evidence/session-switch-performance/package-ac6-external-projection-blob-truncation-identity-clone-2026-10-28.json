@@ -1,0 +1,439 @@
+{
+  "schema": "spaceassistant.package-ac6-external-projection-blob-truncation.v1",
+  "capturedLocalDate": "2026-10-28",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "source": "arm64 PKG payload identity clone",
+    "pkgSha256": "6594ee801e4eddc23ace759164feb2c32ae5af0b5b35403bf3382820353188b8",
+    "appBundle": "/tmp/SpaceAssistant-P4-ReadyHot20261028.app",
+    "identityClone": true,
+    "packageNamePatched": "sap4readyhot28",
+    "adHocResigned": true,
+    "userData": "/Users/space/Library/Application Support/sap4readyhot28",
+    "feishuEnabled": false,
+    "wechatEnabled": false
+  },
+  "fixture": {
+    "kind": "synthetic canonical-backed-only",
+    "sessionId": "3b27f281-c36f-4d77-a1f7-6ee420d523ff",
+    "messageId": "p4-external-blob-2702917b-7174-4e91-ab1d-2dc971d15051",
+    "sessionName": "P4 external projection blob 300KiB",
+    "workDirProfileId": "default",
+    "messageRole": "user",
+    "bodyBytes": 312535,
+    "bodySha256": "638d2c90c50d39d5f6dccbcf562ccfd6d128ab8ec288083789caaa442939005a",
+    "bodyTailMarker": "P4_EXTERNAL_PROJECTION_BLOB_TAIL_OK",
+    "messageStorageStateBeforeAndAfter": "canonical-backed-only",
+    "messageInlineBytes": 0,
+    "projectionPayloadBytes": 313274,
+    "inlinePayloadNull": true,
+    "originalPayloadDigest": "027d8faa3f6caa469a29e2a991fb3c3c4367a8fd93a00a41d98dfd6916e8d15a"
+  },
+  "faultInjection": {
+    "operation": "truncate only the derived projection blob file to half its declared length (313274 → 156637 bytes); no DB cache metadata or canonical/history content modified.",
+    "independentColdProcessCycles": 3,
+    "sameProcessRevisitsExcludedFromRecoveryCount": true,
+    "sameProcessObservation": "The tail remained visible and a ready trace was emitted while the on-disk projection file remained truncated; treated as reuse of already-loaded page/view and not counted as corruption detection."
+  },
+  "sourceTablesBeforeAndAfter": {
+    "messages": {
+      "before": {
+        "rows": 1073,
+        "sha256": "f4fb37dfc826e9311954a3c9abfe624cc8fa5a259a339d71e25d09d106dcbe2f"
+      },
+      "after": {
+        "rows": 1073,
+        "sha256": "f4fb37dfc826e9311954a3c9abfe624cc8fa5a259a339d71e25d09d106dcbe2f"
+      },
+      "unchanged": true
+    },
+    "agent_history_events": {
+      "before": {
+        "rows": 8,
+        "sha256": "5941a8cddd082667a1bd2eec4e12ff7ba8ed26a12fb82daa834bb0bf79547bd3"
+      },
+      "after": {
+        "rows": 8,
+        "sha256": "5941a8cddd082667a1bd2eec4e12ff7ba8ed26a12fb82daa834bb0bf79547bd3"
+      },
+      "unchanged": true
+    },
+    "session_message_body_source_event": {
+      "before": {
+        "rows": 2146,
+        "sha256": "dc4de64e1d45eb727a69330dcd35d59a9d8fb0e356840a6b36a9640699a6c8b7"
+      },
+      "after": {
+        "rows": 2146,
+        "sha256": "dc4de64e1d45eb727a69330dcd35d59a9d8fb0e356840a6b36a9640699a6c8b7"
+      },
+      "unchanged": true
+    },
+    "session_body_source_state": {
+      "before": {
+        "rows": 4,
+        "sha256": "2d111d95316bd252c7d460d1db01b8331729764b654b7b7ff4257a88059485be"
+      },
+      "after": {
+        "rows": 4,
+        "sha256": "2d111d95316bd252c7d460d1db01b8331729764b654b7b7ff4257a88059485be"
+      },
+      "unchanged": true
+    }
+  },
+  "recoveries": [
+    {
+      "cycle": 1,
+      "damagedBlobLocator": "projection-0ad24d13-e14d-4e4a-8e87-25b7b035bb41.blob",
+      "damagedLengthBytes": 156637,
+      "declaredLengthBytes": 313274,
+      "workerBodyReadOutcome": "error",
+      "sourceFallbackOutcome": "ok",
+      "mainTrace": {
+        "logLine": 4591,
+        "tsUtc": "2026-10-27T23:06:30.348Z",
+        "instance": "main",
+        "traceId": "f30aff8b-5334-4024-b37d-d89208672183",
+        "requestOrdinal": 2,
+        "outcome": "ok",
+        "cachePath": "cold",
+        "pageSize": 1,
+        "durationMs": 58.79,
+        "stages": [
+          {
+            "name": "page-select",
+            "durationMs": 0.38,
+            "outcome": "ok"
+          },
+          {
+            "name": "source-spill-discovery",
+            "durationMs": 1.3,
+            "outcome": "ok"
+          },
+          {
+            "name": "worker-startup",
+            "durationMs": 22.3,
+            "outcome": "ok"
+          },
+          {
+            "name": "body-read",
+            "durationMs": 34.13,
+            "outcome": "error"
+          },
+          {
+            "name": "page-select",
+            "durationMs": 0.33,
+            "outcome": "ok"
+          },
+          {
+            "name": "source-spill-discovery",
+            "durationMs": 0.32,
+            "outcome": "ok"
+          },
+          {
+            "name": "worker-queue",
+            "durationMs": 0.04,
+            "outcome": "ok"
+          },
+          {
+            "name": "worker-read",
+            "durationMs": 22.11,
+            "outcome": "ok"
+          },
+          {
+            "name": "body-read",
+            "durationMs": 22.78,
+            "outcome": "ok"
+          },
+          {
+            "name": "final-source-check",
+            "durationMs": 0.28,
+            "outcome": "ok"
+          },
+          {
+            "name": "source-page-read",
+            "durationMs": 23.55,
+            "outcome": "ok"
+          },
+          {
+            "name": "main-ipc",
+            "durationMs": 58.78,
+            "outcome": "ok"
+          }
+        ]
+      },
+      "rendererTrace": {
+        "logLine": 4592,
+        "tsUtc": "2026-10-27T23:06:30.348Z",
+        "instance": "renderer",
+        "traceId": "5-2",
+        "requestOrdinal": 2,
+        "outcome": "ok",
+        "cachePath": null,
+        "pageSize": 1,
+        "durationMs": null,
+        "stages": [
+          {
+            "name": "selection-to-page-request",
+            "durationMs": 14.3,
+            "outcome": "ok"
+          },
+          {
+            "name": "renderer-page-request",
+            "durationMs": 60.8,
+            "outcome": "ok"
+          }
+        ]
+      },
+      "uiTailMarkerVisible": true,
+      "postRecoveryCacheLocator": "projection-ca3f7d54-b8a3-4746-bb89-2219be3553f3.blob",
+      "postRecoveryBlobBytes": 313274
+    },
+    {
+      "cycle": 2,
+      "damagedBlobLocator": "projection-ca3f7d54-b8a3-4746-bb89-2219be3553f3.blob",
+      "damagedLengthBytes": 156637,
+      "declaredLengthBytes": 313274,
+      "workerBodyReadOutcome": "error",
+      "sourceFallbackOutcome": "ok",
+      "mainTrace": {
+        "logLine": 4640,
+        "tsUtc": "2026-10-27T23:08:56.864Z",
+        "instance": "main",
+        "traceId": "4112a2fd-afb5-4f22-880f-f08576660ad5",
+        "requestOrdinal": 2,
+        "outcome": "ok",
+        "cachePath": "cold",
+        "pageSize": 1,
+        "durationMs": 57.89,
+        "stages": [
+          {
+            "name": "page-select",
+            "durationMs": 0.38,
+            "outcome": "ok"
+          },
+          {
+            "name": "source-spill-discovery",
+            "durationMs": 1.18,
+            "outcome": "ok"
+          },
+          {
+            "name": "worker-startup",
+            "durationMs": 21.57,
+            "outcome": "ok"
+          },
+          {
+            "name": "body-read",
+            "durationMs": 33.1,
+            "outcome": "error"
+          },
+          {
+            "name": "page-select",
+            "durationMs": 0.36,
+            "outcome": "ok"
+          },
+          {
+            "name": "source-spill-discovery",
+            "durationMs": 0.33,
+            "outcome": "ok"
+          },
+          {
+            "name": "worker-queue",
+            "durationMs": 0.03,
+            "outcome": "ok"
+          },
+          {
+            "name": "worker-read",
+            "durationMs": 22.12,
+            "outcome": "ok"
+          },
+          {
+            "name": "body-read",
+            "durationMs": 22.82,
+            "outcome": "ok"
+          },
+          {
+            "name": "final-source-check",
+            "durationMs": 0.27,
+            "outcome": "ok"
+          },
+          {
+            "name": "source-page-read",
+            "durationMs": 23.6,
+            "outcome": "ok"
+          },
+          {
+            "name": "main-ipc",
+            "durationMs": 57.87,
+            "outcome": "ok"
+          }
+        ]
+      },
+      "rendererTrace": {
+        "logLine": 4641,
+        "tsUtc": "2026-10-27T23:08:56.864Z",
+        "instance": "renderer",
+        "traceId": "5-2",
+        "requestOrdinal": 2,
+        "outcome": "ok",
+        "cachePath": null,
+        "pageSize": 1,
+        "durationMs": null,
+        "stages": [
+          {
+            "name": "selection-to-page-request",
+            "durationMs": 10.9,
+            "outcome": "ok"
+          },
+          {
+            "name": "renderer-page-request",
+            "durationMs": 59.5,
+            "outcome": "ok"
+          }
+        ]
+      },
+      "uiTailMarkerVisible": true,
+      "postRecoveryCacheLocator": "projection-9527d8db-9255-4183-90d2-fa187456b409.blob",
+      "postRecoveryBlobBytes": 313274
+    },
+    {
+      "cycle": 3,
+      "damagedBlobLocator": "projection-9527d8db-9255-4183-90d2-fa187456b409.blob",
+      "damagedLengthBytes": 156637,
+      "declaredLengthBytes": 313274,
+      "workerBodyReadOutcome": "error",
+      "sourceFallbackOutcome": "ok",
+      "mainTrace": {
+        "logLine": 4685,
+        "tsUtc": "2026-10-27T23:10:30.617Z",
+        "instance": "main",
+        "traceId": "81cabec9-6cc7-4707-ae92-02f7b80561f3",
+        "requestOrdinal": 2,
+        "outcome": "ok",
+        "cachePath": "cold",
+        "pageSize": 1,
+        "durationMs": 58.97,
+        "stages": [
+          {
+            "name": "page-select",
+            "durationMs": 0.39,
+            "outcome": "ok"
+          },
+          {
+            "name": "source-spill-discovery",
+            "durationMs": 0.92,
+            "outcome": "ok"
+          },
+          {
+            "name": "worker-startup",
+            "durationMs": 21.69,
+            "outcome": "ok"
+          },
+          {
+            "name": "body-read",
+            "durationMs": 33.75,
+            "outcome": "error"
+          },
+          {
+            "name": "page-select",
+            "durationMs": 0.33,
+            "outcome": "ok"
+          },
+          {
+            "name": "source-spill-discovery",
+            "durationMs": 0.33,
+            "outcome": "ok"
+          },
+          {
+            "name": "worker-queue",
+            "durationMs": 0.03,
+            "outcome": "ok"
+          },
+          {
+            "name": "worker-read",
+            "durationMs": 22.53,
+            "outcome": "ok"
+          },
+          {
+            "name": "body-read",
+            "durationMs": 23.21,
+            "outcome": "ok"
+          },
+          {
+            "name": "final-source-check",
+            "durationMs": 0.29,
+            "outcome": "ok"
+          },
+          {
+            "name": "source-page-read",
+            "durationMs": 23.97,
+            "outcome": "ok"
+          },
+          {
+            "name": "main-ipc",
+            "durationMs": 58.95,
+            "outcome": "ok"
+          }
+        ]
+      },
+      "rendererTrace": {
+        "logLine": 4686,
+        "tsUtc": "2026-10-27T23:10:30.617Z",
+        "instance": "renderer",
+        "traceId": "5-2",
+        "requestOrdinal": 2,
+        "outcome": "ok",
+        "cachePath": null,
+        "pageSize": 1,
+        "durationMs": null,
+        "stages": [
+          {
+            "name": "selection-to-page-request",
+            "durationMs": 9.5,
+            "outcome": "ok"
+          },
+          {
+            "name": "renderer-page-request",
+            "durationMs": 60.4,
+            "outcome": "ok"
+          }
+        ]
+      },
+      "uiTailMarkerVisible": true,
+      "postRecoveryCacheLocator": "projection-e8ac7bb4-1dde-4814-a84b-82bc673c2b67.blob",
+      "postRecoveryBlobBytes": 313274
+    }
+  ],
+  "databaseAfter": {
+    "quickCheck": "ok",
+    "bodySourceState": "complete",
+    "projectionState": "valid",
+    "cacheLocator": "projection-e8ac7bb4-1dde-4814-a84b-82bc673c2b67.blob",
+    "cacheDeclaredBytes": 313274,
+    "cacheDigest": "027d8faa3f6caa469a29e2a991fb3c3c4367a8fd93a00a41d98dfd6916e8d15a",
+    "cacheInlinePayloadNull": true,
+    "physicalBlobExists": true,
+    "physicalBlobBytes": 313274,
+    "physicalBlobSha256": "027d8faa3f6caa469a29e2a991fb3c3c4367a8fd93a00a41d98dfd6916e8d15a",
+    "sourceStateCounts": [
+      [
+        "complete",
+        4
+      ]
+    ],
+    "projectionStateCounts": [
+      [
+        "valid",
+        4
+      ]
+    ]
+  },
+  "limitations": [
+    "Three cold-process repetitions on the same synthetic clone, not an independent real-history database or baseline package.",
+    "The UI screenshot visibly showed the unique tail marker after each cold recovery; AX text omitted this large rendered text, so the marker check was visual. No byte-for-byte renderer export was captured.",
+    "The same-process revisit after truncation did not force a disk integrity check and is not counted as a successful recovery sample.",
+    "This covers an external projection cache blob, not external History source spill truncation, publish-boundary fault injection, or other AC-6 mutations.",
+    "Does not close P4-02/P4-03 or AC-7."
+  ]
+}

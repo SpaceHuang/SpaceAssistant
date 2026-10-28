@@ -1,0 +1,55 @@
+{
+  "schema": "session-switch-package-routing-evidence/v1",
+  "date": "2026-10-28",
+  "candidateBuildId": "eb0aac8b-6f5b-496c-ba11-f45f194f9584",
+  "originalAppAsarSha256": "c5f6801ea483b11ec01b94ff1ee3c87c34ab609434b8a319f3589c8d4a078cc6",
+  "testApp": {
+    "path": "/tmp/SpaceAssistant-P4-Isolated-20261028.app",
+    "packageName": "spaceassistant-perf-isolated-20261028",
+    "appAsarSha256": "dc36f62ca36e0de41f5e7bbfad72f502419f39ead47fa6f3f00e45fd4836d0a6",
+    "changedPackageField": "package.json:name",
+    "mainBundleSha256": "fa3e0c95f51bf9774a59f08ec4e59395f5e4b1f179152336083dd2e4edf4bafe",
+    "originalMainBundleSha256": "fa3e0c95f51bf9774a59f08ec4e59395f5e4b1f179152336083dd2e4edf4bafe"
+  },
+  "isolatedUserDataPath": "/Users/space/Library/Application Support/spaceassistant-perf-isolated-20261028",
+  "defaultUserDataPath": "/Users/space/Library/Application Support/spaceassistant",
+  "defaultDatabaseMtimeBeforeAndAfter": "2026-10-28 04:32:56",
+  "isolatedDatabase": {
+    "schemaVersion": 117,
+    "messageCount": 965,
+    "bodySourceStates": {
+      "backfilling": 34,
+      "complete": 631
+    }
+  },
+  "sessions": {
+    "a": {
+      "id": "fd148f7d-e91f-4d0f-9380-e815a90913d4",
+      "canonicalMessageCount": 88
+    },
+    "b": {
+      "id": "2216c7ce-2f88-4e45-9dc9-4244636a0773",
+      "canonicalMessageCount": 64
+    }
+  },
+  "results": {
+    "aba": {
+      "cycles": 30,
+      "calls": 90,
+      "wrongSessionPages": 0,
+      "errors": 0,
+      "rendererDurationMs": 332.3
+    },
+    "concurrent": {
+      "calls": 40,
+      "wrongSessionPages": 0,
+      "errors": 0,
+      "rendererDurationMs": 78.6
+    }
+  },
+  "limitations": [
+    "This is a package identity clone. package.json:name changed to provide a unique macOS userData directory; app code was unchanged, and the main bundle hashes match.",
+    "The probe invoked the packaged preload chatGetMessagePage API through CDP. It did not perform window clicks, measure message-ready rendering, collect Long Task/LoAF, or exercise maintenance competition.",
+    "This does not close AC-7 or P4-02/P4-03."
+  ]
+}

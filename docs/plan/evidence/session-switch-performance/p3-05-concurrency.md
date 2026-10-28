@@ -43,3 +43,7 @@ git diff --check
 
 - 本阶段验证的是源码级 deterministic tests 与增量编译，不代表已安装 PKG 上的真实交互、全量回归或 P3-06 的规模/峰值内存验收。
 - 队列饱和采用稳定错误返回；调用方原有 authority/error handling 继续处理该失败。该错误的产品层重试体验和压力下端到端延迟将在 P3-06 评估。
+
+## 外部 projection blob 截断回归补充（2026-10-28）
+
+补充 `sessionProjectionBlobStore.test.ts` 用例：将已发布 projection blob 文件截短至原长度一半，确认 `withVerifiedReadStream` 以 `PROJECTION_BLOB_CORRUPT` 拒绝，并且在校验长度失败时消费端收到的字节数为 0。与 `projectionBuildCoordinator.test.ts` 联合定向运行：2 个文件、50 项通过。此为源码层故障边界证据，不替代 P4 安装包验收。

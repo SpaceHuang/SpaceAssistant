@@ -1,0 +1,713 @@
+{
+  "schema": "spaceassistant.package-hot-cache-switch-sample.v1",
+  "capturedAtUtc": {
+    "start": "2026-10-27T22:16:25.761Z",
+    "end": "2026-10-27T22:19:10.669Z"
+  },
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "source": "arm64 PKG payload identity clone",
+    "pkgSha256": "6594ee801e4eddc23ace759164feb2c32ae5af0b5b35403bf3382820353188b8",
+    "appBundle": "/tmp/SpaceAssistant-P4-ReadyHot20261028.app",
+    "identityClone": true,
+    "packageNamePatched": "sap4readyhot28",
+    "adHocResigned": true,
+    "userData": "/Users/space/Library/Application Support/sap4readyhot28",
+    "workspaceProfile": "/Users/space/Library/Application Support/sap4readyhot28/workspaces/2",
+    "feishuEnabled": false,
+    "wechatEnabled": false
+  },
+  "fixtures": [
+    {
+      "messages": 8,
+      "kind": "synthetic canonical",
+      "projectionCache": "valid",
+      "ledgerGate": "ledger_missing"
+    },
+    {
+      "messages": 1000,
+      "kind": "synthetic canonical-backed-only",
+      "projectionCache": "valid",
+      "ledgerGate": "ready"
+    }
+  ],
+  "hotCacheSwitches": {
+    "n": 60,
+    "groups": {
+      "8": {
+        "n": 30,
+        "cacheReady": 30,
+        "outcomeOk": 30,
+        "mainHandler": {
+          "n": 30,
+          "p50Ms": 1.14,
+          "p95Ms": 1.31,
+          "maxMs": 1.33
+        },
+        "rendererPageRequest": {
+          "n": 30,
+          "p50Ms": 2.4,
+          "p95Ms": 3.5,
+          "maxMs": 3.7
+        },
+        "rendererNextPaint": {
+          "n": 30,
+          "p50Ms": 7.5,
+          "p95Ms": 16.1,
+          "maxMs": 16.2
+        }
+      },
+      "1000": {
+        "n": 30,
+        "cacheReady": 30,
+        "outcomeOk": 30,
+        "mainHandler": {
+          "n": 30,
+          "p50Ms": 9.83,
+          "p95Ms": 11.63,
+          "maxMs": 12.41
+        },
+        "rendererPageRequest": {
+          "n": 30,
+          "p50Ms": 10.8,
+          "p95Ms": 12.8,
+          "maxMs": 13.3
+        },
+        "rendererNextPaint": {
+          "n": 30,
+          "p50Ms": 7,
+          "p95Ms": 15.3,
+          "maxMs": 15.3
+        }
+      }
+    },
+    "longTaskObserverRecords": [],
+    "ledgerGateEvents": {
+      "ready": 30,
+      "blocked": 30,
+      "ledgerMissing": 30
+    },
+    "projectionBuildSlicesDuringWindow": 0,
+    "samples": [
+      {
+        "ordinal": 20,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.2,
+        "rendererPageRequestMs": 3.5,
+        "rendererNextPaintMs": 14.4,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 21,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 11.37,
+        "rendererPageRequestMs": 12.3,
+        "rendererNextPaintMs": 5.8,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 22,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.05,
+        "rendererPageRequestMs": 2.4,
+        "rendererNextPaintMs": 7.2,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 23,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 11.48,
+        "rendererPageRequestMs": 12.4,
+        "rendererNextPaintMs": 5.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 24,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.25,
+        "rendererPageRequestMs": 3.2,
+        "rendererNextPaintMs": 12.1,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 25,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 10.84,
+        "rendererPageRequestMs": 11.9,
+        "rendererNextPaintMs": 5,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 26,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.09,
+        "rendererPageRequestMs": 2.3,
+        "rendererNextPaintMs": 8.6,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 27,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 11.63,
+        "rendererPageRequestMs": 12.5,
+        "rendererNextPaintMs": 7.2,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 28,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.14,
+        "rendererPageRequestMs": 2,
+        "rendererNextPaintMs": 0.9,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 29,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.9,
+        "rendererPageRequestMs": 10.9,
+        "rendererNextPaintMs": 7.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 30,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.2,
+        "rendererPageRequestMs": 3.5,
+        "rendererNextPaintMs": 16.1,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 31,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 10.11,
+        "rendererPageRequestMs": 11,
+        "rendererNextPaintMs": 6.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 32,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.14,
+        "rendererPageRequestMs": 3.2,
+        "rendererNextPaintMs": 11.7,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 33,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.67,
+        "rendererPageRequestMs": 10.6,
+        "rendererNextPaintMs": 2,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 34,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.33,
+        "rendererPageRequestMs": 3.7,
+        "rendererNextPaintMs": 16.2,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 35,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.25,
+        "rendererPageRequestMs": 10.2,
+        "rendererNextPaintMs": 3.5,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 36,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.09,
+        "rendererPageRequestMs": 2.3,
+        "rendererNextPaintMs": 9.9,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 37,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.38,
+        "rendererPageRequestMs": 10.3,
+        "rendererNextPaintMs": 2.2,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 38,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.14,
+        "rendererPageRequestMs": 2.4,
+        "rendererNextPaintMs": 9.8,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 39,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 10.87,
+        "rendererPageRequestMs": 12.6,
+        "rendererNextPaintMs": 15.2,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 40,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.27,
+        "rendererPageRequestMs": 2.5,
+        "rendererNextPaintMs": 6.9,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 41,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.83,
+        "rendererPageRequestMs": 10.8,
+        "rendererNextPaintMs": 7.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 42,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.08,
+        "rendererPageRequestMs": 2.4,
+        "rendererNextPaintMs": 8.4,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 43,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.58,
+        "rendererPageRequestMs": 10.6,
+        "rendererNextPaintMs": 9.7,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 44,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.09,
+        "rendererPageRequestMs": 2.3,
+        "rendererNextPaintMs": 0.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 45,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.68,
+        "rendererPageRequestMs": 10.7,
+        "rendererNextPaintMs": 7.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 46,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.25,
+        "rendererPageRequestMs": 2.4,
+        "rendererNextPaintMs": 0.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 47,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.35,
+        "rendererPageRequestMs": 10.2,
+        "rendererNextPaintMs": 2.1,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 48,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.09,
+        "rendererPageRequestMs": 2.5,
+        "rendererNextPaintMs": 0.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 49,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.67,
+        "rendererPageRequestMs": 10.8,
+        "rendererNextPaintMs": 7.9,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 50,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.31,
+        "rendererPageRequestMs": 2.4,
+        "rendererNextPaintMs": 9.7,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 51,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 10.02,
+        "rendererPageRequestMs": 11.1,
+        "rendererNextPaintMs": 8.8,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 52,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.29,
+        "rendererPageRequestMs": 2.3,
+        "rendererNextPaintMs": 0.2,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 53,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.92,
+        "rendererPageRequestMs": 10.8,
+        "rendererNextPaintMs": 8.8,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 54,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.09,
+        "rendererPageRequestMs": 2.3,
+        "rendererNextPaintMs": 1,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 55,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 10.24,
+        "rendererPageRequestMs": 11.3,
+        "rendererNextPaintMs": 6.8,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 56,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.14,
+        "rendererPageRequestMs": 2.4,
+        "rendererNextPaintMs": 7,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 57,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 8.91,
+        "rendererPageRequestMs": 9.8,
+        "rendererNextPaintMs": 11.2,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 58,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.08,
+        "rendererPageRequestMs": 1.9,
+        "rendererNextPaintMs": 10.7,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 59,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 8.85,
+        "rendererPageRequestMs": 9.7,
+        "rendererNextPaintMs": 6.1,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 60,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.22,
+        "rendererPageRequestMs": 2.1,
+        "rendererNextPaintMs": 11.4,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 61,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.49,
+        "rendererPageRequestMs": 10.4,
+        "rendererNextPaintMs": 1.9,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 62,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.08,
+        "rendererPageRequestMs": 2.5,
+        "rendererNextPaintMs": 7.5,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 63,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 11.11,
+        "rendererPageRequestMs": 12.8,
+        "rendererNextPaintMs": 15.1,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 64,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.16,
+        "rendererPageRequestMs": 2.3,
+        "rendererNextPaintMs": 7.6,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 65,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 10.68,
+        "rendererPageRequestMs": 12.8,
+        "rendererNextPaintMs": 15.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 66,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.19,
+        "rendererPageRequestMs": 3.3,
+        "rendererNextPaintMs": 0.4,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 67,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.89,
+        "rendererPageRequestMs": 11.2,
+        "rendererNextPaintMs": 15.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 68,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.14,
+        "rendererPageRequestMs": 2.3,
+        "rendererNextPaintMs": 0.9,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 69,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.75,
+        "rendererPageRequestMs": 10.8,
+        "rendererNextPaintMs": 1.8,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 70,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.06,
+        "rendererPageRequestMs": 2.3,
+        "rendererNextPaintMs": 7,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 71,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 8.99,
+        "rendererPageRequestMs": 10,
+        "rendererNextPaintMs": 7,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 72,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.16,
+        "rendererPageRequestMs": 2.3,
+        "rendererNextPaintMs": 1.6,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 73,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 12.41,
+        "rendererPageRequestMs": 13.3,
+        "rendererNextPaintMs": 8.6,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 74,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.1,
+        "rendererPageRequestMs": 3,
+        "rendererNextPaintMs": 12.3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 75,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.55,
+        "rendererPageRequestMs": 10.5,
+        "rendererNextPaintMs": 3,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 76,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.19,
+        "rendererPageRequestMs": 2.9,
+        "rendererNextPaintMs": 12.2,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 77,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 9.25,
+        "rendererPageRequestMs": 10.1,
+        "rendererNextPaintMs": 2.1,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 78,
+        "pageSize": 8,
+        "cachePath": "ready",
+        "mainHandlerMs": 1.25,
+        "rendererPageRequestMs": 2.6,
+        "rendererNextPaintMs": 7.5,
+        "outcome": "ok"
+      },
+      {
+        "ordinal": 79,
+        "pageSize": 20,
+        "cachePath": "ready",
+        "mainHandlerMs": 11.16,
+        "rendererPageRequestMs": 12,
+        "rendererNextPaintMs": 7.8,
+        "outcome": "ok"
+      }
+    ]
+  },
+  "axObservation": {
+    "expectedMarkerMismatchCount": 1,
+    "requestOrdinal": 73,
+    "details": "The first AX snapshot returned the previous-session tail; later in the run the final 1000-message tail was visible. This was not synchronously polled at ordinal 73, so the 60-switch run does not prove per-switch content-ready timing. A separate immediate-poll confirmation run below passed all 10 first observations."
+  },
+  "immediatePollConfirmation": {
+    "capturedAtUtc": {
+      "start": "2026-10-27T22:20:45Z",
+      "end": "2026-10-27T22:20:58Z"
+    },
+    "switches": 10,
+    "groups": {
+      "8": {
+        "n": 5,
+        "cacheReady": 5,
+        "outcomeOk": 5,
+        "mainHandler": {
+          "n": 5,
+          "p50Ms": 1.18,
+          "p95Ms": 1.38,
+          "maxMs": 1.38
+        },
+        "rendererNextPaint": {
+          "n": 5,
+          "p50Ms": 10.7,
+          "p95Ms": 11.8,
+          "maxMs": 11.8
+        }
+      },
+      "1000": {
+        "n": 5,
+        "cacheReady": 5,
+        "outcomeOk": 5,
+        "mainHandler": {
+          "n": 5,
+          "p50Ms": 9.58,
+          "p95Ms": 10.31,
+          "maxMs": 10.31
+        },
+        "rendererNextPaint": {
+          "n": 5,
+          "p50Ms": 7.8,
+          "p95Ms": 8.1,
+          "maxMs": 8.1
+        }
+      }
+    },
+    "axExpectedMarkerFirstObservation": "10/10",
+    "axOppositeMarker": false,
+    "pollsToExpectedMarker": 1,
+    "longTaskObserverRecords": 0
+  },
+  "excludedObservation": {
+    "ts": "2026-10-27T22:14:52.858Z",
+    "kind": "long-animation-frame",
+    "durationMs": 131.3,
+    "classification": "outside this hot-cache capture window and not overlapping the earlier neighboring switch request-to-next-paint intervals"
+  },
+  "interpretation": {
+    "status": "partial evidence only",
+    "limitations": [
+      "Ordinary 8-message fixture has ledger_missing on every gate check; cache-ready switching is not evidence of a healthy fully prepared session.",
+      "Identity clone changes the packaged app name and is ad-hoc resigned; it is not an exact installed/signature identity acceptance.",
+      "No same-database baseline comparison.",
+      "CUA click-to-AX wall time includes automation observation delay and is not reported as user latency.",
+      "One AX first-snapshot mismatch in the 60-sample run remains uncorrelated; immediate-poll follow-up observed all targets on the first read."
+    ],
+    "doesNotClose": [
+      "P4-02",
+      "P4-03",
+      "AC-7"
+    ]
+  },
+  "shutdown": {
+    "cloneProcessRunning": false,
+    "defaultAppRunning": false
+  },
+  "percentileMethod": "nearest-rank"
+}

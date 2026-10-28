@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "invoke production storage compaction through packaged preload IPC and read through the existing application storage instance after SQLite close/swap/reopen",
+  "source": {
+    "commit": "b2785a2493eccfa019fb4b5ddd340576eb31c34f",
+    "workingTreeClean": false,
+    "appBundle": "release/mac-arm64/SpaceAssistant.app",
+    "pkgInstalled": false,
+    "pkgSha256": "30f8b64f47dd947ddadd090a381322fc9f508566bb8ec4dab85525c7d5d5f856",
+    "appAsarSha256": "7733ce26f41948b681338b450cded5adeb04f7d4c9c04dc44fba3fe7b4dfe259",
+    "appIsPackaged": true
+  },
+  "isolation": {
+    "profile": "/tmp/spaceassistant-p4-ac5-compact-liydbN/user-data",
+    "copiedFrom": "/Users/space/Library/Application Support/sap4ac6appendvalid28",
+    "databaseOpenedByAppVerifiedByLsof": true,
+    "sourceDatabaseQuickCheckAfterRun": "ok",
+    "sourceTargetSessionStillPresent": true,
+    "feishuAndWechatMessagesSent": false
+  },
+  "target": {
+    "sessionId": "2dfbce2c-b8fd-4bf9-9e6f-b0fc579d6d78",
+    "sessionName": "P4 AC6 valid source append 300KiB",
+    "messageIdsBeforeAndAfter": [
+      "p4-ac6-append-valid-base-user",
+      "p4-ac6-valid-append-2-user",
+      "p4-ac6-valid-append-2-assistant"
+    ],
+    "sourceBefore": "complete",
+    "projectionBefore": "valid",
+    "sourceAfter": "complete",
+    "projectionAfter": "valid",
+    "rawMessageRowsSha256BeforeSourceVsAfterClone": "f147dfa7522a960be1941b3067695e86fc17f335c9f21f80470c8d0e3d432bc0"
+  },
+  "runtime": {
+    "apiSequence": [
+      "window.api.chatGetMessagePage(target, 20) before compaction",
+      "window.api.storageCompact()",
+      "window.api.chatGetMessagePage(target, 20) after compaction",
+      "window.api.chatGetApiContextBaseline(target) after compaction"
+    ],
+    "compaction": {
+      "status": "complete",
+      "executionTarget": "worker",
+      "vacuumMode": "full",
+      "durationMs": 77.10966600000029,
+      "bytesBefore": 6119424,
+      "bytesAfter": 5062656,
+      "pageCountBefore": 1494,
+      "pageCountAfter": 1236,
+      "freelistCountBefore": 144,
+      "freelistCountAfter": 0,
+      "archiveBytes": 8577606,
+      "quickCheckAfter": "ok"
+    },
+    "readAfterSwap": "success; same three target message IDs returned by the already-running application's preload API",
+    "apiBaselineAfterSwap": "success; same three target message IDs"
+  },
+  "coldRestartRead": {
+    "appRelaunchedWithSameIsolatedUserData": true,
+    "quickCheckAfterCompactionAndRestart": "ok",
+    "pageMessageIds": [
+      "p4-ac6-append-valid-base-user",
+      "p4-ac6-valid-append-2-user",
+      "p4-ac6-valid-append-2-assistant"
+    ],
+    "apiBaselineMessageIds": [
+      "p4-ac6-append-valid-base-user",
+      "p4-ac6-valid-append-2-user",
+      "p4-ac6-valid-append-2-assistant"
+    ],
+    "contentLengths": [300046, 25, 29],
+    "contentTailMarkers": [
+      "xxxxxxxxx_P4_AC6_APPEND_BASE_TAIL_OK",
+      "P4_AC6_APPEND_NEW_MESSAGE",
+      "P4_AC6_APPEND_ASSISTANT_REPLY"
+    ]
+  },
+  "result": "pass: production compaction closed and replaced the SQLite file, reopened the same AppDatabase, and the existing packaged session-storage/read services returned the original target content",
+  "limitations": [
+    "one synthetic isolated profile sample; PKG was not installed",
+    "compaction was invoked through preload IPC, not a physical settings-page click",
+    "startup logged backfill/backup warnings for other legacy synthetic fixtures; the target remained source-complete/projection-valid and its raw rows matched the untouched source profile SHA-256",
+    "does not cover simultaneous active projection Worker during close, forced process termination at swap boundaries, real-history performance, or AC-7 baseline/candidate comparison"
+  ]
+}

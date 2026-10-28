@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "edit a canonical-backed message through packaged preload IPC after a valid prepared cache, then reopen and read the certified API baseline",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "buildId": "034a7925-2e8a-4b35-9f42-76d3af1fe041",
+    "sourceCommit": "b2785a2493eccfa019fb4b5ddd340576eb31c34f",
+    "sourceTreeClean": false,
+    "arch": "arm64",
+    "appBundle": "release/mac-arm64/SpaceAssistant.app",
+    "pkgInstalled": false,
+    "pkgSha256": "30f8b64f47dd947ddadd090a381322fc9f508566bb8ec4dab85525c7d5d5f856",
+    "appAsarSha256": "7733ce26f41948b681338b450cded5adeb04f7d4c9c04dc44fba3fe7b4dfe259",
+    "sessionStorageShadowModuleSha256": "bd27fd7ddee30344932fb4a658deb893aa47d22b4d8abc2d308560fa157fb6d8",
+    "builtShadowModuleSha256": "bd27fd7ddee30344932fb4a658deb893aa47d22b4d8abc2d308560fa157fb6d8",
+    "appIsPackaged": true,
+    "rendererUrl": "file:///Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-boundary-refactor/release/mac-arm64/SpaceAssistant.app/Contents/Resources/app.asar/dist/renderer/index.html",
+    "userData": "/tmp/spaceassistant-p4-ac6-ipc-7a456315-10f1-4f8a-9400-9dfdb3658661/user-data",
+    "userDataVerifiedByLsof": true,
+    "ipcMethod": "CDP Runtime.evaluate calling packaged window.api.messagePatchNonTurn",
+    "userPointerClick": false,
+    "feishuAndWechatMessagesSent": false
+  },
+  "fixture": {
+    "synthetic": true,
+    "sessionId": "5df95a95-66d5-4102-8056-44273a8a0558",
+    "messageId": "p4-ac6-ui-user-20261028",
+    "initialContent": "P4_AC6_UI_BEFORE canonical source edit fixture",
+    "editedContent": "P4_AC6_UI_AFTER canonical source edit fixture",
+    "preparedProjectionBeforeEdit": "valid",
+    "beforeEditPageBody": "P4_AC6_UI_BEFORE canonical source edit fixture",
+    "ipcResultContent": "P4_AC6_UI_AFTER canonical source edit fixture",
+    "sameRunApiBaselineContent": "P4_AC6_UI_AFTER canonical source edit fixture",
+    "sameRunPageContent": "P4_AC6_UI_AFTER canonical source edit fixture",
+    "reopenedApiBaselineContent": "P4_AC6_UI_AFTER canonical source edit fixture",
+    "reopenedPageContent": "P4_AC6_UI_AFTER canonical source edit fixture"
+  },
+  "databaseAfterReopen": {
+    "quickCheck": "ok",
+    "sourceStatus": "complete",
+    "projectionStatus": "valid",
+    "messageStorageState": "canonical-backed-only",
+    "sqliteMessageBody": "",
+    "canonicalHistoryContainsEditedBody": true
+  },
+  "defaultProfileSafety": {
+    "mainDatabaseSizeBeforeAndAfterBytes": 2938978304,
+    "mainDatabaseMtimeBeforeAndAfter": "2026-10-28 13:22:57",
+    "walSizeBeforeAndAfterBytes": 0,
+    "walMtimeBeforeAndAfter": "2026-10-28 13:23:04",
+    "note": "A separate CUA getApp-by-name call launched /Applications/SpaceAssistant.app and showed a schema-version error (117 > 115); that process tree was terminated. The default DB main file and WAL stayed unchanged; the shm timestamp changed while the error dialog was open. The tested worktree package process itself opened only the isolated /tmp database."
+  },
+  "limitations": [
+    "The candidate PKG was not installed; the packaged arm64 app bundle from the PKG build was launched directly.",
+    "The edit used the packaged preload IPC, but not a physical UI click; this is IPC boundary evidence, not full UI acceptance.",
+    "One synthetic session and one edit only; it does not close the remaining AC-5/AC-6 matrix or AC-7 paired performance acceptance."
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "formatVersion": 1,
+  "capturedAt": "2026-10-28",
+  "purpose": "Check whether Chromium in the packaged Electron app exposes LoAF script attribution during a synthetic projection rebuild.",
+  "artifact": {
+    "version": "0.2.9",
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "buildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "target": "darwin-arm64",
+    "pkgSha256": "6594ee801e4eddc23ace759164feb2c32ae5af0b5b35403bf3382820353188b8",
+    "packagedAsarSha256": "f029a314cccf8fc0192adbc85a22cf50fcc97ac562d48281fba7534db23b33ba",
+    "identityCloneAsarSha256": "a73f21dee9df6bf570120e3564ec731f0ab24c1f787deac1a112c9330fc02b96",
+    "identityCloneName": "sap4longtask10",
+    "appPath": "/tmp/SpaceAssistant-P4-LongTask-Attributed2-20261028.app"
+  },
+  "isolation": {
+    "userData": "/Users/space/Library/Application Support/sap4longtask10",
+    "workDir": "/tmp/spaceassistant-longtask-workdir",
+    "integrations": {
+      "feishu": false,
+      "wechat": false
+    },
+    "fixture": "Synthetic-only profile; only projection cache/state for the 1000-message target was invalidated after a profile backup. Canonical messages and source data were retained."
+  },
+  "maintenance": {
+    "projectionSlicesMs": [196.02, 742.56],
+    "sliceOutcomes": ["checkpointed", "published"],
+    "totalSliceDurationMs": 938.58,
+    "finalState": "valid",
+    "switchTrace": {
+      "outcome": "ok",
+      "pageRequestMs": 377,
+      "nextPaintMs": 192.9,
+      "classification": "Startup initial-page request, not a user-initiated session switch."
+    },
+    "ledgerGate": {
+      "status": "blocked",
+      "reasonCode": "ledger_missing"
+    }
+  },
+  "longTasksAndLoaf": [
+    { "kind": "longtask", "durationMs": 88 },
+    { "kind": "longtask", "durationMs": 304 },
+    { "kind": "long-animation-frame", "durationMs": 89.6, "blockingDurationMs": 39.2, "scriptAttributionStatus": "unavailable", "scriptCandidateCount": 0 },
+    { "kind": "long-animation-frame", "durationMs": 507.1, "blockingDurationMs": 255.4, "scriptAttributionStatus": "unavailable", "scriptCandidateCount": 0 },
+    { "kind": "long-animation-frame", "durationMs": 174.8, "blockingDurationMs": 0, "scriptAttributionStatus": "unavailable", "scriptCandidateCount": 0 },
+    { "kind": "long-animation-frame", "durationMs": 190.3, "blockingDurationMs": 0, "scriptAttributionStatus": "unavailable", "scriptCandidateCount": 0 },
+    { "kind": "long-animation-frame", "durationMs": 181, "blockingDurationMs": 0, "scriptAttributionStatus": "unavailable", "scriptCandidateCount": 0 },
+    { "kind": "long-animation-frame", "durationMs": 152.2, "blockingDurationMs": 0, "scriptAttributionStatus": "unavailable", "scriptCandidateCount": 0 }
+  ],
+  "directBrowserCheck": {
+    "method": "DevTools Console read-only expression: performance.getEntriesByType('long-animation-frame').map(e => ({ durationMs: e.duration, scriptCount: Array.isArray(e.scripts) ? e.scripts.length : null }))",
+    "result": "Seven buffered LoAF entries were visible; every entry had scripts.length === 0.",
+    "conclusion": "For this Electron/Chromium runtime and sample, the browser provides no script attribution data. This does not identify the source of renderer long tasks; a CPU profile with usable source maps is still required."
+  },
+  "limitations": [
+    "Synthetic canonical-only fixture has a blocked ledger gate and is not a healthy large-history sample.",
+    "The long tasks overlap startup/projection maintenance timestamps but there is no causal task association.",
+    "This is not a repeated user-switch matrix, real-history content-ready comparison, or AC-7 pass."
+  ]
+}

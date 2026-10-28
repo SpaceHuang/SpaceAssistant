@@ -1,0 +1,724 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-28",
+  "scenario": "current worktree arm64 candidate app bundle, isolated real-history COW userData, cold-path A/B UI switching; no accessibility-tree snapshots between clicks",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "electronVersion": "44.1.1",
+    "artifactBuildId": "469f0d38-bc7a-4c9c-84d0-6254659cb123",
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "sourceTreeClean": false,
+    "architecture": "arm64",
+    "pkgPath": "release/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "de8e96cec77757701d6adaf98991162fb8ffd275f0d7c7921402ce1b34fbb672",
+    "appAsarSha256": "5f9f61648636b33dd5e8520eab94778cb062962cdea63b6be98b5da71c0eb2a5",
+    "pkgInstalled": false,
+    "launchedFromPkgBuildAppBundle": true
+  },
+  "machine": {
+    "model": "Mac14,3",
+    "architecture": "arm64",
+    "memoryBytes": 17179869184,
+    "macOS": "26.5.2"
+  },
+  "isolation": {
+    "sourceProfile": "/Users/space/Library/Application Support/sap4perfhealthy28b",
+    "userDataClone": "/Users/space/Library/Application Support/sap4p4realhealthy-current-20261028",
+    "verifiedOpenDatabasePath": "/Users/space/Library/Application Support/sap4p4realhealthy-current-20261028/spaceassistant-data.db",
+    "userDataCloneCopyMethod": "APFS copy-on-write cp -cR",
+    "appProcessExited": true,
+    "connectors": {
+      "feishuEnabled": false,
+      "wechatEnabled": false
+    },
+    "imMessagesSent": false,
+    "databaseQuickCheckAfterRun": "ok",
+    "databaseSha256AfterRun": "034b5702f30aaf577fa6ac91b72e5fcf90456a6e7f0e2710b0acbb3083292665"
+  },
+  "fixtures": {
+    "synthetic": false,
+    "large": {
+      "sessionIdSha256": "611d74793cd100d22b604973ad7e81d712f9cfad510e5a7f158077362417c2d3",
+      "messageCount": 64,
+      "historyEventCount": 2590,
+      "bodyLocatorCount": 64,
+      "sourceStatusBeforeAndAfter": "complete",
+      "ledgerStatusBeforeAndAfter": "ready"
+    },
+    "ordinary": {
+      "sessionIdSha256": "10ae7175596330727c27f038337c0df266fc434f92d964171361746a639c485e",
+      "messageCount": 8,
+      "historyEventCount": 343,
+      "bodyLocatorCount": 8,
+      "sourceStatusBeforeAndAfter": "complete",
+      "ledgerStatusBeforeAndAfter": "ready"
+    },
+    "startupProfileState": "degraded; 142 unrelated history repair failures were reported during startup; target sessions remained complete/ready"
+  },
+  "interaction": {
+    "method": "native CUA accessibility-row clicks; target indices resolved from a fresh AX snapshot at batch start",
+    "switchCount": 20,
+    "sequence": "large then ordinary, alternating; 10 switches per group",
+    "accessibilitySnapshotsDuringSwitchBatch": 0,
+    "finalAxSnapshot": "no content-unavailable error; message text/marker nodes present; did not compare each target’s exact last-message marker",
+    "windowUtc": [
+      "2026-10-28T04:35:35.743Z",
+      "2026-10-28T04:35:51.311Z"
+    ],
+    "matchedMainAndRendererTraces": 20,
+    "allOutcomesOk": true,
+    "cachePaths": {
+      "cold": 20
+    },
+    "pageSizes": {
+      "20": 10,
+      "8": 10
+    },
+    "statisticsMethod": "nearest-rank p50/p95; six-stage renderer sum = selection-to-page-request + renderer-page-request + failure-reason-hydration + store-commit + render-commit + next-paint",
+    "summary": {
+      "large": {
+        "mainHandlerMs": {
+          "n": 10,
+          "p50NearestRank": 4.53,
+          "p95NearestRank": 4.77,
+          "max": 4.77
+        },
+        "rendererSixStageSumMs": {
+          "n": 10,
+          "p50NearestRank": 42.5,
+          "p95NearestRank": 49.0,
+          "max": 49.0
+        },
+        "renderer-page-request": {
+          "n": 10,
+          "p50NearestRank": 16.7,
+          "p95NearestRank": 18.9,
+          "max": 18.9
+        },
+        "next-paint": {
+          "n": 10,
+          "p50NearestRank": 3.2,
+          "p95NearestRank": 3.4,
+          "max": 3.4
+        }
+      },
+      "ordinary": {
+        "mainHandlerMs": {
+          "n": 10,
+          "p50NearestRank": 6.32,
+          "p95NearestRank": 6.48,
+          "max": 6.48
+        },
+        "rendererSixStageSumMs": {
+          "n": 10,
+          "p50NearestRank": 44.9,
+          "p95NearestRank": 48.0,
+          "max": 48.0
+        },
+        "renderer-page-request": {
+          "n": 10,
+          "p50NearestRank": 16.2,
+          "p95NearestRank": 18.5,
+          "max": 18.5
+        },
+        "next-paint": {
+          "n": 10,
+          "p50NearestRank": 3.7,
+          "p95NearestRank": 4,
+          "max": 4
+        }
+      }
+    },
+    "samples": [
+      {
+        "ordinal": 22,
+        "group": "large",
+        "pageSize": 20,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 4.77,
+        "rendererStagesMs": {
+          "selection-to-page-request": 14.4,
+          "renderer-page-request": 17.9,
+          "failure-reason-hydration": 7.4,
+          "store-commit": 0.3,
+          "render-commit": 5.7,
+          "next-paint": 3.3
+        },
+        "rendererSixStageSumMs": 49.0
+      },
+      {
+        "ordinal": 23,
+        "group": "ordinary",
+        "pageSize": 8,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 5.59,
+        "rendererStagesMs": {
+          "selection-to-page-request": 13,
+          "renderer-page-request": 14.5,
+          "failure-reason-hydration": 9.5,
+          "store-commit": 0.3,
+          "render-commit": 7.5,
+          "next-paint": 3.2
+        },
+        "rendererSixStageSumMs": 48.0
+      },
+      {
+        "ordinal": 24,
+        "group": "large",
+        "pageSize": 20,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 4.21,
+        "rendererStagesMs": {
+          "selection-to-page-request": 13.3,
+          "renderer-page-request": 16.3,
+          "failure-reason-hydration": 5.8,
+          "store-commit": 0.4,
+          "render-commit": 4.1,
+          "next-paint": 2.6
+        },
+        "rendererSixStageSumMs": 42.5
+      },
+      {
+        "ordinal": 25,
+        "group": "ordinary",
+        "pageSize": 8,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 6.46,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.1,
+          "renderer-page-request": 15.8,
+          "failure-reason-hydration": 6.7,
+          "store-commit": 0.2,
+          "render-commit": 4.9,
+          "next-paint": 3.6
+        },
+        "rendererSixStageSumMs": 43.3
+      },
+      {
+        "ordinal": 26,
+        "group": "large",
+        "pageSize": 20,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 4.54,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.6,
+          "renderer-page-request": 18.9,
+          "failure-reason-hydration": 6,
+          "store-commit": 0.1,
+          "render-commit": 4.2,
+          "next-paint": 3.2
+        },
+        "rendererSixStageSumMs": 45.0
+      },
+      {
+        "ordinal": 27,
+        "group": "ordinary",
+        "pageSize": 8,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 6.48,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.4,
+          "renderer-page-request": 16.5,
+          "failure-reason-hydration": 7.5,
+          "store-commit": 0.3,
+          "render-commit": 5.2,
+          "next-paint": 4
+        },
+        "rendererSixStageSumMs": 45.9
+      },
+      {
+        "ordinal": 28,
+        "group": "large",
+        "pageSize": 20,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 4.59,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.5,
+          "renderer-page-request": 16.5,
+          "failure-reason-hydration": 5.8,
+          "store-commit": 0.2,
+          "render-commit": 4.2,
+          "next-paint": 3
+        },
+        "rendererSixStageSumMs": 42.2
+      },
+      {
+        "ordinal": 29,
+        "group": "ordinary",
+        "pageSize": 8,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 6.14,
+        "rendererStagesMs": {
+          "selection-to-page-request": 11.7,
+          "renderer-page-request": 18.5,
+          "failure-reason-hydration": 7.4,
+          "store-commit": 0.3,
+          "render-commit": 5.3,
+          "next-paint": 3.7
+        },
+        "rendererSixStageSumMs": 46.9
+      },
+      {
+        "ordinal": 30,
+        "group": "large",
+        "pageSize": 20,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 4.59,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.6,
+          "renderer-page-request": 16.7,
+          "failure-reason-hydration": 5.6,
+          "store-commit": 0.3,
+          "render-commit": 4,
+          "next-paint": 3.2
+        },
+        "rendererSixStageSumMs": 42.4
+      },
+      {
+        "ordinal": 31,
+        "group": "ordinary",
+        "pageSize": 8,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 6.39,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.4,
+          "renderer-page-request": 16.2,
+          "failure-reason-hydration": 7.3,
+          "store-commit": 0.2,
+          "render-commit": 5.2,
+          "next-paint": 3.7
+        },
+        "rendererSixStageSumMs": 45.0
+      },
+      {
+        "ordinal": 32,
+        "group": "large",
+        "pageSize": 20,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 4.44,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.2,
+          "renderer-page-request": 16.9,
+          "failure-reason-hydration": 6.1,
+          "store-commit": 0.3,
+          "render-commit": 4.3,
+          "next-paint": 3.4
+        },
+        "rendererSixStageSumMs": 43.2
+      },
+      {
+        "ordinal": 33,
+        "group": "ordinary",
+        "pageSize": 8,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 6.33,
+        "rendererStagesMs": {
+          "selection-to-page-request": 11.7,
+          "renderer-page-request": 16.2,
+          "failure-reason-hydration": 6.9,
+          "store-commit": 0.2,
+          "render-commit": 4.9,
+          "next-paint": 3.8
+        },
+        "rendererSixStageSumMs": 43.7
+      },
+      {
+        "ordinal": 34,
+        "group": "large",
+        "pageSize": 20,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 4.5,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.3,
+          "renderer-page-request": 18.5,
+          "failure-reason-hydration": 5.8,
+          "store-commit": 0.3,
+          "render-commit": 4,
+          "next-paint": 3.2
+        },
+        "rendererSixStageSumMs": 44.1
+      },
+      {
+        "ordinal": 35,
+        "group": "ordinary",
+        "pageSize": 8,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 6.33,
+        "rendererStagesMs": {
+          "selection-to-page-request": 11.7,
+          "renderer-page-request": 16.3,
+          "failure-reason-hydration": 7.5,
+          "store-commit": 0.2,
+          "render-commit": 5.3,
+          "next-paint": 3.9
+        },
+        "rendererSixStageSumMs": 44.9
+      },
+      {
+        "ordinal": 36,
+        "group": "large",
+        "pageSize": 20,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 4.64,
+        "rendererStagesMs": {
+          "selection-to-page-request": 13.2,
+          "renderer-page-request": 17.1,
+          "failure-reason-hydration": 6.3,
+          "store-commit": 0.2,
+          "render-commit": 4.2,
+          "next-paint": 3.2
+        },
+        "rendererSixStageSumMs": 44.2
+      },
+      {
+        "ordinal": 37,
+        "group": "ordinary",
+        "pageSize": 8,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 6.32,
+        "rendererStagesMs": {
+          "selection-to-page-request": 11.1,
+          "renderer-page-request": 18.4,
+          "failure-reason-hydration": 7.5,
+          "store-commit": 0.2,
+          "render-commit": 5.2,
+          "next-paint": 3.8
+        },
+        "rendererSixStageSumMs": 46.2
+      },
+      {
+        "ordinal": 38,
+        "group": "large",
+        "pageSize": 20,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 4.53,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.3,
+          "renderer-page-request": 16.7,
+          "failure-reason-hydration": 5.5,
+          "store-commit": 0.2,
+          "render-commit": 4,
+          "next-paint": 3
+        },
+        "rendererSixStageSumMs": 41.7
+      },
+      {
+        "ordinal": 39,
+        "group": "ordinary",
+        "pageSize": 8,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 6.22,
+        "rendererStagesMs": {
+          "selection-to-page-request": 11.3,
+          "renderer-page-request": 16.2,
+          "failure-reason-hydration": 7.2,
+          "store-commit": 0.2,
+          "render-commit": 5,
+          "next-paint": 3.6
+        },
+        "rendererSixStageSumMs": 43.5
+      },
+      {
+        "ordinal": 40,
+        "group": "large",
+        "pageSize": 20,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 4.41,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.3,
+          "renderer-page-request": 16.5,
+          "failure-reason-hydration": 5.7,
+          "store-commit": 0.2,
+          "render-commit": 4.1,
+          "next-paint": 3.1
+        },
+        "rendererSixStageSumMs": 41.9
+      },
+      {
+        "ordinal": 41,
+        "group": "ordinary",
+        "pageSize": 8,
+        "cachePath": "cold",
+        "outcome": "ok",
+        "mainHandlerMs": 6.11,
+        "rendererStagesMs": {
+          "selection-to-page-request": 12.3,
+          "renderer-page-request": 15.2,
+          "failure-reason-hydration": 7.5,
+          "store-commit": 0.3,
+          "render-commit": 5.6,
+          "next-paint": 3.1
+        },
+        "rendererSixStageSumMs": 44.0
+      }
+    ],
+    "rendererInitiatedToMainHandlerEntryMs": {
+      "clock": "same-device Date.now epoch wall clock; not mixed with monotonic durations",
+      "n": 20,
+      "p50NearestRank": 1,
+      "p95NearestRank": 1,
+      "max": 2,
+      "samples": [
+        {
+          "ordinal": 22,
+          "group": "large",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 23,
+          "group": "ordinary",
+          "deltaMs": 2
+        },
+        {
+          "ordinal": 24,
+          "group": "large",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 25,
+          "group": "ordinary",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 26,
+          "group": "large",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 27,
+          "group": "ordinary",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 28,
+          "group": "large",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 29,
+          "group": "ordinary",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 30,
+          "group": "large",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 31,
+          "group": "ordinary",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 32,
+          "group": "large",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 33,
+          "group": "ordinary",
+          "deltaMs": 0
+        },
+        {
+          "ordinal": 34,
+          "group": "large",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 35,
+          "group": "ordinary",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 36,
+          "group": "large",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 37,
+          "group": "ordinary",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 38,
+          "group": "large",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 39,
+          "group": "ordinary",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 40,
+          "group": "large",
+          "deltaMs": 1
+        },
+        {
+          "ordinal": 41,
+          "group": "ordinary",
+          "deltaMs": 1
+        }
+      ]
+    }
+  },
+  "observer": {
+    "eventsInNoAxWindow": {
+      "session.switch.trace": 80,
+      "session.history.recovery": 20,
+      "renderer.long-task": 3
+    },
+    "rendererLongAnimationFrames": [
+      {
+        "event": "renderer.long-task",
+        "ts": "2026-10-28T04:35:36.730Z",
+        "kind": "long-animation-frame",
+        "durationMs": 54.7,
+        "blockingDurationMs": 0,
+        "scriptAttributionStatus": "unavailable",
+        "scriptCandidateCount": 0
+      },
+      {
+        "event": "renderer.long-task",
+        "ts": "2026-10-28T04:35:43.248Z",
+        "kind": "long-animation-frame",
+        "durationMs": 50.1,
+        "blockingDurationMs": 0,
+        "scriptAttributionStatus": "unavailable",
+        "scriptCandidateCount": 0
+      },
+      {
+        "event": "renderer.long-task",
+        "ts": "2026-10-28T04:35:48.149Z",
+        "kind": "long-animation-frame",
+        "durationMs": 50.1,
+        "blockingDurationMs": 0,
+        "scriptAttributionStatus": "unavailable",
+        "scriptCandidateCount": 0
+      }
+    ],
+    "rendererLongTaskCount": 3,
+    "rendererLongTaskBlockingDurationMs": 0,
+    "attribution": "unavailable for reported LoAF entries",
+    "separateAxReadControl": {
+      "windowUtc": [
+        "2026-10-28T04:32:50.153Z",
+        "2026-10-28T04:33:33.774Z"
+      ],
+      "axSnapshotAfterEachClick": true,
+      "rendererLongTaskEvents": [
+        {
+          "ts": "2026-10-28T04:32:50.355Z",
+          "kind": "long-animation-frame",
+          "durationMs": 57.5,
+          "blockingDurationMs": 0,
+          "scriptAttributionStatus": "unavailable",
+          "scriptCandidateCount": 0
+        },
+        {
+          "ts": "2026-10-28T04:33:08.028Z",
+          "kind": "longtask",
+          "durationMs": 120
+        },
+        {
+          "ts": "2026-10-28T04:33:08.064Z",
+          "kind": "long-animation-frame",
+          "durationMs": 130.2,
+          "blockingDurationMs": 67.3,
+          "scriptAttributionStatus": "unavailable",
+          "scriptCandidateCount": 0
+        },
+        {
+          "ts": "2026-10-28T04:33:10.232Z",
+          "kind": "long-animation-frame",
+          "durationMs": 53.7,
+          "blockingDurationMs": 0,
+          "scriptAttributionStatus": "unavailable",
+          "scriptCandidateCount": 0
+        },
+        {
+          "ts": "2026-10-28T04:33:13.184Z",
+          "kind": "long-animation-frame",
+          "durationMs": 54.7,
+          "blockingDurationMs": 0,
+          "scriptAttributionStatus": "unavailable",
+          "scriptCandidateCount": 0
+        },
+        {
+          "ts": "2026-10-28T04:33:22.073Z",
+          "kind": "long-animation-frame",
+          "durationMs": 50.9,
+          "blockingDurationMs": 0,
+          "scriptAttributionStatus": "unavailable",
+          "scriptCandidateCount": 0
+        },
+        {
+          "ts": "2026-10-28T04:33:24.984Z",
+          "kind": "long-animation-frame",
+          "durationMs": 53.7,
+          "blockingDurationMs": 0,
+          "scriptAttributionStatus": "unavailable",
+          "scriptCandidateCount": 0
+        }
+      ]
+    },
+    "idleControl": {
+      "windowUtc": [
+        "2026-10-28T04:41:55Z",
+        "2026-10-28T04:42:31Z"
+      ],
+      "durationSeconds": 36,
+      "uiActions": 0,
+      "longTaskOrLoafEventCount": 0,
+      "eventCounts": {},
+      "appPid": "30913",
+      "userDataIsolationVerified": true
+    }
+  },
+  "traceEvidence": {
+    "source": "/Users/space/Documents/Develop/SpaceAssistant/.agent/logs/Agent-20261028.log",
+    "sanitizedMatchedTraceSha256": "5c578a1314f444cd01370a224ea43988a3f1df6967da5d345655fd055b564e25",
+    "wholeAgentLogSha256AtCapture": "987d873835b78a1b23f132bec286dc57cc06a935956661ffa1711faa8a1a6435"
+  },
+  "limitations": [
+    "No same-database baseline package run.",
+    "All measured reads were cold cachePath; no prepared-cache hot cell.",
+    "The no-AX window had three >50ms long-animation-frame records (50.1–54.7ms) with 0 reported blocking duration and unavailable script attribution; strict AC-7 <=50ms is not demonstrated.",
+    "An AX-heavy control window contained 120ms and 130.2ms renderer tasks (one with 67.3ms blocking); the automation overhead may contribute, but this is not causal proof.",
+    "Startup recovery was degraded by 142 unrelated history repair failures and repeated unrelated backfill coverage failures, so maintenance-off behavior is not established.",
+    "Exact last-message body marker was not verified on every one of the 20 clicks.",
+    "No damaged-cache or maintenance-on/off matrix, maintenance completion time or process-tree RSS was collected.",
+    "PKG was not installed; the app bundle generated by the PKG build was launched directly."
+  ],
+  "conclusion": {
+    "usableForAc7": false,
+    "result": "real-history current-candidate cold-path switch trace; useful supplemental evidence but does not close AC-7 or P4-02/P4-03"
+  },
+  "validation": {
+    "scope": "targeted tests only",
+    "testFilesPassed": 10,
+    "testsPassed": 97,
+    "testsSkipped": 25,
+    "exitCode": 0,
+    "fullSuiteRun": false
+  }
+}

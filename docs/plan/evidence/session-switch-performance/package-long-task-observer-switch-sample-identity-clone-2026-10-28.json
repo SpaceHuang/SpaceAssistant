@@ -1,0 +1,117 @@
+{
+  "formatVersion": 1,
+  "capturedAt": "2026-10-28",
+  "purpose": "Exercise the packaged renderer Long Task/LoAF observer during isolated UI session switching.",
+  "artifact": {
+    "version": "0.2.9",
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "buildId": "ce47bcda-7b3e-492f-89de-60b03ad1492f",
+    "target": "darwin-arm64",
+    "pkgSha256": "09b01353f63075bd6645010dbf8ee520700f7751a000348554807ff5f3dc506e",
+    "identityCloneAsarSha256": "d3576a3d2d36acd17b2b5bc7f617ffcf8aa308c001f552b140a76a8e34fbead5",
+    "identityCloneName": "sap4longtask10",
+    "appPath": "/tmp/SpaceAssistant-P4-LongTask-20261028.app"
+  },
+  "isolation": {
+    "userData": "/Users/space/Library/Application Support/sap4longtask10",
+    "workDir": "/tmp/spaceassistant-longtask-workdir",
+    "integrations": {
+      "feishu": false,
+      "wechat": false
+    },
+    "data": "Synthetic-only profile copied from the isolated maintenance fixture; the default application database was not opened."
+  },
+  "uiSample": {
+    "sequence": [
+      "P4 valid large 64 messages",
+      "P4 canonical maintenance 1000 messages",
+      "P4 valid ordinary 8 messages",
+      "P4 valid large 64 messages",
+      "P4 canonical maintenance 1000 messages",
+      "P4 valid ordinary 8 messages",
+      "P4 valid large 64 messages",
+      "P4 canonical maintenance 1000 messages"
+    ],
+    "actions": 8,
+    "visibleTargetRowsConfirmed": 8,
+    "cuaClickPlusAxObservationWallMs": [477, 495, 813, 446, 456, 454, 687, 442],
+    "wallTimeCaveat": "Includes computer-use call and accessibility-tree observation waits; not a user-perceived click latency metric."
+  },
+  "switchTrace": {
+    "requestOrdinals": [2, 10],
+    "count": 9,
+    "outcomes": {
+      "ok": 9
+    },
+    "cachePaths": {
+      "ready": 9
+    },
+    "mainHandlerMs": {
+      "p50": 6.53,
+      "p95": 13.02,
+      "max": 13.02
+    },
+    "rendererPageRequestMs": {
+      "p50": 7.5,
+      "p95": 14.1,
+      "max": 14.1
+    },
+    "rendererNextPaintMs": {
+      "p50": 8.0,
+      "p95": 12.7,
+      "max": 12.7
+    }
+  },
+  "rendererLongTaskObserver": {
+    "eventsBeforeRepeatedSwitchWindow": [
+      {
+        "kind": "longtask",
+        "durationMs": 90,
+        "loggedAt": "2026-10-27T21:42:26.245Z"
+      },
+      {
+        "kind": "long-animation-frame",
+        "durationMs": 91.6,
+        "blockingDurationMs": 41.3,
+        "loggedAt": "2026-10-27T21:42:26.648Z"
+      },
+      {
+        "kind": "longtask",
+        "durationMs": 309,
+        "loggedAt": "2026-10-27T21:42:26.648Z"
+      },
+      {
+        "kind": "long-animation-frame",
+        "durationMs": 312.3,
+        "blockingDurationMs": 259.6,
+        "loggedAt": "2026-10-27T21:42:26.651Z"
+      }
+    ],
+    "eventsDuringRepeatedSwitchWindow": {
+      "longtaskAtLeast50ms": 0,
+      "longAnimationFrameAtLeast50ms": 0
+    },
+    "log": "/tmp/spaceassistant-longtask-workdir/.agent/logs/Agent-20261028.log"
+  },
+  "maintenanceOverlapProbe": {
+    "fixtureAction": "After backing up the isolated profile, only the target 1000-message synthetic session projection cache/state was invalidated; canonical messages and source data were retained.",
+    "projectionSlicesMs": [140.59, 1503.57],
+    "finalProjectionState": "valid",
+    "settingsPageVisible": true,
+    "cuaClickPlusAxObservationMs": 777,
+    "settingsVisibleBeforeFinalProjectionSliceLogged": true,
+    "longTaskAndLoafEventsDuringRebuild": [
+      { "kind": "longtask", "durationMs": 86, "loggedAt": "2026-10-27T21:47:00.348Z" },
+      { "kind": "long-animation-frame", "durationMs": 87.6, "blockingDurationMs": 37.2, "loggedAt": "2026-10-27T21:47:00.734Z" },
+      { "kind": "longtask", "durationMs": 320, "loggedAt": "2026-10-27T21:47:00.734Z" },
+      { "kind": "long-animation-frame", "durationMs": 324.7, "blockingDurationMs": 270.2, "loggedAt": "2026-10-27T21:47:00.741Z" },
+      { "kind": "long-animation-frame", "durationMs": 108.2, "blockingDurationMs": 0, "loggedAt": "2026-10-27T21:47:00.879Z" }
+    ],
+    "limitation": "Long-task records overlap the rebuild log window but have no source attribution in this package build; timing overlap does not establish that projection work caused the renderer tasks. CUA duration includes accessibility observation waits, not direct click latency."
+  },
+  "sampleLimitations": [
+    "The target canonical-only synthetic profile emitted ledger gate status blocked with reasonCode ledger_missing on every sampled session switch; it is not a healthy-ledger large-history fixture.",
+    "The two Long Task and two LoAF records were logged before the repeated-switch interval and cannot be attributed to the repeated user clicks.",
+    "Eight synthetic UI switches are diagnostic only; this does not satisfy the AC-7 sample matrix, content-ready timing, maintenance competition, or same-database baseline requirements."
+  ]
+}

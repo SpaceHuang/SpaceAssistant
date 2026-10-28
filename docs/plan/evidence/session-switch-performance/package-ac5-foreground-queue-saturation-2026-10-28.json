@@ -1,0 +1,27 @@
+{
+  "schema": "session-switch-package-foreground-queue-saturation/v1",
+  "date": "2026-10-28",
+  "candidateBuildId": "eb0aac8b-6f5b-496c-ba11-f45f194f9584",
+  "packageIdentity": "spaceassistant-p4-maintenance-20261028",
+  "appAsarSha256": "51910d25974c87403a88004ea96ffaf936ae34b8a78619d54b6ec9c1994ac04a",
+  "mainBundleSha256": "fa3e0c95f51bf9774a59f08ec4e59395f5e4b1f179152336083dd2e4edf4bafe",
+  "isolatedUserDataPath": "/Users/space/Library/Application Support/spaceassistant-p4-maintenance-20261028",
+  "fixture": {
+    "kind": "synthetic-canonical-backed-only",
+    "sessionId": "8daf401c-29b3-49eb-bb6f-e6c10f55f5c6",
+    "canonicalMessageCount": 1000,
+    "projectionCacheInitiallyAbsent": true
+  },
+  "burst": {
+    "simultaneousPageCalls": 20,
+    "mainIpcOutcomes": {
+      "ok": 17,
+      "error": 3
+    },
+    "errorCode": "PROJECTION_FOREGROUND_WORKER_QUEUE_FULL",
+    "errorDurationMs": [7.25, 7.49, 7.58],
+    "configuredPendingQueueLimit": 16,
+    "canonicalIdsFullyValidated": false
+  },
+  "interpretation": "This was an intentionally oversized burst against the cold foreground worker queue. It exceeded one active worker plus sixteen pending jobs; the three excess requests were rejected by the configured bound. This is not a normal one-page session switch and is not evidence of wrong-session data, but accepted pages were not fully ID-validated in this probe."
+}

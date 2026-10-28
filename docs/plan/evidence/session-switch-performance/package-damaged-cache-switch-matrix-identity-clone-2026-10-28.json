@@ -1,0 +1,768 @@
+{
+  "schema": "spaceassistant.package-damaged-cache-switch-matrix.v1",
+  "capturedAtLocalDate": "2026-10-28",
+  "capturedAtUtc": {
+    "start": "2026-10-27T22:26:23.521Z",
+    "end": "2026-10-27T22:32:47.365Z"
+  },
+  "percentileMethod": "nearest-rank",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "source": "arm64 PKG payload identity clone",
+    "pkgSha256": "6594ee801e4eddc23ace759164feb2c32ae5af0b5b35403bf3382820353188b8",
+    "appBundle": "/tmp/SpaceAssistant-P4-ReadyHot20261028.app",
+    "identityClone": true,
+    "packageNamePatched": "sap4readyhot28",
+    "adHocResigned": true,
+    "userData": "/Users/space/Library/Application Support/sap4readyhot28",
+    "workspaceProfile": "/Users/space/Library/Application Support/sap4readyhot28/workspaces/2",
+    "feishuEnabled": false,
+    "wechatEnabled": false
+  },
+  "fixture": {
+    "sessionMessageCount": 1000,
+    "kind": "synthetic canonical-backed-only",
+    "healthyProjectionCacheBeforeEachCorruption": true,
+    "inlinePayloadBytesBeforeEachCorruption": 211541,
+    "cacheCorruption": "inline_payload replaced with one-byte invalid JSON",
+    "canonicalAndHistorySourceModified": false
+  },
+  "scenario": "With the isolated package open on the ordinary 8-message conversation, corrupt only the derived inline projection payload, switch to the 1000-message conversation, verify the target marker on the first AX snapshot, then wait until projection state is valid and the 211541-byte payload is restored before the next iteration.",
+  "summary": {
+    "n": 30,
+    "cachePathCold": 30,
+    "outcomeOk": 30,
+    "axFirstSnapshotCorrect": 30,
+    "mainHandler": {
+      "n": 30,
+      "p50Ms": 32.43,
+      "p95Ms": 38.23,
+      "maxMs": 38.4
+    },
+    "rendererPageRequest": {
+      "n": 30,
+      "p50Ms": 33.6,
+      "p95Ms": 39.2,
+      "maxMs": 39.3
+    },
+    "rendererNextPaint": {
+      "n": 30,
+      "p50Ms": 8.9,
+      "p95Ms": 12.4,
+      "maxMs": 15
+    },
+    "projectionBuild": {
+      "checkpointedSlice": {
+        "n": 30,
+        "p50Ms": 55.4,
+        "p95Ms": 82.2,
+        "maxMs": 82.21
+      },
+      "publishedSlice": {
+        "n": 30,
+        "p50Ms": 119.43,
+        "p95Ms": 122.95,
+        "maxMs": 123.38
+      },
+      "mainTraceToPublished": {
+        "n": 30,
+        "p50Ms": 598.0,
+        "p95Ms": 622.0,
+        "maxMs": 624.0
+      }
+    }
+  },
+  "longTaskObserverRecordsBetweenFirstReadAndFinalProjectionPublish": [],
+  "ledgerGateEvents": {
+    "ready": 29,
+    "blocked": 29,
+    "ledgerMissing": 29
+  },
+  "samples": [
+    {
+      "sample": 1,
+      "requestOrdinal": 3,
+      "mainTraceTs": "2026-10-27T22:26:23.521Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 37.66,
+      "workerReadMs": 27.7,
+      "sourcePageReadMs": 37.16,
+      "rendererPageRequestMs": 38.9,
+      "rendererNextPaintMs": 3.1,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 56.42,
+        "publishedSliceMs": 122.93,
+        "mainTraceToPublishedMs": 597.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 2,
+      "requestOrdinal": 5,
+      "mainTraceTs": "2026-10-27T22:26:54.897Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 34.5,
+      "workerReadMs": 23.58,
+      "sourcePageReadMs": 34.04,
+      "rendererPageRequestMs": 36,
+      "rendererNextPaintMs": 6.5,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 53.27,
+        "publishedSliceMs": 122.47,
+        "mainTraceToPublishedMs": 595.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 3,
+      "requestOrdinal": 7,
+      "mainTraceTs": "2026-10-27T22:27:22.177Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 33.86,
+      "workerReadMs": 23.33,
+      "sourcePageReadMs": 33.46,
+      "rendererPageRequestMs": 34.8,
+      "rendererNextPaintMs": 9.8,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 51.46,
+        "publishedSliceMs": 119.43,
+        "mainTraceToPublishedMs": 592.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 4,
+      "requestOrdinal": 9,
+      "mainTraceTs": "2026-10-27T22:27:33.497Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 33.84,
+      "workerReadMs": 23.28,
+      "sourcePageReadMs": 33.42,
+      "rendererPageRequestMs": 35,
+      "rendererNextPaintMs": 6.7,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 52.2,
+        "publishedSliceMs": 121.61,
+        "mainTraceToPublishedMs": 594.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 5,
+      "requestOrdinal": 11,
+      "mainTraceTs": "2026-10-27T22:27:43.180Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 33.89,
+      "workerReadMs": 22.86,
+      "sourcePageReadMs": 33.5,
+      "rendererPageRequestMs": 34.9,
+      "rendererNextPaintMs": 7.6,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 72.6,
+        "publishedSliceMs": 116.85,
+        "mainTraceToPublishedMs": 612.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 6,
+      "requestOrdinal": 13,
+      "mainTraceTs": "2026-10-27T22:27:55.678Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 32.3,
+      "workerReadMs": 23.17,
+      "sourcePageReadMs": 31.86,
+      "rendererPageRequestMs": 33.5,
+      "rendererNextPaintMs": 9.9,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 54.07,
+        "publishedSliceMs": 121.59,
+        "mainTraceToPublishedMs": 598.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 7,
+      "requestOrdinal": 15,
+      "mainTraceTs": "2026-10-27T22:28:06.396Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 32.38,
+      "workerReadMs": 23.32,
+      "sourcePageReadMs": 31.93,
+      "rendererPageRequestMs": 33.8,
+      "rendererNextPaintMs": 8.6,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 53.64,
+        "publishedSliceMs": 120.23,
+        "mainTraceToPublishedMs": 594.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 8,
+      "requestOrdinal": 17,
+      "mainTraceTs": "2026-10-27T22:28:16.562Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 32.33,
+      "workerReadMs": 23.35,
+      "sourcePageReadMs": 31.87,
+      "rendererPageRequestMs": 33.4,
+      "rendererNextPaintMs": 9.2,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 52.96,
+        "publishedSliceMs": 122.95,
+        "mainTraceToPublishedMs": 598.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 9,
+      "requestOrdinal": 19,
+      "mainTraceTs": "2026-10-27T22:28:28.361Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 31.92,
+      "workerReadMs": 22.85,
+      "sourcePageReadMs": 31.55,
+      "rendererPageRequestMs": 32.8,
+      "rendererNextPaintMs": 10.1,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 69.36,
+        "publishedSliceMs": 114.79,
+        "mainTraceToPublishedMs": 609.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 10,
+      "requestOrdinal": 21,
+      "mainTraceTs": "2026-10-27T22:28:39.709Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 36.09,
+      "workerReadMs": 26.92,
+      "sourcePageReadMs": 35.6,
+      "rendererPageRequestMs": 37.5,
+      "rendererNextPaintMs": 12.4,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 54.31,
+        "publishedSliceMs": 121.33,
+        "mainTraceToPublishedMs": 593.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 11,
+      "requestOrdinal": 23,
+      "mainTraceTs": "2026-10-27T22:28:51.871Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 30.65,
+      "workerReadMs": 21.98,
+      "sourcePageReadMs": 30.26,
+      "rendererPageRequestMs": 32,
+      "rendererNextPaintMs": 3.7,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 54.03,
+        "publishedSliceMs": 119.58,
+        "mainTraceToPublishedMs": 597.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 12,
+      "requestOrdinal": 25,
+      "mainTraceTs": "2026-10-27T22:29:05.361Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 33.14,
+      "workerReadMs": 24.1,
+      "sourcePageReadMs": 32.79,
+      "rendererPageRequestMs": 34.2,
+      "rendererNextPaintMs": 10.3,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 67.45,
+        "publishedSliceMs": 115.63,
+        "mainTraceToPublishedMs": 607.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 13,
+      "requestOrdinal": 27,
+      "mainTraceTs": "2026-10-27T22:29:15.611Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 31.49,
+      "workerReadMs": 22.97,
+      "sourcePageReadMs": 31.11,
+      "rendererPageRequestMs": 32.5,
+      "rendererNextPaintMs": 10.8,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 53.22,
+        "publishedSliceMs": 119.2,
+        "mainTraceToPublishedMs": 595.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 14,
+      "requestOrdinal": 29,
+      "mainTraceTs": "2026-10-27T22:29:25.763Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 32.04,
+      "workerReadMs": 23.16,
+      "sourcePageReadMs": 31.66,
+      "rendererPageRequestMs": 33,
+      "rendererNextPaintMs": 8.9,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 52.55,
+        "publishedSliceMs": 121.85,
+        "mainTraceToPublishedMs": 596.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 15,
+      "requestOrdinal": 31,
+      "mainTraceTs": "2026-10-27T22:29:35.429Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 32.43,
+      "workerReadMs": 23.44,
+      "sourcePageReadMs": 32,
+      "rendererPageRequestMs": 33.5,
+      "rendererNextPaintMs": 9.5,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 79.59,
+        "publishedSliceMs": 117.12,
+        "mainTraceToPublishedMs": 620.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 16,
+      "requestOrdinal": 33,
+      "mainTraceTs": "2026-10-27T22:30:15.707Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 32.92,
+      "workerReadMs": 22.1,
+      "sourcePageReadMs": 32.56,
+      "rendererPageRequestMs": 34.1,
+      "rendererNextPaintMs": 15,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 50.14,
+        "publishedSliceMs": 123.38,
+        "mainTraceToPublishedMs": 595.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 17,
+      "requestOrdinal": 35,
+      "mainTraceTs": "2026-10-27T22:30:25.969Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 38.23,
+      "workerReadMs": 27.93,
+      "sourcePageReadMs": 37.85,
+      "rendererPageRequestMs": 39.2,
+      "rendererNextPaintMs": 3.4,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 82.21,
+        "publishedSliceMs": 115.72,
+        "mainTraceToPublishedMs": 615.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 18,
+      "requestOrdinal": 37,
+      "mainTraceTs": "2026-10-27T22:30:36.736Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 38.4,
+      "workerReadMs": 27.16,
+      "sourcePageReadMs": 38.03,
+      "rendererPageRequestMs": 39.3,
+      "rendererNextPaintMs": 3.5,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 52.33,
+        "publishedSliceMs": 119.49,
+        "mainTraceToPublishedMs": 587.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 19,
+      "requestOrdinal": 39,
+      "mainTraceTs": "2026-10-27T22:30:46.429Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 31.71,
+      "workerReadMs": 23.05,
+      "sourcePageReadMs": 31.32,
+      "rendererPageRequestMs": 32.5,
+      "rendererNextPaintMs": 10.2,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 82.2,
+        "publishedSliceMs": 113.01,
+        "mainTraceToPublishedMs": 619.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 20,
+      "requestOrdinal": 41,
+      "mainTraceTs": "2026-10-27T22:30:57.280Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 33.83,
+      "workerReadMs": 25.03,
+      "sourcePageReadMs": 33.47,
+      "rendererPageRequestMs": 35,
+      "rendererNextPaintMs": 9.3,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 77.68,
+        "publishedSliceMs": 122.67,
+        "mainTraceToPublishedMs": 622.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 21,
+      "requestOrdinal": 43,
+      "mainTraceTs": "2026-10-27T22:31:07.212Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 31.12,
+      "workerReadMs": 22.55,
+      "sourcePageReadMs": 30.77,
+      "rendererPageRequestMs": 32.1,
+      "rendererNextPaintMs": 10.4,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 80.6,
+        "publishedSliceMs": 114.12,
+        "mainTraceToPublishedMs": 619.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 22,
+      "requestOrdinal": 45,
+      "mainTraceTs": "2026-10-27T22:31:18.290Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 34.14,
+      "workerReadMs": 24.73,
+      "sourcePageReadMs": 33.73,
+      "rendererPageRequestMs": 35.6,
+      "rendererNextPaintMs": 2.2,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 55.4,
+        "publishedSliceMs": 119.86,
+        "mainTraceToPublishedMs": 595.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 23,
+      "requestOrdinal": 47,
+      "mainTraceTs": "2026-10-27T22:31:28.556Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 31.54,
+      "workerReadMs": 22.31,
+      "sourcePageReadMs": 31.15,
+      "rendererPageRequestMs": 32.6,
+      "rendererNextPaintMs": 3.3,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 56.54,
+        "publishedSliceMs": 119.34,
+        "mainTraceToPublishedMs": 598.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 24,
+      "requestOrdinal": 49,
+      "mainTraceTs": "2026-10-27T22:31:38.230Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 32.63,
+      "workerReadMs": 23.45,
+      "sourcePageReadMs": 32.28,
+      "rendererPageRequestMs": 33.6,
+      "rendererNextPaintMs": 9.2,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 76.12,
+        "publishedSliceMs": 114.35,
+        "mainTraceToPublishedMs": 614.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 25,
+      "requestOrdinal": 51,
+      "mainTraceTs": "2026-10-27T22:31:49.045Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 31.81,
+      "workerReadMs": 22.69,
+      "sourcePageReadMs": 31.39,
+      "rendererPageRequestMs": 32.7,
+      "rendererNextPaintMs": 10.8,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 80.46,
+        "publishedSliceMs": 118.6,
+        "mainTraceToPublishedMs": 624.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 26,
+      "requestOrdinal": 53,
+      "mainTraceTs": "2026-10-27T22:32:00.706Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 31.66,
+      "workerReadMs": 21.91,
+      "sourcePageReadMs": 31.1,
+      "rendererPageRequestMs": 32.7,
+      "rendererNextPaintMs": 2.3,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 54.42,
+        "publishedSliceMs": 118.4,
+        "mainTraceToPublishedMs": 595.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 27,
+      "requestOrdinal": 55,
+      "mainTraceTs": "2026-10-27T22:32:10.663Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 31.17,
+      "workerReadMs": 22.6,
+      "sourcePageReadMs": 30.76,
+      "rendererPageRequestMs": 32.2,
+      "rendererNextPaintMs": 10.1,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 66.76,
+        "publishedSliceMs": 114.11,
+        "mainTraceToPublishedMs": 606.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 28,
+      "requestOrdinal": 57,
+      "mainTraceTs": "2026-10-27T22:32:21.648Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 32.95,
+      "workerReadMs": 23.9,
+      "sourcePageReadMs": 32.56,
+      "rendererPageRequestMs": 34.3,
+      "rendererNextPaintMs": 8.8,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 52.31,
+        "publishedSliceMs": 120.51,
+        "mainTraceToPublishedMs": 593.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 29,
+      "requestOrdinal": 59,
+      "mainTraceTs": "2026-10-27T22:32:31.532Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 33.45,
+      "workerReadMs": 24.67,
+      "sourcePageReadMs": 33.1,
+      "rendererPageRequestMs": 34.5,
+      "rendererNextPaintMs": 8.5,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 75.98,
+        "publishedSliceMs": 117.76,
+        "mainTraceToPublishedMs": 616.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    },
+    {
+      "sample": 30,
+      "requestOrdinal": 61,
+      "mainTraceTs": "2026-10-27T22:32:46.765Z",
+      "pageSize": 20,
+      "cachePath": "cold",
+      "mainOutcome": "ok",
+      "mainHandlerMs": 31.82,
+      "workerReadMs": 23.07,
+      "sourcePageReadMs": 31.43,
+      "rendererPageRequestMs": 33.1,
+      "rendererNextPaintMs": 8.3,
+      "axFirstSnapshotTargetVisible": true,
+      "oppositeSessionMarker": false,
+      "projectionBuild": {
+        "checkpointedSliceMs": 57.08,
+        "publishedSliceMs": 120.53,
+        "mainTraceToPublishedMs": 600.0,
+        "stateObservedValidBeforeNextMutation": true,
+        "inlinePayloadBytesAfter": 211541
+      }
+    }
+  ],
+  "finalDatabaseCheck": {
+    "quickCheck": "ok",
+    "projectionState": "valid",
+    "inlinePayloadBytes": 211541,
+    "payloadDigestLength": 64
+  },
+  "shutdown": {
+    "cloneProcessRunning": false,
+    "defaultAppRunning": false
+  },
+  "interpretation": {
+    "status": "synthetic package damaged-cache switch cell completed at n=30",
+    "notes": [
+      "All 30 UI reads used cachePath=cold and returned successfully; all first AX snapshots showed the target assistant 999 tail.",
+      "Reported postReadToPublished interval begins at the main trace timestamp and is not total time from cache corruption or a complete maintenance-cycle duration.",
+      "This identity clone modifies the package name and uses ad-hoc signing; no same-database baseline was measured.",
+      "The matrix is synthetic and does not establish AC-7 real-history acceptance or maintenance toggle behavior."
+    ],
+    "doesNotClose": [
+      "P4-02",
+      "P4-03",
+      "AC-7"
+    ]
+  }
+}

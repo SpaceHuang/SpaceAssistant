@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "edit a canonical-backed message after a prepared cache exists, then cold-start the packaged app and rebuild the projection",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "6d5910fe-7b9c-4ccf-bc28-c49e02e212cb",
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "sourceTreeClean": false,
+    "source": "arm64 PKG payload identity clone",
+    "pkgPath": "/tmp/sa-ac6-revision-pkg/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "1d455c60ecdb329cf89c2b927073cd6a1df0a4f45a6c4f5ca1a7723f699e2f04",
+    "appBundle": "/tmp/SpaceAssistant-P4-AC6-EditRevision28.app",
+    "appAsarSha256": "47fce209bce1c43b7e472e38fc5662e053f770187d09f4ca2336d44e82f2bf97",
+    "mainJsSha256": "c252a007fb33c282817013ed66ef1ea20602823d5865d51c6408f7038ea84461",
+    "packagedSourceWriterSha256": "ffd433f40ca7f545cdb9a87e78596821cd319781134fbfe30b378b38f5e1267b",
+    "packageIdentityPatched": true,
+    "adHocResigned": true,
+    "runMode": "SPACEASSISTANT_DEV=1 with explicit isolated userData override; no ELECTRON_START_URL",
+    "userData": "/Users/space/Library/Application Support/sap4ac6editrev28",
+    "pkgInstalled": false,
+    "feishuAndWechatMessagesSent": false
+  },
+  "fixture": {
+    "synthetic": true,
+    "sessionId": "cd0a726e-ff59-4b2c-821c-d319bff2378e",
+    "messageId": "p4-ac6-source-edit-full-user-20261028",
+    "initialContentByteLength": 300069,
+    "preparedProjectionBeforeEdit": "valid",
+    "firstEditAttemptBeforeFix": {
+      "projectionStatus": "rejected",
+      "failure": "CHAT_BODY_AUTHORITY_MISMATCH",
+      "cause": "an immutable older History snapshot was compared with the current dual-write body mirror"
+    },
+    "editAfterFix": {
+      "content": "P4_AC6_PACKAGED_CANONICAL_EDIT_REPAIR",
+      "writerInvocation": "compiled source writer whose SHA-256 matches the writer module in the PKG app.asar",
+      "writerResult": true,
+      "messageStorageAfterEdit": "canonical-backed-only",
+      "sqliteBodyAfterEdit": ""
+    }
+  },
+  "database": {
+    "sourceStatus": "complete",
+    "sourceRevision": 28,
+    "projectionStatus": "valid",
+    "messageRevision": 11,
+    "projectionDigest": "dbe4a14f2bc4591464cc7ba5062b9b7fec02c22f822a72da4ca0e3a6cb27d3ed",
+    "quickCheck": "ok"
+  },
+  "uiObservation": {
+    "result": "visible-content-verified",
+    "observation": "After the packaged app cold-started with the isolated profile and rebuilt this session, the AX tree showed the edited user body P4_AC6_PACKAGED_CANONICAL_EDIT_REPAIR and the existing assistant reply.",
+    "editWasInvokedThroughPackagedIPC": false
+  },
+  "limitations": [
+    "single synthetic identity-clone sample; package was not installed",
+    "isolated launch used SPACEASSISTANT_DEV=1 to set userData, although no development server URL was configured",
+    "the compiled writer module was hash-matched to app.asar but invoked by a Node harness rather than the packaged renderer IPC",
+    "does not cover ordinary edit through UI/IPC, delete, History source spill damage, publish-boundary fault, real history, or baseline comparison",
+    "does not close AC-7 or P4-02/P4-03"
+  ]
+}

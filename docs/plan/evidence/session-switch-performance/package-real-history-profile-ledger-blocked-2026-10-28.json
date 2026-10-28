@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "arm64 PKG payload opened against an isolated clone of the available real-history profile",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "408f22f7-d4ea-4aa0-b09e-ea5ef05407d8",
+    "pkgPath": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-boundary-refactor/release/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "01a4b403981af90db2aaf26ffb5702f542b03873117521222970e65b851b55cf",
+    "appAsarSha256": "b42c8911972f4ef0885b15aa85804cc0a6743e6922976264b1357ceb7918a7e0",
+    "copiedPayloadAppAsarMatchedPkg": true,
+    "pkgInstalled": false,
+    "identityCloneBundleId": "com.spaceassistant.p4realhistorypkg408v2",
+    "databaseProfile": "/Users/space/Library/Application Support/sap4realhistfix28",
+    "helperUserDataDirVerified": true
+  },
+  "fixture": {
+    "synthetic": false,
+    "profileSource": "/Users/space/Library/Application Support/sap4realhist10",
+    "sessionCount": 661,
+    "selectedMessageCount": 88,
+    "selectedSourceState": "complete",
+    "selectedLedgerProjectionState": "blocked",
+    "startupPendingRepairCount": 55,
+    "canonicalMessageAndHistoryContentModified": false
+  },
+  "ui": {
+    "appLaunched": true,
+    "sessionRowsRespondedToSelection": true,
+    "selectedConversationRendered": true,
+    "pageTimingCaptured": false,
+    "currentBuildTraceCaptured": false
+  },
+  "logging": {
+    "expectedBuildId": "408f22f7-d4ea-4aa0-b09e-ea5ef05407d8",
+    "latestAvailableTraceBuildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "traceLogChangedDuringThisRun": false
+  },
+  "secondAttempt": {
+    "profileSource": "/Users/space/Library/Application Support/spaceassistant",
+    "databaseProfile": "/Users/space/Library/Application Support/sap4realhistcurrent28",
+    "sessions": 969,
+    "sourceBackfilling": 35,
+    "ledgerStates": {
+      "blocked": 7,
+      "dirty": 1,
+      "uninitialized": 306,
+      "unknown": 655
+    },
+    "quickCheckBeforeAndAfter": "ok",
+    "launchResult": "LaunchServices open attempt appeared stuck at startup screen for 41 seconds; after terminating that isolated process, direct executable launch completed and rendered the session UI",
+    "directLaunchStartup": {
+      "windowReadyMs": 617,
+      "rendererFirstPaintMs": 240,
+      "startupSessionHistoryRecovery": {
+        "pendingRepairs": 2302,
+        "durationMs": 9,
+        "ledgerGateStatus": "blocked",
+        "ledgerGateReasonCode": "physical_proof_mismatch"
+      },
+      "firstPageTrace": {
+        "requestOrdinal": 1,
+        "pageSize": 20,
+        "cachePath": "cold",
+        "mainHandlerDurationMs": 9.79,
+        "mainSourcePageReadMs": 9.19,
+        "rendererPageRequestAwaitMs": 14241.8,
+        "rendererFailureReasonHydrationMs": 27.9,
+        "rendererNextPaintMs": 23.3,
+        "nearbyRendererLongTaskMaxDurationMs": 316.8,
+        "nearbyRendererLongTaskMaxBlockingDurationMs": 263.2,
+        "classification": "startup first-page request only; not a deliberate session-switch sample; renderer await duration includes time before the main handler trace began and its cause is undetermined"
+      }
+    },
+    "sourceProfileUnchanged": true,
+    "isolatedProcessExited": true
+  },
+  "result": "not-countable: neither available real-history clone has a healthy ledger projection for a large session. The newer clone supplied one current-build startup first-page trace, but it is not a deliberate switch sample; it shows 14.24 seconds awaiting the page IPC while the traced main handler took 9.79 ms, so the delay is outside the measured main read stages and its cause remains undetermined",
+  "limitations": [
+    "the available profile is degraded and cannot serve as a healthy real-history performance sample",
+    "a newer default-profile clone also lacked a healthy ledger state; LaunchServices startup behavior differed from direct executable launch",
+    "the first-page renderer request duration is an observed startup wait, not a session-switch latency statistic; the current trace does not isolate where the 14.24-second wait occurred",
+    "the PKG was expanded and its payload launched under an isolated identity; the PKG was not installed",
+    "the temporary app instance was closed after inspection; stderr showed repeated source-backfill failures while the degraded clone was running",
+    "this does not close AC-7, P4-02, or P4-03"
+  ]
+}

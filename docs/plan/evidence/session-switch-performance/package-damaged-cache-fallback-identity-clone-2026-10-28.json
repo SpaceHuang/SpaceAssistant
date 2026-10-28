@@ -1,0 +1,102 @@
+{
+  "schema": "spaceassistant.package-damaged-cache-fallback-sample.v1",
+  "capturedAtUtc": {
+    "start": "2026-10-27T22:23:49.735Z",
+    "end": "2026-10-27T22:23:51.228Z"
+  },
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "source": "arm64 PKG payload identity clone",
+    "pkgSha256": "6594ee801e4eddc23ace759164feb2c32ae5af0b5b35403bf3382820353188b8",
+    "appBundle": "/tmp/SpaceAssistant-P4-ReadyHot20261028.app",
+    "identityClone": true,
+    "packageNamePatched": "sap4readyhot28",
+    "adHocResigned": true,
+    "userData": "/Users/space/Library/Application Support/sap4readyhot28",
+    "workspaceProfile": "/Users/space/Library/Application Support/sap4readyhot28/workspaces/2"
+  },
+  "fixture": {
+    "messageCount": 1000,
+    "kind": "synthetic canonical-backed-only",
+    "projectionStateBefore": "valid",
+    "projectionInlineBytesBefore": 211541,
+    "cacheMutation": "inline_payload replaced with one-byte invalid JSON; digest and canonical/History source left unchanged",
+    "cacheMutationBytes": 1
+  },
+  "result": {
+    "n": 1,
+    "firstPageSize": 20,
+    "mainCachePath": "cold",
+    "outcome": "ok",
+    "mainHandlerMs": 66.41,
+    "workerReadMs": 53.0,
+    "sourcePageReadMs": 65.39,
+    "rendererPageRequestMs": 356.3,
+    "rendererNextPaintMs": 0.8,
+    "visibleTailMessageIds": [
+      "user 994",
+      "assistant 995",
+      "user 996",
+      "assistant 997",
+      "user 998",
+      "assistant 999"
+    ],
+    "canonicalBodySourceModified": false
+  },
+  "rebuild": {
+    "slices": [
+      {
+        "durationMs": 112.28,
+        "outcome": "checkpointed"
+      },
+      {
+        "durationMs": 524.68,
+        "outcome": "published"
+      }
+    ],
+    "projectionStateAfter": "valid",
+    "projectionInlineBytesAfter": 211541
+  },
+  "observer": {
+    "records": [
+      {
+        "ts": "2026-10-27T22:23:50.132Z",
+        "kind": "longtask",
+        "durationMs": 88.0
+      },
+      {
+        "ts": "2026-10-27T22:23:50.493Z",
+        "kind": "long-animation-frame",
+        "durationMs": 90.8
+      },
+      {
+        "ts": "2026-10-27T22:23:50.493Z",
+        "kind": "longtask",
+        "durationMs": 290.0
+      },
+      {
+        "ts": "2026-10-27T22:23:50.501Z",
+        "kind": "long-animation-frame",
+        "durationMs": 295.5
+      }
+    ],
+    "sourceAttribution": "unavailable",
+    "causality": "not established; these events overlap app startup and cold fallback but no script attribution was recorded"
+  },
+  "acceptance": {
+    "sampleSize": 1,
+    "isUiSwitch": false,
+    "p95ClaimAllowed": false,
+    "doesNotClose": [
+      "damaged-cache matrix",
+      "P4-02",
+      "P4-03",
+      "AC-7"
+    ]
+  },
+  "shutdown": {
+    "cloneProcessRunning": false,
+    "defaultAppRunning": false
+  }
+}

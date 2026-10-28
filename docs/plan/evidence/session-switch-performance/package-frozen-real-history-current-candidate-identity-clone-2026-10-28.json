@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-28",
+  "scenario": "same frozen real-history backup, baseline package migration/readability check followed by current candidate package cold-path UI switches on separate COW userData clones",
+  "device": {
+    "modelIdentifier": "Mac14,3",
+    "architecture": "arm64",
+    "macOSVersion": "26.5.2",
+    "memoryBytes": 17179869184
+  },
+  "frozenSource": {
+    "path": "/Users/space/Library/Application Support/spaceassistant/backups/spaceassistant-data-before-ledger-rebuild-e78e8347-20261020.db",
+    "sha256": "7c11d494879cbbf64b3761e9092d5a7dafb4135253a794cd5ed3826ee5f0d399",
+    "schemaVersion": 102,
+    "quickCheck": "ok",
+    "sourceSpillReferenceCount": 144,
+    "missingReferencedSpillsInClones": 0,
+    "referencedSpillBytes": 171186880,
+    "sourceWasOpenedReadOnlyAndNotModified": true
+  },
+  "isolation": {
+    "baselineUserData": "/Users/space/Library/Application Support/sap4baseline109afresh28",
+    "candidateUserData": "/Users/space/Library/Application Support/sap4candidate6a5fresh28",
+    "independentCOWClonesFromSameDatabaseAndSpillSeed": true,
+    "feishuAndWechatEnabledInBothClones": false,
+    "messagesSent": false,
+    "defaultInstalledAppWasNotInteractedWith": true,
+    "baselineProcessExited": true,
+    "candidateProcessExited": true,
+    "quickCheckAfterRun": {
+      "baseline": "ok",
+      "candidate": "ok"
+    }
+  },
+  "baseline": {
+    "sourceCommit": "109a938404124235d632e4cdbd4f9e06eaa48728",
+    "sourceTreeClean": true,
+    "artifactBuildId": "35205b7a-46ab-45c7-ae77-890d43204ed4",
+    "pkgSha256": "3f4656132a531ce4f58f61f65338a3515b9494203dc9a84ec8c45d38d58b195c",
+    "appAsarSha256": "a3e33001c36ee4934fa9239467b02ce7f1691e9799859abfb73511ffa5e9fb5f",
+    "identityCloneBundleId": "com.spaceassistant.p4baselinefrozen10228",
+    "schemaBefore": 102,
+    "schemaAfter": 107,
+    "startupRecovery": "ready",
+    "targetLargeAndSmallSessionsRenderedNonErrorMessageBodies": true,
+    "targetSwitchLatencyMeasuredInThisRun": false,
+    "note": "The unrelated startup-selected legacy session showed ENOENT for its historical events.jsonl; the two target sessions rendered without this error. Existing same-source baseline latency results remain separately documented in external-performance.md."
+  },
+  "candidate": {
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "sourceTreeClean": false,
+    "artifactBuildId": "6113fa88-2c21-41cf-b805-c0fb19115b2f",
+    "pkgSha256": "6a5a07831f591017bbfe09325298abe427d3affb68275d87ae3a707902962928",
+    "appAsarSha256": "5f09ef1980216bdad29e2d93ae1f992b74899aa1c9e87696cb7463edcf91a31a",
+    "identityCloneBundleId": "com.spaceassistant.p4healthyhistory28b",
+    "schemaAfter": 117,
+    "startupRecovery": "degraded",
+    "profileRepairFailureCount": 146,
+    "targetSessions": {
+      "large": {
+        "sessionId": "2a9b85a7-58cf-4239-bbb6-bcd188b25325",
+        "messageCount": 150,
+        "historyEventCount": 0,
+        "sourceStatus": "backfilling",
+        "ledgerStatus": "blocked"
+      },
+      "small": {
+        "sessionId": "c1a07aba-0603-4935-b334-71ac077d4194",
+        "messageCount": 8,
+        "historyEventCount": 343,
+        "sourceStatus": "complete",
+        "ledgerStatus": "ready"
+      }
+    },
+    "traceWindowUtc": {
+      "start": "2026-10-28T02:25:21.443Z",
+      "end": "2026-10-28T02:29:39.490Z"
+    },
+    "mainPageReadTraces": {
+      "count": 63,
+      "outcomes": { "ok": 63 },
+      "cachePath": { "cold": 63 },
+      "pageSizes": { "8": 31, "20": 32 },
+      "deliberateSwitchSamples": { "large": 30, "small": 31 }
+    },
+    "uiBodyObservation": {
+      "method": "native CUA accessibility-row selection followed by AX tree snapshot",
+      "isTrustedBrowserClickIndependentlyCaptured": false,
+      "readinessDefinition": "the target row was selected and an assistant/user message container was present without a canonical-content, ledger, or ENOENT error",
+      "large": { "bodyVisibleOnSnapshot": 30, "attempts": 30 },
+      "small": { "bodyVisibleOnSnapshot": 30, "attempts": 31 },
+      "smallFirstSnapshotWithoutMessageContainer": 1,
+      "thatSmallSessionRenderedOnARepeatSelection": true,
+      "lastMessageBodyDigestVerifiedPerSwitch": false
+    },
+    "traceLatencyMs": {
+      "percentileMethod": "nearest rank; ready proxy sums selection-to-page-request, renderer-page-request, failure-reason-hydration, store-commit, render-commit, and next-paint stages",
+      "largePageSize20": {
+        "n": 30,
+        "mainHandler": { "p50": 7.53, "p95": 11.59, "max": 14.54 },
+        "rendererPageRequest": { "p50": 15.3, "p95": 19.4, "max": 20.4 },
+        "nextPaint": { "p50": 5.7, "p95": 7.3, "max": 7.7 },
+        "stageSumReadyProxy": { "p50": 40.4, "p95": 48.0, "max": 55.3 }
+      },
+      "smallPageSize8": {
+        "n": 31,
+        "mainHandler": { "p50": 5.53, "p95": 6.89, "max": 8.2 },
+        "rendererPageRequest": { "p50": 14.3, "p95": 17.3, "max": 17.6 },
+        "nextPaint": { "p50": 6.1, "p95": 7.9, "max": 10.4 },
+        "stageSumReadyProxy": { "p50": 40.5, "p95": 49.4, "max": 52.5 }
+      }
+    },
+    "rendererLongTaskEventsDuringTraceWindow": 0,
+    "limitations": [
+      "The candidate clone profile was globally degraded and is not a healthy canonical real-history profile.",
+      "The 150-message target had no History events, remained backfilling, and had a blocked ledger; it measures legacy fallback behavior, not prepared canonical-history behavior.",
+      "One small-session AX snapshot did not show a message container on the first observation; a later repeat selection did. It is retained as an unconfirmed/not-ready observation, not dropped from the attempt count.",
+      "The AX check did not verify a per-session last-message marker or body digest, and trusted DOM click state was not independently captured.",
+      "The stage-sum ready figure is a trace-derived proxy, not a matched baseline measurement of last-message DOM readiness.",
+      "All page reads were cold-path. Hot-cache, damaged-cache, maintenance-toggle, maintenance-overlap completion/RSS, and full AC-5/AC-6 package matrices remain unmeasured here."
+    ]
+  },
+  "conclusion": {
+    "sameFrozenSourceEstablished": true,
+    "currentCandidateColdPathEvidenceAdded": true,
+    "pairedCurrentRunBaselineLatencyComparison": false,
+    "usableForAc7Pass": false,
+    "result": "supports cold legacy fallback responsiveness on the candidate package; the real-history canonical large-session, exact per-switch body correctness, and full AC-7 comparisons remain open"
+  }
+}

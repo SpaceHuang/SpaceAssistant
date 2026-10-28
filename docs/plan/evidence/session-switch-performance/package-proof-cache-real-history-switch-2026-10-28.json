@@ -1,0 +1,62 @@
+{
+  "date": "2026-10-28",
+  "scenario": "Candidate arm64 app bundle, isolated copy of real-history profile, 64-message and 8-message targets, alternating trusted pointer input",
+  "sourceCommit": "7a5064e3",
+  "artifact": {
+    "buildId": "a9e3795a-8cff-46b4-a952-892c71407609",
+    "appAsarSha256": "ba7ec1cfe8b2378aacf1f47e93f937a005544c9bc481abc573599b6979829bb5",
+    "dmgSha256": "a0f7c0aace45d981e8a1d193fbe851b11956d81530666183b09143ce0c492d93",
+    "installed": false
+  },
+  "profile": {
+    "source": "APFS copy-on-write clone of sap4p4realhealthy-current-20261028",
+    "userData": "/Users/space/Library/Application Support/sap4ac7proofcache-attach-20261028",
+    "sourceProfileOpened": false,
+    "globalStartupHealth": "degraded",
+    "startupRepairPendingLogEntries": 96,
+    "quickCheckAfterRun": "ok",
+    "cloneRemovedAfterRun": true
+  },
+  "targets": {
+    "large": { "messageCount": 64, "ledgerStateAfterRun": "ready", "sourceManifestCount": 1, "sourceManifestBytes": 4228 },
+    "ordinary": { "messageCount": 8, "ledgerStateAfterRun": "ready", "sourceManifestCount": 1, "sourceManifestBytes": 6887 }
+  },
+  "switches": {
+    "large": {
+      "n": 30,
+      "trustedInput": 30,
+      "targetMessageIdPresentAndStableForTwoFrames": 30,
+      "clickToDomStableMs": { "p50": 163.45, "p95NearestRank": 197.4, "max": 209.3 },
+      "mainPageReadMs": { "p50": 4.02, "p95NearestRank": 5.53, "max": 26.2 },
+      "rendererPageRequestMs": { "p50": 14.4, "p95NearestRank": 38.5, "max": 43.8 },
+      "nextPaintMs": { "p50": 6.3, "p95NearestRank": 10.8, "max": 10.9 }
+    },
+    "ordinary": {
+      "n": 30,
+      "trustedInput": 30,
+      "targetMessageIdPresentAndStableForTwoFrames": 30,
+      "clickToDomStableMs": { "p50": 167.4, "p95NearestRank": 208.7, "max": 283.1 },
+      "mainPageReadMs": { "p50": 5.85, "p95NearestRank": 9.62, "max": 19.65 },
+      "rendererPageRequestMs": { "p50": 13.4, "p95NearestRank": 21.1, "max": 24.1 },
+      "nextPaintMs": { "p50": 3.4, "p95NearestRank": 7.0, "max": 7.5 }
+    }
+  },
+  "trace": {
+    "mainPageReads": { "n": 60, "ok": 60, "cachePath": { "cold": 60 } },
+    "readyLedgerGate": { "events": 60, "proofReused": 58, "baseline": 2, "durationMs": { "p50": 84, "p95NearestRank": 120, "max": 6275 }, "sessionIdentityAvailable": false },
+    "longTaskObserver": {
+      "records": 24,
+      "longTaskCount": 4,
+      "longTaskDurationsMs": [50, 104, 294, 125],
+      "longAnimationFrameCount": 20,
+      "maxLongAnimationFrameMs": 299.4,
+      "maxBlockingDurationMs": 244.7,
+      "timestampsAvailableForClickCorrelation": false
+    },
+    "agentLog": "Workspace .agent/logs/Agent-20261028.log, filtered by artifactBuildId; no message content copied into this record."
+  },
+  "acceptance": {
+    "countsTowardAc7": false,
+    "reason": "Candidate-only run without a same-library baseline. The profile had unrelated startup repair work; page cache was cold for all 60 page reads; Long Task/LoAF records could not be correlated to individual clicks. This is a candidate real-history cold-path cell only."
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema": "session-switch-package-maintenance-concurrency/v1",
+  "date": "2026-10-28",
+  "candidateBuildId": "eb0aac8b-6f5b-496c-ba11-f45f194f9584",
+  "candidate": {
+    "source": "v117 PKG app bundle identity clone",
+    "packageName": "spaceassistant-p4-maintenance-race-20261028",
+    "appAsarSha256": "124addd9bbe2ecb0cff00b165684d4cc8df232223a7eb8157cf79407cfa2344e",
+    "mainBundleSha256": "fa3e0c95f51bf9774a59f08ec4e59395f5e4b1f179152336083dd2e4edf4bafe",
+    "isolatedUserDataPath": "/Users/space/Library/Application Support/spaceassistant-p4-maintenance-race-20261028"
+  },
+  "fixture": {
+    "kind": "synthetic-canonical-backed-only",
+    "sessionId": "8daf401c-29b3-49eb-bb6f-e6c10f55f5c6",
+    "canonicalMessageCount": 1000,
+    "bodySourceStatusBefore": "backfilling",
+    "locatorCountBefore": 0,
+    "manifestCountBefore": 0,
+    "sourceEventOrphanCountBefore": 0,
+    "imEnabled": false
+  },
+  "foregroundRead": {
+    "startedWhileBackfillPending": true,
+    "api": "window.api.chatGetMessagePage",
+    "pageSize": 20,
+    "durationMs": 6685.7,
+    "returnedCanonicalIds": true,
+    "wrongSessionMessages": 0,
+    "errorCount": 0
+  },
+  "maintenance": {
+    "statusSamples": 312,
+    "statusesObserved": ["backfilling", "complete"],
+    "locatorCountsObserved": [0, 1000],
+    "finalStatus": "complete",
+    "finalLocatorCount": 1000
+  },
+  "limitations": [
+    "This validates one preload page read during source locator backfill, not projection-cache rebuild.",
+    "It does not measure window-click-to-content-ready, settings responsiveness, Long Task/LoAF, or full maintenance peak RSS.",
+    "The app package name was changed to create a unique macOS userData identity; main bundle hash matches the v117 candidate package."
+  ]
+}

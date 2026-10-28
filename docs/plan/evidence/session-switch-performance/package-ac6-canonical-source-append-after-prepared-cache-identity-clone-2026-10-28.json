@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "append accepted canonical messages after prepared cache exists, then read through packaged preload API",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "source": "arm64 PKG payload identity clone",
+    "pkgSha256": "6594ee801e4eddc23ace759164feb2c32ae5af0b5b35403bf3382820353188b8",
+    "appBundle": "/tmp/SpaceAssistant-P4-AC6-AppendValidB20261028.app",
+    "appAsarSha256": "d760bc522287e75d0b77b23c045789dd22a324c868680fa1656a454c7c4f500c",
+    "packageNamePatched": "sap4ac6appendvalid28",
+    "identityClone": true,
+    "adHocResigned": true,
+    "userData": "/Users/space/Library/Application Support/sap4ac6appendvalid28",
+    "mainJsSha256": "c252a007fb33c282817013ed66ef1ea20602823d5865d51c6408f7038ea84461",
+    "feishuAndWechatMessagesSent": false
+  },
+  "fixture": {
+    "synthetic": true,
+    "sessionId": "2dfbce2c-b8fd-4bf9-9e6f-b0fc579d6d78",
+    "messageIds": [
+      "p4-ac6-append-valid-base-user",
+      "p4-ac6-valid-append-2-user",
+      "p4-ac6-valid-append-2-assistant"
+    ],
+    "initialBody": {
+      "byteLength": 300050,
+      "sha256": "a01e49216a4cd387e25e9e1b7a6b2786bb48ede5ac49e1a7fab865100b9a2ec9",
+      "prefix": "P4_AC6_APPEND_BASE_",
+      "tail": "_P4_AC6_APPEND_BASE_TAIL_OK"
+    },
+    "append": {
+      "acceptedInput": "P4_AC6_APPEND_NEW_MESSAGE",
+      "assistantReply": "P4_AC6_APPEND_ASSISTANT_REPLY",
+      "path": [
+        "prepareTurnAtomically",
+        "SqliteAgentHistory.appendBatch(session-input-committed)",
+        "SqliteAgentHistory.appendBatch(model-response-committed)",
+        "SqliteAgentHistory.appendBatch(invocation-completed)",
+        "updateMessageContent",
+        "updatePersistedTurnState"
+      ]
+    }
+  },
+  "packageApi": {
+    "method": "window.api.chatGetMessagePage({sessionId, limit: 10})",
+    "returnedMessages": 3,
+    "markers": [
+      "_P4_AC6_APPEND_BASE_TAIL_OK",
+      "P4_AC6_APPEND_NEW_MESSAGE",
+      "P4_AC6_APPEND_ASSISTANT_REPLY"
+    ],
+    "readyCallElapsedMs": 2.3,
+    "elapsedMsMeaning": "one subsequent ready API call only; not cold-read, UI-ready, or p95"
+  },
+  "database": {
+    "sourceStatus": "complete",
+    "sourceRevision": 22,
+    "projectionStatus": "valid",
+    "messageRevision": 9,
+    "projectionDigest": "44a36e37d4ec7504a11e045c9adb1fc81e4afa83674846aa80925a6533792e22",
+    "bodyLocatorCount": 3,
+    "quickCheck": "ok"
+  },
+  "uiObservation": {
+    "result": "visible-content-verified",
+    "observation": "In a cold-started packaged identity clone, the initial window had not yet rendered the session content. After explicitly selecting the target row, the AX tree and screenshot showed the 300 KiB source body tail marker, the appended user message, and the assistant reply.",
+    "selectionEvidence": [
+      "P4_AC6_APPEND_BASE_TAIL_OK",
+      "P4_AC6_APPEND_NEW_MESSAGE",
+      "P4_AC6_APPEND_ASSISTANT_REPLY"
+    ],
+    "roundTrip": "not counted; subsequent selection automation briefly observed a stale page and the sequence was not controlled tightly enough for a valid A→B→A claim",
+    "interpretation": "The earlier empty-area observation was not reproduced as a persistent result. This confirms packaged UI content visibility for the synthetic fixture after explicit selection; it does not establish UI-ready latency or a production-turn end-to-end append path.",
+    "followUp": "Measure selection-to-content-ready with trace correlation and exercise a source edit through the product UI or a package-level IPC fixture."
+  },
+  "limitations": [
+    "single synthetic identity-clone sample",
+    "does not cover ordinary source edit/delete, History source spill damage, projection publish-boundary fault, real history, or baseline comparison",
+    "does not establish renderer UI correctness"
+  ]
+}

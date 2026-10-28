@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "delete a prepared canonical-backed session through the packaged renderer UI and verify database cleanup",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "3c6f7485-021a-43e3-b12f-eb9b793acf17",
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "sourceTreeClean": false,
+    "platform": "mac-arm64",
+    "pkgPath": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-boundary-refactor/release/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "223aa70894ac69b0394c87c5c44e611e52663642aa38b6dc4688ca9b9d5d58b1",
+    "appAsarSha256": "402e435bff1170161425b0822d7efcab8a908002ee9afce79d7f7ace54c22615",
+    "pkgInstalled": false,
+    "identityCloneBundleId": "com.spaceassistant.p4ac6spillfix28",
+    "identityCloneAppPath": "/tmp/SpaceAssistant-P4-AC6-RendererFailureFix28.app",
+    "databaseProfile": "/Users/space/Library/Application Support/sap4ac6uideletefix28",
+    "profileCreation": "APFS copy-on-write clone of sap4ac6appendvalid28",
+    "helperUserDataDirVerified": true,
+    "feishuAndWechatMessagesSent": false
+  },
+  "fixture": {
+    "synthetic": true,
+    "sessionId": "2dfbce2c-b8fd-4bf9-9e6f-b0fc579d6d78",
+    "sessionName": "P4 AC6 valid source append 300KiB",
+    "messageCountBeforeDelete": 3,
+    "preparedProjectionBeforeDelete": "valid",
+    "projectionCacheRowsBeforeDelete": 1,
+    "sourceStatusBeforeDelete": "complete"
+  },
+  "ui": {
+    "deleteConfirmationPresented": true,
+    "confirmationNamedTargetSession": true,
+    "confirmationAcceptedInIsolatedClone": true,
+    "successToastVisible": "已删除",
+    "targetRemovedFromSessionList": true,
+    "emptyStateVisibleAfterDelete": true
+  },
+  "databaseAfterDelete": {
+    "sessionRows": 0,
+    "messageRows": 0,
+    "projectionStateRows": 0,
+    "projectionCacheRows": 0,
+    "bodySourceStateRows": 0,
+    "projectionBlobReferenceRows": 0,
+    "quickCheck": "ok"
+  },
+  "result": "pass: packaged UI confirmation invoked deletion and all queried target rows were absent; database quick_check remained ok",
+  "limitations": [
+    "single synthetic identity-clone sample; no PKG installation",
+    "uses development isolation environment and unique ad-hoc signed bundle identity",
+    "checks deletion rows immediately after the UI operation; no cold-restart resurrection test in this sample",
+    "does not cover publication-boundary failure, real history, baseline comparison, or the full AC-6 matrix",
+    "does not close AC-7 or P4-02/P4-03"
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-28",
+  "scenario": "Single bounded baseline attempt against the candidate real-history profile; stopped before candidate run",
+  "baseline": {
+    "commit": "109a938404124235d632e4cdbd4f9e06eaa48728",
+    "appAsarSha256": "a3e33001c36ee4934fa9239467b02ce7f1691e9799859abfb73511ffa5e9fb5f",
+    "profileSchema": 107,
+    "startupRecovery": "ready",
+    "projectionStateForTargets": "unknown",
+    "runtimeErrors": { "code": "SESSION_LEDGER_BLOCKED", "channel": "chat:get-session-compaction-markers", "count": 3 }
+  },
+  "candidate": {
+    "appAsarSha256": "ba7ec1cfe8b2378aacf1f47e93f937a005544c9bc481abc573599b6979829bb5",
+    "profileSchema": 117,
+    "projectionStateForTargets": "ready",
+    "started": false
+  },
+  "sameTargetDataCheck": {
+    "baselineAndCandidateMessageDigestMatched": true,
+    "baselineAndCandidateHistoryRowDigestMatched": true,
+    "large": {
+      "messageCount": 64,
+      "messageDigest": "5d02f85d15322c10d77c05d67e7f062d5b310a99fc0c23d218769d0f7da5419",
+      "historyEventCount": 2590,
+      "historyDigest": "d96323da0974689d7cadcf6ae65282222b248d0e4d0752a05c85dca7bd79c4eb"
+    },
+    "ordinary": {
+      "messageCount": 8,
+      "messageDigest": "7a95bca877748ec953db8729cc4bd09984276641405d3897a58f2c5ac490ff16",
+      "historyEventCount": 343,
+      "historyDigest": "2242d7afcd887c191e260045054d69815c4715875667adeaf32f75789e468fc2"
+    }
+  },
+  "baselineAttempt": {
+    "trustedClicks": 3,
+    "verifiedTargetDomStableForTwoFrames": 3,
+    "clickToDomStableMs": [285.2, 186.9, 200.0],
+    "failedInputOrdinal": 4,
+    "failure": "No trusted pointer event was observed before bounded timeout; the script stopped immediately.",
+    "p95Reported": false
+  },
+  "acceptance": {
+    "samplesCountTowardAc7": false,
+    "reason": "The baseline binary started with startup recovery ready but could not serve compaction-marker IPC for the migrated profile (SESSION_LEDGER_BLOCKED). Its source predates commit c2926903, which added retryBlocked:false for read-only marker hydration. The required 30 samples per target were not completed; the fourth input was not trusted. No candidate run or baseline/candidate comparison occurred.",
+    "relatedRegressionTests": {
+      "command": "npm exec vitest run electron/sessionStorage/sessionStorage.test.ts electron/sessionContextCompaction.ipc.test.ts electron/runtime/sessionLedgerLifecycleProduction.test.ts",
+      "passed": 92,
+      "failed": 0
+    },
+    "migrationAndHistoryTests": {
+      "command": "npm exec vitest run electron/database/migrations.sessionContentCutover.test.ts electron/runtime/sqliteAgentHistory.test.ts",
+      "passed": 213,
+      "failed": 0
+    },
+    "readOnlyNoDrainRegression": {
+      "command": "npm exec vitest run electron/sessionLedgerLifecycle.test.ts electron/sessionStorage/sessionStorage.test.ts electron/sessionContextCompaction.ipc.test.ts",
+      "passed": 87,
+      "failed": 0
+    }
+  },
+  "cleanup": {
+    "baselineProcessExited": true,
+    "candidateProcessStarted": false,
+    "temporaryCowCopiesRemoved": true,
+    "sourceProfilesModified": false
+  }
+}

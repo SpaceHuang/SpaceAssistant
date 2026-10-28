@@ -1,0 +1,107 @@
+{
+  "date": "2026-10-28",
+  "artifactBuildId": "eb0aac8b-6f5b-496c-ba11-f45f194f9584",
+  "packageSha256": "abd5b8fd1e1555d92a719f85ca99f8eeb7235c0cf283ee0b37fb44146fcc98cf",
+  "asarSha256": "c5f6801ea483b11ec01b94ff1ee3c87c34ab609434b8a319f3589c8d4a078cc6",
+  "appIdentity": "sap4test202610 (isolated clone)",
+  "userData": "/Users/space/Library/Application Support/sap4test202610",
+  "workDir": "/tmp/spaceassistant-p4-ui-isolated-workdir",
+  "fixture": "synthetic placeholder conversations in isolated cloned profile; no messages sent",
+  "integrations": {
+    "feishu": false,
+    "wechat": false
+  },
+  "switches": {
+    "total": 30,
+    "eachDirection": 15,
+    "allExpectedBodyVisible": true,
+    "rendererTraceSamples": [
+      {
+        "syntheticSessionMessageCount": 8,
+        "pageSize": 8,
+        "samples": 15,
+        "rendererPageRequest": {
+          "n": 15,
+          "p50Ms": 4.8,
+          "p95Ms": 5.7,
+          "maxMs": 5.7
+        },
+        "selectionToPageRequest": {
+          "n": 15,
+          "p50Ms": 7.6,
+          "p95Ms": 10.9,
+          "maxMs": 10.9
+        },
+        "failureReasonHydration": {
+          "n": 15,
+          "p50Ms": 1.2,
+          "p95Ms": 1.7,
+          "maxMs": 1.7
+        },
+        "renderCommit": {
+          "n": 15,
+          "p50Ms": 1,
+          "p95Ms": 1.5,
+          "maxMs": 1.5
+        },
+        "nextPaint": {
+          "n": 15,
+          "p50Ms": 4.6,
+          "p95Ms": 11.7,
+          "maxMs": 11.7
+        }
+      },
+      {
+        "syntheticSessionMessageCount": 64,
+        "pageSize": 20,
+        "samples": 15,
+        "rendererPageRequest": {
+          "n": 15,
+          "p50Ms": 5.1,
+          "p95Ms": 7.8,
+          "maxMs": 7.8
+        },
+        "selectionToPageRequest": {
+          "n": 15,
+          "p50Ms": 7.5,
+          "p95Ms": 8.2,
+          "maxMs": 8.2
+        },
+        "failureReasonHydration": {
+          "n": 15,
+          "p50Ms": 3.9,
+          "p95Ms": 5.5,
+          "maxMs": 5.5
+        },
+        "renderCommit": {
+          "n": 15,
+          "p50Ms": 0.9,
+          "p95Ms": 1.9,
+          "maxMs": 1.9
+        },
+        "nextPaint": {
+          "n": 15,
+          "p50Ms": 6.7,
+          "p95Ms": 14.9,
+          "maxMs": 14.9
+        }
+      }
+    ]
+  },
+  "cuaClickToFullAXSnapshotMs": {
+    "n": 30,
+    "p50Ms": 501,
+    "p95Ms": 553,
+    "maxMs": 614
+  },
+  "settingsAfterSwitch": {
+    "opened": true,
+    "cuaClickToFullAXSnapshotMs": 761
+  },
+  "measurementLimits": [
+    "CUA action-to-full-AX snapshot includes automation accessibility wait and is not an end-user latency metric.",
+    "Renderer stages are warm-cache synthetic-fixture observations; they do not cover cold/corrupt cache or maintenance competition.",
+    "No Long Task/LoAF observer was active in this run.",
+    "No baseline binary same-database comparison was run."
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-28",
+  "candidate": {
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "buildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "pkgSha256": "6594ee801e4eddc23ace759164feb2c32ae5af0b5b35403bf3382820353188b8",
+    "officialPayloadAppAsarSha256": "f029a314cccf8fc0192adbc85a22cf50fcc97ac562d48281fba7534db23b33ba",
+    "identityCloneAppAsarSha256": "bff21be3b70b1dfaaddd951078819a6f94095dca4f650317f40f9c508493ee17",
+    "architecture": "arm64"
+  },
+  "isolation": {
+    "appIdentity": "sap4realhist10",
+    "userDataPath": "/Users/space/Library/Application Support/sap4realhist10",
+    "sourceCopyPath": "/tmp/spaceassistant-p4-validation/copies/candidate-v7",
+    "sourceDatabaseBytes": 2780368896,
+    "sourceQuickCheck": "ok",
+    "copiedDatabaseQuickCheckBeforeLaunch": "ok",
+    "sessions": 661,
+    "messages": 821,
+    "maxSessionMessages": 150,
+    "feishuEnabled": false,
+    "wechatEnabled": false,
+    "defaultUserDatabaseUsed": false
+  },
+  "scenario": {
+    "interactionMethod": "native CUA clicks in isolated packaged-app clone",
+    "switches": 10,
+    "sequence": "alternating one 150-message session and one 28-message session",
+    "windowVisibleAfterEachClick": true,
+    "messageBodyOrTitleWrittenToPersistentEvidence": false,
+    "mainAndRendererTraceCorrelation": "requestOrdinal and rendererProcessId"
+  },
+  "switchTrace": {
+    "cachePath": "cold for all 10 requests",
+    "mainHandlerMs": {
+      "n": 10,
+      "p50": 6.41,
+      "p95NearestRank": 12.87,
+      "max": 12.87
+    },
+    "rendererPageRequestMs": {
+      "n": 10,
+      "p50": 9.25,
+      "p95NearestRank": 19.8,
+      "max": 19.8
+    },
+    "rendererNextPaintMs": {
+      "n": 10,
+      "p50": 11.95,
+      "p95NearestRank": 19.4,
+      "max": 19.4
+    },
+    "longTaskObserverEventsDuringSwitches": 0,
+    "ledgerGateEventsDuringSwitches": {
+      "ready": 5,
+      "blockedLedgerMissing": 5,
+      "sessionIdPresentInLog": false
+    }
+  },
+  "devtoolsProfile": {
+    "recordedSwitches": 8,
+    "reportedInpMs": 64,
+    "temporaryTraceGzipSizeDisplay": "3.7M (ls -lh)",
+    "traceEventCount": 75085,
+    "longCompleteEventsAtLeast50Ms": [
+      {
+        "event": "RunTask",
+        "durationMs": 319.828,
+        "note": "contains CpuProfiler::StartProfiling; profiler startup overhead"
+      },
+      {
+        "event": "RunTask",
+        "durationMs": 197.488
+      },
+      {
+        "event": "RunTask",
+        "durationMs": 153.717
+      },
+      {
+        "event": "RunTask",
+        "durationMs": 88.259
+      }
+    ],
+    "attributionConclusion": "not attributable to session switching; recording overhead and event-to-click alignment prevent source-level conclusion",
+    "traceResourceContentIncluded": false,
+    "traceMayContainCapturedScreenshots": true,
+    "temporaryTraceDeletedAfterAnalysis": true
+  },
+  "conclusion": {
+    "usableForAc7": false,
+    "reason": "all page reads were cold; ledger gate alternated between ready and ledger_missing without session IDs in logs, so healthy-history and per-session classification cannot be established",
+    "appExited": true,
+    "imOrExternalMessagesSent": false
+  }
+}

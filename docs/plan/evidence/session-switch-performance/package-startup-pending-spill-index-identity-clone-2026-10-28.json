@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "cold launch from an isolated profile whose derived History spill index is marked as reconciling",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "408f22f7-d4ea-4aa0-b09e-ea5ef05407d8",
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "sourceTreeClean": false,
+    "platform": "mac-arm64",
+    "pkgPath": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-boundary-refactor/release/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "01a4b403981af90db2aaf26ffb5702f542b03873117521222970e65b851b55cf",
+    "appAsarSha256": "b42c8911972f4ef0885b15aa85804cc0a6743e6922976264b1357ceb7918a7e0",
+    "pkgInstalled": false,
+    "identityCloneBundleId": "com.spaceassistant.p4ac6spillindexfix28",
+    "identityCloneAppPath": "/tmp/SpaceAssistant-P4-AC6-SpillIndexRaceFix28.app",
+    "databaseProfile": "/Users/space/Library/Application Support/sap4ac6spillindexfix28",
+    "helperUserDataDirVerified": true
+  },
+  "fixture": {
+    "synthetic": true,
+    "healthySessionId": "ef0fe307-b4d1-4502-8a58-9a80d34f7e60",
+    "healthySessionName": "P4 valid ordinary 8 messages",
+    "profileWasClonedFrom": "/Users/space/Library/Application Support/sap4ac6uideletefix28",
+    "spillReferenceIndexStatusBeforeLaunch": "running",
+    "sourceAndHistoryContentModified": false
+  },
+  "ui": {
+    "coldLaunch": true,
+    "targetSessionVisibleAndSelected": true,
+    "userAndAssistantMessagesVisible": true,
+    "localizedReadErrorVisible": false,
+    "observedError": null,
+    "evidenceMethod": "live CUA accessibility tree after launch of the app extracted from the PKG"
+  },
+  "databaseAfterLaunch": {
+    "spillReferenceIndexStatus": "complete",
+    "verifiedGeneration": 39,
+    "quickCheck": "ok"
+  },
+  "result": "pass: the packaged app cold-launched from a cloned profile marked as reconciling and displayed the selected healthy conversation; the derived index completed during startup. The UI sample does not establish that its page read happened before reconciliation completed.",
+  "limitations": [
+    "the PKG was expanded and its app payload launched under an isolated identity; the PKG was not installed",
+    "the UI sample is synthetic and n=1",
+    "the exact ordering between the selected page read and index reconciliation was not captured; the source regression test deterministically covers the pending-index ordering",
+    "this does not close AC-7, P4-02, or P4-03"
+  ]
+}

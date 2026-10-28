@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "read canonical-backed content with a truncated History source spill using the current PKG payload modules",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "6d5910fe-7b9c-4ccf-bc28-c49e02e212cb",
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "sourceTreeClean": false,
+    "source": "arm64 PKG payload app.asar loaded by its Electron binary in ELECTRON_RUN_AS_NODE mode",
+    "pkgPath": "/tmp/sa-ac6-revision-pkg/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "1d455c60ecdb329cf89c2b927073cd6a1df0a4f45a6c4f5ca1a7723f699e2f04",
+    "appAsarSha256": "47fce209bce1c43b7e472e38fc5662e053f770187d09f4ca2336d44e82f2bf97",
+    "pkgInstalled": false,
+    "feishuAndWechatMessagesSent": false
+  },
+  "fixture": {
+    "synthetic": true,
+    "sessionId": "2dfbce2c-b8fd-4bf9-9e6f-b0fc579d6d78",
+    "sessionName": "P4 AC6 valid source append 300KiB",
+    "messageId": "p4-ac6-append-valid-base-user",
+    "locator": "699d48a5-993f-4e0f-aa8f-4f56884772c0.spill",
+    "expectedLength": 300046,
+    "expectedSha256": "cd15ea027e93ff1141a7eade87aedc7209e3f6ad66f66631b0a7046795a60a39",
+    "sourceStatusBeforeRead": "complete",
+    "sourceRevisionBeforeRead": 22,
+    "databaseProfile": "/Users/space/Library/Application Support/sap4ac6spill28",
+    "damage": {
+      "operation": "truncate generated source copy to one half of its descriptor length",
+      "byteLengthAfter": 150023,
+      "sha256After": "9147f709cbf063a4d87664b4bff50c839f66a210ce2ab6334bfc2effaae41465"
+    }
+  },
+  "control": {
+    "profile": "/Users/space/Library/Application Support/sap4ac6editrev28",
+    "result": "returned",
+    "entryCount": 3,
+    "targetBodyLength": 300046,
+    "targetBodyTail": "P4_AC6_APPEND_BASE_TAIL_OK"
+  },
+  "damagedRead": {
+    "implementation": "readChatPageAfterPreparation exported from current app.asar dist-electron/electron/sessionStorage/public/readMessages.js; createSqliteSessionStorage backed by the same app.asar database module",
+    "backfillRequested": false,
+    "result": "rejected",
+    "errorCode": "CANONICAL_SESSION_CONTENT_UNAVAILABLE",
+    "returnedPage": false
+  },
+  "databaseAfterRead": {
+    "sourceStatus": "complete",
+    "sourceRevision": 22,
+    "projectionStatus": "invalid",
+    "messages": 3,
+    "quickCheck": "ok"
+  },
+  "limitations": [
+    "single synthetic identity-clone sample; no PKG installation",
+    "used the current packaged shared read modules through ELECTRON_RUN_AS_NODE, not the packaged renderer IPC or UI",
+    "valid and damaged profiles were separate clones; damaged profile remains an isolated test fixture",
+    "does not cover spill deletion, same-length digest corruption, malformed locator, publish-boundary fault, real history, or baseline comparison",
+    "does not close AC-7 or P4-02/P4-03"
+  ]
+}

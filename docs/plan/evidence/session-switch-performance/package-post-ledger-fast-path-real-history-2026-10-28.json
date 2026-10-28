@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-28",
+  "purpose": "Post-fix diagnostic run for read-only blocked-ledger gate and cross-process IPC timestamps",
+  "candidate": {
+    "version": "0.2.9",
+    "buildId": "21b8262e-43d1-4830-a050-61cc437df56a",
+    "pkg": "release/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "e056d6100884d4868a3b5ffe9ca530d826772ac427e68764f2676fc7233d4f8e",
+    "appAsarSha256": "5f9f61648636b33dd5e8520eab94778cb062962cdea63b6be98b5da71c0eb2a5",
+    "installed": false
+  },
+  "data": {
+    "kind": "APFS copy-on-write clone of a real user profile",
+    "cloneName": "sap4diagipcfix-20261028b",
+    "cloneQuickCheckBeforeRun": "ok",
+    "connectorConfig": "disabled in clone",
+    "health": "degraded; not an AC-7 healthy canonical sample"
+  },
+  "run": {
+    "launch": "candidate app binary directly, with clone as userData and CDP 9336",
+    "rendererReached": true,
+    "windowReached": true,
+    "uiAction": "one sidebar row container was clicked; AX output did not establish a completed session change, so no switch latency is reported",
+    "appClosed": true,
+    "processesRemainingForClone": false
+  },
+  "observations": {
+    "startup": "renderer DOM-ready / did-finish-load around 14.69 s; main log showed a large blocked-ledger repair diagnostic before renderer readiness",
+    "repeatedErrors": {
+      "SESSION_LEDGER_REPAIR_PENDING": 100,
+      "PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH": 10
+    },
+    "ipcEpochPair": "no correlated deliberate-switch trace was emitted in the captured stdout log",
+    "eventLoopDelay": "not available from this run's captured output"
+  },
+  "interpretation": "This run cannot show whether the writer-drain fast path improves healthy large-history switching. It exposes persistent legacy repair/backfill failures in the cloned profile and does not qualify for latency or AC-7 claims.",
+  "validation": {
+    "focusedTests": "electron/sessionLedgerLifecycle.test.ts, electron/sessionStorage/sessionStorage.test.ts, electron/runtime/sessionLedgerLifecycleProduction.test.ts: 99 passed",
+    "incrementalBuild": "passed",
+    "fullBuild": "passed"
+  }
+}

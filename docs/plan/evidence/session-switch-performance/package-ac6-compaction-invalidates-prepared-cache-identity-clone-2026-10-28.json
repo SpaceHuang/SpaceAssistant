@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "append transcript-compacted source event after a prepared chat-body cache has been read",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "source": "arm64 PKG payload identity clone",
+    "pkgSha256": "6594ee801e4eddc23ace759164feb2c32ae5af0b5b35403bf3382820353188b8",
+    "appBundle": "/tmp/SpaceAssistant-P4-AC6-Append20261028.app",
+    "appAsarSha256": "f1d5ce8b0a2cf186f4e0bdd8d130756209a1c3d5c99ab4b94021f4fb1c17c8e3",
+    "packageNamePatched": "sap4ac6append28",
+    "identityClone": true,
+    "adHocResigned": true,
+    "userData": "/Users/space/Library/Application Support/sap4ac6append28",
+    "mainJsSha256": "c252a007fb33c282817013ed66ef1ea20602823d5865d51c6408f7038ea84461",
+    "feishuAndWechatMessagesSent": false
+  },
+  "fixture": {
+    "sessionId": "58cb6f23-5e18-47b9-8a2c-6d9a37fe03d2",
+    "messageId": "p4-ac6-source-ab47616a-2cb9-489b-bf6f-d44db29a4f80",
+    "bodyBefore": "P4_AC6_BODY_BEFORE_COMPACTION",
+    "bodyBeforeSha256": "ee05393aff3430ddfbaf5e39173597f365ebcf97ee946c11c8c4387b3bb44033",
+    "bodyAfter": "P4_AC6_BODY_AFTER_COMPACTION",
+    "bodyAfterSha256": "991cbe0db74e2350da3ca5e8f82be1b1ebd2960a85e095455c99ae5164bfd4ff",
+    "messageStorageState": "canonical-backed-only",
+    "messageInlineBytes": 0,
+    "preparedCacheReadBeforeMutation": {
+      "mainLogLine": 34,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "pageSize": 1,
+      "durationMs": 2.62,
+      "uiBodyVisible": "P4_AC6_BODY_BEFORE_COMPACTION"
+    }
+  },
+  "mutation": {
+    "writer": "production SqliteAgentHistory.appendBatch",
+    "eventKind": "transcript-compacted",
+    "eventId": "p4-ac6-compaction-snapshot",
+    "invocationId": "p4-ac6-compaction-invocation",
+    "messageId": "p4-ac6-source-ab47616a-2cb9-489b-bf6f-d44db29a4f80",
+    "messageCount": 1,
+    "historyEventCountBefore": 2,
+    "historyEventCountAfter": 3,
+    "sourceReadAfterMutation": {
+      "outcome": "ok",
+      "returnedBody": "P4_AC6_BODY_AFTER_COMPACTION",
+      "mainLogLine": 45,
+      "cachePath": "cold",
+      "pageSize": 1,
+      "durationMs": 119.79,
+      "stages": {
+        "workerReadMs": 18.58,
+        "sourcePageReadMs": 119.5,
+        "finalSourceCheck": "ok"
+      }
+    },
+    "uiReadAfterSwitchAwayAndBack": {
+      "outcome": "ok",
+      "visibleBody": "P4_AC6_BODY_AFTER_COMPACTION",
+      "mainLogLine": 54,
+      "cachePath": "ready",
+      "mainDurationMs": 1.03,
+      "rendererNextPaintLogLine": 59,
+      "rendererNextPaintMs": 4.0
+    }
+  },
+  "databaseAfter": {
+    "quickCheck": "ok",
+    "bodySourceStatus": "complete",
+    "bodySourceRevision": 12,
+    "projectionStatus": "valid",
+    "messageRevision": 3,
+    "historyWatermark": [3, 3, "p4-ac6-compaction-snapshot", "p4-ac6-compaction-invocation"],
+    "projectionPayloadDigest": "551f7a04583e2541f55e8b1a29020adf1a34b48c1aef094e8710d5e947f82b19"
+  },
+  "setupExcluded": {
+    "attempt": "first startup occurred before source backfill reached complete",
+    "mainLogLine": 14,
+    "outcome": "error",
+    "countedAsAcceptanceSample": false,
+    "reason": "the fixture's source state was pending; it was backfilled and revalidated before the counted cold-read sample"
+  },
+  "limitations": [
+    "single synthetic identity-clone sample; not a same-source baseline or real-history group",
+    "does not cover source append, source deletion, History source spill corruption, or publication-boundary failure",
+    "the fixture's ledger gate reported ledger_missing; this sample covers canonical chat-body read correctness only",
+    "startup Long Task/LoAF and blob-GC warnings from the excluded pending-source setup attempt are not attributed to this source-mutation read"
+  ]
+}

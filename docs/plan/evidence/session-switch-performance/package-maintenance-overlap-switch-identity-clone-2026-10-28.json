@@ -1,0 +1,1247 @@
+{
+  "schema": "spaceassistant.package-maintenance-overlap-switch.v1",
+  "capturedAtLocalDate": "2026-10-28",
+  "capturedAtUtc": {
+    "start": "2026-10-27T22:46:29.050Z",
+    "end": "2026-10-27T22:49:14.248Z"
+  },
+  "percentileMethod": "nearest-rank",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "source": "arm64 PKG payload identity clone",
+    "pkgSha256": "6594ee801e4eddc23ace759164feb2c32ae5af0b5b35403bf3382820353188b8",
+    "appBundle": "/tmp/SpaceAssistant-P4-ReadyHot20261028.app",
+    "identityClone": true,
+    "packageNamePatched": "sap4readyhot28",
+    "adHocResigned": true,
+    "userData": "/Users/space/Library/Application Support/sap4readyhot28",
+    "workspaceProfile": "/Users/space/Library/Application Support/sap4readyhot28/workspaces/2",
+    "feishuEnabled": false,
+    "wechatEnabled": false
+  },
+  "fixture": {
+    "kind": "synthetic canonical-backed-only",
+    "targetSessionMessages": 64,
+    "maintenanceSessionMessages": 1000,
+    "targetCachePath": "ready",
+    "maintenanceTrigger": "inline_payload replaced with one-byte invalid JSON on the 1000-message fixture; app fallback schedules projection rebuild",
+    "mutationCount": 46,
+    "successfulCacheRestorations": 46,
+    "sourceTablesUnchanged": {
+      "messages": {
+        "before": {
+          "rows": 1072,
+          "sha256": "904c633b40cfb5a13fdd757e693bdd1d901d57a24a86e0ed682b467ea2494815"
+        },
+        "after": {
+          "rows": 1072,
+          "sha256": "904c633b40cfb5a13fdd757e693bdd1d901d57a24a86e0ed682b467ea2494815"
+        }
+      },
+      "agent_history_events": {
+        "before": {
+          "rows": 6,
+          "sha256": "01f5ca1e981abbe820b5ec7cc32304cfceef487b9a541d14e3207a1d541f5c84"
+        },
+        "after": {
+          "rows": 6,
+          "sha256": "01f5ca1e981abbe820b5ec7cc32304cfceef487b9a541d14e3207a1d541f5c84"
+        }
+      },
+      "session_message_body_source_event": {
+        "before": {
+          "rows": 2144,
+          "sha256": "61fa0dba5b98afb0a2cc736738c8c888879a01b43be6fbc0dfc754ce5a7c5573"
+        },
+        "after": {
+          "rows": 2144,
+          "sha256": "61fa0dba5b98afb0a2cc736738c8c888879a01b43be6fbc0dfc754ce5a7c5573"
+        }
+      },
+      "session_body_source_state": {
+        "before": {
+          "rows": 3,
+          "sha256": "350e670122512d14515ca76afe4c59c5d88cd92b9d3a85168b8961347c21d464"
+        },
+        "after": {
+          "rows": 3,
+          "sha256": "350e670122512d14515ca76afe4c59c5d88cd92b9d3a85168b8961347c21d464"
+        }
+      }
+    },
+    "databaseAfterRun": {
+      "quickCheck": "ok",
+      "sourceStateCounts": [
+        [
+          "complete",
+          3
+        ]
+      ],
+      "projectionStateCounts": [
+        [
+          "valid",
+          3
+        ]
+      ],
+      "cacheRowsAndPayloadLengthMinMax": [
+        3,
+        3043,
+        211541
+      ]
+    }
+  },
+  "scenario": "After each synthetic derived-cache corruption of the 1000-message fixture, click it to trigger recovery, then switch to the ready-cache 64-message fixture while projection rebuild slices are active. Three runs used 30, 8, and 8 corruption cycles. In-app page-request intervals are paired with checkpointed-to-published projection build windows; AX wall time is not used as latency.",
+  "summary": {
+    "uiCorruptionCycles": 46,
+    "projectionBuildWindows": 46,
+    "coldFallbackMainTraces": 43,
+    "readyMainTraces": 43,
+    "readyRendererTracePairs": 43,
+    "readyPageTracesOverlappedProjectionBuild": 34,
+    "readyPageTracesOutsideBuildWindow": 9,
+    "readyTraceOutcomesOk": 43,
+    "missingOrUnmatchedUiAttempts": 3,
+    "activeBuildOverlapMetrics": {
+      "mainHandler": {
+        "n": 34,
+        "p50Ms": 4.82,
+        "p95Ms": 6.57,
+        "maxMs": 6.66
+      },
+      "rendererPageRequest": {
+        "n": 34,
+        "p50Ms": 5.8,
+        "p95Ms": 7.8,
+        "maxMs": 7.8
+      },
+      "selectionToPageRequest": {
+        "n": 34,
+        "p50Ms": 3.9,
+        "p95Ms": 4.8,
+        "maxMs": 9.8
+      },
+      "nextPaint": {
+        "n": 34,
+        "p50Ms": 6.4,
+        "p95Ms": 15.2,
+        "maxMs": 15.4
+      }
+    },
+    "longTaskOrLoafObserverRecordCount": 0,
+    "ledgerGateReasonCounts": {
+      "null": 43,
+      "ledger_missing": 43
+    }
+  },
+  "idleComparison": {
+    "evidence": "package-hot-cache-maintenance-idle-switch-identity-clone-2026-10-28.json",
+    "samePackageUserDataDatabaseAndTargetFixture": true,
+    "target64Messages": {
+      "n": 30,
+      "mainHandlerP95Ms": 6.58,
+      "rendererPageRequestP95Ms": 7.5,
+      "nextPaintP95Ms": 14.4
+    }
+  },
+  "readyRequests": [
+    {
+      "requestOrdinal": 7,
+      "timestampUtc": "2026-10-27T22:46:29.820Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.66,
+      "rendererPageRequestMs": 7.8,
+      "selectionToPageRequestMs": 9.8,
+      "nextPaintMs": 9.2,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:29.469870Z",
+        "publishedAtUtc": "2026-10-27T22:46:30.279Z",
+        "estimatedWindowMs": 809.13,
+        "checkpointSliceMs": 411.13,
+        "publishSliceMs": 397.51
+      }
+    },
+    {
+      "requestOrdinal": 9,
+      "timestampUtc": "2026-10-27T22:46:31.408Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.1,
+      "rendererPageRequestMs": 6.3,
+      "selectionToPageRequestMs": 4.8,
+      "nextPaintMs": 15.1,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:31.148180Z",
+        "publishedAtUtc": "2026-10-27T22:46:31.769Z",
+        "estimatedWindowMs": 620.82,
+        "checkpointSliceMs": 125.82,
+        "publishSliceMs": 494.1
+      }
+    },
+    {
+      "requestOrdinal": 11,
+      "timestampUtc": "2026-10-27T22:46:32.896Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.08,
+      "rendererPageRequestMs": 5.9,
+      "selectionToPageRequestMs": 4,
+      "nextPaintMs": 10.7,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:32.633470Z",
+        "publishedAtUtc": "2026-10-27T22:46:33.250Z",
+        "estimatedWindowMs": 616.53,
+        "checkpointSliceMs": 118.53,
+        "publishSliceMs": 497.11
+      }
+    },
+    {
+      "requestOrdinal": 13,
+      "timestampUtc": "2026-10-27T22:46:34.437Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.77,
+      "rendererPageRequestMs": 5.8,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 5.9,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:34.186110Z",
+        "publishedAtUtc": "2026-10-27T22:46:34.723Z",
+        "estimatedWindowMs": 536.89,
+        "checkpointSliceMs": 43.89,
+        "publishSliceMs": 493.2
+      }
+    },
+    {
+      "requestOrdinal": 15,
+      "timestampUtc": "2026-10-27T22:46:36.168Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.47,
+      "rendererPageRequestMs": 5.5,
+      "selectionToPageRequestMs": 4.1,
+      "nextPaintMs": 6.7,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:35.934840Z",
+        "publishedAtUtc": "2026-10-27T22:46:36.438Z",
+        "estimatedWindowMs": 503.16,
+        "checkpointSliceMs": 143.16,
+        "publishSliceMs": 359.52
+      }
+    },
+    {
+      "requestOrdinal": 17,
+      "timestampUtc": "2026-10-27T22:46:37.904Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.76,
+      "rendererPageRequestMs": 5.6,
+      "selectionToPageRequestMs": 4.2,
+      "nextPaintMs": 5,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:37.651680Z",
+        "publishedAtUtc": "2026-10-27T22:46:38.276Z",
+        "estimatedWindowMs": 624.32,
+        "checkpointSliceMs": 130.32,
+        "publishSliceMs": 493.42
+      }
+    },
+    {
+      "requestOrdinal": 19,
+      "timestampUtc": "2026-10-27T22:46:39.453Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.55,
+      "rendererPageRequestMs": 5.4,
+      "selectionToPageRequestMs": 3.5,
+      "nextPaintMs": 4.7,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:39.201290Z",
+        "publishedAtUtc": "2026-10-27T22:46:39.534Z",
+        "estimatedWindowMs": 332.71,
+        "checkpointSliceMs": 74.71,
+        "publishSliceMs": 257.7
+      }
+    },
+    {
+      "requestOrdinal": 21,
+      "timestampUtc": "2026-10-27T22:46:41.006Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.55,
+      "rendererPageRequestMs": 5.4,
+      "selectionToPageRequestMs": 4.8,
+      "nextPaintMs": 6.4,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:40.749550Z",
+        "publishedAtUtc": "2026-10-27T22:46:41.382Z",
+        "estimatedWindowMs": 632.45,
+        "checkpointSliceMs": 137.45,
+        "publishSliceMs": 493.92
+      }
+    },
+    {
+      "requestOrdinal": 23,
+      "timestampUtc": "2026-10-27T22:46:42.540Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.82,
+      "rendererPageRequestMs": 7,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 15.4,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:42.300260Z",
+        "publishedAtUtc": "2026-10-27T22:46:42.609Z",
+        "estimatedWindowMs": 308.74,
+        "checkpointSliceMs": 55.74,
+        "publishSliceMs": 251.97
+      }
+    },
+    {
+      "requestOrdinal": 25,
+      "timestampUtc": "2026-10-27T22:46:44.104Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.87,
+      "rendererPageRequestMs": 5.7,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 4.7,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:43.836300Z",
+        "publishedAtUtc": "2026-10-27T22:46:44.464Z",
+        "estimatedWindowMs": 627.7,
+        "checkpointSliceMs": 128.7,
+        "publishSliceMs": 497.93
+      }
+    },
+    {
+      "requestOrdinal": 27,
+      "timestampUtc": "2026-10-27T22:46:45.640Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.89,
+      "rendererPageRequestMs": 7.5,
+      "selectionToPageRequestMs": 3.8,
+      "nextPaintMs": 15,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:45.385330Z",
+        "publishedAtUtc": "2026-10-27T22:46:45.714Z",
+        "estimatedWindowMs": 328.67,
+        "checkpointSliceMs": 58.67,
+        "publishSliceMs": 269.1
+      }
+    },
+    {
+      "requestOrdinal": 29,
+      "timestampUtc": "2026-10-27T22:46:47.170Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.47,
+      "rendererPageRequestMs": 5.2,
+      "selectionToPageRequestMs": 4,
+      "nextPaintMs": 6.3,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:46.941490Z",
+        "publishedAtUtc": "2026-10-27T22:46:47.576Z",
+        "estimatedWindowMs": 634.51,
+        "checkpointSliceMs": 139.51,
+        "publishSliceMs": 494.32
+      }
+    },
+    {
+      "requestOrdinal": 31,
+      "timestampUtc": "2026-10-27T22:46:48.767Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.52,
+      "rendererPageRequestMs": 6.6,
+      "selectionToPageRequestMs": 4,
+      "nextPaintMs": 5,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:48.501900Z",
+        "publishedAtUtc": "2026-10-27T22:46:48.795Z",
+        "estimatedWindowMs": 293.1,
+        "checkpointSliceMs": 50.1,
+        "publishSliceMs": 242.04
+      }
+    },
+    {
+      "requestOrdinal": 33,
+      "timestampUtc": "2026-10-27T22:46:50.269Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.48,
+      "rendererPageRequestMs": 5.6,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 5.2,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:50.016780Z",
+        "publishedAtUtc": "2026-10-27T22:46:50.646Z",
+        "estimatedWindowMs": 629.22,
+        "checkpointSliceMs": 131.22,
+        "publishSliceMs": 497.68
+      }
+    },
+    {
+      "requestOrdinal": 35,
+      "timestampUtc": "2026-10-27T22:46:51.811Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.91,
+      "rendererPageRequestMs": 5.7,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 11.8,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:51.569400Z",
+        "publishedAtUtc": "2026-10-27T22:46:51.876Z",
+        "estimatedWindowMs": 306.6,
+        "checkpointSliceMs": 52.6,
+        "publishSliceMs": 253.4
+      }
+    },
+    {
+      "requestOrdinal": 37,
+      "timestampUtc": "2026-10-27T22:46:53.340Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.61,
+      "rendererPageRequestMs": 7,
+      "selectionToPageRequestMs": 4,
+      "nextPaintMs": 15.2,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:53.086210Z",
+        "publishedAtUtc": "2026-10-27T22:46:53.733Z",
+        "estimatedWindowMs": 646.79,
+        "checkpointSliceMs": 161.79,
+        "publishSliceMs": 484.18
+      }
+    },
+    {
+      "requestOrdinal": 39,
+      "timestampUtc": "2026-10-27T22:46:54.937Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.53,
+      "rendererPageRequestMs": 6.5,
+      "selectionToPageRequestMs": 4.1,
+      "nextPaintMs": 4.6,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:54.668710Z",
+        "publishedAtUtc": "2026-10-27T22:46:54.959Z",
+        "estimatedWindowMs": 290.29,
+        "checkpointSliceMs": 42.29,
+        "publishSliceMs": 247.52
+      }
+    },
+    {
+      "requestOrdinal": 41,
+      "timestampUtc": "2026-10-27T22:46:56.437Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.47,
+      "rendererPageRequestMs": 6,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 6,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:56.184220Z",
+        "publishedAtUtc": "2026-10-27T22:46:56.807Z",
+        "estimatedWindowMs": 622.78,
+        "checkpointSliceMs": 128.78,
+        "publishSliceMs": 493.17
+      }
+    },
+    {
+      "requestOrdinal": 43,
+      "timestampUtc": "2026-10-27T22:46:57.987Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.9,
+      "rendererPageRequestMs": 5.8,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 5.1,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:57.734440Z",
+        "publishedAtUtc": "2026-10-27T22:46:58.025Z",
+        "estimatedWindowMs": 290.56,
+        "checkpointSliceMs": 48.56,
+        "publishSliceMs": 241.46
+      }
+    },
+    {
+      "requestOrdinal": 45,
+      "timestampUtc": "2026-10-27T22:46:59.520Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.78,
+      "rendererPageRequestMs": 5.7,
+      "selectionToPageRequestMs": 3.8,
+      "nextPaintMs": 4.8,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:46:59.251780Z",
+        "publishedAtUtc": "2026-10-27T22:46:59.875Z",
+        "estimatedWindowMs": 623.22,
+        "checkpointSliceMs": 129.22,
+        "publishSliceMs": 493.82
+      }
+    },
+    {
+      "requestOrdinal": 47,
+      "timestampUtc": "2026-10-27T22:47:01.536Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.68,
+      "rendererPageRequestMs": 5.6,
+      "selectionToPageRequestMs": 4.6,
+      "nextPaintMs": 6.2,
+      "overlappedProjectionBuild": false,
+      "buildWindow": null
+    },
+    {
+      "requestOrdinal": 49,
+      "timestampUtc": "2026-10-27T22:47:03.190Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.95,
+      "rendererPageRequestMs": 7.4,
+      "selectionToPageRequestMs": 3.5,
+      "nextPaintMs": 15.1,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:47:02.932380Z",
+        "publishedAtUtc": "2026-10-27T22:47:03.505Z",
+        "estimatedWindowMs": 572.62,
+        "checkpointSliceMs": 87.62,
+        "publishSliceMs": 485.11
+      }
+    },
+    {
+      "requestOrdinal": 51,
+      "timestampUtc": "2026-10-27T22:47:05.232Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.45,
+      "rendererPageRequestMs": 5.4,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 5.7,
+      "overlappedProjectionBuild": false,
+      "buildWindow": null
+    },
+    {
+      "requestOrdinal": 53,
+      "timestampUtc": "2026-10-27T22:47:07.139Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.54,
+      "rendererPageRequestMs": 5.3,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 4.6,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:47:06.630850Z",
+        "publishedAtUtc": "2026-10-27T22:47:07.304Z",
+        "estimatedWindowMs": 673.15,
+        "checkpointSliceMs": 178.15,
+        "publishSliceMs": 493.54
+      }
+    },
+    {
+      "requestOrdinal": 55,
+      "timestampUtc": "2026-10-27T22:47:08.789Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.92,
+      "rendererPageRequestMs": 5.8,
+      "selectionToPageRequestMs": 3.5,
+      "nextPaintMs": 6.4,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:47:08.530610Z",
+        "publishedAtUtc": "2026-10-27T22:47:09.147Z",
+        "estimatedWindowMs": 616.39,
+        "checkpointSliceMs": 116.39,
+        "publishSliceMs": 498.73
+      }
+    },
+    {
+      "requestOrdinal": 57,
+      "timestampUtc": "2026-10-27T22:47:12.247Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.89,
+      "rendererPageRequestMs": 5.8,
+      "selectionToPageRequestMs": 4.2,
+      "nextPaintMs": 9.2,
+      "overlappedProjectionBuild": false,
+      "buildWindow": null
+    },
+    {
+      "requestOrdinal": 59,
+      "timestampUtc": "2026-10-27T22:47:13.906Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.66,
+      "rendererPageRequestMs": 6.5,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 16.2,
+      "overlappedProjectionBuild": false,
+      "buildWindow": null
+    },
+    {
+      "requestOrdinal": 61,
+      "timestampUtc": "2026-10-27T22:47:15.289Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.99,
+      "rendererPageRequestMs": 5.9,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 4.8,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:47:15.033640Z",
+        "publishedAtUtc": "2026-10-27T22:47:15.658Z",
+        "estimatedWindowMs": 624.36,
+        "checkpointSliceMs": 114.36,
+        "publishSliceMs": 509.3
+      }
+    },
+    {
+      "requestOrdinal": 63,
+      "timestampUtc": "2026-10-27T22:48:08.995Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 8.47,
+      "rendererPageRequestMs": 10.2,
+      "selectionToPageRequestMs": 5,
+      "nextPaintMs": 11.5,
+      "overlappedProjectionBuild": false,
+      "buildWindow": null
+    },
+    {
+      "requestOrdinal": 65,
+      "timestampUtc": "2026-10-27T22:48:10.736Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.71,
+      "rendererPageRequestMs": 6.8,
+      "selectionToPageRequestMs": 4,
+      "nextPaintMs": 5.4,
+      "overlappedProjectionBuild": false,
+      "buildWindow": null
+    },
+    {
+      "requestOrdinal": 67,
+      "timestampUtc": "2026-10-27T22:48:12.153Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.65,
+      "rendererPageRequestMs": 6.6,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 4.4,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:48:11.882550Z",
+        "publishedAtUtc": "2026-10-27T22:48:12.493Z",
+        "estimatedWindowMs": 610.45,
+        "checkpointSliceMs": 118.45,
+        "publishSliceMs": 490.78
+      }
+    },
+    {
+      "requestOrdinal": 69,
+      "timestampUtc": "2026-10-27T22:48:15.554Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.71,
+      "rendererPageRequestMs": 5.7,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 5.8,
+      "overlappedProjectionBuild": false,
+      "buildWindow": null
+    },
+    {
+      "requestOrdinal": 71,
+      "timestampUtc": "2026-10-27T22:48:17.250Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.55,
+      "rendererPageRequestMs": 5.4,
+      "selectionToPageRequestMs": 4,
+      "nextPaintMs": 5.6,
+      "overlappedProjectionBuild": false,
+      "buildWindow": null
+    },
+    {
+      "requestOrdinal": 73,
+      "timestampUtc": "2026-10-27T22:48:18.904Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.5,
+      "rendererPageRequestMs": 5.3,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 4.5,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:48:18.646600Z",
+        "publishedAtUtc": "2026-10-27T22:48:19.202Z",
+        "estimatedWindowMs": 555.4,
+        "checkpointSliceMs": 65.4,
+        "publishSliceMs": 488.54
+      }
+    },
+    {
+      "requestOrdinal": 75,
+      "timestampUtc": "2026-10-27T22:48:20.956Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.73,
+      "rendererPageRequestMs": 5.7,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 3.1,
+      "overlappedProjectionBuild": false,
+      "buildWindow": null
+    },
+    {
+      "requestOrdinal": 77,
+      "timestampUtc": "2026-10-27T22:49:03.780Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.43,
+      "rendererPageRequestMs": 6.6,
+      "selectionToPageRequestMs": 4,
+      "nextPaintMs": 9.8,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:49:03.632230Z",
+        "publishedAtUtc": "2026-10-27T22:49:03.809Z",
+        "estimatedWindowMs": 176.77,
+        "checkpointSliceMs": 49.77,
+        "publishSliceMs": 126.27
+      }
+    },
+    {
+      "requestOrdinal": 79,
+      "timestampUtc": "2026-10-27T22:49:05.120Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.45,
+      "rendererPageRequestMs": 5.4,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 7.3,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:49:04.985450Z",
+        "publishedAtUtc": "2026-10-27T22:49:05.542Z",
+        "estimatedWindowMs": 556.55,
+        "checkpointSliceMs": 75.55,
+        "publishSliceMs": 480.34
+      }
+    },
+    {
+      "requestOrdinal": 81,
+      "timestampUtc": "2026-10-27T22:49:06.600Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.63,
+      "rendererPageRequestMs": 5.6,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 7.1,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:49:06.468880Z",
+        "publishedAtUtc": "2026-10-27T22:49:06.954Z",
+        "estimatedWindowMs": 485.12,
+        "checkpointSliceMs": 92.12,
+        "publishSliceMs": 392.73
+      }
+    },
+    {
+      "requestOrdinal": 83,
+      "timestampUtc": "2026-10-27T22:49:08.167Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.47,
+      "rendererPageRequestMs": 5.5,
+      "selectionToPageRequestMs": 4,
+      "nextPaintMs": 6.6,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:49:08.038390Z",
+        "publishedAtUtc": "2026-10-27T22:49:08.638Z",
+        "estimatedWindowMs": 599.61,
+        "checkpointSliceMs": 73.61,
+        "publishSliceMs": 524.81
+      }
+    },
+    {
+      "requestOrdinal": 85,
+      "timestampUtc": "2026-10-27T22:49:09.623Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.64,
+      "rendererPageRequestMs": 5.4,
+      "selectionToPageRequestMs": 3.3,
+      "nextPaintMs": 4.5,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:49:09.497710Z",
+        "publishedAtUtc": "2026-10-27T22:49:10.196Z",
+        "estimatedWindowMs": 698.29,
+        "checkpointSliceMs": 146.29,
+        "publishSliceMs": 551.22
+      }
+    },
+    {
+      "requestOrdinal": 87,
+      "timestampUtc": "2026-10-27T22:49:11.182Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.57,
+      "rendererPageRequestMs": 7.6,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 8.7,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:49:11.054450Z",
+        "publishedAtUtc": "2026-10-27T22:49:11.776Z",
+        "estimatedWindowMs": 721.55,
+        "checkpointSliceMs": 160.55,
+        "publishSliceMs": 560.73
+      }
+    },
+    {
+      "requestOrdinal": 89,
+      "timestampUtc": "2026-10-27T22:49:12.758Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.5,
+      "rendererPageRequestMs": 7.8,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 15,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:49:12.628220Z",
+        "publishedAtUtc": "2026-10-27T22:49:13.234Z",
+        "estimatedWindowMs": 605.78,
+        "checkpointSliceMs": 144.78,
+        "publishSliceMs": 461.07
+      }
+    },
+    {
+      "requestOrdinal": 91,
+      "timestampUtc": "2026-10-27T22:49:14.248Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.97,
+      "rendererPageRequestMs": 5.7,
+      "selectionToPageRequestMs": 4.1,
+      "nextPaintMs": 9.5,
+      "overlappedProjectionBuild": true,
+      "buildWindow": {
+        "estimatedStartUtc": "2026-10-27T22:49:14.141390Z",
+        "publishedAtUtc": "2026-10-27T22:49:14.710Z",
+        "estimatedWindowMs": 568.61,
+        "checkpointSliceMs": 75.61,
+        "publishSliceMs": 492.87
+      }
+    }
+  ],
+  "projectionBuildWindows": [
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:29.469870Z",
+      "publishedAtUtc": "2026-10-27T22:46:30.279Z",
+      "estimatedWindowMs": 809.13,
+      "checkpointSliceMs": 411.13,
+      "publishSliceMs": 397.51
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:31.148180Z",
+      "publishedAtUtc": "2026-10-27T22:46:31.769Z",
+      "estimatedWindowMs": 620.82,
+      "checkpointSliceMs": 125.82,
+      "publishSliceMs": 494.1
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:32.633470Z",
+      "publishedAtUtc": "2026-10-27T22:46:33.250Z",
+      "estimatedWindowMs": 616.53,
+      "checkpointSliceMs": 118.53,
+      "publishSliceMs": 497.11
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:34.186110Z",
+      "publishedAtUtc": "2026-10-27T22:46:34.723Z",
+      "estimatedWindowMs": 536.89,
+      "checkpointSliceMs": 43.89,
+      "publishSliceMs": 493.2
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:35.934840Z",
+      "publishedAtUtc": "2026-10-27T22:46:36.438Z",
+      "estimatedWindowMs": 503.16,
+      "checkpointSliceMs": 143.16,
+      "publishSliceMs": 359.52
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:37.651680Z",
+      "publishedAtUtc": "2026-10-27T22:46:38.276Z",
+      "estimatedWindowMs": 624.32,
+      "checkpointSliceMs": 130.32,
+      "publishSliceMs": 493.42
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:39.201290Z",
+      "publishedAtUtc": "2026-10-27T22:46:39.534Z",
+      "estimatedWindowMs": 332.71,
+      "checkpointSliceMs": 74.71,
+      "publishSliceMs": 257.7
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:40.749550Z",
+      "publishedAtUtc": "2026-10-27T22:46:41.382Z",
+      "estimatedWindowMs": 632.45,
+      "checkpointSliceMs": 137.45,
+      "publishSliceMs": 493.92
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:42.300260Z",
+      "publishedAtUtc": "2026-10-27T22:46:42.609Z",
+      "estimatedWindowMs": 308.74,
+      "checkpointSliceMs": 55.74,
+      "publishSliceMs": 251.97
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:43.836300Z",
+      "publishedAtUtc": "2026-10-27T22:46:44.464Z",
+      "estimatedWindowMs": 627.7,
+      "checkpointSliceMs": 128.7,
+      "publishSliceMs": 497.93
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:45.385330Z",
+      "publishedAtUtc": "2026-10-27T22:46:45.714Z",
+      "estimatedWindowMs": 328.67,
+      "checkpointSliceMs": 58.67,
+      "publishSliceMs": 269.1
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:46.941490Z",
+      "publishedAtUtc": "2026-10-27T22:46:47.576Z",
+      "estimatedWindowMs": 634.51,
+      "checkpointSliceMs": 139.51,
+      "publishSliceMs": 494.32
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:48.501900Z",
+      "publishedAtUtc": "2026-10-27T22:46:48.795Z",
+      "estimatedWindowMs": 293.1,
+      "checkpointSliceMs": 50.1,
+      "publishSliceMs": 242.04
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:50.016780Z",
+      "publishedAtUtc": "2026-10-27T22:46:50.646Z",
+      "estimatedWindowMs": 629.22,
+      "checkpointSliceMs": 131.22,
+      "publishSliceMs": 497.68
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:51.569400Z",
+      "publishedAtUtc": "2026-10-27T22:46:51.876Z",
+      "estimatedWindowMs": 306.6,
+      "checkpointSliceMs": 52.6,
+      "publishSliceMs": 253.4
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:53.086210Z",
+      "publishedAtUtc": "2026-10-27T22:46:53.733Z",
+      "estimatedWindowMs": 646.79,
+      "checkpointSliceMs": 161.79,
+      "publishSliceMs": 484.18
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:54.668710Z",
+      "publishedAtUtc": "2026-10-27T22:46:54.959Z",
+      "estimatedWindowMs": 290.29,
+      "checkpointSliceMs": 42.29,
+      "publishSliceMs": 247.52
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:56.184220Z",
+      "publishedAtUtc": "2026-10-27T22:46:56.807Z",
+      "estimatedWindowMs": 622.78,
+      "checkpointSliceMs": 128.78,
+      "publishSliceMs": 493.17
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:57.734440Z",
+      "publishedAtUtc": "2026-10-27T22:46:58.025Z",
+      "estimatedWindowMs": 290.56,
+      "checkpointSliceMs": 48.56,
+      "publishSliceMs": 241.46
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:46:59.251780Z",
+      "publishedAtUtc": "2026-10-27T22:46:59.875Z",
+      "estimatedWindowMs": 623.22,
+      "checkpointSliceMs": 129.22,
+      "publishSliceMs": 493.82
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:47:01.021160Z",
+      "publishedAtUtc": "2026-10-27T22:47:01.181Z",
+      "estimatedWindowMs": 159.84,
+      "checkpointSliceMs": 43.84,
+      "publishSliceMs": 115.38
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:47:02.932380Z",
+      "publishedAtUtc": "2026-10-27T22:47:03.505Z",
+      "estimatedWindowMs": 572.62,
+      "checkpointSliceMs": 87.62,
+      "publishSliceMs": 485.11
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:47:04.680900Z",
+      "publishedAtUtc": "2026-10-27T22:47:04.865Z",
+      "estimatedWindowMs": 184.1,
+      "checkpointSliceMs": 57.1,
+      "publishSliceMs": 126.42
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:47:06.630850Z",
+      "publishedAtUtc": "2026-10-27T22:47:07.304Z",
+      "estimatedWindowMs": 673.15,
+      "checkpointSliceMs": 178.15,
+      "publishSliceMs": 493.54
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:47:08.530610Z",
+      "publishedAtUtc": "2026-10-27T22:47:09.147Z",
+      "estimatedWindowMs": 616.39,
+      "checkpointSliceMs": 116.39,
+      "publishSliceMs": 498.73
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:47:10.284630Z",
+      "publishedAtUtc": "2026-10-27T22:47:10.475Z",
+      "estimatedWindowMs": 190.37,
+      "checkpointSliceMs": 67.37,
+      "publishSliceMs": 122.45
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:47:13.363550Z",
+      "publishedAtUtc": "2026-10-27T22:47:13.554Z",
+      "estimatedWindowMs": 190.45,
+      "checkpointSliceMs": 60.45,
+      "publishSliceMs": 128.86
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:47:15.033640Z",
+      "publishedAtUtc": "2026-10-27T22:47:15.658Z",
+      "estimatedWindowMs": 624.36,
+      "checkpointSliceMs": 114.36,
+      "publishSliceMs": 509.3
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:47:16.795400Z",
+      "publishedAtUtc": "2026-10-27T22:47:16.991Z",
+      "estimatedWindowMs": 195.6,
+      "checkpointSliceMs": 61.6,
+      "publishSliceMs": 132.7
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:47:20.292880Z",
+      "publishedAtUtc": "2026-10-27T22:47:20.475Z",
+      "estimatedWindowMs": 182.12,
+      "checkpointSliceMs": 64.12,
+      "publishSliceMs": 116.56
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:48:10.182750Z",
+      "publishedAtUtc": "2026-10-27T22:48:10.369Z",
+      "estimatedWindowMs": 186.25,
+      "checkpointSliceMs": 63.25,
+      "publishSliceMs": 122.39
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:48:11.882550Z",
+      "publishedAtUtc": "2026-10-27T22:48:12.493Z",
+      "estimatedWindowMs": 610.45,
+      "checkpointSliceMs": 118.45,
+      "publishSliceMs": 490.78
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:48:13.623000Z",
+      "publishedAtUtc": "2026-10-27T22:48:13.820Z",
+      "estimatedWindowMs": 197.0,
+      "checkpointSliceMs": 61,
+      "publishSliceMs": 135.64
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:48:16.696880Z",
+      "publishedAtUtc": "2026-10-27T22:48:16.877Z",
+      "estimatedWindowMs": 180.12,
+      "checkpointSliceMs": 60.12,
+      "publishSliceMs": 118.71
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:48:18.646600Z",
+      "publishedAtUtc": "2026-10-27T22:48:19.202Z",
+      "estimatedWindowMs": 555.4,
+      "checkpointSliceMs": 65.4,
+      "publishSliceMs": 488.54
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:48:20.417600Z",
+      "publishedAtUtc": "2026-10-27T22:48:20.595Z",
+      "estimatedWindowMs": 177.4,
+      "checkpointSliceMs": 58.4,
+      "publishSliceMs": 118.27
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:48:23.894920Z",
+      "publishedAtUtc": "2026-10-27T22:48:24.072Z",
+      "estimatedWindowMs": 177.08,
+      "checkpointSliceMs": 65.08,
+      "publishSliceMs": 111.69
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:48:24.437580Z",
+      "publishedAtUtc": "2026-10-27T22:48:25.028Z",
+      "estimatedWindowMs": 590.42,
+      "checkpointSliceMs": 130.42,
+      "publishSliceMs": 459.46
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:49:03.632230Z",
+      "publishedAtUtc": "2026-10-27T22:49:03.809Z",
+      "estimatedWindowMs": 176.77,
+      "checkpointSliceMs": 49.77,
+      "publishSliceMs": 126.27
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:49:04.985450Z",
+      "publishedAtUtc": "2026-10-27T22:49:05.542Z",
+      "estimatedWindowMs": 556.55,
+      "checkpointSliceMs": 75.55,
+      "publishSliceMs": 480.34
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:49:06.468880Z",
+      "publishedAtUtc": "2026-10-27T22:49:06.954Z",
+      "estimatedWindowMs": 485.12,
+      "checkpointSliceMs": 92.12,
+      "publishSliceMs": 392.73
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:49:08.038390Z",
+      "publishedAtUtc": "2026-10-27T22:49:08.638Z",
+      "estimatedWindowMs": 599.61,
+      "checkpointSliceMs": 73.61,
+      "publishSliceMs": 524.81
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:49:09.497710Z",
+      "publishedAtUtc": "2026-10-27T22:49:10.196Z",
+      "estimatedWindowMs": 698.29,
+      "checkpointSliceMs": 146.29,
+      "publishSliceMs": 551.22
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:49:11.054450Z",
+      "publishedAtUtc": "2026-10-27T22:49:11.776Z",
+      "estimatedWindowMs": 721.55,
+      "checkpointSliceMs": 160.55,
+      "publishSliceMs": 560.73
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:49:12.628220Z",
+      "publishedAtUtc": "2026-10-27T22:49:13.234Z",
+      "estimatedWindowMs": 605.78,
+      "checkpointSliceMs": 144.78,
+      "publishSliceMs": 461.07
+    },
+    {
+      "estimatedStartUtc": "2026-10-27T22:49:14.141390Z",
+      "publishedAtUtc": "2026-10-27T22:49:14.710Z",
+      "estimatedWindowMs": 568.61,
+      "checkpointSliceMs": 75.61,
+      "publishSliceMs": 492.87
+    }
+  ],
+  "limitations": [
+    "Identity clone is ad-hoc re-signed; not the exact installed PKG identity.",
+    "This exercises projection-cache rebuild maintenance only, not source locator backfill, retention, spill cleanup, or all lifecycle tasks.",
+    "Three of 46 UI corruption cycles lacked a matching cold/ready page-trace pair; those attempts are not included in the valid sample count.",
+    "AX snapshots retained prior virtualized scroll positions, so target tail text was not consistently present in the captured viewport; correctness is not inferred from AX in this matrix.",
+    "The ordinary fixture ledger gate remains ledger_missing; synthetic fixture is not a healthy real-history validation.",
+    "No Long Task/LoAF event was observed; this does not measure process-tree RSS during maintenance.",
+    "The source was compared with an SQLite backup taken before cache mutations; no same-source baseline binary comparison was run; P4-02 and AC-7 remain open.",
+    "Cache-mutation-to-publish end-to-end maintenance time was not captured; build window is estimated from logged slice durations only."
+  ],
+  "sourceLog": "isolated workdir .agent/logs/Agent-20261028.log; allowlisted switch/build fields only; session IDs and message bodies omitted."
+}

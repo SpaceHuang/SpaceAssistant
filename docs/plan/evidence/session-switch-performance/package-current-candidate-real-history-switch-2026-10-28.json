@@ -1,0 +1,83 @@
+{
+  "date": "2026-10-28",
+  "purpose": "Real UI and packaged trace sample for current arm64 candidate on an isolated copy of a real profile",
+  "candidate": {
+    "version": "0.2.9",
+    "buildId": "21b8262e-43d1-4830-a050-61cc437df56a",
+    "pkg": "release/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "e056d6100884d4868a3b5ffe9ca530d826772ac427e68764f2676fc7233d4f8e",
+    "appAsarSha256": "5f9f61648636b33dd5e8520eab94778cb062962cdea63b6be98b5da71c0eb2a5",
+    "installed": false
+  },
+  "environment": {
+    "architecture": "macOS arm64",
+    "userData": "APFS copy-on-write clone sap4latesthealthyprobe-20261028a",
+    "cloneQuickCheckBeforeAndAfter": "ok",
+    "sessions": 665,
+    "messages": 965,
+    "connectors": "Feishu and WeChat disabled in clone",
+    "targetRowsAtPreflight": "large target: 64 messages / 2590 History events / source complete / ledger ready; ordinary target: 8 messages / 343 History events / source complete / ledger ready",
+    "profileScope": "The two selected target rows were healthy at preflight; the full clone was not globally healthy (34 backfilling sources, 4 blocked ledgers, many unknown/uninitialized ledger states). Do not generalize this sample to every session in the profile."
+  },
+  "run": {
+    "launch": "Directly launched candidate app bundle with clone as userData and CDP port 9337; did not install PKG",
+    "switches": {
+      "largeUiSelections": 30,
+      "largeContentVerified": 30,
+      "ordinaryUiSelections": 30,
+      "ordinaryContentVerified": 30,
+      "verification": "Fresh accessibility snapshots after each selection contained the target-specific content marker; no message content is included in this report.",
+      "traceCorrelated": {
+        "large": 30,
+        "ordinary": 29,
+        "limitation": "One ordinary UI selection has no complete correlated session.switch.trace record; it is excluded from timing percentiles."
+      }
+    },
+    "appClosed": true,
+    "cloneProcessesRemaining": false
+  },
+  "traceWindow": {
+    "artifactBuildId": "21b8262e-43d1-4830-a050-61cc437df56a",
+    "log": "/Users/space/Documents/Develop/SpaceAssistant/.agent/logs/Agent-20261028.log",
+    "filter": "session.switch.trace, build ID match, request ordinal >= 2; main and renderer merged by rendererProcessId/requestOrdinal",
+    "percentile": "linear interpolation over sorted samples",
+    "metricsMs": {
+      "largePageSize20N30": {
+        "selectionToPageRequest": {"p50": 8.25, "p95": 9.55, "max": 14.5},
+        "rendererPageRequest": {"p50": 15.6, "p95": 17.83, "max": 18.7},
+        "mainHandler": {"p50": 4.01, "p95": 4.91, "max": 10.52},
+        "sourcePageRead": {"p50": 3.96, "p95": 4.83, "max": 10.15},
+        "failureReasonHydration": {"p50": 5.5, "p95": 7.19, "max": 14.7},
+        "storeCommit": {"p50": 0.2, "p95": 0.4, "max": 0.4},
+        "renderCommit": {"p50": 3.9, "p95": 5.21, "max": 12.3},
+        "nextPaint": {"p50": 3.7, "p95": 7.78, "max": 8.4},
+        "requestDispatchGapWallClock": {"p50": 1.0, "p95": 2.55, "max": 3.0}
+      },
+      "ordinaryPageSize8N29": {
+        "selectionToPageRequest": {"p50": 8.3, "p95": 9.64, "max": 11.1},
+        "rendererPageRequest": {"p50": 14.4, "p95": 17.34, "max": 18.3},
+        "mainHandler": {"p50": 5.58, "p95": 6.32, "max": 10.46},
+        "sourcePageRead": {"p50": 5.53, "p95": 6.26, "max": 10.36},
+        "failureReasonHydration": {"p50": 6.9, "p95": 9.58, "max": 11.0},
+        "storeCommit": {"p50": 0.3, "p95": 0.4, "max": 0.4},
+        "renderCommit": {"p50": 4.9, "p95": 7.02, "max": 8.3},
+        "nextPaint": {"p50": 3.3, "p95": 5.92, "max": 7.2},
+        "requestDispatchGapWallClock": {"p50": 1.0, "p95": 1.6, "max": 3.0}
+      }
+    },
+    "rendererLongTasks": {
+      "count": 3,
+      "longAnimationFrames": 13,
+      "maxDurationMs": 350.9,
+      "maxBlockingDurationMs": 249.9,
+      "attribution": "No script attribution was available; events overlap the overall switch run but cannot be assigned to a specific switch or task."
+    }
+  },
+  "interpretation": "UI content was verified for all 60 selections. Timing coverage has 30 large and 29 ordinary correlated trace groups. Main handler and renderer stage timings are low, but the run includes renderer Long Task/LoAF events exceeding 50 ms; because attribution is unavailable, this does not establish which operation caused them. The renderer-page-request duration is not end-to-end click-to-visible latency. No matched baseline was collected in this run, so it cannot establish improvement or AC-7 pass.",
+  "limitations": [
+    "The full source profile has degraded ledger/backfill state despite both selected target rows being source-complete and ledger-ready at preflight.",
+    "No same-database baseline was measured in this run.",
+    "No cold/hot/damaged-cache and maintenance-on/off matched matrix or maintenance completion/RSS sample was collected in this run.",
+    "PKG was not installed; the app bundle was launched with a copy-on-write userData clone."
+  ]
+}

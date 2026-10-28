@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "bounded attempt to close the current arm64 candidate app while its source-locator backfill worker is active",
+  "candidate": {
+    "appBundle": "release/mac-arm64/SpaceAssistant.app",
+    "buildId": "24b62a20-5e5e-4d74-b4bb-1f0afe29b486",
+    "commitSha": "b2785a2493eccfa019fb4b5ddd340576eb31c34f",
+    "appAsarSha256": "d12da471b56d41b461649970f8c4a05b2b96bbe2a5189a38d302365717cd6f03",
+    "pkgInstalled": false,
+    "developerIdSigned": false
+  },
+  "isolation": {
+    "userDataPath": "/tmp/spaceassistant-p4-close-T3szGn/user-data",
+    "copiedFrom": "/Users/space/Library/Application Support/spaceassistant-p4-maintenance-race-20261028",
+    "appDatabaseOpenedInClone": true,
+    "sourceProfileOpenedByApp": false
+  },
+  "fixture": {
+    "sessionId": "8daf401c-29b3-49eb-bb6f-e6c10f55f5c6",
+    "messagesBeforeLaunch": 1000,
+    "locatorsBeforeLaunch": 0,
+    "manifestsBeforeLaunch": 0,
+    "sourceEventsBeforeLaunch": 0,
+    "sourceStatusBeforeLaunch": "backfilling",
+    "quickCheckBeforeLaunch": "ok"
+  },
+  "attempts": [
+    {
+      "clone": "/tmp/spaceassistant-p4-close-T3szGn/user-data",
+      "result": "not-counted: source backfill completed before first state observation",
+      "exitCode": 0,
+      "afterClose": { "quickCheck": "ok", "messages": 1000, "locators": 1000, "sourceStatus": "complete" }
+    },
+    {
+      "clone": "/tmp/spaceassistant-p4-close2-Qff7cm/user-data",
+      "checkpointObservedElapsedMs": 1123,
+      "checkpointRunId": "9246d2da-9a1b-4502-98a3-cd452049401a",
+      "statusStillBackfillingAfter10ms": true,
+      "quitMechanism": "System Events Cmd+Q; this did not exit the process",
+      "processForced": true,
+      "result": "not-counted: the OS shortcut did not establish product app-quit IPC; isolated clone remained consistent"
+    },
+    {
+      "clone": "/tmp/spaceassistant-p4-close3-aU4qI7/user-data",
+      "checkpointObservedElapsedMs": 1127,
+      "checkpointRunId": "682f530d-2c04-4deb-9471-0fcac9a006fa",
+      "statusStillBackfillingAfter10ms": true,
+      "productQuitIpc": "window.api.appQuit() via packaged renderer DevTools Runtime.evaluate",
+      "quitRequestedElapsedMs": 1264,
+      "processExitCode": 0,
+      "forced": false,
+      "result": "pass: app exited normally with the source-backfill run checkpoint active; no partial locators were published"
+    }
+  ],
+  "afterProductQuit": {
+    "quickCheck": "ok",
+    "messages": 1000,
+    "locators": 0,
+    "manifests": 0,
+    "sourceEvents": 0,
+    "sourceStatus": "backfilling",
+    "checkpointRunIdPreserved": "682f530d-2c04-4deb-9471-0fcac9a006fa",
+    "candidateAppProcessRemaining": false
+  },
+  "restartRecovery": {
+    "reopenedSameIsolatedUserData": true,
+    "sourceStatusAfterResume": "complete",
+    "checkpointCleared": true,
+    "messages": 1000,
+    "locators": 1000,
+    "manifests": 1,
+    "sourceEvents": 2000,
+    "quickCheck": "ok",
+    "normalAppQuitIpc": true,
+    "appProcessExitCode": 0,
+    "forced": false,
+    "elapsedMs": 9567,
+    "candidateAppProcessRemaining": false
+  },
+  "limitations": [
+    "Only the third attempt used the product app-quit IPC and counts as a successful active-backfill shutdown sample; the first observation missed the active window and the second did not invoke the product quit path.",
+    "The checkpoint proves a backfill run was active; the app quit request followed 137 ms after the marker, while the state remained backfilling.",
+    "This is one synthetic isolated clone sample, not an installed PKG or AC-7 performance measurement.",
+    "All source profiles were left untouched; the product-quit clone is retained for inspection."
+  ]
+}

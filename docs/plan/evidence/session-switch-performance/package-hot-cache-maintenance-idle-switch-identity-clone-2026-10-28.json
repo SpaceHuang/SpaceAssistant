@@ -1,0 +1,779 @@
+{
+  "schema": "spaceassistant.package-hot-cache-maintenance-idle-switch.v1",
+  "capturedAtLocalDate": "2026-10-28",
+  "capturedAtUtc": {
+    "start": "2026-10-27T22:42:02.398Z",
+    "end": "2026-10-27T22:42:40.404Z"
+  },
+  "percentileMethod": "nearest-rank",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "94e4242e-24d6-4374-b8f4-405c5f8d71f5",
+    "source": "arm64 PKG payload identity clone",
+    "pkgSha256": "6594ee801e4eddc23ace759164feb2c32ae5af0b5b35403bf3382820353188b8",
+    "appBundle": "/tmp/SpaceAssistant-P4-ReadyHot20261028.app",
+    "identityClone": true,
+    "packageNamePatched": "sap4readyhot28",
+    "adHocResigned": true,
+    "userData": "/Users/space/Library/Application Support/sap4readyhot28",
+    "workspaceProfile": "/Users/space/Library/Application Support/sap4readyhot28/workspaces/2",
+    "feishuEnabled": false,
+    "wechatEnabled": false
+  },
+  "fixture": {
+    "kind": "synthetic canonical-backed-only sessions",
+    "sessions": {
+      "ordinary": 8,
+      "large": 64,
+      "unopenedMaintenanceFixture": 1000
+    },
+    "switches": {
+      "ordinary": 30,
+      "large": 30
+    },
+    "cacheState": "ready on every sampled page request",
+    "databaseAfterRun": {
+      "quickCheck": "ok",
+      "sourceStateCompleteRows": 3,
+      "projectionStateValidRows": 3,
+      "projectionCacheRows": 3
+    }
+  },
+  "scenario": "With no maintenance work induced, alternate 30 times between the 8-message and 64-message ready-cache sessions. Confirm exact assistant tail markers in AX after each click; calculate user-path timings only from in-app main/renderer traces, not AX automation wall time.",
+  "summary": {
+    "mainTraceCount": 60,
+    "rendererTraceRecordCount": 180,
+    "outcomeOk": 60,
+    "cachePathReady": 60,
+    "strictAxTailMarkersVerified": 60,
+    "byPageSize": {
+      "8": {
+        "mainHandler": {
+          "n": 30,
+          "p50Ms": 1.18,
+          "p95Ms": 1.29,
+          "maxMs": 1.39
+        },
+        "rendererPageRequest": {
+          "n": 30,
+          "p50Ms": 2.8,
+          "p95Ms": 3.6,
+          "maxMs": 3.7
+        },
+        "selectionToPageRequest": {
+          "n": 30,
+          "p50Ms": 3.6,
+          "p95Ms": 4.0,
+          "maxMs": 4.1
+        },
+        "nextPaint": {
+          "n": 30,
+          "p50Ms": 10.3,
+          "p95Ms": 16.3,
+          "maxMs": 16.3
+        }
+      },
+      "20": {
+        "mainHandler": {
+          "n": 30,
+          "p50Ms": 5.3,
+          "p95Ms": 6.58,
+          "maxMs": 6.78
+        },
+        "rendererPageRequest": {
+          "n": 30,
+          "p50Ms": 6.3,
+          "p95Ms": 7.5,
+          "maxMs": 7.7
+        },
+        "selectionToPageRequest": {
+          "n": 30,
+          "p50Ms": 3.3,
+          "p95Ms": 4.0,
+          "maxMs": 5.3
+        },
+        "nextPaint": {
+          "n": 30,
+          "p50Ms": 7.3,
+          "p95Ms": 14.4,
+          "maxMs": 15.7
+        }
+      }
+    },
+    "projectionBuildSliceCount": 0,
+    "longTaskOrLoafObserverRecordCount": 0,
+    "ledgerGateReasonCounts": {
+      "ledger_missing": 60
+    }
+  },
+  "samples": [
+    {
+      "requestOrdinal": 34,
+      "timestampUtc": "2026-10-27T22:42:02.398Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.23,
+      "rendererPageRequestMs": 6.2,
+      "selectionToPageRequestMs": 5.3,
+      "nextPaintMs": 6.8
+    },
+    {
+      "requestOrdinal": 35,
+      "timestampUtc": "2026-10-27T22:42:03.012Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.19,
+      "rendererPageRequestMs": 2.3,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 7.6
+    },
+    {
+      "requestOrdinal": 36,
+      "timestampUtc": "2026-10-27T22:42:03.649Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.23,
+      "rendererPageRequestMs": 7.2,
+      "selectionToPageRequestMs": 3.5,
+      "nextPaintMs": 7.5
+    },
+    {
+      "requestOrdinal": 37,
+      "timestampUtc": "2026-10-27T22:42:04.261Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.25,
+      "rendererPageRequestMs": 2.4,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 7.8
+    },
+    {
+      "requestOrdinal": 38,
+      "timestampUtc": "2026-10-27T22:42:04.899Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.07,
+      "rendererPageRequestMs": 7.1,
+      "selectionToPageRequestMs": 3.5,
+      "nextPaintMs": 5.6
+    },
+    {
+      "requestOrdinal": 39,
+      "timestampUtc": "2026-10-27T22:42:05.521Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.12,
+      "rendererPageRequestMs": 3.3,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 16.2
+    },
+    {
+      "requestOrdinal": 40,
+      "timestampUtc": "2026-10-27T22:42:06.150Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.29,
+      "rendererPageRequestMs": 7.2,
+      "selectionToPageRequestMs": 3.2,
+      "nextPaintMs": 7.4
+    },
+    {
+      "requestOrdinal": 41,
+      "timestampUtc": "2026-10-27T22:42:06.776Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.39,
+      "rendererPageRequestMs": 3,
+      "selectionToPageRequestMs": 3.8,
+      "nextPaintMs": 11.2
+    },
+    {
+      "requestOrdinal": 42,
+      "timestampUtc": "2026-10-27T22:42:07.410Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.5,
+      "rendererPageRequestMs": 7.5,
+      "selectionToPageRequestMs": 4,
+      "nextPaintMs": 11.4
+    },
+    {
+      "requestOrdinal": 43,
+      "timestampUtc": "2026-10-27T22:42:08.005Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.15,
+      "rendererPageRequestMs": 3.7,
+      "selectionToPageRequestMs": 4.1,
+      "nextPaintMs": 15.1
+    },
+    {
+      "requestOrdinal": 44,
+      "timestampUtc": "2026-10-27T22:42:08.632Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.05,
+      "rendererPageRequestMs": 6,
+      "selectionToPageRequestMs": 3.3,
+      "nextPaintMs": 6.1
+    },
+    {
+      "requestOrdinal": 45,
+      "timestampUtc": "2026-10-27T22:42:09.237Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.15,
+      "rendererPageRequestMs": 2,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 0.2
+    },
+    {
+      "requestOrdinal": 46,
+      "timestampUtc": "2026-10-27T22:42:09.866Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.08,
+      "rendererPageRequestMs": 7.1,
+      "selectionToPageRequestMs": 3.2,
+      "nextPaintMs": 5.9
+    },
+    {
+      "requestOrdinal": 47,
+      "timestampUtc": "2026-10-27T22:42:10.476Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.28,
+      "rendererPageRequestMs": 3,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 10.3
+    },
+    {
+      "requestOrdinal": 48,
+      "timestampUtc": "2026-10-27T22:42:11.091Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.13,
+      "rendererPageRequestMs": 6.2,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 13.3
+    },
+    {
+      "requestOrdinal": 49,
+      "timestampUtc": "2026-10-27T22:42:11.704Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.16,
+      "rendererPageRequestMs": 2.1,
+      "selectionToPageRequestMs": 3.5,
+      "nextPaintMs": 0.2
+    },
+    {
+      "requestOrdinal": 50,
+      "timestampUtc": "2026-10-27T22:42:12.325Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.78,
+      "rendererPageRequestMs": 7.7,
+      "selectionToPageRequestMs": 3,
+      "nextPaintMs": 13
+    },
+    {
+      "requestOrdinal": 51,
+      "timestampUtc": "2026-10-27T22:42:12.943Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.19,
+      "rendererPageRequestMs": 3.1,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 11.1
+    },
+    {
+      "requestOrdinal": 52,
+      "timestampUtc": "2026-10-27T22:42:13.567Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.02,
+      "rendererPageRequestMs": 5.9,
+      "selectionToPageRequestMs": 3,
+      "nextPaintMs": 7.3
+    },
+    {
+      "requestOrdinal": 53,
+      "timestampUtc": "2026-10-27T22:42:14.442Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.21,
+      "rendererPageRequestMs": 3,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 12.1
+    },
+    {
+      "requestOrdinal": 54,
+      "timestampUtc": "2026-10-27T22:42:15.066Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.08,
+      "rendererPageRequestMs": 6,
+      "selectionToPageRequestMs": 3,
+      "nextPaintMs": 5.5
+    },
+    {
+      "requestOrdinal": 55,
+      "timestampUtc": "2026-10-27T22:42:15.676Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.25,
+      "rendererPageRequestMs": 3.1,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 11.7
+    },
+    {
+      "requestOrdinal": 56,
+      "timestampUtc": "2026-10-27T22:42:16.299Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.13,
+      "rendererPageRequestMs": 6.1,
+      "selectionToPageRequestMs": 3,
+      "nextPaintMs": 5.6
+    },
+    {
+      "requestOrdinal": 57,
+      "timestampUtc": "2026-10-27T22:42:17.179Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.14,
+      "rendererPageRequestMs": 2.2,
+      "selectionToPageRequestMs": 4,
+      "nextPaintMs": 7.5
+    },
+    {
+      "requestOrdinal": 58,
+      "timestampUtc": "2026-10-27T22:42:17.816Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.58,
+      "rendererPageRequestMs": 7.5,
+      "selectionToPageRequestMs": 3.3,
+      "nextPaintMs": 5.2
+    },
+    {
+      "requestOrdinal": 59,
+      "timestampUtc": "2026-10-27T22:42:18.437Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.21,
+      "rendererPageRequestMs": 3.4,
+      "selectionToPageRequestMs": 3.5,
+      "nextPaintMs": 16.3
+    },
+    {
+      "requestOrdinal": 60,
+      "timestampUtc": "2026-10-27T22:42:19.058Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.41,
+      "rendererPageRequestMs": 6.4,
+      "selectionToPageRequestMs": 3,
+      "nextPaintMs": 13.1
+    },
+    {
+      "requestOrdinal": 61,
+      "timestampUtc": "2026-10-27T22:42:19.654Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.18,
+      "rendererPageRequestMs": 3.3,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 16.2
+    },
+    {
+      "requestOrdinal": 62,
+      "timestampUtc": "2026-10-27T22:42:20.281Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.99,
+      "rendererPageRequestMs": 5.9,
+      "selectionToPageRequestMs": 3.5,
+      "nextPaintMs": 7
+    },
+    {
+      "requestOrdinal": 63,
+      "timestampUtc": "2026-10-27T22:42:20.887Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.12,
+      "rendererPageRequestMs": 3.3,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 15.6
+    },
+    {
+      "requestOrdinal": 64,
+      "timestampUtc": "2026-10-27T22:42:21.515Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.96,
+      "rendererPageRequestMs": 5.9,
+      "selectionToPageRequestMs": 3.3,
+      "nextPaintMs": 7
+    },
+    {
+      "requestOrdinal": 65,
+      "timestampUtc": "2026-10-27T22:42:22.147Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.15,
+      "rendererPageRequestMs": 2.2,
+      "selectionToPageRequestMs": 2.9,
+      "nextPaintMs": 5.6
+    },
+    {
+      "requestOrdinal": 66,
+      "timestampUtc": "2026-10-27T22:42:22.759Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.37,
+      "rendererPageRequestMs": 7.4,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 12.3
+    },
+    {
+      "requestOrdinal": 67,
+      "timestampUtc": "2026-10-27T22:42:23.370Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.19,
+      "rendererPageRequestMs": 2.2,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 0.2
+    },
+    {
+      "requestOrdinal": 68,
+      "timestampUtc": "2026-10-27T22:42:23.995Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.29,
+      "rendererPageRequestMs": 6.2,
+      "selectionToPageRequestMs": 3.2,
+      "nextPaintMs": 9.8
+    },
+    {
+      "requestOrdinal": 69,
+      "timestampUtc": "2026-10-27T22:42:24.588Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.19,
+      "rendererPageRequestMs": 3.6,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 15.8
+    },
+    {
+      "requestOrdinal": 70,
+      "timestampUtc": "2026-10-27T22:42:25.192Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.41,
+      "rendererPageRequestMs": 6.5,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 13.2
+    },
+    {
+      "requestOrdinal": 71,
+      "timestampUtc": "2026-10-27T22:42:25.803Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.19,
+      "rendererPageRequestMs": 2.3,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 0.2
+    },
+    {
+      "requestOrdinal": 72,
+      "timestampUtc": "2026-10-27T22:42:26.441Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.5,
+      "rendererPageRequestMs": 6.5,
+      "selectionToPageRequestMs": 3.3,
+      "nextPaintMs": 13.7
+    },
+    {
+      "requestOrdinal": 73,
+      "timestampUtc": "2026-10-27T22:42:27.059Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.21,
+      "rendererPageRequestMs": 2.9,
+      "selectionToPageRequestMs": 3.9,
+      "nextPaintMs": 12
+    },
+    {
+      "requestOrdinal": 74,
+      "timestampUtc": "2026-10-27T22:42:27.684Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 6.24,
+      "rendererPageRequestMs": 7.3,
+      "selectionToPageRequestMs": 2.8,
+      "nextPaintMs": 5.9
+    },
+    {
+      "requestOrdinal": 75,
+      "timestampUtc": "2026-10-27T22:42:28.286Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.11,
+      "rendererPageRequestMs": 2.1,
+      "selectionToPageRequestMs": 3.8,
+      "nextPaintMs": 0.8
+    },
+    {
+      "requestOrdinal": 76,
+      "timestampUtc": "2026-10-27T22:42:28.914Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.09,
+      "rendererPageRequestMs": 6.1,
+      "selectionToPageRequestMs": 3.4,
+      "nextPaintMs": 7.3
+    },
+    {
+      "requestOrdinal": 77,
+      "timestampUtc": "2026-10-27T22:42:29.528Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.18,
+      "rendererPageRequestMs": 2.2,
+      "selectionToPageRequestMs": 3.4,
+      "nextPaintMs": 9
+    },
+    {
+      "requestOrdinal": 78,
+      "timestampUtc": "2026-10-27T22:42:30.151Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.16,
+      "rendererPageRequestMs": 6.1,
+      "selectionToPageRequestMs": 2.9,
+      "nextPaintMs": 3.8
+    },
+    {
+      "requestOrdinal": 79,
+      "timestampUtc": "2026-10-27T22:42:30.976Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.13,
+      "rendererPageRequestMs": 2.8,
+      "selectionToPageRequestMs": 3.8,
+      "nextPaintMs": 11.1
+    },
+    {
+      "requestOrdinal": 80,
+      "timestampUtc": "2026-10-27T22:42:31.567Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 4.41,
+      "rendererPageRequestMs": 5.4,
+      "selectionToPageRequestMs": 3.8,
+      "nextPaintMs": 3.7
+    },
+    {
+      "requestOrdinal": 81,
+      "timestampUtc": "2026-10-27T22:42:32.412Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.16,
+      "rendererPageRequestMs": 2.2,
+      "selectionToPageRequestMs": 3.4,
+      "nextPaintMs": 8
+    },
+    {
+      "requestOrdinal": 82,
+      "timestampUtc": "2026-10-27T22:42:33.046Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.3,
+      "rendererPageRequestMs": 6.3,
+      "selectionToPageRequestMs": 3.3,
+      "nextPaintMs": 8.5
+    },
+    {
+      "requestOrdinal": 83,
+      "timestampUtc": "2026-10-27T22:42:33.658Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.19,
+      "rendererPageRequestMs": 2.9,
+      "selectionToPageRequestMs": 3.5,
+      "nextPaintMs": 12.5
+    },
+    {
+      "requestOrdinal": 84,
+      "timestampUtc": "2026-10-27T22:42:34.289Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.37,
+      "rendererPageRequestMs": 6.4,
+      "selectionToPageRequestMs": 3.1,
+      "nextPaintMs": 15.7
+    },
+    {
+      "requestOrdinal": 85,
+      "timestampUtc": "2026-10-27T22:42:34.911Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.1,
+      "rendererPageRequestMs": 2.1,
+      "selectionToPageRequestMs": 3.6,
+      "nextPaintMs": 8.5
+    },
+    {
+      "requestOrdinal": 86,
+      "timestampUtc": "2026-10-27T22:42:35.525Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.42,
+      "rendererPageRequestMs": 6.4,
+      "selectionToPageRequestMs": 3.8,
+      "nextPaintMs": 13.1
+    },
+    {
+      "requestOrdinal": 87,
+      "timestampUtc": "2026-10-27T22:42:36.144Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.14,
+      "rendererPageRequestMs": 2,
+      "selectionToPageRequestMs": 3.4,
+      "nextPaintMs": 9.3
+    },
+    {
+      "requestOrdinal": 88,
+      "timestampUtc": "2026-10-27T22:42:36.790Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.43,
+      "rendererPageRequestMs": 6.6,
+      "selectionToPageRequestMs": 3.3,
+      "nextPaintMs": 14.4
+    },
+    {
+      "requestOrdinal": 89,
+      "timestampUtc": "2026-10-27T22:42:37.404Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.12,
+      "rendererPageRequestMs": 3.1,
+      "selectionToPageRequestMs": 3.8,
+      "nextPaintMs": 16.3
+    },
+    {
+      "requestOrdinal": 90,
+      "timestampUtc": "2026-10-27T22:42:38.032Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.15,
+      "rendererPageRequestMs": 6,
+      "selectionToPageRequestMs": 3.3,
+      "nextPaintMs": 6.3
+    },
+    {
+      "requestOrdinal": 91,
+      "timestampUtc": "2026-10-27T22:42:38.663Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.22,
+      "rendererPageRequestMs": 2.7,
+      "selectionToPageRequestMs": 3.1,
+      "nextPaintMs": 8.1
+    },
+    {
+      "requestOrdinal": 92,
+      "timestampUtc": "2026-10-27T22:42:39.531Z",
+      "pageSize": 20,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 5.15,
+      "rendererPageRequestMs": 6.1,
+      "selectionToPageRequestMs": 3.8,
+      "nextPaintMs": 5.5
+    },
+    {
+      "requestOrdinal": 93,
+      "timestampUtc": "2026-10-27T22:42:40.404Z",
+      "pageSize": 8,
+      "outcome": "ok",
+      "cachePath": "ready",
+      "mainHandlerMs": 1.29,
+      "rendererPageRequestMs": 3.5,
+      "selectionToPageRequestMs": 3.7,
+      "nextPaintMs": 16.2
+    }
+  ],
+  "limitations": [
+    "This is a synthetic-data arm64 PKG identity clone, not an exact installed package identity.",
+    "The maintenance condition is idle/no induced work; lifecycle maintenance was not toggled off through a production control.",
+    "The ordinary fixture has ledger_missing gate observations; this is not evidence for a healthy complete ledger.",
+    "No same-database baseline binary was run, so this is not an AC-7 comparison.",
+    "AX automation wall time includes accessibility polling and is excluded from user-visible latency."
+  ],
+  "sourceLog": "isolated workdir .agent/logs/Agent-20261028.log; only allowlisted trace fields copied; session IDs and message bodies omitted."
+}

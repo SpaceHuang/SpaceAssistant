@@ -1,0 +1,38 @@
+{
+  "schema": "session-switch-package-isolation-attempt/v1",
+  "date": "2026-10-28",
+  "status": "not-accepted-as-isolated-package-evidence",
+  "candidate": {
+    "source": "v117 PKG extracted app bundle",
+    "appPath": "/tmp/spaceassistant-p4-validation/pkg-v117-expanded/com.spaceassistant.app.pkg/Payload/SpaceAssistant.app",
+    "appAsarSha256": "c5f6801ea483b11ec01b94ff1ee3c87c34ab609434b8a319f3589c8d4a078cc6",
+    "commandLineUserDataDir": "/Users/space/Library/Application Support/spaceassistant-exact-pkg-synthetic3-20261028",
+    "helperCommandLineShowedRequestedUserDataDir": true
+  },
+  "databaseIsolation": {
+    "defaultDatabase": "/Users/space/Library/Application Support/spaceassistant/spaceassistant-data.db",
+    "before": {
+      "mainMtimeLocal": "2026-10-28 04:32:56",
+      "walSizeBytes": 4144752
+    },
+    "after": {
+      "mainMtimeLocal": "2026-10-28 04:53:08",
+      "mainSizeBytes": 2937507840,
+      "walMtimeLocal": "2026-10-28 04:53:08",
+      "walSizeBytes": 0,
+      "schemaVersion": 117,
+      "quickCheck10": "ok",
+      "openApplicationProcessFound": false,
+      "openFileHandleFound": false
+    },
+    "attribution": "unknown; no pre-run snapshot, and external activity in the interval cannot be ruled out",
+    "writesOrRollbackByAgentAfterObservation": false
+  },
+  "probe": {
+    "preloadApiAvailable": true,
+    "singleAndShortSequenceApiResponsesObserved": true,
+    "canonicalMessageIdsWereCompared": false,
+    "acceptedForReleaseAcceptance": false
+  },
+  "conclusion": "The helper user-data-dir argument alone did not establish application database isolation. This attempt is not valid package acceptance evidence. Do not attribute the default database timestamp/WAL changes or revert the database based on this observation."
+}

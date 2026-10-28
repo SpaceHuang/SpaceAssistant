@@ -1,0 +1,109 @@
+{
+  "date": "2026-10-28",
+  "purpose": "Same-device, same-frozen-source baseline/candidate UI response proxy; not AC-7 latency evidence",
+  "source": {
+    "path": "/Users/space/Library/Application Support/spaceassistant/backups/spaceassistant-data-before-ledger-rebuild-e78e8347-20261020.db",
+    "sha256": "7c11d494879cbbf64b3761e9092d5a7dafb4135253a794cd5ed3826ee5f0d399",
+    "schemaVersion": 102,
+    "cowProfiles": {
+      "baseline": "/Users/space/Library/Application Support/sap4baseline-tdd1028a",
+      "candidate": "/Users/space/Library/Application Support/sap4candidate-tdd1028a"
+    },
+    "databaseChecks": {
+      "baseline": { "schemaVersion": 107, "sessions": 661, "messages": 821, "quickCheck": "ok" },
+      "candidate": { "schemaVersion": 117, "sessions": 661, "messages": 821, "quickCheck": "ok" }
+    }
+  },
+  "artifacts": {
+    "baseline": {
+      "commit": "109a938404124235d632e4cdbd4f9e06eaa48728",
+      "appAsarSha256": "a3e33001c36ee4934fa9239467b02ce7f1691e9799859abfb73511ffa5e9fb5f",
+      "pkgSha256": "3f4656132a531ce4f58f61f65338a3515b9494203dc9a84ec8c45d38d58b195c"
+    },
+    "candidate": {
+      "buildId": "603e2716-34de-466a-8d99-57237ff5f69c",
+      "appAsarSha256": "5f09ef1980216bdad29e2d93ae1f992b74899aa1c9e87696cb7463edcf91a31a",
+      "pkgSha256": "498481003bd90cdd1e65b1eefaf3f6fb15cb544d35814c30c59b78999b28a201",
+      "sourceTreeWasDirty": true
+    }
+  },
+  "targets": {
+    "large": {
+      "sessionId": "2a9b85a7-58cf-4239-bbb6-bcd188b25325",
+      "title": "Agent Runtime调度化",
+      "messages": 150,
+      "historyEvents": 0,
+      "candidateSourceStatus": "backfilling",
+      "candidateLedger": "blocked:ledger_missing"
+    },
+    "ordinary": {
+      "sessionId": "c1a07aba-0603-4935-b334-71ac077d4194",
+      "title": "分析微信链路工具调用均需用户确认且安全审核Agent未被调用的原因并输出报告",
+      "messages": 8,
+      "historyEvents": 343,
+      "candidateSourceStatus": "complete",
+      "candidateLedger": "ready"
+    }
+  },
+  "method": {
+    "interaction": "CUA set the session search field, waited for the filtered row, clicked the first result at window coordinate [300,325], then polled full AX snapshots until the target body marker appeared and the other target marker was absent.",
+    "timer": "performance.now immediately before the CUA click call through the first AX snapshot that contained the target body marker",
+    "pollLimit": 10,
+    "order": "30 alternating ordinary-to-large pairs per artifact",
+    "quantile": "nearest rank: sorted[ceil(p*n)-1]",
+    "limitations": [
+      "The interval includes CUA click dispatch and AX snapshot transport/rendering overhead, roughly 1 second per sample; it is not a user click-to-paint latency.",
+      "The baseline and candidate were independently migrated COW copies of the same database seed (schema 107 and 117); they were not the same live database.",
+      "Baseline renders its legacy history path while candidate page size is bounded; the amount of message DOM work is not identical.",
+      "The large target is legacy-only, with zero History events and a blocked candidate ledger, so this does not measure a healthy canonical large session.",
+      "No hot-cache, damaged-cache, maintenance toggle/overlap, RSS, Long Task attribution, or canonical healthy history comparison is included."
+    ]
+  },
+  "results": {
+    "baseline": {
+      "ordinary": {
+        "n": 30,
+        "ready": 30,
+        "failed": 0,
+        "firstSnapshotReady": 30,
+        "p50Ms": 1073.2,
+        "p95Ms": 1098.2,
+        "maxMs": 1098.6,
+        "samplesMs": [1073.2,1058,1063.7,1058.8,1081.7,1098.6,1074.3,1066.4,1073,1098.2,1081.7,1065.8,1082.1,1057.3,1066.2,1065.6,1076.1,1082.4,1067.2,1082.9,1077,1082.8,1067,1076.4,1082.8,1082.1,1066.7,1067.9,1067.1,1094.1]
+      },
+      "large": {
+        "n": 30,
+        "ready": 30,
+        "failed": 0,
+        "firstSnapshotReady": 30,
+        "p50Ms": 1101.4,
+        "p95Ms": 1177.3,
+        "maxMs": 1182.3,
+        "samplesMs": [1097.2,1094.9,1099.9,1104.8,1084,1182.3,1112.1,1110.2,1156.8,1101.6,1100.6,1109.9,1099.1,1101.2,1100,1111.4,1177.3,1100.6,1101.4,1126.5,1101.2,1100,1103.9,1100.9,1090.1,1108,1099,1102.1,1107,1110.9]
+      }
+    },
+    "candidate": {
+      "ordinary": {
+        "n": 30,
+        "ready": 30,
+        "failed": 0,
+        "firstSnapshotReady": 24,
+        "p50Ms": 1265.8,
+        "p95Ms": 1334,
+        "maxMs": 3306.9,
+        "samplesMs": [3306.9,1273.3,1256,1203.4,1232.9,1273.5,1268.6,1278.2,1257.7,1259.1,1265.6,1258.3,1253.6,1203.4,1292.4,1334,1231.3,1262.4,1239.2,1265.8,1274.7,1268.9,1253.5,1290.3,1268.6,1278.3,1263.1,1267.8,1285.6,1277]
+      },
+      "large": {
+        "n": 30,
+        "ready": 30,
+        "failed": 0,
+        "firstSnapshotReady": 30,
+        "p50Ms": 1101.9,
+        "p95Ms": 1175.1,
+        "maxMs": 1184.2,
+        "samplesMs": [1100.9,1098.1,1094.3,1090.8,1127.9,1094.2,1095.5,1114.6,1146.3,1093.6,1130.7,1125.6,1146.4,1184.2,1126.3,1098.6,1175.1,1095.3,1131.5,1091.3,1098.6,1149.2,1082.4,1104.4,1106.3,1095.6,1108.1,1113.8,1101.9,1101.1]
+      }
+    }
+  },
+  "conclusion": "The large-session AX proxy distributions are nearly the same (baseline/candidate p95 1177.3/1175.1 ms), while candidate ordinary-session p95 is 1334 ms versus baseline 1098.2 ms and one candidate AX-ready sample took 3306.9 ms. Because the proxy is dominated by CUA/AX overhead and the candidate large target is unhealthy legacy-only, these numbers are diagnostic observations, not evidence that AC-7 passed or failed. P4-02, P4-03, and AC-7 remain open."
+}

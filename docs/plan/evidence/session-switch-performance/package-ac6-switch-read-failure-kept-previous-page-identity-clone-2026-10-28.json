@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "select a session whose source spill is truncated after a healthy conversation was displayed",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "6d5910fe-7b9c-4ccf-bc28-c49e02e212cb",
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "sourceTreeClean": false,
+    "source": "arm64 PKG payload identity clone",
+    "pkgSha256": "1d455c60ecdb329cf89c2b927073cd6a1df0a4f45a6c4f5ca1a7723f699e2f04",
+    "appAsarSha256": "47fce209bce1c43b7e472e38fc5662e053f770187d09f4ca2336d44e82f2bf97",
+    "packageInstalled": false,
+    "userData": "/Users/space/Library/Application Support/sap4ac6spill28"
+  },
+  "fixture": {
+    "healthySession": {
+      "id": "ef0fe307-b4d1-4502-8a58-9a80d34f7e60",
+      "name": "P4 valid ordinary 8 messages"
+    },
+    "selectedSession": {
+      "id": "2dfbce2c-b8fd-4bf9-9e6f-b0fc579d6d78",
+      "name": "P4 AC6 valid source append 300KiB"
+    },
+    "selectedSessionSourceSpill": {
+      "locator": "699d48a5-993f-4e0f-aa8f-4f56884772c0.spill",
+      "expectedLength": 300046,
+      "actualLength": 150023
+    }
+  },
+  "readResult": {
+    "packagedSharedReader": "CANONICAL_SESSION_CONTENT_UNAVAILABLE",
+    "result": "rejected-without-returning-partial-page"
+  },
+  "uiObservation": {
+    "result": "previous-conversation-remained-visible-after-switch-error",
+    "observation": "The sidebar selected the damaged append session while the center pane continued to show the preceding ordinary fixture's user 2/assistant 3, user 4/assistant 5, and user 6/assistant 7 messages. No load-error state or retry action was shown.",
+    "observedBy": "CUA accessibility tree and screenshot"
+  },
+  "sourceRepair": {
+    "file": "src/renderer/components/Chat/ChatView.tsx",
+    "behavior": "clear the prior display page when a session load starts; catch failed page reads, show a localized persistent error with retry, and recover on a later successful retry",
+    "regressionTest": "src/renderer/components/Chat/ChatView.failureReasonRestore.test.tsx"
+  },
+  "limitations": [
+    "synthetic identity-clone profile; PKG not installed",
+    "reproduction used the existing packaged renderer; source repair has targeted tests and renderer build but has not yet been repackaged into this PKG",
+    "does not prove production-user impact or quantify switch latency"
+  ]
+}

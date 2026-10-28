@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "delete a prepared canonical-backed session through packaged UI, then cold-restart and verify it does not reappear",
+  "source": {
+    "commit": "b2785a2493eccfa019fb4b5ddd340576eb31c34f",
+    "workingTreeClean": false,
+    "pkgInstalled": false,
+    "appBundle": "release/mac-arm64/SpaceAssistant.app",
+    "pkgSha256": "30f8b64f47dd947ddadd090a381322fc9f508566bb8ec4dab85525c7d5d5f856",
+    "appAsarSha256": "7733ce26f41948b681338b450cded5adeb04f7d4c9c04dc44fba3fe7b4dfe259",
+    "appIsPackaged": true
+  },
+  "isolation": {
+    "profile": "/tmp/spaceassistant-p4-ac6-delete-reopen-ALDc0y/user-data",
+    "createdAs": "filesystem copy of a previously used synthetic prepared-append profile; original profile left unchanged",
+    "databasePathVerifiedByLsof": true,
+    "feishuAndWechatMessagesSent": false
+  },
+  "fixture": {
+    "synthetic": true,
+    "sessionId": "2dfbce2c-b8fd-4bf9-9e6f-b0fc579d6d78",
+    "sessionName": "P4 AC6 valid source append 300KiB",
+    "messagesBeforeDelete": 3,
+    "projectionBeforeDelete": "valid",
+    "sourceBeforeDelete": "complete",
+    "quickCheckBeforeDelete": "ok"
+  },
+  "ui": {
+    "targetDeleteButtonFound": true,
+    "confirmationDialogNamedTarget": true,
+    "confirmationAcceptedInIsolatedClone": true,
+    "successToast": "已删除",
+    "targetAbsentFromListBeforeRestart": true,
+    "targetAbsentFromListAfterColdRestart": true
+  },
+  "databaseAfterColdRestart": {
+    "quickCheck": "ok",
+    "sessions": 0,
+    "messages": 0,
+    "projectionState": 0,
+    "projectionCache": 0,
+    "bodySourceState": 0,
+    "projectionBlobReferences": 0
+  },
+  "uiAutomation": {
+    "method": "CDP Runtime.evaluate HTMLElement.click on the product delete control and confirmation button",
+    "physicalMouseInput": false,
+    "productRendererAndIpcPath": true
+  },
+  "result": "pass: product UI/IPC deletion removed all target rows, and a cold restart did not restore the deleted session",
+  "limitations": [
+    "single synthetic profile sample; PKG was not installed",
+    "UI action was dispatched through CDP DOM click, not physical mouse input",
+    "does not cover publication-boundary crash, real history, or the AC-7 baseline/candidate performance comparison",
+    "unrelated legacy fixture sessions emitted source-backfill repair warnings during restart; the deleted target remained absent from both UI and all queried target tables"
+  ]
+}

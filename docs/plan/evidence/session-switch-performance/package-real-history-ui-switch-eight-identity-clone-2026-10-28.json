@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-28",
+  "scenario": "arm64 PKG payload identity clone, isolated copy of available real-history profile, native UI search and session-row selection",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "6113fa88-2c21-41cf-b805-c0fb19115b2f",
+    "pkgPath": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-boundary-refactor/release/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "6a5a07831f591017bbfe09325298abe427d3affb68275d87ae3a707902962928",
+    "appAsarSha256": "5f09ef1980216bdad29e2d93ae1f992b74899aa1c9e87696cb7463edcf91a31a",
+    "identityCloneBundleId": "com.spaceassistant.p4healthyhistory28b",
+    "identityCloneAppAsarMatchedPkgPayload": true,
+    "pkgInstalled": false,
+    "architecture": "arm64"
+  },
+  "isolation": {
+    "sourceProfile": "/Users/space/Library/Application Support/spaceassistant-perf-isolated-20261028",
+    "databaseProfileUsedByApp": "/Users/space/Library/Application Support/sap4perfhealthy28b",
+    "helperUserDataDirVerified": true,
+    "appProcessExited": true,
+    "defaultProfileLaunchAttemptBeforeIsolation": "environment override was ignored; startup stopped at database-version guard before migrations; this attempt is excluded from measurements",
+    "defaultProfileUsedForMeasurements": false,
+    "wechatAndFeishuMessagesSent": false
+  },
+  "fixtures": {
+    "synthetic": false,
+    "largeSession": {
+      "messageCount": 64,
+      "historyEventCount": 2590,
+      "sourceStatus": "complete",
+      "ledgerStatusBeforeAndAfter": "ready"
+    },
+    "smallSession": {
+      "messageCount": 8,
+      "historyEventCount": 343,
+      "sourceStatus": "complete",
+      "ledgerStatusBeforeAndAfter": "ready"
+    },
+    "sourceProfileRowDigests": {
+      "largeSession": {
+        "messages": { "count": 64, "sha256": "aaf054684c053d423f6b627c25f4a76abe5cbfd90687d81539cc243a9ebbc3cd" },
+        "historyEvents": { "count": 2590, "sha256": "a0355ea784372392a9296e0ada2f665cf8cb4f7e8362640b6bf44a7ebec16e3e" },
+        "bodyLocators": { "count": 64, "sha256": "a6a12630e53632c7396ec39ea1e1573189a386f107e0cc9b18231b64114d00a6" },
+        "sourceEventLinks": { "count": 1088, "sha256": "2232e1a04c1bac08af9bdf37c5251399dfce5ab19bdf72842b58205b8e9345cd" }
+      },
+      "smallSession": {
+        "messages": { "count": 8, "sha256": "4dcf550d513017c3fab74474992e4dd7ba593cdeed08bba135bf3acfa7d03264" },
+        "historyEvents": { "count": 343, "sha256": "6155332dd2c5183555237e49f47836659d490ce7bb560d327445cdfd1d3102c4" },
+        "bodyLocators": { "count": 8, "sha256": "74e8ec4ecf9280640d92a47e982f8d353f887b0dc14321a54bf729b1c5937eef" },
+        "sourceEventLinks": { "count": 232, "sha256": "7da5c7332face2fc9e2644d363da0fec89b6364883a19ec86af4a002765915af" }
+      }
+    },
+    "canonicalMessageHistoryLocatorAndSourceEventRowsMatchSourceProfile": true,
+    "quickCheckBeforeAndAfter": "ok"
+  },
+  "interaction": {
+    "method": "native CUA; search by existing session title, then click the matching row",
+    "deliberateSwitches": 8,
+    "sequence": "8-message and 64-message sessions alternating",
+    "matchingMainAndRendererTraces": 8,
+    "pageSizes": [8, 20, 8, 20, 8, 20, 8, 20],
+    "pageReadOutcomes": "8/8 ok",
+    "perSwitchTargetBodyMarkerVerification": false,
+    "searchAndAccessibilityAutomationTimeIncludedInUserLatency": false
+  },
+  "switchTrace": {
+    "cachePath": "cold for all 8 page reads",
+    "mainHandlerMs": {
+      "n": 8,
+      "p50": 5.84,
+      "p95NearestRank": 11.6,
+      "max": 11.6
+    },
+    "rendererPageRequestMs": {
+      "n": 8,
+      "p50": 14.7,
+      "p95NearestRank": 19.2,
+      "max": 19.2
+    },
+    "rendererNextPaintMs": {
+      "n": 8,
+      "p50": 5.4,
+      "p95NearestRank": 7.1,
+      "max": 7.1
+    },
+    "rendererLongTaskEventsDuringSwitchWindow": 0,
+    "eventLoopWatchdogSampleDuringSwitchWindow": false,
+    "unattributedLedgerGate": {
+      "baselineReadyDurationMs": 1037,
+      "sessionIdPresentInLog": false,
+      "sameWindowAsSwitches": true
+    }
+  },
+  "limitations": [
+    "This is one candidate-package sample; there is no same-database baseline-package run.",
+    "All reads were cold-path reads; this does not measure prepared-cache hits.",
+    "The session-row selection produced correlated main and renderer traces, but target body markers were not checked on every switch.",
+    "A 1037 ms ledger baseline-ready event occurred during the switch window without a session identifier; it is not attributed to a specific session or to the page-read duration.",
+    "The switch window was shorter than the event-loop watchdog reporting interval; zero renderer long-task events do not establish absence of all main-thread stalls.",
+    "No cache-corruption matrix, maintenance-on/off matched matrix, memory peak, or maintenance completion measure was collected in this run.",
+    "The PKG payload was launched under a re-signed identity clone, not installed."
+  ],
+  "conclusion": {
+    "usableForAc7": false,
+    "result": "supporting real-history candidate-package trace only; P4-02, P4-03, and AC-7 remain open"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "rapid packaged renderer selection A→large B→A; verify final selected session and rendered message IDs",
+  "source": {
+    "commit": "b2785a2493eccfa019fb4b5ddd340576eb31c34f",
+    "workingTreeClean": false,
+    "appBundle": "release/mac-arm64/SpaceAssistant.app",
+    "pkgInstalled": false,
+    "pkgSha256": "30f8b64f47dd947ddadd090a381322fc9f508566bb8ec4dab85525c7d5d5f856",
+    "appAsarSha256": "7733ce26f41948b681338b450cded5adeb04f7d4c9c04dc44fba3fe7b4dfe259",
+    "appIsPackaged": true
+  },
+  "isolation": {
+    "profile": "/tmp/spaceassistant-p4-ac5-aba-z3whmd/user-data",
+    "copiedFrom": "/Users/space/Library/Application Support/sap4ac6appendvalid28",
+    "databaseOpenedByAppVerifiedByLsof": true,
+    "sourceFixtureQuickCheckAfterRun": "ok",
+    "isolatedDatabaseQuickCheckAfterRun": "ok",
+    "feishuAndWechatMessagesSent": false
+  },
+  "targets": {
+    "A": {
+      "sessionId": "2dfbce2c-b8fd-4bf9-9e6f-b0fc579d6d78",
+      "sessionName": "P4 AC6 valid source append 300KiB",
+      "source": "complete",
+      "projection": "valid",
+      "expectedRenderedMessageIds": [
+        "p4-ac6-append-valid-base-user",
+        "p4-ac6-valid-append-2-user",
+        "p4-ac6-valid-append-2-assistant"
+      ]
+    },
+    "B": {
+      "sessionId": "d4f29521-8672-486e-93fa-df56c7a8e5f2",
+      "sessionName": "P4 valid large 64 messages",
+      "messageCount": 64,
+      "source": "complete",
+      "projection": "valid"
+    }
+  },
+  "interaction": {
+    "sequence": [
+      "P4 AC6 valid source append 300KiB",
+      "P4 valid large 64 messages",
+      "P4 AC6 valid source append 300KiB"
+    ],
+    "dispatchSpacingMs": [25, 25],
+    "method": "CDP Runtime.evaluate dispatching product session-row DOM click handlers",
+    "physicalMouseInput": false,
+    "finalActiveSession": "P4 AC6 valid source append 300KiB",
+    "renderedMessageIds": [
+      "p4-ac6-append-valid-base-user",
+      "p4-ac6-valid-append-2-user",
+      "p4-ac6-valid-append-2-assistant"
+    ],
+    "largeSessionMessageIdsPresent": false
+  },
+  "runtimeWarnings": [
+    "Startup logged backfill errors for other synthetic fixtures.",
+    "A scheduled canonical backup for target A logged CANONICAL_SESSION_CONTENT_UNAVAILABLE; target A and B source/projection states still read complete/valid after the run."
+  ],
+  "result": "pass for single-run renderer route isolation: final selection A rendered only A message IDs after rapid A→B→A",
+  "limitations": [
+    "one synthetic run; no latency or AC-7 performance inference",
+    "CDP dispatched renderer DOM clicks rather than physical pointer input",
+    "startup/background maintenance warnings make this unsuitable as a clean recovery or source-health acceptance sample",
+    "does not cover cancellation of a shared worker waiter, close/storage switch, package installation, or release-boundary crash"
+  ]
+}

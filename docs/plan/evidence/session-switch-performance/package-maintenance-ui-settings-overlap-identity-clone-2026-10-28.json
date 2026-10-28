@@ -1,0 +1,177 @@
+{
+  "date": "2026-10-28",
+  "buildId": "eb0aac8b-6f5b-496c-ba11-f45f194f9584",
+  "packageSha256": "abd5b8fd1e1555d92a719f85ca99f8eeb7235c0cf283ee0b37fb44146fcc98cf",
+  "asarInCandidatePackageSha256": "c5f6801ea483b11ec01b94ff1ee3c87c34ab609434b8a319f3589c8d4a078cc6",
+  "identityCloneAppAsarSha256": "51910d25974c87403a88004ea96ffaf936ae34b8a78619d54b6ec9c1994ac04a",
+  "mainJsSha256": "fa3e0c95f51bf9774a59f08ec4e59395f5e4b1f179152336083dd2e4edf4bafe",
+  "appIdentity": "spaceassistant-p4-maintenance-20261028",
+  "verifiedUserData": "/Users/space/Library/Application Support/spaceassistant-p4-maintenance-20261028",
+  "isolatedWorkDir": "/tmp/spaceassistant-p4-maintenance-ui-workdir",
+  "fixture": {
+    "kind": "synthetic canonical-backed-only",
+    "messageCount": 1000,
+    "body": "placeholder m characters",
+    "externalIntegrationsEnabled": false
+  },
+  "procedure": "With the 1000-message synthetic session selected away, delete only its projection cache and state rows in the isolated test profile. Return to the workbench; select the session, wait for its expected tail message in AX, then immediately click Settings. A 1 ms polling reader records projection state.",
+  "ui": {
+    "sessionSelectionStartedAt": "2026-10-27T21:35:52.188Z",
+    "expectedTailVisible": true,
+    "settingsClickStartedAt": "2026-10-27T21:35:52.647Z",
+    "settingsVisibleAt": "2026-10-27T21:35:53.198Z",
+    "projectionWasStillRebuildingWhenSettingsVisible": true,
+    "cuaSettingsClickToFullAXSnapshotMs": 551
+  },
+  "projectionState": {
+    "states": [
+      {
+        "elapsedMs": 1.605,
+        "unixMs": 1793136948805.2952,
+        "state": "absent"
+      },
+      {
+        "elapsedMs": 3881.611,
+        "unixMs": 1793136952685.3408,
+        "state": "rebuilding"
+      },
+      {
+        "elapsedMs": 4525.061,
+        "unixMs": 1793136953328.788,
+        "state": "valid"
+      }
+    ],
+    "sawRebuilding": true,
+    "elapsedMs": 4525.36
+  },
+  "buildSlices": [
+    {
+      "ts": "2026-10-27T21:35:52.942Z",
+      "durationMs": 257.15,
+      "nextSequence": 0,
+      "outcome": "checkpointed",
+      "yielded": true
+    },
+    {
+      "ts": "2026-10-27T21:35:53.327Z",
+      "durationMs": 384.77,
+      "nextSequence": 2,
+      "outcome": "published",
+      "yielded": false
+    }
+  ],
+  "mainSwitchTrace": {
+    "ts": "2026-10-27T21:35:52.267Z",
+    "outcome": "ok",
+    "cachePath": "cold",
+    "pageSize": 20,
+    "durationMs": 33.79,
+    "stages": [
+      {
+        "name": "page-select",
+        "durationMs": 1.87,
+        "outcome": "ok"
+      },
+      {
+        "name": "source-spill-discovery",
+        "durationMs": 8.99,
+        "outcome": "ok"
+      },
+      {
+        "name": "worker-queue",
+        "durationMs": 0.01,
+        "outcome": "ok"
+      },
+      {
+        "name": "worker-read",
+        "durationMs": 22.39,
+        "outcome": "ok"
+      },
+      {
+        "name": "body-read",
+        "durationMs": 31.6,
+        "outcome": "ok"
+      },
+      {
+        "name": "final-source-check",
+        "durationMs": 0.24,
+        "outcome": "ok"
+      },
+      {
+        "name": "source-page-read",
+        "durationMs": 33.74,
+        "outcome": "ok"
+      },
+      {
+        "name": "main-ipc",
+        "durationMs": 33.78,
+        "outcome": "ok"
+      }
+    ]
+  },
+  "rendererSwitchTrace": [
+    {
+      "ts": "2026-10-27T21:35:52.267Z",
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 34.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "ts": "2026-10-27T21:35:52.271Z",
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 3.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "ts": "2026-10-27T21:35:52.273Z",
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 4.7,
+          "outcome": "ok"
+        }
+      ]
+    }
+  ],
+  "finalState": {
+    "projection": "valid",
+    "attempts": 0,
+    "bodySource": "complete"
+  },
+  "limits": [
+    "CUA click-to-full-AX duration includes accessibility automation wait and is not a user-perceived latency measurement.",
+    "This validates one warm-window foreground competition sample; it does not satisfy 30-sample AC-7 cache or maintenance matrices.",
+    "No Long Task/LoAF observer was enabled.",
+    "No same-database baseline comparison was run.",
+    "No private message text is included."
+  ]
+}

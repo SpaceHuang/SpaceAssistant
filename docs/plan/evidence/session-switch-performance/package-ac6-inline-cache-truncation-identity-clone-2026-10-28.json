@@ -1,0 +1,37 @@
+{
+  "schema": "session-switch-package-inline-cache-corruption/v1",
+  "date": "2026-10-28",
+  "candidateBuildId": "eb0aac8b-6f5b-496c-ba11-f45f194f9584",
+  "candidate": {
+    "source": "v117 PKG app bundle identity clone",
+    "packageName": "spaceassistant-p4-cache-test-20261028",
+    "appAsarSha256": "42cb9018f97909ab3c22695ab5cabfa87934d05b3149dc0e3e604d8e31ef3b2d",
+    "mainBundleSha256": "fa3e0c95f51bf9774a59f08ec4e59395f5e4b1f179152336083dd2e4edf4bafe",
+    "isolatedUserDataPath": "/Users/space/Library/Application Support/spaceassistant-p4-cache-test-20261028"
+  },
+  "fixture": {
+    "kind": "synthetic-canonical-backed-only",
+    "sessionId": "d4f29521-8672-486e-93fa-df56c7a8e5f2",
+    "canonicalMessageCount": 64,
+    "projectionStatusBefore": "valid",
+    "inlinePayloadLengthBeforeCorruption": 137073,
+    "inlinePayloadLengthAfterCorruption": 20
+  },
+  "foregroundPage": {
+    "api": "window.api.chatGetMessagePage",
+    "durationMs": 36.6,
+    "pageSize": 20,
+    "allReturnedIdsMatchCanonical": true,
+    "wrongSessionMessages": 0,
+    "errors": 0
+  },
+  "afterRead": {
+    "projectionState": "invalid",
+    "inlinePayloadPresent": false
+  },
+  "limitations": [
+    "This exercises truncation of the inline SQLite projection payload, not truncation of an external projection blob file.",
+    "It does not measure window click-to-content-ready or projection rebuild completion.",
+    "The app package name was changed to create a unique userData identity; its main bundle hash matches the v117 candidate."
+  ]
+}

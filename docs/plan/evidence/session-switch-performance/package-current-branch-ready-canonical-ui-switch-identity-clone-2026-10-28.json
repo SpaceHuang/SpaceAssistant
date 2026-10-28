@@ -1,0 +1,4211 @@
+{
+  "schema": "spaceassistant.package-current-branch-canonical-ready-window-switch.v1",
+  "capturedAtLocalDate": "2026-10-28",
+  "sampleWindowUtc": {
+    "start": "2026-10-28T04:26:36.358Z",
+    "end": "2026-10-28T04:27:15.797Z"
+  },
+  "percentileMethod": "nearest-rank",
+  "runtime": {
+    "version": "0.2.9",
+    "artifactBuildId": "469f0d38-bc7a-4c9c-84d0-6254659cb123",
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "sourceTreeClean": false,
+    "pkgPath": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-boundary-refactor/release/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "de8e96cec77757701d6adaf98991162fb8ffd275f0d7c7921402ce1b34fbb672",
+    "appBundle": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-boundary-refactor/release/mac-arm64/SpaceAssistant.app",
+    "appAsarSha256": "5f9f61648636b33dd5e8520eab94778cb062962cdea63b6be98b5da71c0eb2a5",
+    "installedPkg": false,
+    "appBundleBuiltFromSameArm64PkgRun": true
+  },
+  "isolation": {
+    "identityClone": true,
+    "userData": "/Users/space/Library/Application Support/sap4p4currentbranch20261028",
+    "workDir": "/Users/space/Library/Application Support/sap4p4currentbranch20261028/workspaces/2-run",
+    "workDirRepointedInsideClone": true,
+    "feishuEnabled": false,
+    "wechatEnabled": false,
+    "databaseSha256": "d82ec108462e0763c39dafa8208a93637dcea64aa32304d53c1ada27b484dc33",
+    "traceLogSha256": "52b57d9466e49fe3cda309eca88ea26cbfd5edddd2434d6ef1dc8c641feb71a4"
+  },
+  "fixture": {
+    "kind": "synthetic canonical-backed-only",
+    "targets": {
+      "ordinary": {
+        "name": "P4 valid ordinary 8 messages",
+        "messages": 8,
+        "sourceState": "complete",
+        "projectionState": "valid",
+        "projectionAttempts": 0,
+        "ledgerGate": "blocked:ledger_missing"
+      },
+      "large": {
+        "name": "P4 valid large 64 messages",
+        "messages": 64,
+        "sourceState": "complete",
+        "projectionState": "valid",
+        "projectionAttempts": 0,
+        "ledgerGate": "blocked:ledger_missing"
+      }
+    },
+    "databaseQuickCheck": "ok"
+  },
+  "procedure": {
+    "input": "60 CUA accessibility clicks on session-list buttons, alternating ordinary then large for 30 pairs",
+    "correctness": "60/60 AX body tail markers verified: assistant 7 for ordinary, assistant 63 for large",
+    "latencySource": "paired in-app main/renderer session.switch.trace; CUA wall time excluded because it includes automation and accessibility transport",
+    "cacheMode": "ready for every request; no maintenance induced"
+  },
+  "summary": {
+    "switchAttempts": 60,
+    "bodyMarkersVerified": 60,
+    "mainTraceCount": 60,
+    "rendererTraceCount": 180,
+    "outcomeOk": 60,
+    "cachePathReady": 60,
+    "pageSizeCounts": {
+      "8": 30,
+      "20": 30
+    },
+    "rendererLongTaskOrLoafRecords": 0,
+    "projectionBuildSliceCount": 0,
+    "groups": {
+      "8": {
+        "n": 30,
+        "mainHandler": {
+          "n": 30,
+          "p50Ms": 1.43,
+          "p95Ms": 1.73,
+          "maxMs": 1.74
+        },
+        "rendererPageRequest": {
+          "n": 30,
+          "p50Ms": 3,
+          "p95Ms": 4.4,
+          "maxMs": 4.6
+        },
+        "nextPaint": {
+          "n": 30,
+          "p50Ms": 5.8,
+          "p95Ms": 11.4,
+          "maxMs": 11.7
+        },
+        "selectionToNextPaintStageSum": {
+          "n": 30,
+          "p50Ms": 16.5,
+          "p95Ms": 23.5,
+          "maxMs": 23.5
+        }
+      },
+      "20": {
+        "n": 30,
+        "mainHandler": {
+          "n": 30,
+          "p50Ms": 5.73,
+          "p95Ms": 6.76,
+          "maxMs": 7.52
+        },
+        "rendererPageRequest": {
+          "n": 30,
+          "p50Ms": 7.3,
+          "p95Ms": 8.1,
+          "maxMs": 9
+        },
+        "nextPaint": {
+          "n": 30,
+          "p50Ms": 8,
+          "p95Ms": 11.7,
+          "maxMs": 12.8
+        },
+        "selectionToNextPaintStageSum": {
+          "n": 30,
+          "p50Ms": 23.7,
+          "p95Ms": 29.2,
+          "maxMs": 29.7
+        }
+      }
+    }
+  },
+  "samples": [
+    {
+      "requestOrdinal": 2,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.57,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.33,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.66,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.75,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.27,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.56,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 6.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 1.2,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 3,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.39,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.41,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.11,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.36,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.34,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.38,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 4,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.35,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.28,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.66,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.21,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.34,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 5.8,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 5,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.99,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.39,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.68,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.95,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.39,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.98,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 7.2,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 6,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.48,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.29,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.71,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.77,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.21,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.46,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 7,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.55,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.43,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.44,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.42,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.54,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 3.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 3,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 8,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.65,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.42,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.72,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.78,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.21,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.64,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 5.6,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 9,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.73,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.41,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.38,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.64,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.37,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.7,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6.4,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 10,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.18,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.24,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.56,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.61,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.17,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.17,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.2,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 11,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.92,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.46,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.31,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.61,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.45,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.91,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 12,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.54,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.29,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.72,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.81,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.26,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.53,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6.1,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 13,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 6.76,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.43,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 5.27,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 5.59,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.43,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 6.76,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 8.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.7,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 14,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.58,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.31,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.74,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.83,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.25,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.58,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 5.4,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 15,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 6.46,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.49,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 5,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 5.21,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.49,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 6.45,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.4,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 16,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.45,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.29,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.73,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.78,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.21,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.45,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 17,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.71,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.45,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.49,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.69,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.27,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.7,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6.5,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 18,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.49,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.74,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.81,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.19,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.48,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 5.5,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 19,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.31,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.42,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.13,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.35,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.32,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.31,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 20,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.66,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.42,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.83,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.88,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.66,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 5.2,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 21,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 6.53,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.47,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 5.14,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 5.42,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.31,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 6.53,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 22,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.66,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.41,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.67,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.75,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.66,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 23,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 7.52,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.45,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 5.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 6.03,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.79,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 7.51,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 7.4,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 24,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.27,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.27,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.65,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.19,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.27,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 5.7,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 25,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.49,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.43,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.08,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.37,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.36,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.49,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 26,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.32,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.29,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.64,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.68,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.19,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.32,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6.3,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 27,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.85,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.42,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.59,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.79,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.35,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.84,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8.3,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 28,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.58,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.29,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.74,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.83,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.28,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.58,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 5.8,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 29,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.73,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.45,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.36,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.61,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.37,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.73,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 11.7,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 30,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.19,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.25,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.57,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.61,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.17,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.19,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 2.4,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 31,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.17,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.38,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.04,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.24,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.16,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 32,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.42,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.28,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.63,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.71,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.23,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.41,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6.2,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 33,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 6.37,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.56,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.85,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 5.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.38,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 6.36,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.6,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 34,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.25,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.27,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.59,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.63,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.18,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.25,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6.1,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 35,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.35,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.37,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.16,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.38,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.32,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.35,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8.3,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 36,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.23,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.26,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.58,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.62,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.19,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.22,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 0.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 2.4,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 37,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.78,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.76,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.16,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.36,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.32,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.77,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 3.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 38,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.24,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.27,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.55,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.18,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.24,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 11.4,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 39,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.4,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.38,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.11,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.36,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.42,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.39,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 12.8,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 40,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.44,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.27,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.75,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.44,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 4.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 11.7,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 41,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.49,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.02,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.22,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.51,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.47,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8.1,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 42,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.26,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.26,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.56,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.64,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.26,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6.5,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 43,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 6.5,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 5.02,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 5.26,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.43,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 6.5,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 44,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.45,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.34,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.71,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.76,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.44,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 7.3,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 45,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.56,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.41,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.36,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.55,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.31,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.55,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8.2,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 46,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.24,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.26,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.59,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.63,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.19,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.24,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 6.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 4.4,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 47,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 6.62,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.49,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 5.18,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 5.43,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.41,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 6.62,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 8,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.6,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 48,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.22,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.26,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.58,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.62,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.18,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.21,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 3.8,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 49,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.35,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.42,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.04,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.28,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.31,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.35,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 7.8,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 50,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.26,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.26,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.61,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.66,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.18,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.26,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 5.6,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 51,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.25,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.31,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.25,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 52,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.73,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.41,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.82,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.22,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.71,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 5.8,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 53,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.26,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.53,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 3.92,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.12,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.34,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.25,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 2.9,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 54,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.58,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.31,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.73,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.81,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.58,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6.6,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 55,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.77,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.42,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.43,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.71,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.38,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.76,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 56,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.24,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.26,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.58,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.63,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.18,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.24,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 5.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 0.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 57,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 6.21,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.53,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.85,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 5.04,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.32,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 6.2,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.7,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 58,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.43,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.66,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.75,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.43,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 2.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 59,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 6.37,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.46,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 5.03,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 5.25,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.34,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 6.37,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 8,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8.3,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 60,
+      "target": "ordinary",
+      "pageSize": 8,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 1.74,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.32,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 0.78,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 0.84,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.38,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 1.73,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 3.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    },
+    {
+      "requestOrdinal": 61,
+      "target": "large",
+      "pageSize": 20,
+      "cachePath": "ready",
+      "outcome": "ok",
+      "mainHandlerMs": 5.83,
+      "mainStages": [
+        {
+          "name": "page-select",
+          "durationMs": 0.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "source-spill-discovery",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "body-read",
+          "durationMs": 4.83,
+          "outcome": "ok"
+        },
+        {
+          "name": "final-source-check",
+          "durationMs": 0.35,
+          "outcome": "ok"
+        },
+        {
+          "name": "main-ipc",
+          "durationMs": 5.83,
+          "outcome": "ok"
+        }
+      ],
+      "rendererStages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 4.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10.5,
+          "outcome": "ok"
+        }
+      ],
+      "bodyMarkerVerified": true
+    }
+  ]
+}

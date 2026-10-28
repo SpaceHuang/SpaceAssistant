@@ -1,0 +1,57 @@
+{
+  "date": "2026-10-28",
+  "scenario": "Bounded preflight for one frozen real-history baseline/candidate pair; stopped before performance sampling",
+  "baseline": {
+    "commit": "109a938404124235d632e4cdbd4f9e06eaa48728",
+    "appAsarSha256": "a3e33001c36ee4934fa9239467b02ce7f1691e9799859abfb73511ffa5e9fb5f",
+    "started": true,
+    "isolatedDatabaseOpened": true,
+    "startupCanonicalHistoryOutcome": "failed",
+    "startupRepairFailureCount": 5
+  },
+  "candidate": {
+    "started": false,
+    "reason": "Target source identity precondition failed during baseline preflight; no candidate measurements would be comparable."
+  },
+  "frozenDatabase": {
+    "sha256": "7c11d494879cbbf64b3761e9092d5a7dafb4135253a794cd5ed3826ee5f0d399",
+    "bytes": 2768465920,
+    "twoIndependentCopiesMatched": true,
+    "sourceCopiesOpenedForWrite": false
+  },
+  "globalHistoryCursor": {
+    "integrityFlagInvalid": true,
+    "pendingCursorRows": 0,
+    "migratedProfileIntegrityFlagInvalid": false,
+    "interpretation": "Schema 102 to 103/104 migration revalidates this marker from cursor facts; the raw marker alone is not evidence of a persistent blocker."
+  },
+  "targets": {
+    "large": {
+      "sessionMessageCount": 64,
+      "databaseHistoryEventCount": 2590,
+      "externalHistoryIndexEventCount": 3042,
+      "externalHistoryBytes": 9263082,
+      "ledgerState": "unknown",
+      "projectionRejectionReason": "order-invalid"
+    },
+    "ordinary": {
+      "sessionMessageCount": 8,
+      "databaseHistoryEventCount": 343,
+      "externalHistoryIndexEventCount": 468,
+      "externalHistoryBytes": 945257,
+      "ledgerState": "unknown",
+      "projectionRejectionReason": "order-invalid"
+    }
+  },
+  "measurement": {
+    "samplesCollected": 0,
+    "countsTowardAc7": false,
+    "reason": "The frozen database global History cursor integrity flag is invalid. Both target sessions consequently have unknown ledger state and a persisted order-invalid projection rejection. DB agent_history_events and external session event indexes count different event stores and are not directly comparable. Baseline startup also reported five History repair failures without identifying affected sessions. The targets do not satisfy the healthy canonical-session precondition."
+  },
+  "cleanup": {
+    "baselineProcessExited": true,
+    "candidateProcessStarted": false,
+    "temporaryCowCopiesRemoved": true,
+    "frozenSourceModified": false
+  }
+}

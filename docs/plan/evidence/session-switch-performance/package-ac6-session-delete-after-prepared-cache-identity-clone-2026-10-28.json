@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-28",
+  "scenario": "delete a session after prepared projection state exists, then cold-start packaged payload and verify database cleanup",
+  "runtime": {
+    "appVersion": "0.2.9",
+    "artifactBuildId": "6d5910fe-7b9c-4ccf-bc28-c49e02e212cb",
+    "sourceCommit": "58e3255c17ffba30244f4e9fef4b765b9627ebf4",
+    "sourceTreeClean": false,
+    "source": "arm64 PKG payload identity clone",
+    "pkgPath": "/tmp/sa-ac6-revision-pkg/SpaceAssistant-0.2.9-arm64.pkg",
+    "pkgSha256": "1d455c60ecdb329cf89c2b927073cd6a1df0a4f45a6c4f5ca1a7723f699e2f04",
+    "appBundle": "/tmp/SpaceAssistant-P4-AC6-EditRevision28.app",
+    "appAsarSha256": "47fce209bce1c43b7e472e38fc5662e053f770187d09f4ca2336d44e82f2bf97",
+    "packagedDeleteModule": "dist-electron/electron/database/operations.js",
+    "packagedDeleteModuleSha256": "2ca30e2d1dfa32ade249c1dd68c07ce061f5a45a9dcc24eb75906b376fb8ac34",
+    "packageIdentityPatched": true,
+    "adHocResigned": true,
+    "runMode": "SPACEASSISTANT_DEV=1 with explicit isolated userData override; no ELECTRON_START_URL",
+    "userData": "/Users/space/Library/Application Support/sap4ac6delete28",
+    "pkgInstalled": false,
+    "feishuAndWechatMessagesSent": false
+  },
+  "fixture": {
+    "synthetic": true,
+    "sessionId": "cd0a726e-ff59-4b2c-821c-d319bff2378e",
+    "title": "P4 AC6 valid source edit after prepared cache",
+    "preparedProjectionBeforeDelete": "valid",
+    "uiDeleteConfirmation": "opened and canceled; no irreversible UI confirmation was accepted",
+    "deleteInvocation": "production deleteSession command from the compiled package-matched database operations module, invoked by a Node harness against the isolated cloned database"
+  },
+  "databaseAfterDelete": {
+    "sessionRow": null,
+    "messages": 0,
+    "sessionProjectionState": 0,
+    "sessionProjectionCache": 0,
+    "sessionBodySourceState": 0,
+    "quickCheck": "ok"
+  },
+  "coldStartObservation": {
+    "result": "deleted-target-absent-from-database; unrelated-same-title-fixture-remains-visible",
+    "observation": "After restarting the packaged payload with the isolated userData, the UI showed a separate synthetic fixture titled 'P4 AC6 valid source edit prepared-cache fixture' (ID b5ea0a4c-8d8d-4f33-810c-94e112f68158). The deleted target ID and all its projection/source rows remained absent from the database. UI deletion IPC was not exercised."
+  },
+  "limitations": [
+    "single synthetic identity-clone sample; package was not installed",
+    "isolated launch used SPACEASSISTANT_DEV=1 to set userData, although no development server URL was configured",
+    "the UI confirmation was canceled and deletion was invoked through the hash-matched compiled database command harness, not packaged UI/IPC",
+    "does not cover History source spill damage, publish-boundary fault, real history, or baseline comparison",
+    "does not close AC-7 or P4-02/P4-03"
+  ]
+}

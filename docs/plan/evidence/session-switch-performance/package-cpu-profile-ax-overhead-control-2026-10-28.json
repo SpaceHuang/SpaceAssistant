@@ -1,0 +1,94 @@
+{
+  "date": "2026-10-28",
+  "purpose": "Compare packaged session switches observed with full accessibility-tree reads after each click versus a sequence without intermediate AX reads, while sampling renderer CPU",
+  "candidate": {
+    "version": "0.2.9",
+    "buildId": "21b8262e-43d1-4830-a050-61cc437df56a",
+    "pkgSha256": "e056d6100884d4868a3b5ffe9ca530d826772ac427e68764f2676fc7233d4f8e",
+    "appAsarSha256": "5f9f61648636b33dd5e8520eab94778cb062962cdea63b6be98b5da71c0eb2a5",
+    "installed": false
+  },
+  "environment": {
+    "userData": "APFS COW clone sap4cpuprofile-20261028a, based on the prior isolated real-profile clone",
+    "connectors": "Feishu and WeChat disabled",
+    "databaseQuickCheck": "ok before and after",
+    "targetStatesAfterRun": {
+      "large": {"messages": 64, "source": "complete", "ledger": "ready"},
+      "ordinary": {"messages": 8, "source": "complete", "ledger": "ready"}
+    },
+    "runtime": "Candidate app bundle launched directly with the clone as userData and CDP port 9338; app was closed after sampling and no clone processes remained."
+  },
+  "method": {
+    "cpuProfiler": "CDP Profiler, 1000 microsecond sampling interval",
+    "switchVerification": "Renderer main trace joined by rendererProcessId/requestOrdinal. CUA content marker checks were performed for the with-AX run after each action; for the no-intermediate-AX run, one final AX check verified the final target content.",
+    "importantLimit": "These are short repeated-switch diagnostic windows, not the full AC-7 matrix or a paired baseline comparison."
+  },
+  "withFullAxAfterEveryAction": {
+    "cuAActions": 12,
+    "contentChecksPassed": 12,
+    "actualSwitchTraceGroups": 11,
+    "noOpAction": 1,
+    "traceOutcomes": "all successful",
+    "rendererLongTaskAndLoafEventsDuringSwitchWindow": {
+      "longtask": 1,
+      "longAnimationFrame": 6,
+      "maxDurationMs": 139.1,
+      "maxBlockingDurationMs": 74.1,
+      "longTaskDurationMs": 129.0
+    },
+    "cpuProfile": {
+      "durationMs": 49609.8,
+      "idleSampledMs": 47354.5,
+      "nonIdleSampledMs": 2254.6,
+      "idlePercent": 95.5,
+      "topApplicationFilesBySampledSelfTimeMs": {
+        "main-ByzHs3v0.js": 538.82,
+        "sessionDisplay-BK1AwcvS.js": 323.64,
+        "preload.js": 2.51
+      }
+    }
+  },
+  "withoutIntermediateAxReads": {
+    "cuAActions": 12,
+    "verifiedActualSwitchTraceGroups": 12,
+    "largePageSize20": 6,
+    "ordinaryPageSize8": 6,
+    "traceOutcomes": "12/12 successful",
+    "contentChecksPassed": "Final target marker present in the one post-sequence AX check",
+    "rendererLongTaskAndLoafEventsDuringSwitchWindow": {
+      "longtask": 0,
+      "longAnimationFrame": 0
+    },
+    "cpuProfile": {
+      "durationMs": 26199.3,
+      "idleSampledMs": 23833.8,
+      "nonIdleSampledMs": 2364.6,
+      "idlePercent": 90.97,
+      "topSampledSelfTimeMs": [
+        {"file": "main-ByzHs3v0.js", "function": "r", "ms": 58.38},
+        {"file": "sessionDisplay-BK1AwcvS.js", "function": "mc", "ms": 17.23},
+        {"file": "main-ByzHs3v0.js", "function": "rHe", "ms": 12.5},
+        {"file": "sessionDisplay-BK1AwcvS.js", "function": "Pl", "ms": 7.57}
+      ]
+    }
+  },
+  "traceMetricsMsWithoutIntermediateAx": {
+    "largeN6": {
+      "mainHandler": {"p50": 4.05, "p95": 4.21, "max": 4.25},
+      "rendererPageRequest": {"p50": 16.3, "p95": 16.96, "max": 17.1},
+      "nextPaint": {"p50": 6.4, "p95": 6.5, "max": 6.5}
+    },
+    "ordinaryN6": {
+      "mainHandler": {"p50": 5.64, "p95": 6.35, "max": 6.49},
+      "rendererPageRequest": {"p50": 15.45, "p95": 19.3, "max": 20.1},
+      "nextPaint": {"p50": 6.6, "p95": 7.25, "max": 7.4}
+    },
+    "percentile": "linear interpolation over sorted samples"
+  },
+  "interpretation": "The full-AX sequence produced seven renderer Long Task/LoAF events, while the second sequence had 12 real switches and no such events. Both CPU profiles were mostly idle and neither isolated a clear JavaScript hotspot. This strongly suggests that full accessibility-tree reads can add substantial measurement interference, but the runs were not randomized and do not prove that AX reads caused every event. It also does not rule out the user's reported pause in normal use. Main handler/page-request/next-paint stage timings do not equal end-to-end click-to-visible latency.",
+  "remaining": [
+    "No same-database baseline candidate comparison was collected in this experiment.",
+    "No full cold/hot/damaged-cache or maintenance-on/off matrix was collected.",
+    "No conclusion is made about the cause of the user-observed pause or AC-7 pass/fail."
+  ]
+}
