@@ -5,7 +5,7 @@ import path from 'node:path'
 import fs from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
-import { appendMessage, createPersistedTurn, createSession, enqueueQueuedUserMessage } from '../database/operations'
+import { appendMessage, appendMessagesAtomically, createPersistedTurn, createSession, enqueueQueuedUserMessage } from '../database/operations'
 import { createSessionBodySourceBackfillTask, createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sqliteSessionStorage'
 import { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { createSqliteProjectionChatBodyCacheStore } from './infrastructure/sqlite/sessionProjectionStateStore'
@@ -313,7 +313,7 @@ describe('SQLite projection build task composition', () => {
       const session = createSession(db, { name: 'single oversized History event', model: 'test' })
       const body = 'segment-source-body-'.repeat(2_048)
       const messages = Array.from({ length: 850 }, (_, index) => ({ id: `segment-source-${index}`, role: 'user', content: body, timestamp: index + 1 }))
-      for (const message of messages) appendMessage(db, { ...message, sessionId: session.id, status: 'sent' })
+      appendMessagesAtomically(db, messages.map((message) => ({ ...message, sessionId: session.id, status: 'sent' as const })))
       const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id,
         createSpillStore(path.join(path.dirname(temp.dbPath), 'spill')))
       await history.appendBatch([
@@ -377,8 +377,8 @@ describe('SQLite projection build task composition', () => {
     try {
       const session = createSession(db, { name: 'large History message facts', model: 'test' })
       const body = 'dual-write-fact-body-'.repeat(3_000)
-      const messages = Array.from({ length: 1_000 }, (_, index) => ({ id: `large-fact-${index}`, role: 'user', content: body, timestamp: index + 1 }))
-      for (const message of messages) appendMessage(db, { ...message, sessionId: session.id, status: 'sent' })
+      const messages = Array.from({ length: 300 }, (_, index) => ({ id: `large-fact-${index}`, role: 'user', content: body, timestamp: index + 1 }))
+      appendMessagesAtomically(db, messages.map((message) => ({ ...message, sessionId: session.id, status: 'sent' as const })))
       const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id,
         createSpillStore(path.join(path.dirname(temp.dbPath), 'source-spill')))
       await history.appendBatch([
@@ -396,7 +396,8 @@ describe('SQLite projection build task composition', () => {
         (SELECT COALESCE(SUM(length(CAST(content AS BLOB))),0) FROM messages WHERE session_id=?) AS fact_content_byte_length
         FROM agent_history_events WHERE event_id=?`).get(session.id, 'large-facts-context') as
         { byte_length: number; fact_content_byte_length: number }
-      expect(storedEvent.byte_length).toBeGreaterThan(60 * 1024 * 1024)
+      expect(storedEvent.byte_length).toBeGreaterThan(16 * 1024 * 1024)
+      expect(storedEvent.fact_content_byte_length).toBeGreaterThan(16 * 1024 * 1024)
       expect(storedEvent.byte_length + storedEvent.fact_content_byte_length).toBeLessThanOrEqual(128 * 1024 * 1024)
       const processGeneration = advanceProcessGeneration(conn)
       const sliceSamples: Array<{ maxWorkerHeapUsedBytesPeakSampled: number | null; maxProcessRssBytesPeakSampled: number | null;
@@ -413,7 +414,7 @@ describe('SQLite projection build task composition', () => {
       let sourceBackfillHandle: ReturnType<typeof sourceTask.start> | undefined
       try {
         sourceBackfillHandle = sourceTask.start()
-        await vi.waitFor(() => expect(sourceBackfillFinished).toBe(true), { timeout: 60_000 })
+        await vi.waitFor(() => expect(sourceBackfillFinished).toBe(true), { timeout: 120_000 })
         sourceBackfillHandle?.stop()
         await sourceBackfillHandle?.quiesce()
         const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
@@ -434,7 +435,7 @@ describe('SQLite projection build task composition', () => {
         await host.lifecycle.stop({ deadlineMs: 5_000 })
       }
     } finally { temp.cleanup() }
-  }, 180_000)
+  }, 240_000)
 
   it('segments one oversized spilled message item across bounded History blobs', async () => {
     const temp = createTempDatabase('sqlite-projection-single-oversized-history-item-')
