@@ -238,7 +238,7 @@ describe('canonical session ledger outbox', () => {
     }
   })
 
-  it('maps every canonical session sidecar kind to an exact ordered projection target', () => {
+  it('maps and resolves every canonical session sidecar kind to an exact ordered projection target', () => {
     const db = createMemoryAppDb()
     databases.push(db)
     const session = createSession(db, { name: 'outbox mapping' })
@@ -258,10 +258,12 @@ describe('canonical session ledger outbox', () => {
       make('mapping-result', 4, 'tool-call-finished', { toolCallId: 'mapping-tool', sessionLedger: { location, stepId: 'mapping-step', result: { success: true } } }),
       make('mapping-compaction', 5, 'transcript-compacted', { sessionLedger: { location,
         start: { compactionId: 'mapping-compaction' }, summary: { compactionId: 'mapping-compaction' } } }),
-      make('mapping-terminal', 6, 'invocation-interrupted', { sessionLedger: { location, turnId: 'mapping-turn', reason: 'interrupted' } })
+      make('mapping-terminal', 6, 'invocation-interrupted', { status: 'interrupted', sessionLedger: { location, turnId: 'mapping-turn', reason: 'interrupted' } })
     ]
 
-    const targets = buildCanonicalToolResultProjectionTargets(getDbConnection(db), events, session.id, session.generation)
+    const conn = getDbConnection(db)
+    runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, events, 0, { sessionId: session.id }))
+    const targets = buildCanonicalToolResultProjectionTargets(conn, events, session.id, session.generation)
 
     expect(targets.map((target) => target.projectionKind)).toEqual([
       'request-projection', 'request-retry', 'tool-call:mapping-tool', 'request-usage', 'request-final-context',
@@ -269,6 +271,16 @@ describe('canonical session ledger outbox', () => {
     ])
     expect(targets[0]?.expectedEventIds).toEqual(['request_header:mapping-request:1', 'request_context:mapping-request:1'])
     expect(targets[4]?.expectedEventIds).toEqual(['request_context_final:mapping-request:1'])
+    expect(targets).toHaveLength(8)
+    const resolved = targets.map((target) => {
+      const source = conn.prepare('SELECT session_seq FROM agent_history_events WHERE event_id=?').get(target.canonicalEventId) as { session_seq: number }
+      return resolveCanonicalSessionLedgerProjectionTarget(conn, {
+        targetId: canonicalLedgerProjectionTargetId(target), ledgerLocationKey: target.ledgerLocationKey,
+        sessionId: target.sessionId, sessionGeneration: target.sessionGeneration, canonicalEventId: target.canonicalEventId,
+        canonicalSequence: source.session_seq, projectionOrder: target.projectionOrder ?? 0, projectionKind: target.projectionKind
+      })
+    })
+    expect(resolved.map((target) => target?.expectedEventIds)).toEqual(targets.map(({ expectedEventIds }) => expectedEventIds))
   })
 
   it('commits the canonical event and exact projection obligation atomically, then acks only a complete identity set', () => {
