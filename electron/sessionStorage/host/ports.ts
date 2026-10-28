@@ -35,7 +35,7 @@ export interface StorageLifecycleControl {
   pauseMaintenance(input?: { category?: MaintenanceClass }): Promise<void>
   resumeMaintenance(input?: { category?: MaintenanceClass }): void
   inspectMaintenance(): readonly MaintenanceState[]
-  stop(input: { deadlineMs: number }): Promise<{ status: 'quiescent' | 'deadline-exceeded' }>
+  stop(input: { deadlineMs: number }): Promise<{ status: 'quiescent' | 'deadline-exceeded' | 'failed' }>
 }
 
 export type HistoryStartupRecoverySummary = Readonly<{

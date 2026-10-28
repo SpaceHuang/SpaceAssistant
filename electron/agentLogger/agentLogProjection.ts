@@ -13,6 +13,7 @@ const TARGET_EVENTS = new Set<AgentLogEventName>([
   'trust.remove',
   'history.cutover', 'session.storage.shadow', 'session.history.recovery', 'session.history.repair.failed', 'session.transcript.read',
   'session.projection.build.slice', 'session.transcript.reconciliation', 'session.switch.trace',
+  'renderer.long-task',
   'tools.execution_summary',
   'shell.security.deny', 'shell.trust.command', 'shell.path.confirm', 'shell.path.reject', 'shell.precheck', 'shell.confirm',
   'shell.exec.start', 'shell.exec.plan_failed', 'shell.exec.spawned', 'shell.exec.auto_background',
@@ -71,7 +72,44 @@ export function projectRendererSessionSwitchTraceMessage(message: string, author
     return [{ name: item.name, durationMs: Math.round(item.durationMs * 100) / 100, outcome: item.outcome }]
   })
   return { instance: 'renderer', traceId: `${processId}-${requestOrdinal}`, rendererProcessId: processId,
-    requestOrdinal, outcome, pageSize, stages }
+    requestOrdinal, ...(isValidTraceEpochMs(candidate.requestInitiatedAtEpochMs) ? { requestInitiatedAtEpochMs: candidate.requestInitiatedAtEpochMs } : {}),
+    outcome, pageSize, stages }
+}
+
+export function projectRendererLongTaskMessage(_message: string, _authoritativeProcessId?: number): Record<string, unknown> | undefined {
+  const prefix = '[renderer.performance.long-task] '
+  if (!_message.startsWith(prefix)) return undefined
+  let parsed: unknown
+  try { parsed = JSON.parse(_message.slice(prefix.length)) } catch { return undefined }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+  const value = parsed as Record<string, unknown>
+  const kind = value.kind
+  const startTimeMs = value.startTimeMs
+  const durationMs = value.durationMs
+  if ((kind !== 'longtask' && kind !== 'long-animation-frame') ||
+    typeof startTimeMs !== 'number' || !Number.isFinite(startTimeMs) || startTimeMs < 0 || startTimeMs > 1_000_000_000 ||
+    typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 50 || durationMs > 600_000 ||
+    !Number.isSafeInteger(_authoritativeProcessId) || Number(_authoritativeProcessId) < 0) return undefined
+  const result: Record<string, unknown> = {
+    kind,
+    startTimeMs: Math.round(startTimeMs * 100) / 100,
+    durationMs: Math.round(durationMs * 100) / 100,
+    rendererProcessId: _authoritativeProcessId
+  }
+  const blockingDurationMs = value.blockingDurationMs
+  if (kind === 'long-animation-frame' && typeof blockingDurationMs === 'number' && Number.isFinite(blockingDurationMs) &&
+    blockingDurationMs >= 0 && blockingDurationMs <= durationMs) {
+    result.blockingDurationMs = Math.round(blockingDurationMs * 100) / 100
+  }
+  if (kind === 'long-animation-frame') {
+    const scriptAttributionStatus = projectRendererScriptAttributionStatus(value.scriptAttributionStatus)
+    const scriptCandidateCount = projectRendererScriptCandidateCount(value.scriptCandidateCount)
+    if (scriptAttributionStatus) result.scriptAttributionStatus = scriptAttributionStatus
+    if (scriptCandidateCount !== undefined) result.scriptCandidateCount = scriptCandidateCount
+  }
+  const scriptAttributions = projectRendererScriptAttributions(value.scriptAttributions)
+  if (scriptAttributions.length > 0) result.scriptAttributions = scriptAttributions
+  return result
 }
 
 function hash(value: unknown): string {
@@ -98,6 +136,7 @@ export function projectAgentLogFields(
   if (event.startsWith('script.exec.')) return projectShellAgentLogFields(event, fields)
   if (!TARGET_EVENTS.has(event)) return fields
   if (event === 'session.switch.trace') return projectSessionSwitchTraceFields(fields)
+  if (event === 'renderer.long-task') return projectRendererLongTaskFields(fields)
 
   const out: Record<string, unknown> = {}
   const processTool = isProcessToolName(typeof fields.toolName === 'string' ? fields.toolName : undefined)
@@ -136,12 +175,71 @@ export function projectAgentLogFields(
   return out
 }
 
+function projectRendererLongTaskFields(fields: Record<string, unknown>): Record<string, unknown> {
+  const kind = fields.kind
+  const startTimeMs = fields.startTimeMs
+  const durationMs = fields.durationMs
+  const processId = fields.rendererProcessId
+  if ((kind !== 'longtask' && kind !== 'long-animation-frame') ||
+    typeof startTimeMs !== 'number' || !Number.isFinite(startTimeMs) || startTimeMs < 0 || startTimeMs > 1_000_000_000 ||
+    typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 50 || durationMs > 600_000 ||
+    !Number.isSafeInteger(processId) || Number(processId) < 0) return {}
+  const out: Record<string, unknown> = {
+    kind,
+    startTimeMs: Math.round(startTimeMs * 100) / 100,
+    durationMs: Math.round(durationMs * 100) / 100,
+    rendererProcessId: processId
+  }
+  const blockingDurationMs = fields.blockingDurationMs
+  if (kind === 'long-animation-frame' && typeof blockingDurationMs === 'number' && Number.isFinite(blockingDurationMs) &&
+    blockingDurationMs >= 0 && blockingDurationMs <= durationMs) {
+    out.blockingDurationMs = Math.round(blockingDurationMs * 100) / 100
+  }
+  if (kind === 'long-animation-frame') {
+    const scriptAttributionStatus = projectRendererScriptAttributionStatus(fields.scriptAttributionStatus)
+    const scriptCandidateCount = projectRendererScriptCandidateCount(fields.scriptCandidateCount)
+    if (scriptAttributionStatus) out.scriptAttributionStatus = scriptAttributionStatus
+    if (scriptCandidateCount !== undefined) out.scriptCandidateCount = scriptCandidateCount
+  }
+  const scriptAttributions = projectRendererScriptAttributions(fields.scriptAttributions)
+  if (scriptAttributions.length > 0) out.scriptAttributions = scriptAttributions
+  return out
+}
+
+function projectRendererScriptAttributionStatus(value: unknown): 'unavailable' | 'filtered' | 'present' | undefined {
+  return value === 'unavailable' || value === 'filtered' || value === 'present' ? value : undefined
+}
+
+function projectRendererScriptCandidateCount(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 100 ? Number(value) : undefined
+}
+
+function projectRendererScriptAttributions(value: unknown): readonly Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 20).flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+    const candidate = item as Record<string, unknown>
+    if (typeof candidate.file !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.m?js$/.test(candidate.file) ||
+      typeof candidate.durationMs !== 'number' || !Number.isFinite(candidate.durationMs) || candidate.durationMs <= 0 || candidate.durationMs > 600_000) return []
+    const attribution: Record<string, unknown> = {
+      file: candidate.file,
+      durationMs: Math.round(candidate.durationMs * 100) / 100
+    }
+    if (typeof candidate.functionName === 'string' && /^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/.test(candidate.functionName)) {
+      attribution.functionName = candidate.functionName
+    }
+    return [attribution]
+  }).slice(0, 3)
+}
+
 function projectSessionSwitchTraceFields(fields: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (fields.instance === 'main' || fields.instance === 'renderer') out.instance = fields.instance
   if (typeof fields.traceId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(fields.traceId)) out.traceId = fields.traceId
   if (Number.isSafeInteger(fields.rendererProcessId) && Number(fields.rendererProcessId) >= 0) out.rendererProcessId = fields.rendererProcessId
   if (Number.isSafeInteger(fields.requestOrdinal) && Number(fields.requestOrdinal) >= 1) out.requestOrdinal = fields.requestOrdinal
+  if (isValidTraceEpochMs(fields.requestInitiatedAtEpochMs)) out.requestInitiatedAtEpochMs = fields.requestInitiatedAtEpochMs
+  if (isValidTraceEpochMs(fields.handlerEnteredAtEpochMs)) out.handlerEnteredAtEpochMs = fields.handlerEnteredAtEpochMs
   if (['ok', 'error', 'cancelled', 'timeout'].includes(String(fields.outcome))) out.outcome = fields.outcome
   if (['ready', 'prior-authority', 'cold', 'invalidated', 'unknown'].includes(String(fields.cachePath))) out.cachePath = fields.cachePath
   if (Number.isSafeInteger(fields.pageSize) && Number(fields.pageSize) >= 0 && Number(fields.pageSize) <= 200) out.pageSize = fields.pageSize
@@ -158,4 +256,8 @@ function projectSessionSwitchTraceFields(fields: Record<string, unknown>): Recor
     out.stages = stages
   }
   return out
+}
+
+function isValidTraceEpochMs(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1_000_000_000_000 && value <= 10_000_000_000_000
 }

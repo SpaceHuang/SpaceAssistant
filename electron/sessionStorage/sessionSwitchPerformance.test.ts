@@ -95,7 +95,7 @@ describe('session switch trace', () => {
   it('allows only bounded switch trace fields through the production log projection', () => {
     const projected = projectAgentLogFields('session.switch.trace', {
       instance: 'main', traceId: 'trace-1', rendererProcessId: 77, requestOrdinal: 3, outcome: 'ok', cachePath: 'ready', pageSize: 20,
-      durationMs: 12.34, stages: [
+      handlerEnteredAtEpochMs: 1_798_000_000_124, durationMs: 12.34, stages: [
         { name: 'selection-to-page-request', durationMs: 4.5, outcome: 'ok' },
         { name: 'page-read', durationMs: 12.34, outcome: 'ok' }
       ],
@@ -103,7 +103,8 @@ describe('session switch trace', () => {
     })
 
     expect(projected).toEqual({
-      instance: 'main', traceId: 'trace-1', rendererProcessId: 77, requestOrdinal: 3, outcome: 'ok', cachePath: 'ready', pageSize: 20,
+      instance: 'main', traceId: 'trace-1', rendererProcessId: 77, requestOrdinal: 3, handlerEnteredAtEpochMs: 1_798_000_000_124,
+      outcome: 'ok', cachePath: 'ready', pageSize: 20,
       durationMs: 12.34, stages: [
         { name: 'selection-to-page-request', durationMs: 4.5, outcome: 'ok' },
         { name: 'page-read', durationMs: 12.34, outcome: 'ok' }
@@ -157,10 +158,11 @@ describe('session switch trace', () => {
     const result = await readChatPageWithSessionSwitchTrace(async ({ trace, onCachePath }) => {
       onCachePath('cold')
       return trace.measure('projection-prepare', async () => page)
-    }, { traceId: 'ipc-trace', rendererProcessId: 77, requestOrdinal: 9, emit })
+    }, { traceId: 'ipc-trace', rendererProcessId: 77, requestOrdinal: 9, handlerEnteredAtEpochMs: 1_798_000_000_124, emit })
     expect(result).toBe(page)
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({
-      instance: 'main', traceId: 'ipc-trace', rendererProcessId: 77, requestOrdinal: 9, outcome: 'ok', cachePath: 'cold', pageSize: 1,
+      instance: 'main', traceId: 'ipc-trace', rendererProcessId: 77, requestOrdinal: 9, handlerEnteredAtEpochMs: 1_798_000_000_124,
+      outcome: 'ok', cachePath: 'cold', pageSize: 1,
       stages: expect.arrayContaining([expect.objectContaining({ name: 'main-ipc' }), expect.objectContaining({ name: 'projection-prepare' })])
     }))
     expect(JSON.stringify(emit.mock.calls)).not.toContain('must not be logged')

@@ -14,6 +14,7 @@ export type AgentLogEventName =
   | 'session.projection.build.slice'
   | 'session.transcript.reconciliation'
   | 'session.switch.trace'
+  | 'renderer.long-task'
   | 'eventloop.delay'
   | 'session.transcript.revalidation'
   | 'session.projection.blob_gc_failed'

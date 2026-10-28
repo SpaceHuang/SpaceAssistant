@@ -123,6 +123,15 @@ function readCanonicalBodies(db: AppDatabase, sessionId: string, validateLegacyR
   }
 }
 
+/** Canonical-only rows intentionally have no legacy body mirror; accept that shape only under retained canonical write authority. */
+function readAuthorizedCanonicalOnlyMessageIds(db: AppDatabase, sessionId: string): ReadonlySet<string> {
+  const rows = getDbConnection(db).prepare(`SELECT messages.id FROM messages
+    JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
+    WHERE messages.session_id=? AND messages.content_storage_state='canonical-backed-only' AND messages.content=''
+      AND cutover.write_mode='canonical' AND cutover.cleanup_state='retained'`).all(sessionId) as Array<{ id: string }>
+  return new Set(rows.map(({ id }) => id))
+}
+
 /** Read the same frozen turn skeleton as getTurnContext, then resolve only selected stable IDs from canonical History. */
 export function readCanonicalTurnContextCandidate(
   db: AppDatabase,
@@ -306,7 +315,11 @@ export function shadowAcceptedTurnContext(
         }
         candidate.push({ ...legacy, content: body.content, timestamp: body.timestamp })
       }
-      const fields = fieldDifferences(legacyMessages, candidate)
+      const canonicalOnlyIds = readAuthorizedCanonicalOnlyMessageIds(db, sessionId)
+      const comparisonCandidate = candidate.map((message) => canonicalOnlyIds.has(message.id)
+        ? { ...message, content: '' }
+        : message)
+      const fields = fieldDifferences(legacyMessages, comparisonCandidate)
       let acceptedInputFingerprint: SessionStorageShadowReport['acceptedInputFingerprint']
       if (acceptedInput) {
         const acceptedUser = candidate.find((message) => message.id === acceptedInput.messageId && message.role === 'user')
@@ -365,7 +378,8 @@ export function shadowTurnRoutingInput<T extends Readonly<{ userInput: string; r
         userInput = required.content
       }
 
-      const descending: Array<{ role: 'user' | 'assistant'; content: string }> = []
+      const descending: Array<{ id: string; role: 'user' | 'assistant'; content: string }> = []
+      const canonicalOnlyIds = readAuthorizedCanonicalOnlyMessageIds(db, input.sessionId)
       const limit = input.limit ?? 50
       if (limit <= 0) {
         const candidate = { ...input.routeInput, userInput, recentMessages: [] } as T
@@ -381,18 +395,23 @@ export function shadowTurnRoutingInput<T extends Readonly<{ userInput: string; r
         if (!body || body.id !== skeleton.id || body.role !== skeleton.role || typeof body.content !== 'string') {
           return unavailable({ consumer: 'turn-routing', sessionId: input.sessionId, source: canonical.source, legacy: input.routeInput, reason: 'routing-canonical-body-missing' })
         }
-        if (hasSqliteTrimmedContent(body.content)) descending.push({ role: skeleton.role, content: body.content })
+        if (hasSqliteTrimmedContent(body.content)) descending.push({ id: skeleton.id, role: skeleton.role, content: body.content })
         if (descending.length >= limit) break
       }
-      const recentMessages = descending.reverse()
+      const routeMessages = descending.reverse()
+      const recentMessages = routeMessages.map(({ role, content }) => ({ role, content }))
       const candidate = { ...input.routeInput, userInput, recentMessages } as T
-      const fields = fieldDifferences(input.routeInput, candidate)
+      const comparableRecentMessages = input.limit === Number.MAX_SAFE_INTEGER
+        ? routeMessages.filter(({ id }) => !canonicalOnlyIds.has(id)).map(({ role, content }) => ({ role, content }))
+        : recentMessages
+      const comparableCandidate = { ...input.routeInput, userInput, recentMessages: comparableRecentMessages } as T
+      const fields = fieldDifferences(input.routeInput, comparableCandidate)
       const safeLegacy = { ...input.routeInput, getApiKey: undefined, signal: undefined }
       const safeCandidate = { ...candidate, getApiKey: undefined, signal: undefined }
       return emitReport({
         consumer: 'turn-routing', sessionId: input.sessionId, source: canonical.source,
         status: fields.length === 0 ? 'matched' : 'mismatched', differenceCount: fields.length, fields,
-        legacyHash: hash(safeLegacy), canonicalHash: hash(safeCandidate), candidate
+        legacyHash: hash(safeLegacy), canonicalHash: hash({ ...safeCandidate, recentMessages: comparableRecentMessages }), candidate
         , canonicalWatermark: canonical.canonicalWatermark,
         canonicalSourceValidated: canonical.canonicalSourceValidated
       })

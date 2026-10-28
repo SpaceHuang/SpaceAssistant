@@ -22,9 +22,9 @@ describe('renderer session switch trace', () => {
 
   it('attaches request ordinal after the contextBridge response reaches the renderer world', async () => {
     const page = { entries: [] }
-    const result = await requestChatMessagePageWithTraceMetadata(async () => page)
+    const result = await requestChatMessagePageWithTraceMetadata(async () => page, () => 1_798_000_000_123)
     expect(result).toBe(page)
-    expect(readSessionSwitchTraceMetadata(result)).toEqual({ requestOrdinal: expect.any(Number) })
+    expect(readSessionSwitchTraceMetadata(result)).toEqual({ requestOrdinal: expect.any(Number), requestInitiatedAtEpochMs: 1_798_000_000_123 })
   })
 
   it('emits only bounded timings and the shared renderer correlation key', () => {
@@ -42,6 +42,13 @@ describe('renderer session switch trace', () => {
         { name: 'renderer-page-request', durationMs: 10.13, outcome: 'ok' }
       ]
     })
+  })
+
+  it('emits the IPC initiation wall-clock marker for cross-process queue delay diagnosis', () => {
+    const emit = vi.fn()
+    emitRendererSessionSwitchTrace({ metadata: { processId: 44, requestOrdinal: 9, requestInitiatedAtEpochMs: 1_798_000_000_123 },
+      outcome: 'ok', pageSize: 1, stages: [], emit })
+    expect(JSON.parse(emit.mock.calls[0]![0]!)).toMatchObject({ requestInitiatedAtEpochMs: 1_798_000_000_123 })
   })
 
   it('uses the exact private prefix consumed by the main console-message listener', () => {

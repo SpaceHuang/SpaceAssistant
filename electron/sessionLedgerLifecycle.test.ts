@@ -10,6 +10,10 @@ import { prepareSessionLedgerProcessLockTarget } from './sessionLedgerProcessLoc
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { randomUUID, createHash } from 'node:crypto'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { getSessionEventSink, setSessionEventCommitObserver } from './sessionEvents'
 
 const proof: SessionLedgerReadyProof = { canonicalWatermark: 'seq:3', ledgerGeneration: 1, fileIdentity: 'dev-ino', fileBytes: 80,
   tailFrame: 'tail-hash', indexSeq: 3, indexEventCount: 3, indexBytes: 80, indexLastAt: 100 }
@@ -135,6 +139,80 @@ describe('session ledger lifecycle lock', () => {
       ])
       expect(first.readiness.ledgerLocationKey).toBe(readiness.ledgerLocationKey)
     } finally { db.close() }
+  })
+
+  it('does not wait for a stalled event writer when reusing a permanent physical-mismatch block', async () => {
+    const db = createMemoryAppDb()
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ledger-blocked-read-fast-path-'))
+    const location = { workDir: root, sessionId: 'blocked-read', createdAt: 9 }
+    let releaseObserver!: () => void
+    let observerEntered!: () => void
+    const observerBarrier = new Promise<void>((resolve) => { releaseObserver = resolve })
+    const observerStarted = new Promise<void>((resolve) => { observerEntered = resolve })
+    const sink = getSessionEventSink(root, location.sessionId, location.createdAt)
+    try {
+      const conn = getDbConnection(db)
+      const readiness = ensureLegacyLedgerReadiness(conn, location, 'g')
+      conn.prepare(`UPDATE session_ledger_projection_state SET state='blocked', failure_class='physical_proof_mismatch',
+        owner_reconciled_process_generation=1 WHERE ledger_location_key=?`).run(readiness.ledgerLocationKey)
+      setSessionEventCommitObserver(async () => { observerEntered(); await observerBarrier })
+      const append = sink.appendCritical({ type: 'turn_start', payload: { turnId: 'stalled-commit' } })
+      await observerStarted
+
+      const result = await Promise.race([
+        ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g', processGeneration: 1, retryBlocked: false,
+          dependencies: { fileExists: async () => true, readProof: async () => undefined,
+            bootstrap: async () => proof, baseline: async () => proof, applyTarget: async () => ({ eventIds: [], events: [] }) } }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('read waited for stalled writer drain')), 100))
+      ])
+
+      expect(result).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'physical_proof_mismatch' } })
+      releaseObserver()
+      await append
+    } finally {
+      releaseObserver()
+      setSessionEventCommitObserver(undefined)
+      await sink.close().catch(() => undefined)
+      db.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not drain a stalled writer to refresh an old-owner blocked verdict in read-only mode', async () => {
+    const db = createMemoryAppDb()
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ledger-blocked-old-owner-read-fast-path-'))
+    const location = { workDir: root, sessionId: 'blocked-old-owner-read', createdAt: 10 }
+    let releaseObserver!: () => void
+    let observerEntered!: () => void
+    const observerBarrier = new Promise<void>((resolve) => { releaseObserver = resolve })
+    const observerStarted = new Promise<void>((resolve) => { observerEntered = resolve })
+    const sink = getSessionEventSink(root, location.sessionId, location.createdAt)
+    try {
+      const conn = getDbConnection(db)
+      const readiness = ensureLegacyLedgerReadiness(conn, location, 'g')
+      conn.prepare(`UPDATE session_ledger_projection_state SET state='blocked', failure_class='physical_proof_mismatch',
+        owner_reconciled_process_generation=0 WHERE ledger_location_key=?`).run(readiness.ledgerLocationKey)
+      setSessionEventCommitObserver(async () => { observerEntered(); await observerBarrier })
+      const append = sink.appendCritical({ type: 'turn_start', payload: { turnId: 'old-owner-stalled-commit' } })
+      await observerStarted
+
+      const result = await Promise.race([
+        ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g', processGeneration: 1, retryBlocked: false,
+          dependencies: { fileExists: async () => true, readProof: async () => undefined,
+            bootstrap: async () => proof, baseline: async () => proof, applyTarget: async () => ({ eventIds: [], events: [] }) } }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('read waited for old-owner writer drain')), 100))
+      ])
+
+      expect(result).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'physical_proof_mismatch' } })
+      releaseObserver()
+      await append
+    } finally {
+      releaseObserver()
+      setSessionEventCommitObserver(undefined)
+      await sink.close().catch(() => undefined)
+      db.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 
   it('rejects stale baseline completion after readiness state has changed', () => {

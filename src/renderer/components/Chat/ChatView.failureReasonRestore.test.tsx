@@ -329,6 +329,74 @@ describe('ChatView 失败原因回溯', () => {
     expect(screen.queryByText('会话模型「claude-sonnet-4-20250514」当前不可用（未知模型），请在设置中重新选择模型')).toBeNull()
   })
 
+  it('切换会话的首屏读取失败时清除上一会话正文并显示可重试错误', async () => {
+    renderChatView()
+    expect(await screen.findByText('hello')).toBeDefined()
+    expect(await screen.findByText('partial')).toBeDefined()
+
+    store.dispatch(setSessions([testSession, secondSession]))
+    vi.mocked(window.api.chatGetMessagePage).mockImplementation(async ({ sessionId }) => {
+      if (sessionId === secondSession.id) {
+        const calls = vi.mocked(window.api.chatGetMessagePage).mock.calls.filter(([payload]) => payload.sessionId === secondSession.id).length
+        if (calls === 1) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+        return {
+          entries: [{ message: { ...userMessage, id: 'b-loaded', sessionId: secondSession.id, content: 'B loaded' }, sequence: 1 }],
+          oldestSequence: 1,
+          hasMoreBefore: false
+        }
+      }
+      return {
+        entries: [
+          { message: userMessage, sequence: 1 },
+          { message: failedAssistant, sequence: 2 }
+        ],
+        oldestSequence: 1,
+        hasMoreBefore: false
+      }
+    })
+
+    act(() => store.dispatch(setSession(secondSession.id)))
+
+    await waitFor(() => expect(window.api.chatGetMessagePage).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: secondSession.id, limit: 20 })))
+    expect(screen.queryByText('hello')).toBeNull()
+    expect(screen.queryByText('partial')).toBeNull()
+    expect((await screen.findByRole('alert')).textContent).toContain('无法加载这个会话的消息')
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByText('B loaded')).toBeDefined()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('切换会话读取挂起时显示加载态而不显示上一会话正文', async () => {
+    let resolvePage!: (value: Awaited<ReturnType<typeof window.api.chatGetMessagePage>>) => void
+    renderChatView()
+    expect(await screen.findByText('hello')).toBeDefined()
+
+    store.dispatch(setSessions([testSession, secondSession]))
+    vi.mocked(window.api.chatGetMessagePage).mockImplementation(async ({ sessionId }) => {
+      if (sessionId === secondSession.id) return new Promise((resolve) => { resolvePage = resolve })
+      return {
+        entries: [
+          { message: userMessage, sequence: 1 },
+          { message: failedAssistant, sequence: 2 }
+        ],
+        oldestSequence: 1,
+        hasMoreBefore: false
+      }
+    })
+
+    act(() => store.dispatch(setSession(secondSession.id)))
+
+    expect((await screen.findByRole('status')).textContent).toContain('正在加载会话消息')
+    expect(screen.queryByText('hello')).toBeNull()
+    expect(screen.queryByText('partial')).toBeNull()
+    await act(async () => resolvePage({
+      entries: [{ message: { ...userMessage, id: 'b-loaded-pending', sessionId: secondSession.id, content: 'B loaded after pending' }, sequence: 1 }],
+      oldestSequence: 1,
+      hasMoreBefore: false
+    }))
+    expect(await screen.findByText('B loaded after pending')).toBeDefined()
+  })
+
   it('主进程没有失败记录时保持通用失败提示', async () => {
     vi.mocked(window.api.chatGetTurnErrors).mockResolvedValue([])
     renderChatView()

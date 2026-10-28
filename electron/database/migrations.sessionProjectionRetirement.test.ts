@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { runMigrations } from './migrations'
-import { SCHEMA_META_KEYS } from './schema'
+import { DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
 
 describe('session projection legacy retirement migration', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
@@ -33,7 +33,7 @@ describe('session projection legacy retirement migration', () => {
     expect(trigger?.sql).toContain("UPDATE migration_probe SET value='after;still'")
     conn.prepare("UPDATE legacy_source SET value='changed' WHERE id=1").run()
     expect(conn.prepare('SELECT value FROM migration_probe WHERE id=1').get()).toEqual({ value: 'after;still' })
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '116' })
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: String(DB_SCHEMA_VERSION) })
 
     conn.exec('CREATE TABLE canonical_session_projection_eligibility(session_id TEXT PRIMARY KEY)')
     conn.exec('CREATE TABLE canonical_session_projection_rejections(session_id TEXT PRIMARY KEY)')

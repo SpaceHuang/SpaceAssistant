@@ -312,6 +312,12 @@
       "noSessionDesc": "Create or open a conversation in the session list",
       "startTitle": "Start a conversation",
       "startDesc": "Ask a question to collaborate — e.g. summarize the README. You can also use /skill or /wiki commands."
+    },
+    "loadingMessages": "Loading conversation…",
+    "loadFailed": {
+      "title": "Could not load this conversation",
+      "description": "The conversation history is temporarily unavailable. Try again; if the problem continues, check the local session data.",
+      "retry": "Retry"
     }
   },
   "shell": {

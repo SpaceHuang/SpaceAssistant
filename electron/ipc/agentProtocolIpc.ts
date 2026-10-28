@@ -733,18 +733,21 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       event,
       payload: { sessionId: string; beforeSequence?: number; limit?: number }
     ) => {
+      const handlerEnteredAtEpochMs = Date.now()
       return readChatPageWithSessionSwitchTrace(
         ({ trace, onCachePath }) => readChatPageAfterPreparation(sessionStorage, payload, { trace, onCachePath }),
         { traceId: randomUUID(), rendererProcessId: event.processId, requestOrdinal: nextSessionSwitchRequestOrdinal(event.sender, event.processId),
+          handlerEnteredAtEpochMs,
           emit: (event) => logAgentEvent('info', 'session.switch.trace', event) }
       )
     }
   )
 
   ipcMain.handle('chat:get-display-message-page', async (_e, payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
+    const handlerEnteredAtEpochMs = Date.now()
     const page = await readChatPageWithSessionSwitchTrace(
       ({ trace, onCachePath }) => readChatPageAfterPreparation(sessionStorage, payload, { trace, onCachePath }),
-      { traceId: randomUUID(), emit: (event) => logAgentEvent('info', 'session.switch.trace', event) }
+      { traceId: randomUUID(), handlerEnteredAtEpochMs, emit: (event) => logAgentEvent('info', 'session.switch.trace', event) }
     )
     return { ...page, entries: page.entries.filter(({ message }) => message.role === 'assistant').map(({ message, sequence }) => ({ display: turnToDisplay({ turnId: message.id, requestId: '', version: 0, assistantMessage: message }), sequence })) }
   })

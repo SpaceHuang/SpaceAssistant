@@ -1373,10 +1373,12 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       expect(enableCanonicalSessionWriteAuthority(temp.db, session.id).status).toBe('enabled')
       expect(await writeCanonicalBackedMessageContent(temp.db, 'canonical-edit-user', 'after')).toBe(true)
       expect(getDbConnection(temp.db).prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get('canonical-edit-user'))
-        .toEqual({ content: 'after', content_storage_state: 'canonical-backed-dual-write' })
+        .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
       temp.db.close()
       reopened = openDatabase(temp.dbPath)
-      expect(certifyCanonicalSessionApiRead(reopened, session.id).status).toBe('eligible')
+      const certification = certifyCanonicalSessionApiRead(reopened, session.id)
+      expect(certification.reason).toBeUndefined()
+      expect(certification.status).toBe('eligible')
       setCanonicalApiReadFeatureEnabled(reopened, true)
       expect(readCanonicalApiContextIfEligible(reopened, session.id, undefined, 'canonical-edit-user', [])?.messages?.[0]?.content).toBe('after')
     } finally {
@@ -1396,12 +1398,12 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     await expect(writeCanonicalBackedMessageContent(db, 'canonical-edit-preview-user', 'canonical preview body')).resolves.toBe(true)
 
     expect(getSession(db, session.id)?.preview).toBe('canonical preview body')
-    expect(getDbConnection(db).prepare('SELECT content FROM messages WHERE id=?').get('canonical-edit-preview-user'))
-      .toEqual({ content: 'canonical preview body' })
+    expect(getDbConnection(db).prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get('canonical-edit-preview-user'))
+      .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
     db.close()
   })
 
-  it('rolls back canonical edits and legacy mirrors together if the sealed message mirror fails', async () => {
+  it('commits canonical edits while clearing the stale sealed message mirror', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'canonical edit rollback', model: 'test' })
     appendMessage(db, { id: 'canonical-edit-rollback-user', sessionId: session.id, role: 'user', content: 'before', timestamp: 1, status: 'sent' })
@@ -1410,15 +1412,15 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     const { enableCanonicalSessionWriteAuthority, writeCanonicalBackedMessageContent } = await import('../sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority')
     expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
     const conn = getDbConnection(db)
-    const before = conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=?').get(session.id)
     conn.exec(`CREATE TRIGGER fail_canonical_edit_mirror BEFORE UPDATE OF content ON messages
       WHEN OLD.id='canonical-edit-rollback-user' AND NEW.content='after'
       BEGIN SELECT RAISE(ABORT,'injected canonical edit mirror failure'); END`)
-    await expect(writeCanonicalBackedMessageContent(db, 'canonical-edit-rollback-user', 'after'))
-      .rejects.toThrow('injected canonical edit mirror failure')
-    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=?').get(session.id)).toEqual(before)
+    await expect(writeCanonicalBackedMessageContent(db, 'canonical-edit-rollback-user', 'after')).resolves.toBe(true)
     expect(conn.prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get('canonical-edit-rollback-user'))
-      .toEqual({ content: 'before', content_storage_state: 'canonical-backed-dual-write' })
+      .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
+    const transcript = new SqliteAgentHistory(conn, 1, Date.now, session.id).readCanonicalSessionTranscriptForShadow(session.id)
+    expect(transcript.kind).toBe('matched')
+    if (transcript.kind === 'matched') expect(transcript.messages[0]?.content).toBe('after')
     db.close()
   })
 

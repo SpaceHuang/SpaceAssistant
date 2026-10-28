@@ -23,6 +23,14 @@ describe('session switch trace metadata', () => {
     const page = { entries: [] }
     expect(() => attachSessionSwitchTraceMetadata(page, { processId: -1, requestOrdinal: 1 })).toThrow()
     expect(() => attachSessionSwitchTraceMetadata(page, { processId: 1, requestOrdinal: 0 })).toThrow()
+    expect(() => attachSessionSwitchTraceMetadata({ entries: [] }, { requestOrdinal: 1, requestInitiatedAtEpochMs: 1 })).toThrow()
+  })
+
+  it('keeps a validated request initiation timestamp private to local trace metadata', () => {
+    const page = { entries: [] }
+    attachSessionSwitchTraceMetadata(page, { processId: 21, requestOrdinal: 6, requestInitiatedAtEpochMs: 1_798_000_000_123 })
+    expect(readSessionSwitchTraceMetadata(page)).toEqual({ processId: 21, requestOrdinal: 6, requestInitiatedAtEpochMs: 1_798_000_000_123 })
+    expect(JSON.stringify(page)).toBe('{"entries":[]}')
   })
 
   it('supports renderer-world correlation when process identity is supplied by the main receiver', () => {

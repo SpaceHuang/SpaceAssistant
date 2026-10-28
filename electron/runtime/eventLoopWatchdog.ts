@@ -9,12 +9,12 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
  */
 
 export type EventLoopWatchdogOptions = {
-  /** p99 delay above which a breach is logged. */
+  /** p99 or single-interval maximum delay above which a breach is logged. */
   thresholdMs?: number
   /** How often the histogram is inspected. */
   checkIntervalMs?: number
   histogram?: IntervalHistogram
-  onBreach?: (p99Ms: number) => void
+  onBreach?: (p99Ms: number, maxMs: number) => void
 }
 
 export type EventLoopWatchdog = Readonly<{ stop: () => void }>
@@ -22,9 +22,9 @@ export type EventLoopWatchdog = Readonly<{ stop: () => void }>
 export function startEventLoopWatchdog(options: EventLoopWatchdogOptions = {}): EventLoopWatchdog {
   const thresholdMs = options.thresholdMs ?? 200
   const checkIntervalMs = options.checkIntervalMs ?? 30_000
-  const onBreach = options.onBreach ?? ((p99Ms: number) => {
+  const onBreach = options.onBreach ?? ((p99Ms: number, maxMs: number) => {
     try {
-      logAgentEvent('warn', 'eventloop.delay', { p99Ms: Math.round(p99Ms), thresholdMs })
+      logAgentEvent('warn', 'eventloop.delay', { p99Ms: Math.round(p99Ms), maxMs: Math.round(maxMs), thresholdMs })
     } catch { /* Observation logging cannot change the sampled loop. */ }
   })
 
@@ -33,7 +33,8 @@ export function startEventLoopWatchdog(options: EventLoopWatchdogOptions = {}): 
 
   const timer = setInterval(() => {
     const p99Ms = histogram.percentile(99) / 1e6
-    if (p99Ms >= thresholdMs) onBreach(p99Ms)
+    const maxMs = histogram.max / 1e6
+    if (p99Ms >= thresholdMs || maxMs >= thresholdMs) onBreach(p99Ms, maxMs)
     histogram.reset()
   }, checkIntervalMs)
   timer.unref?.()

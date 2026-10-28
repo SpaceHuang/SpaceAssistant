@@ -1,11 +1,31 @@
 import { describe, expect, it } from 'vitest'
-import { projectAgentLogFields } from './agentLogProjection'
-import { projectRendererSessionSwitchTraceMessage } from './agentLogProjection'
+import { projectAgentLogFields, projectRendererLongTaskMessage, projectRendererSessionSwitchTraceMessage } from './agentLogProjection'
 
 describe('projectAgentLogFields', () => {
+  it('accepts renderer long-task timing only from the private console envelope', () => {
+    expect(projectRendererLongTaskMessage('[renderer.performance.long-task] {"kind":"long-animation-frame","startTimeMs":25.126,"durationMs":75.345,"blockingDurationMs":42.789,"scriptAttributionStatus":"present","scriptCandidateCount":2,"scriptAttributions":[{"file":"main-AbC123.js","functionName":"renderMessageList","durationMs":30.126,"path":"/private"}],"scripts":[{"sourceURL":"/private/path.js"}]}', 44))
+      .toEqual({ kind: 'long-animation-frame', startTimeMs: 25.13, durationMs: 75.35, blockingDurationMs: 42.79, rendererProcessId: 44,
+        scriptAttributionStatus: 'present', scriptCandidateCount: 2,
+        scriptAttributions: [{ file: 'main-AbC123.js', functionName: 'renderMessageList', durationMs: 30.13 }] })
+    expect(projectRendererLongTaskMessage('[renderer.performance.long-task] {"kind":"longtask","startTimeMs":1,"durationMs":49}', 44)).toBeUndefined()
+    expect(projectRendererLongTaskMessage('[renderer.performance.long-task] not-json', 44)).toBeUndefined()
+    expect(projectRendererLongTaskMessage('[renderer.performance.long-task] {"kind":"longtask","startTimeMs":1,"durationMs":80,"path":"/private"}', 44))
+      .toEqual({ kind: 'longtask', startTimeMs: 1, durationMs: 80, rendererProcessId: 44 })
+  })
+
+  it('retains only validated renderer long-task timing fields', () => {
+    expect(projectAgentLogFields('renderer.long-task', {
+      kind: 'longtask', startTimeMs: 1, durationMs: 80, blockingDurationMs: 4, rendererProcessId: 44,
+      scriptAttributions: [{ file: 'main-AbC123.js', functionName: 'renderMessageList', durationMs: 60 }],
+      sourceURL: '/private/path.js', sessionId: 'private-session'
+    })).toEqual({ kind: 'longtask', startTimeMs: 1, durationMs: 80, rendererProcessId: 44,
+      scriptAttributions: [{ file: 'main-AbC123.js', functionName: 'renderMessageList', durationMs: 60 }] })
+  })
+
   it('accepts renderer switch timings only from the private console diagnostic envelope', () => {
-    expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] {"event":"session.switch.trace","instance":"renderer","rendererProcessId":44,"requestOrdinal":8,"outcome":"ok","pageSize":20,"stages":[{"name":"selection-to-page-request","durationMs":4.5,"outcome":"ok"},{"name":"renderer-page-request","durationMs":3.4,"outcome":"ok"}],"private":"body"}'))
+    expect(projectRendererSessionSwitchTraceMessage('[session.switch.trace.renderer] {"event":"session.switch.trace","instance":"renderer","rendererProcessId":44,"requestOrdinal":8,"requestInitiatedAtEpochMs":1798000000123,"outcome":"ok","pageSize":20,"stages":[{"name":"selection-to-page-request","durationMs":4.5,"outcome":"ok"},{"name":"renderer-page-request","durationMs":3.4,"outcome":"ok"}],"private":"body"}'))
       .toEqual({ instance: 'renderer', traceId: '44-8', rendererProcessId: 44, requestOrdinal: 8,
+        requestInitiatedAtEpochMs: 1_798_000_000_123,
         outcome: 'ok', pageSize: 20, stages: [
           { name: 'selection-to-page-request', durationMs: 4.5, outcome: 'ok' },
           { name: 'renderer-page-request', durationMs: 3.4, outcome: 'ok' }

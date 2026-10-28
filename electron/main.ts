@@ -103,7 +103,7 @@ import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { measureStartupPhase } from './startupTiming'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
-import { projectRendererSessionSwitchTraceMessage } from './agentLogger/agentLogProjection'
+import { projectRendererLongTaskMessage, projectRendererSessionSwitchTraceMessage } from './agentLogger/agentLogProjection'
 import { extractWebContentsConsoleMessage } from './consoleMessage'
 import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
 import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
@@ -292,7 +292,7 @@ installProcessSafetyNet((event, detail) => {
 /** 用量统计启动维护（回填/补齐/清理）：whenReady 内注册，主窗口创建完成后执行（评审 P1-3）。 */
 let usageStatsStartupMaintenance: (() => void) | null = null
 let startWindowReadyMaintenance: (() => void) | null = null
-let storageLifecycleStop: ((deadlineMs: number) => Promise<{ status: 'quiescent' | 'deadline-exceeded' }>) | null = null
+let storageLifecycleStop: ((deadlineMs: number) => Promise<{ status: 'quiescent' | 'deadline-exceeded' | 'failed' }>) | null = null
 let storageProfileCoordinator: StorageProfileCoordinator | null = null
 let projectionRevalidationDrainStop: { stop: () => void } | null = null
 let eventLoopWatchdogStop: (() => void) | null = null
@@ -382,6 +382,8 @@ export async function createMainWindow(): Promise<void> {
     const message = extractWebContentsConsoleMessage(event, level, rawMessage)
     if (!message) return
     if (message.startsWith('[startup]')) console.info(message)
+    const rendererLongTask = projectRendererLongTaskMessage(message, win.webContents.mainFrame.processId)
+    if (rendererLongTask) logAgentEvent('warn', 'renderer.long-task', rendererLongTask)
     const rendererTrace = projectRendererSessionSwitchTraceMessage(message, win.webContents.mainFrame.processId)
     if (rendererTrace) logAgentEvent('info', 'session.switch.trace', rendererTrace)
   })
@@ -742,10 +744,13 @@ app.whenReady().then(async () => {
   }
   appSessionStorage = sessionStorage
   storageLifecycleStop = async (deadlineMs) => {
-    const [sessionStatus, profileStatus] = await Promise.all([
+    const [sessionResult, profileResult] = await Promise.allSettled([
       sessionStorageHost.lifecycle.stop({ deadlineMs }),
       storageProfileCoordinator?.shutdown({ deadlineMs }) ?? Promise.resolve({ status: 'quiescent' as const })
     ])
+    if (sessionResult.status === 'rejected' || profileResult.status === 'rejected' ||
+      sessionResult.value.status === 'failed') return { status: 'failed' as const }
+    const [sessionStatus, profileStatus] = [sessionResult.value, profileResult.value]
     return sessionStatus.status === 'quiescent' && profileStatus.status === 'quiescent'
       ? { status: 'quiescent' as const }
       : { status: 'deadline-exceeded' as const }
@@ -1511,6 +1516,7 @@ app.on('before-quit', (event) => {
   const storageQuiescence = lifecycleStop?.(SHUTDOWN_TIMEOUT_MS) ?? Promise.resolve({ status: 'quiescent' as const })
   void storageQuiescence.then((result) => {
     if (result.status === 'deadline-exceeded') console.warn('[shutdown] storage maintenance did not become quiescent before deadline')
+    else if (result.status === 'failed') console.warn('[shutdown] storage maintenance quiescence failed; database close will be skipped')
   })
   const sessionProjectionMigrationShutdown = sessionProjectionMigrationApplication?.shutdown() ?? Promise.resolve()
   sessionProjectionMigrationApplication = null

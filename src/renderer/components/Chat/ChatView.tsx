@@ -108,6 +108,9 @@ export function ChatView() {
   const displayGeneration = useTypedSelector((s) => s.chat.displayGeneration)
   const compactionMarkers = useTypedSelector((s) => s.chat.compactionMarkers)
   const [contextSummaryTick, setContextSummaryTick] = useState(0)
+  const [displayPageLoading, setDisplayPageLoading] = useState(false)
+  const [displayPageLoadFailed, setDisplayPageLoadFailed] = useState(false)
+  const [displayPageRetryRevision, setDisplayPageRetryRevision] = useState(0)
   const contextScalars = useMemo(() => {
     void contextSummaryTick
     if (!sessionId) return { historyImageTokens: 0, thinkingTokensToExclude: 0 }
@@ -275,6 +278,8 @@ export function ChatView() {
 
   useEffect(() => {
     if (!sessionId) {
+      setDisplayPageLoading(false)
+      setDisplayPageLoadFailed(false)
       dispatch(setMessages([]))
       return
     }
@@ -282,9 +287,22 @@ export function ChatView() {
     const summaryGeneration = beginContextSummarySession(sessionId)
     const generation = nextDisplayRequestGeneration()
     const selectionToPageRequestMs = takeRendererSessionSelectionDuration(sessionId)
+    setDisplayPageLoading(true)
+    setDisplayPageLoadFailed(false)
+    dispatch(setDisplayPage({ entries: [], oldestSequence: null, hasMoreBefore: false, generation }))
     void (async () => {
-      const page = await fetchMessagePage({ sessionId, limit: SESSION_SWITCH_MESSAGE_PAGE_SIZE, selectionToPageRequestMs })
+      let page: Awaited<ReturnType<typeof window.api.chatGetMessagePage>>
+      try {
+        page = await fetchMessagePage({ sessionId, limit: SESSION_SWITCH_MESSAGE_PAGE_SIZE, selectionToPageRequestMs })
+      } catch {
+        if (!cancelled) {
+          setDisplayPageLoading(false)
+          setDisplayPageLoadFailed(true)
+        }
+        return
+      }
       if (cancelled) return
+      setDisplayPageLoading(false)
       const renderTraceMetadata = readSessionSwitchTraceMetadata(page)
       const storeCommitStartedAt = performance.now()
       dispatch(
@@ -313,7 +331,7 @@ export function ChatView() {
     return () => {
       cancelled = true
     }
-  }, [sessionId, dispatch, bumpContextSummary, fetchMessagePage, hydratePageFailureReasons, nextDisplayRequestGeneration])
+  }, [sessionId, displayPageRetryRevision, dispatch, bumpContextSummary, fetchMessagePage, hydratePageFailureReasons, nextDisplayRequestGeneration])
 
   useLayoutEffect(() => {
     const pending = pendingSessionSwitchRenderTraceRef.current
@@ -1208,13 +1226,25 @@ export function ChatView() {
   ) : messages.length === 0 ? (
     <div className="chat-scroll-wrap">
       <div className="chat-scroll">
-        <div className="chat-empty">
-          <div className="chat-empty-icon" aria-hidden>
-            <MessageSquare size={22} strokeWidth={1.75} />
+        {displayPageLoading ? (
+          <div className="chat-empty" role="status">{t('chatView.loadingMessages')}</div>
+        ) : displayPageLoadFailed ? (
+          <div className="chat-empty" role="alert">
+            <div className="chat-empty-title">{t('chatView.loadFailed.title')}</div>
+            <p className="chat-empty-desc">{t('chatView.loadFailed.description')}</p>
+            <Button type="link" onClick={() => setDisplayPageRetryRevision((revision) => revision + 1)}>
+              {t('chatView.loadFailed.retry')}
+            </Button>
           </div>
-          <div className="chat-empty-title">{t('chatView.empty.startTitle')}</div>
-          <p className="chat-empty-desc">{t('chatView.empty.startDesc')}</p>
-        </div>
+        ) : (
+          <div className="chat-empty">
+            <div className="chat-empty-icon" aria-hidden>
+              <MessageSquare size={22} strokeWidth={1.75} />
+            </div>
+            <div className="chat-empty-title">{t('chatView.empty.startTitle')}</div>
+            <p className="chat-empty-desc">{t('chatView.empty.startDesc')}</p>
+          </div>
+        )}
       </div>
     </div>
   ) : (

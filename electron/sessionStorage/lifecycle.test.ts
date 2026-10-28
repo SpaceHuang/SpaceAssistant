@@ -78,6 +78,35 @@ describe('host-only storage lifecycle control', () => {
     await expect(lifecycle.stop({ deadlineMs: 1 })).resolves.toEqual({ status: 'deadline-exceeded' })
   })
 
+  it('reports a quiescence failure without claiming the database is safe to close', async () => {
+    const lifecycle = createStorageLifecycleControl({ tasks: [{ taskId: 'test-task', category: 'pending-reclamation',
+      start: () => ({ stop() {}, quiesce: async () => { throw new Error('worker exit failed') } }) }] })
+    lifecycle.allowBackgroundWork()
+    await expect(lifecycle.stop({ deadlineMs: 100 })).resolves.toEqual({ status: 'failed' })
+  })
+
+  it('clears the shutdown deadline timer after workers become quiescent', async () => {
+    vi.useFakeTimers()
+    try {
+      const lifecycle = createStorageLifecycleControl({ tasks: [{ taskId: 'test-task', category: 'pending-reclamation',
+        start: () => ({ stop() {}, quiesce: async () => undefined }) }] })
+      lifecycle.allowBackgroundWork()
+      await expect(lifecycle.stop({ deadlineMs: 100 })).resolves.toEqual({ status: 'quiescent' })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('continues stopping sibling tasks when one task stop hook throws', async () => {
+    const siblingStop = vi.fn()
+    const lifecycle = createStorageLifecycleControl({ tasks: [
+      { taskId: 'broken-stop', category: 'derived-index', start: () => ({ stop() { throw new Error('stop failed') }, quiesce: async () => undefined }) },
+      { taskId: 'sibling', category: 'retention', start: () => ({ stop: siblingStop, quiesce: async () => undefined }) }
+    ] })
+    lifecycle.allowBackgroundWork()
+    await expect(lifecycle.stop({ deadlineMs: 100 })).resolves.toEqual({ status: 'failed' })
+    expect(siblingStop).toHaveBeenCalledOnce()
+  })
+
   it('forwards coalesced policy and capacity wakeups to an active task handle', () => {
     const request = vi.fn()
     const lifecycle = createStorageLifecycleControl({ tasks: [{ taskId: 'wakeable', category: 'retention', start: () => ({ stop() {}, quiesce: async () => undefined, request }) }] })

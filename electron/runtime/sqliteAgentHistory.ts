@@ -118,19 +118,27 @@ function requiredUserLegacyTextProjection(content: unknown): string | undefined 
     .map((block) => (block as Record<string, unknown>).text as string).join('')
 }
 
+function isCanonicalWriteFence(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  return typeof value.sessionGeneration === 'string' && Number.isSafeInteger(value.sessionSeq) &&
+    Number.isSafeInteger(value.commitOrder) && (value.watermarkEventId === null || typeof value.watermarkEventId === 'string') &&
+    (value.watermarkInvocationId === null || typeof value.watermarkInvocationId === 'string')
+}
+
 export function mirrorCanonicalContextMessages(
   conn: DatabaseSync,
   sessionId: string,
   messages: readonly unknown[],
-  skipMessageId?: string
+  skipMessageId?: string,
+  canonicalRevision = false
 ): void {
   if (!conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").get()) return
   const hasTurnsTable = Boolean(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'").get())
   const findTarget = conn.prepare(hasTurnsTable
-    ? `SELECT messages.session_id,messages.role,messages.status,messages.sequence,
+    ? `SELECT messages.session_id,messages.role,messages.status,messages.sequence,messages.content,messages.content_storage_state,
         (SELECT state FROM turns WHERE session_id=messages.session_id AND assistant_message_id=messages.id LIMIT 1) AS turn_state
       FROM messages WHERE messages.id=?`
-    : 'SELECT session_id,role,status,sequence,NULL AS turn_state FROM messages WHERE id=?')
+    : 'SELECT session_id,role,status,sequence,content,content_storage_state,NULL AS turn_state FROM messages WHERE id=?')
   const update = conn.prepare(`UPDATE messages SET content=CASE
     WHEN content_storage_state='canonical-backed-only' THEN content ELSE ? END,
     content_storage_state=CASE
@@ -138,6 +146,8 @@ export function mirrorCanonicalContextMessages(
     WHEN (SELECT write_mode FROM session_message_content_cutover WHERE session_id=?)='canonical'
       THEN 'canonical-backed-dual-write' ELSE content_storage_state END
     WHERE id=? AND session_id=? AND role=? AND status=?`)
+  const updateEditedCanonicalBody = conn.prepare(`UPDATE messages SET content='',content_storage_state='canonical-backed-only'
+    WHERE id=? AND session_id=? AND role=? AND status=? AND content_storage_state='canonical-backed-dual-write' AND content=?`)
   const lastSequence = conn.prepare('SELECT sequence FROM messages WHERE session_id=? ORDER BY sequence DESC LIMIT 1')
   const updatePreview = conn.prepare('UPDATE sessions SET preview=?,updated_at=? WHERE id=?')
   const seenMessageIds = new Set<string>()
@@ -148,7 +158,8 @@ export function mirrorCanonicalContextMessages(
       throw new HistoryBatchError('canonical context message identity is duplicated or conflicts with its legacy row')
     }
     seenMessageIds.add(rawMessage.id)
-    const target = findTarget.get(rawMessage.id) as { session_id: string; role: string; status: string; sequence: number; turn_state: string | null } | undefined
+    const target = findTarget.get(rawMessage.id) as { session_id: string; role: string; status: string; sequence: number;
+      content: string; content_storage_state: string; turn_state: string | null } | undefined
     // Canonical History also serves standalone/remote invocations that have no desktop message row.
     if (!target) continue
     if (target.session_id !== sessionId || target.role !== rawMessage.role) {
@@ -165,7 +176,13 @@ export function mirrorCanonicalContextMessages(
       ? requiredUserLegacyTextProjection(rawMessage.content)
       : assistantLegacyTextProjection(rawMessage.content)
     if (content === undefined) throw new HistoryBatchError('canonical context message content cannot be mirrored exactly')
-    const result = update.run(content, sessionId, rawMessage.id, sessionId, rawMessage.role, target.status)
+    const editedCanonicalBody = canonicalRevision && target.content_storage_state === 'canonical-backed-dual-write' && target.content !== content
+    const result = editedCanonicalBody
+      // Earlier History snapshots remain immutable. Once a canonical body is edited,
+      // the old snapshot can no longer be checked against a current dual-write mirror.
+      // Move only the changed message to canonical-only in this same History transaction.
+      ? updateEditedCanonicalBody.run(rawMessage.id, sessionId, rawMessage.role, target.status, target.content)
+      : update.run(content, sessionId, rawMessage.id, sessionId, rawMessage.role, target.status)
     if (Number(result.changes) !== 1) throw new HistoryBatchError('canonical context message mirror target changed during append')
     const last = lastSequence.get(sessionId) as { sequence: number } | undefined
     if (last?.sequence === target.sequence) updatePreview.run(content.slice(0, 120), Date.now(), sessionId)
@@ -645,7 +662,8 @@ export class SqliteAgentHistory implements HistoryPort {
             }
             if (event.kind === 'transcript-compacted') continue
             if (!('requiredUserMessage' in payload)) {
-              mirrorCanonicalContextMessages(this.conn, this.sessionId, payload.messages as unknown[])
+              mirrorCanonicalContextMessages(this.conn, this.sessionId, payload.messages as unknown[], undefined,
+                isCanonicalWriteFence(payload.canonicalWriteFence))
               continue
             }
             if (!payload.requiredUserMessage || typeof payload.requiredUserMessage !== 'object' || Array.isArray(payload.requiredUserMessage)) {

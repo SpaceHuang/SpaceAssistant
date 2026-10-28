@@ -278,7 +278,14 @@ export async function ensureSessionLedgerReady(input: {
     return { status: 'blocked', readiness: readSessionLedgerReadiness(input.conn, latest.ledgerLocationKey)! }
   })
   const initial = readSessionLedgerReadiness(input.conn, readiness.ledgerLocationKey)!
-  const result = hasCredentialedBootstrap(initial)
+  // Read-only consumers (currently compaction-marker hydration during a session switch) fall back
+  // to canonical History when the ledger is blocked. They must not wait for an active writer just
+  // to refresh a verdict that they are explicitly forbidden to retry.
+  const canReuseBlockedVerdictWithoutWriterDrain = input.retryBlocked === false &&
+    initial.state === 'blocked' && !hasCredentialedBootstrap(initial)
+  const result = canReuseBlockedVerdictWithoutWriterDrain
+    ? { status: 'blocked' as const, readiness: initial }
+    : hasCredentialedBootstrap(initial)
     ? await runLifecycle()
     : await withSessionEventWriterDrain(input.location.workDir, input.location.sessionId, runLifecycle)
   try {

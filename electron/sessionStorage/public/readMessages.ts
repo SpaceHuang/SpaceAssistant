@@ -7,6 +7,7 @@ export type SessionSwitchTraceEvent = Readonly<{
   traceId: string
   rendererProcessId?: number
   requestOrdinal?: number
+  handlerEnteredAtEpochMs?: number
   outcome: 'ok' | 'error' | 'cancelled' | 'timeout'
   cachePath: 'ready' | 'prior-authority' | 'cold' | 'invalidated' | 'unknown'
   pageSize: number
@@ -79,12 +80,13 @@ export function createSessionSwitchTrace(options: Readonly<{
 /** Wrap the IPC-owned page read and emit one bounded main-process trace on success or failure. */
 export async function readChatPageWithSessionSwitchTrace<T extends Readonly<{ entries: readonly unknown[] }>>(
   read: (diagnostics: Readonly<{ trace: ReturnType<typeof createSessionSwitchTrace>; onCachePath: (path: 'ready' | 'prior-authority' | 'cold' | 'invalidated') => void }>) => Promise<T>,
-  options: Readonly<{ traceId: string; rendererProcessId?: number; requestOrdinal?: number; emit: (event: SessionSwitchTraceEvent) => void }>
+  options: Readonly<{ traceId: string; rendererProcessId?: number; requestOrdinal?: number; handlerEnteredAtEpochMs?: number; emit: (event: SessionSwitchTraceEvent) => void }>
 ): Promise<T> {
   const trace = createSessionSwitchTrace({ instance: 'main', traceId: options.traceId, emit: (event) => options.emit({
     ...event,
     ...(Number.isSafeInteger(options.rendererProcessId) && options.rendererProcessId! >= 0 ? { rendererProcessId: options.rendererProcessId } : {}),
-    ...(Number.isSafeInteger(options.requestOrdinal) && options.requestOrdinal! >= 1 ? { requestOrdinal: options.requestOrdinal } : {})
+    ...(Number.isSafeInteger(options.requestOrdinal) && options.requestOrdinal! >= 1 ? { requestOrdinal: options.requestOrdinal } : {}),
+    ...(isValidTraceEpochMs(options.handlerEnteredAtEpochMs) ? { handlerEnteredAtEpochMs: options.handlerEnteredAtEpochMs } : {})
   }) })
   let cachePath: SessionSwitchTraceSummary['cachePath'] = 'unknown'
   try {
@@ -95,6 +97,10 @@ export async function readChatPageWithSessionSwitchTrace<T extends Readonly<{ en
     trace.finish({ outcome: 'error', cachePath, pageSize: 0 })
     throw error
   }
+}
+
+function isValidTraceEpochMs(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1_000_000_000_000 && value <= 10_000_000_000_000
 }
 
 function sessionSwitchDuration(value: number): number {

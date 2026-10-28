@@ -94,10 +94,13 @@ export function readProjectionPageSourceSpills(conn: DatabaseSync, sessionId: st
     WHERE owner_table='agent_history_events'`).get() as { status: string; verified_generation: number | null } | undefined
   const generation = conn.prepare("SELECT meta_value FROM spill_reference_meta WHERE meta_key='canonical_change_generation'")
     .get() as { meta_value: number } | undefined
-  if (!state || state.status !== 'complete' || !generation || !Number.isSafeInteger(state.verified_generation) ||
-    !Number.isSafeInteger(generation.meta_value) || state.verified_generation! > generation.meta_value) {
-    throw new Error('PROJECTION_SOURCE_SPILL_INDEX_UNAVAILABLE')
-  }
+  // This index is derived maintenance state. Selected canonical events and their source digests above
+  // are authoritative for a page, so a startup reconciliation must not block a healthy cold read.
+  // A fresh complete index still gets exact parity validation; a partial/stale index may only add
+  // entries that are already present in the canonical payload.
+  const indexReady = !!state && state.status === 'complete' && !!generation &&
+    Number.isSafeInteger(state.verified_generation) && Number.isSafeInteger(generation.meta_value) &&
+    state.verified_generation === generation.meta_value
 
   const referenced: SpillDescriptor[] = []
   for (const event of events) {
@@ -121,7 +124,12 @@ export function readProjectionPageSourceSpills(conn: DatabaseSync, sessionId: st
       parsedIndexed.push(found[0])
     }
     const stable = (items: readonly SpillDescriptor[]) => items.map((item) => JSON.stringify(item)).sort()
-    if (JSON.stringify(stable(descriptors)) !== JSON.stringify(stable(parsedIndexed))) throw new Error('PROJECTION_SOURCE_SPILL_INDEX_MISMATCH')
+    const canonicalDescriptors = stable(descriptors)
+    const indexedDescriptors = stable(parsedIndexed)
+    if ((indexReady && JSON.stringify(canonicalDescriptors) !== JSON.stringify(indexedDescriptors)) ||
+      (!indexReady && indexedDescriptors.some((item) => !canonicalDescriptors.includes(item)))) {
+      throw new Error('PROJECTION_SOURCE_SPILL_INDEX_MISMATCH')
+    }
     referenced.push(...descriptors)
   }
   return Object.freeze(referenced)

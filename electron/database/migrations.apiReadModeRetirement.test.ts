@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { runMigrations } from './migrations'
-import { SCHEMA_META_KEYS } from './schema'
+import { DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
 import { createSession } from './operations'
 import { openDatabase } from './index'
 
@@ -44,7 +44,7 @@ describe('api_read_mode retirement migration', () => {
     const triggers = conn.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger'").all() as Array<{ name: string; sql: string }>
     expect(triggers.some(({ name }) => name === 'invalidate_session_projection_after_content_revision')).toBe(true)
     expect(triggers.some(({ sql }) => sql.includes('api_read_mode'))).toBe(false)
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '116' })
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: String(DB_SCHEMA_VERSION) })
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical',updated_at=2 WHERE session_id=?").run(existing.id)
     expect(conn.prepare("SELECT status FROM session_projection_state WHERE session_id=? AND scope_key='scope:test'").get(existing.id))
       .toEqual({ status: 'invalid' })
@@ -65,7 +65,7 @@ describe('api_read_mode retirement migration', () => {
       const columns = getDbConnection(reopened).prepare('PRAGMA table_info(session_message_content_cutover)').all() as Array<{ name: string }>
       expect(columns.map(({ name }) => name)).not.toContain('api_read_mode')
       expect(getDbConnection(reopened).prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
-        .toEqual({ value: '116' })
+        .toEqual({ value: String(DB_SCHEMA_VERSION) })
     } finally {
       reopened?.close()
       temp.cleanup()

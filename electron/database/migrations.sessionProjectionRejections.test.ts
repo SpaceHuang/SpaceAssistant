@@ -3,7 +3,7 @@ import { createSession } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { runMigrations } from './migrations'
-import { SCHEMA_META_KEYS } from './schema'
+import { DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
 
 describe('legacy projection rejection retirement', () => {
   it('drops v112 rejection and eligibility rows while keeping scope state', () => {
@@ -24,7 +24,7 @@ describe('legacy projection rejection retirement', () => {
 
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)")
       .all('canonical_session_projection_eligibility', 'canonical_session_projection_rejections')).toEqual([])
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key=?").get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '116' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key=?").get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare('SELECT COUNT(*) AS count FROM session_projection_state WHERE session_id=?').get(session.id)).toEqual({ count: 0 })
     db.close()
   })

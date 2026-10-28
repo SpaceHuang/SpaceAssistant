@@ -212,16 +212,19 @@ function expectButtonVisible(button: HTMLElement) {
   expect(button.className).not.toContain('chat-scroll-to-latest--hidden')
 }
 
-function pageFromStore(sessionId: string) {
-  const messages = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
+const messagePages = new Map<string, Message[]>()
+
+function pageFromMessages(sessionId: string, messages: readonly Message[]) {
+  const sessionMessages = messages.filter((message) => message.sessionId === sessionId)
   return {
-    entries: messages.map((message, sequence) => ({ message, sequence })),
-    oldestSequence: messages.length ? 0 : null,
+    entries: sessionMessages.map((message, sequence) => ({ message, sequence })),
+    oldestSequence: sessionMessages.length ? 0 : null,
     hasMoreBefore: false
   }
 }
 
 async function renderChatWithMessages(messages: Message[], session: Session = testSession, config?: AppConfig) {
+  messagePages.set(session.id, messages)
   store.dispatch(setConfig(config ?? makeConfig()))
   store.dispatch(setSession(session.id))
   store.dispatch(setMessages(messages))
@@ -260,6 +263,7 @@ function syncScrollState(
 describe('ChatView scroll to latest', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
+    messagePages.clear()
     scrollToIndexMock.mockClear()
     await changeAppLocale('zh-CN')
 
@@ -280,7 +284,7 @@ describe('ChatView scroll to latest', () => {
         store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
       ),
       chatGetMessagePage: vi.fn().mockImplementation(async ({ sessionId }: { sessionId: string }) =>
-        pageFromStore(sessionId)
+        pageFromMessages(sessionId, messagePages.get(sessionId) ?? [])
       ),
       chatGetApiContextBaseline: vi.fn().mockResolvedValue({ sessionId: testSession.id, entries: [] }),
       chatGetContextHistorySummaryBaseline: vi.fn().mockResolvedValue({

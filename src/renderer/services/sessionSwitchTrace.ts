@@ -26,9 +26,12 @@ export function takeRendererSessionSelectionDuration(sessionId: string, now = pe
 }
 
 /** Attach correlation in the renderer world, after contextBridge has copied the IPC result. */
-export async function requestChatMessagePageWithTraceMetadata<T extends object>(request: () => Promise<T>): Promise<T> {
+export async function requestChatMessagePageWithTraceMetadata<T extends object>(request: () => Promise<T>, nowEpochMs: () => number = Date.now): Promise<T> {
   rendererPageRequestOrdinal += 1
-  const metadata: SessionSwitchTraceMetadata = { requestOrdinal: rendererPageRequestOrdinal }
+  const initiatedAt = nowEpochMs()
+  const metadata: SessionSwitchTraceMetadata = { requestOrdinal: rendererPageRequestOrdinal,
+    ...(Number.isSafeInteger(initiatedAt) && initiatedAt >= 1_000_000_000_000 && initiatedAt <= 10_000_000_000_000
+      ? { requestInitiatedAtEpochMs: initiatedAt } : {}) }
   try {
     return attachSessionSwitchTraceMetadata(await request(), metadata)
   } catch (error) {
@@ -49,6 +52,7 @@ export function emitRendererSessionSwitchTrace(input: Readonly<{
     .slice(0, 20).map((stage) => ({ name: stage.name, durationMs: Math.round(stage.durationMs * 100) / 100, outcome: stage.outcome }))
   const line = JSON.stringify({ event: 'session.switch.trace', instance: 'renderer',
     ...(input.metadata.processId === undefined ? {} : { rendererProcessId: input.metadata.processId }), requestOrdinal: input.metadata.requestOrdinal,
+    ...(input.metadata.requestInitiatedAtEpochMs === undefined ? {} : { requestInitiatedAtEpochMs: input.metadata.requestInitiatedAtEpochMs }),
     outcome: input.outcome, pageSize: Math.min(200, Math.max(0, Math.trunc(input.pageSize))), stages })
   try { (input.emit ?? ((value) => console.info(`[session.switch.trace.renderer] ${value}`)))(line) } catch { /* Diagnostics never affect message rendering. */ }
 }

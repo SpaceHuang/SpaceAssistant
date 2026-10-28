@@ -175,6 +175,23 @@ describe('session projection derived blob store', () => {
     await expect(blobs.collectGarbage(getDbConnection(temp.db))).resolves.toMatchObject({ removedCount: 1 })
   })
 
+  it('rejects a truncated external projection blob before yielding bytes to the consumer', async () => {
+    temp = createTempDatabase('projection-verified-stream-truncated-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const payload = 'published projection body '.repeat(100)
+    const staged = await blobs.write(payload)
+    await staged.release()
+    await fs.truncate(path.join(root, staged.locator), Math.floor(staged.byteLength / 2))
+
+    let consumedBytes = 0
+    await expect(blobs.withVerifiedReadStream(staged, async (stream) => {
+      for await (const chunk of stream) consumedBytes += chunk.byteLength
+      return consumedBytes
+    })).rejects.toMatchObject({ code: 'PROJECTION_BLOB_CORRUPT' })
+    expect(consumedBytes).toBe(0)
+  })
+
   it('allocates and promotes multiple worker artifacts while retaining the fence until checkpoint release', async () => {
     temp = createTempDatabase('projection-worker-stage-batch-')
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')

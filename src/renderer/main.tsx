@@ -4,8 +4,11 @@ import { Provider } from 'react-redux'
 import { store } from './store'
 import App from './App'
 import { ThemeProvider } from './theme/ThemeProvider'
+import { startRendererLongTaskObserver } from './services/rendererLongTaskObserver'
 import './i18n'
 import './styles.css'
+
+startRendererLongTaskObserver()
 
 const rendererStartupStartedAt = performance.now()
 let rendererFirstPaintReported = false

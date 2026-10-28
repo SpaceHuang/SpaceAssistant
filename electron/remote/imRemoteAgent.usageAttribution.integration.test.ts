@@ -361,13 +361,21 @@ describe('Feishu production entry usage attribution SQLite integration', () => {
       await patchHandlers.get('message:patch-non-turn')!(null, { sessionId: session.id, messageId: oldUser.message.id, patch: { content: 'edited old user sentinel' } })
       await patchHandlers.get('message:patch-non-turn')!(null, { sessionId: session.id, messageId: oldAssistant.message.id, patch: { content: 'edited old assistant sentinel' } })
     }
-    const expectedOldUser = edited ? 'edited old user sentinel' : 'old user before edit'
-    const expectedOldAssistant = edited ? 'edited old assistant sentinel' : 'old assistant before edit'
+    const expectedOldUser = canonicalRetained && edited ? '' : edited ? 'edited old user sentinel' : 'old user before edit'
+    const expectedOldAssistant = canonicalRetained && edited ? '' : edited ? 'edited old assistant sentinel' : 'old assistant before edit'
     expect(getDbConnection(db).prepare('SELECT id,sequence,content FROM messages WHERE session_id=? ORDER BY sequence LIMIT 2').all(session.id))
       .toEqual([
         { id: oldUser.message.id, sequence: 0, content: expectedOldUser },
         { id: oldAssistant.message.id, sequence: 1, content: expectedOldAssistant }
       ])
+    if (canonicalRetained && edited) {
+      const transcript = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).readCanonicalSessionTranscriptForShadow(session.id)
+      expect(transcript.kind).toBe('matched')
+      if (transcript.kind === 'matched') {
+        expect(transcript.messages.filter(({ id }) => [oldUser.message.id, oldAssistant.message.id].includes(id))
+          .map(({ content }) => content)).toEqual(['edited old user sentinel', 'edited old assistant sentinel'])
+      }
+    }
     if (canonicalRetained) {
       const latestHistory = await storage.execution.historyFor({ sessionId: session.id }).readLatestInvocationForSession(session.id)
       expect(latestHistory.kind).toBe('completed')
@@ -484,13 +492,21 @@ describe('Feishu production entry usage attribution SQLite integration', () => {
       await patchHandlers.get('message:patch-non-turn')!(null, { sessionId: session.id, messageId: oldUser.message.id, patch: { content: 'edited WeChat user sentinel' } })
       await patchHandlers.get('message:patch-non-turn')!(null, { sessionId: session.id, messageId: oldAssistant.message.id, patch: { content: 'edited WeChat assistant sentinel' } })
     }
-    const expectedOldUser = edited ? 'edited WeChat user sentinel' : 'old WeChat user before edit'
-    const expectedOldAssistant = edited ? 'edited WeChat assistant sentinel' : 'old WeChat assistant before edit'
+    const expectedOldUser = canonicalRetained && edited ? '' : edited ? 'edited WeChat user sentinel' : 'old WeChat user before edit'
+    const expectedOldAssistant = canonicalRetained && edited ? '' : edited ? 'edited WeChat assistant sentinel' : 'old WeChat assistant before edit'
     expect(getDbConnection(db).prepare('SELECT id,sequence,content FROM messages WHERE session_id=? ORDER BY sequence LIMIT 2').all(session.id))
       .toEqual([
         { id: oldUser.message.id, sequence: 0, content: expectedOldUser },
         { id: oldAssistant.message.id, sequence: 1, content: expectedOldAssistant }
       ])
+    if (canonicalRetained && edited) {
+      const transcript = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).readCanonicalSessionTranscriptForShadow(session.id)
+      expect(transcript.kind).toBe('matched')
+      if (transcript.kind === 'matched') {
+        expect(transcript.messages.filter(({ id }) => [oldUser.message.id, oldAssistant.message.id].includes(id))
+          .map(({ content }) => content)).toEqual(['edited WeChat user sentinel', 'edited WeChat assistant sentinel'])
+      }
+    }
     const accepted = prepareTurnAtomically(db, {
       user: { id: 'wechat-non-track-current-user', sessionId: session.id, role: 'user', content: 'current WeChat accepted sentinel', timestamp: 3, status: 'sent' },
       assistant: { id: 'wechat-non-track-current-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 4, status: 'streaming' },

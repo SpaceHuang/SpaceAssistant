@@ -360,8 +360,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     await patch(makeSender(), { sessionId: session.id, messageId: priorAssistant.message.id, patch: { content: 'edited prior assistant sentinel' } })
     expect(getDbConnection(db).prepare('SELECT id,sequence,content FROM messages WHERE session_id=? ORDER BY sequence LIMIT 2').all(session.id))
       .toEqual([
-        { id: priorUser.message.id, sequence: 0, content: 'edited prior user sentinel' },
-        { id: priorAssistant.message.id, sequence: 1, content: 'edited prior assistant sentinel' }
+        { id: priorUser.message.id, sequence: 0, content: canonicalRetained ? '' : 'edited prior user sentinel' },
+        { id: priorAssistant.message.id, sequence: 1, content: canonicalRetained ? '' : 'edited prior assistant sentinel' }
       ])
     if (canonicalRetained) {
       expect(new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).readCanonicalSessionTranscriptForShadow(session.id))

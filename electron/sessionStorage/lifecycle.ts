@@ -10,7 +10,7 @@ export function createStorageLifecycleControl(input: {
   let allowed = false
   const records = input.tasks.map((task) => ({ task, handle: undefined as LifecycleTaskHandle | undefined, paused: false,
     lastError: undefined as string | undefined, retryTimer: undefined as ReturnType<typeof setTimeout> | undefined }))
-  let stopping: Promise<{ status: 'quiescent' | 'deadline-exceeded' }> | undefined
+  let stopping: Promise<{ status: 'quiescent' | 'deadline-exceeded' | 'failed' }> | undefined
   const ensureStarted = (record: typeof records[number]) => {
     if (stopped || record.paused || !allowed || record.handle || record.retryTimer) return false
     try {
@@ -90,20 +90,31 @@ export function createStorageLifecycleControl(input: {
       if (stopping) return stopping
       stopped = true
       const active = records.map((record) => record.handle).filter((handle): handle is LifecycleTaskHandle => !!handle)
+      let stopFailed = false
       for (const record of records) {
         if (record.retryTimer) clearTimeout(record.retryTimer)
         record.retryTimer = undefined
-        record.handle?.stop()
+        try { record.handle?.stop() } catch { stopFailed = true }
         record.handle = undefined
       }
       if (!active.length && !input.quiesce) {
         stopping = Promise.resolve({ status: 'quiescent' as const })
         return stopping
       }
-      stopping = Promise.race([
-        Promise.all([...active.map((handle) => handle.quiesce()), input.quiesce?.() ?? Promise.resolve()]).then(() => ({ status: 'quiescent' as const })),
-        new Promise<{ status: 'deadline-exceeded' }>((resolve) => setTimeout(() => resolve({ status: 'deadline-exceeded' }), Math.max(0, deadlineMs)))
-      ]).then((result) => result)
+      const quiescence = Promise.all([
+        ...active.map((handle) => Promise.resolve().then(() => handle.quiesce())),
+        ...(input.quiesce ? [Promise.resolve().then(() => input.quiesce!())] : [])
+      ]).then(
+        () => ({ status: stopFailed ? 'failed' as const : 'quiescent' as const }),
+        () => ({ status: 'failed' as const })
+      )
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined
+      const deadline = new Promise<{ status: 'deadline-exceeded' }>((resolve) => {
+        deadlineTimer = setTimeout(() => resolve({ status: 'deadline-exceeded' }), Math.max(0, deadlineMs))
+      })
+      stopping = Promise.race([quiescence, deadline]).finally(() => {
+        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer)
+      })
       return stopping
     }
   })

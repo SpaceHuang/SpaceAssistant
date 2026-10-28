@@ -312,6 +312,12 @@
       "noSessionDesc": "在左侧会话列表中新建或打开对话",
       "startTitle": "开始对话",
       "startDesc": "输入问题开始协作，例如：帮我整理 README 的要点。也可使用 /skill 或 /wiki 命令。"
+    },
+    "loadingMessages": "正在加载会话消息…",
+    "loadFailed": {
+      "title": "无法加载这个会话的消息",
+      "description": "历史内容暂时不可用。请重试；如果问题仍然存在，请检查本地会话数据。",
+      "retry": "重试"
     }
   },
   "shell": {

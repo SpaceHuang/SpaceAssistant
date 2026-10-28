@@ -101,6 +101,54 @@ describe('projection page source dependency reader', () => {
       .toThrow('PROJECTION_SOURCE_DEPENDENCY_MISMATCH')
   })
 
+  it('resolves selected source spills from canonical History while the derived spill index is reconciling', async () => {
+    const temp = createTempDatabase('projection-page-spill-index-pending-')
+    cleanup = temp.cleanup
+    const conn = getDbConnection(temp.db)
+    const session = createSession(temp.db, { name: 'page dependency pending spill index' })
+    const descriptor = { version: 1, kind: 'source-of-truth', locator: '11111111-1111-4111-8111-111111111111.spill',
+      byteLength: 3, sha256: 'a'.repeat(64), createdAt: 10, head: 'abc', tail: 'abc' }
+    await new SqliteAgentHistory(conn, 1, () => 10, session.id).appendBatch([{
+      invocationId: 'pending-index-invocation', turnId: 'pending-index-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'pending-index-event', idempotencyKey: 'pending-index-event', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'pending-index-message', role: 'assistant', content: 'body' }] },
+    }], 0)
+    conn.prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?')
+      .run(JSON.stringify({ messages: [{ id: 'pending-index-message', role: 'assistant',
+        content: { __spaceassistant_spill_v1: descriptor } }] }), 'pending-index-event')
+    const event = conn.prepare(`SELECT invocation_id,turn_id,sequence,event_id,idempotency_key,schema_version,kind,session_seq,
+      commit_order,created_at,payload_json FROM agent_history_events WHERE event_id=?`)
+      .get('pending-index-event') as Parameters<typeof projectionSourceEventDigest>[0]
+    const sourceRevision = conn.prepare('SELECT source_revision FROM session_body_source_state WHERE session_id=?')
+      .get(session.id) as { source_revision: number }
+    conn.prepare(`INSERT INTO session_body_source_manifest(session_id,invocation_id,source_revision,manifest_locator,byte_length,sha256,
+      history_watermark_json,schema_version) VALUES(?,?,?,?,?,?,?,?)`).run(session.id, 'pending-index-invocation', sourceRevision.source_revision,
+        'projection-77777777-7777-4777-8777-777777777777.blob', 2, 'e'.repeat(64), '[1,1]', 1)
+    conn.prepare(`INSERT INTO session_message_body_locator(session_id,message_id,sequence,fragment_locator,byte_length,sha256)
+      VALUES(?,?,?,?,?,?)`).run(session.id, 'pending-index-message', 0, 'projection-88888888-8888-4888-8888-888888888888.blob', 2, 'f'.repeat(64))
+    conn.prepare(`INSERT INTO session_message_body_source_event(session_id,message_id,invocation_id,event_id,event_sequence,
+      session_sequence,schema_version,kind,source_digest) VALUES(?,?,?,?,?,?,?,?,?)`).run(session.id, 'pending-index-message',
+        'pending-index-invocation', 'pending-index-event', event.sequence, event.session_seq, event.schema_version, event.kind,
+        projectionSourceEventDigest(event))
+    const revision = conn.prepare('SELECT source_revision FROM session_body_source_state WHERE session_id=?')
+      .get(session.id) as { source_revision: number }
+    conn.prepare(`UPDATE spill_reference_backfill_state SET status='running',verified_generation=NULL
+      WHERE owner_table='agent_history_events'`).run()
+
+    expect(readProjectionPageSourceSpills(conn, session.id, revision.source_revision, ['pending-index-message']))
+      .toEqual([descriptor])
+
+    const eventRevision = conn.prepare('SELECT spill_reference_revision FROM agent_history_events WHERE event_id=?')
+      .get('pending-index-event') as { spill_reference_revision: number | null }
+    const wrongDescriptor = { ...descriptor, locator: '22222222-2222-4222-8222-222222222222.spill' }
+    conn.prepare(`INSERT INTO spill_reference_index(owner_table,owner_key,descriptor_path,owner_revision,locator,kind,
+      descriptor_json,updated_at) VALUES(?,?,?,?,?,?,?,?)`).run('agent_history_events',
+        JSON.stringify(['pending-index-invocation', 'pending-index-event']), '/messages/0/content/__spaceassistant_spill_v1',
+        String(eventRevision.spill_reference_revision), wrongDescriptor.locator, 'source-of-truth', JSON.stringify(wrongDescriptor), 10)
+    expect(() => readProjectionPageSourceSpills(conn, session.id, revision.source_revision, ['pending-index-message']))
+      .toThrow('PROJECTION_SOURCE_SPILL_INDEX_MISMATCH')
+  })
+
   it('requires every History event in each selected invocation dependency set', async () => {
     const temp = createTempDatabase('projection-page-dependency-coverage-')
     cleanup = temp.cleanup

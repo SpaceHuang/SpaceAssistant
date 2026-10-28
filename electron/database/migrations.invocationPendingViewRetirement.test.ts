@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { runMigrations } from './migrations'
-import { SCHEMA_META_KEYS } from './schema'
+import { DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
 
 describe('invocation pending view retirement migration', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
@@ -21,6 +21,6 @@ describe('invocation pending view retirement migration', () => {
     runMigrations(conn)
 
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='canonical_invocation_pending_views'").get()).toBeUndefined()
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '116' })
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: String(DB_SCHEMA_VERSION) })
   })
 })
