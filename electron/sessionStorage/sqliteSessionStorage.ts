@@ -116,7 +116,15 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const readContextMeterEventsForLocation = async (sessionId: string, workDir: string): Promise<readonly CanonicalContextMeterEvent[]> => {
     const session = queries.readSession(sessionId)
     if (!session) throw new Error('SESSION_NOT_FOUND')
-    if (options.ensureSessionLedgerReady && !(await options.ensureSessionLedgerReady({ session, workDir }))) throw new Error('SESSION_LEDGER_BLOCKED')
+    if (options.ensureSessionLedgerReady) {
+      try {
+        if (!(await options.ensureSessionLedgerReady({ session, workDir }))) {
+          return queries.readCanonicalContextMeterEvents(sessionId) ?? []
+        }
+      } catch {
+        return queries.readCanonicalContextMeterEvents(sessionId) ?? []
+      }
+    }
     const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
     const fileEvents = (await readSessionEvents(sink.eventsPath)).filter(({ type }) =>
       type === 'request_header' || type === 'request_context' || type === 'request_usage' || type === 'request_retry')
@@ -383,7 +391,8 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
         content: Object.freeze({ state: 'unavailable' as const, reason: 'session-missing' as const,
           source: Object.freeze({ sessionGeneration: '', messageRevision: 0, authority: 'unknown' }) }),
         execution: Object.freeze({ state: 'blocked' as const, source: Object.freeze({ sessionId, transcriptVersion: 0 }) }),
-        ledger: Object.freeze({ state: 'unknown', reason: 'readiness-missing' as const, source: Object.freeze({ sessionId }) }),
+        ledger: Object.freeze({ state: 'degraded' as const, readinessState: 'unknown' as const, reasonCode: 'readiness-missing' as const,
+          reason: 'readiness-missing' as const, source: Object.freeze({ sessionId }) }),
         maintenance: Object.freeze({ state: maintenanceState, tasks: Object.freeze(maintenanceTasks), source: maintenanceSource })
       })
       const conn = getDbConnection(db)
@@ -403,12 +412,14 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       else if (execution.hasActiveTurn(sessionId)) executionState = 'busy'
       else executionState = 'ready'
       const workDir = options.getWorkDirForSession?.(sessionId)
-      let ledger: { state: 'uninitialized' | 'initializing' | 'unknown' | 'checking' | 'ready' | 'dirty' | 'blocked'; reason?: 'location-unavailable' | 'readiness-missing'; source: { sessionId: string; locationKey?: string; ledgerGeneration?: number; canonicalWatermark?: string | null; failureClass?: string | null } }
-      if (!workDir) ledger = { state: 'unknown', reason: 'location-unavailable', source: { sessionId } }
+      let ledger: { state: 'ready' | 'degraded'; readinessState: 'uninitialized' | 'initializing' | 'unknown' | 'checking' | 'ready' | 'dirty' | 'blocked'; reasonCode?: 'location-unavailable' | 'readiness-missing' | 'ledger-uninitialized' | 'ledger-initializing' | 'ledger-unknown' | 'ledger-checking' | 'ledger-dirty' | 'ledger-blocked'; reason?: 'location-unavailable' | 'readiness-missing'; source: { sessionId: string; locationKey?: string; ledgerGeneration?: number; canonicalWatermark?: string | null; failureClass?: string | null } }
+      if (!workDir) ledger = { state: 'degraded', readinessState: 'unknown', reason: 'location-unavailable', reasonCode: 'location-unavailable', source: { sessionId } }
       else {
         const location = { workDir, sessionId, createdAt: session.createdAt }
         const readiness = readSessionLedgerAvailability(conn, location)
-        ledger = { state: readiness.state, ...(readiness.reason ? { reason: readiness.reason } : {}), source: { sessionId, locationKey: readiness.locationKey,
+        const reasonCode = readiness.state === 'ready' ? undefined : readiness.reason ?? `ledger-${readiness.state}` as NonNullable<typeof ledger['reasonCode']>
+        ledger = { state: readiness.state === 'ready' ? 'ready' : 'degraded', readinessState: readiness.state,
+          ...(reasonCode ? { reasonCode } : {}), ...(readiness.reason ? { reason: readiness.reason } : {}), source: { sessionId, locationKey: readiness.locationKey,
           ...(readiness.ledgerGeneration !== undefined ? { ledgerGeneration: readiness.ledgerGeneration } : {}),
           ...(readiness.canonicalWatermark !== undefined ? { canonicalWatermark: readiness.canonicalWatermark } : {}),
           ...(readiness.failureClass !== undefined ? { failureClass: readiness.failureClass } : {}) } }

@@ -49,7 +49,13 @@ export type SessionAvailability = Readonly<{
   globalFence: Readonly<{ state: 'pending' | 'ready' | 'degraded' | 'blocked'; source: Readonly<{ recoveryState: 'pending' | 'ready' | 'degraded' | 'blocked' }> }>
   content: Readonly<{ state: 'readable' | 'unavailable'; reason?: 'content-unavailable' | 'session-missing'; source: Readonly<{ sessionGeneration: string; messageRevision: number; authority: string }> }>
   execution: Readonly<{ state: 'ready' | 'busy' | 'pending-recovery' | 'commit-uncertain' | 'blocked'; source: Readonly<{ sessionId: string; transcriptVersion: number; lastTurnId?: string }> }>
-  ledger: Readonly<{ state: 'uninitialized' | 'initializing' | 'unknown' | 'checking' | 'ready' | 'dirty' | 'blocked'; reason?: 'location-unavailable' | 'readiness-missing'; source: Readonly<{ sessionId: string; locationKey?: string; ledgerGeneration?: number; canonicalWatermark?: string | null; failureClass?: string | null }> }>
+  ledger: Readonly<{
+    state: 'ready' | 'degraded'
+    readinessState: 'uninitialized' | 'initializing' | 'unknown' | 'checking' | 'ready' | 'dirty' | 'blocked'
+    reasonCode?: 'location-unavailable' | 'readiness-missing' | 'ledger-uninitialized' | 'ledger-initializing' | 'ledger-unknown' | 'ledger-checking' | 'ledger-dirty' | 'ledger-blocked'
+    reason?: 'location-unavailable' | 'readiness-missing'
+    source: Readonly<{ sessionId: string; locationKey?: string; ledgerGeneration?: number; canonicalWatermark?: string | null; failureClass?: string | null }>
+  }>
   maintenance: Readonly<{ state: 'available' | 'paused' | 'blocked'; tasks: readonly SessionAvailabilityTask[]; source: readonly Readonly<{ taskId: string; status: SessionAvailabilityTask['status'] }>[] }>
 }>
 export interface SessionAvailabilityPort { inspect(sessionId: string): SessionAvailability }

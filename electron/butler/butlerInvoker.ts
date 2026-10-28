@@ -464,10 +464,8 @@ async function runButlerModelTurn(
   const session = sessionStorage.queries.readSession(args.sessionId)
   if (!session) return { ok: false, error: 'BUTLER_SESSION_MISSING' }
   if (!args.assistantMessageId) return { ok: false, error: 'BUTLER_ASSISTANT_MESSAGE_REQUIRED' }
-  if (sessionStorage.ensureLedgerReady && !(await sessionStorage.ensureLedgerReady(args.sessionId))) {
-    return { ok: false, error: 'SESSION_LEDGER_BLOCKED' }
-  }
-
+  // Ledger readiness is maintenance state; canonical History remains authoritative for this turn.
+  try { await sessionStorage.ensureLedgerReady?.(args.sessionId) } catch { /* availability is reported by session storage */ }
   const toolsConfig = deps.getToolsConfig()
   let rawMessages: import('../../src/shared/domainTypes').Message[]
   if (args.turnId) {

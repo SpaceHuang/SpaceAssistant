@@ -334,6 +334,27 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     await fs.rm(workDir, { recursive: true, force: true })
   })
 
+  it.each(['returns false', 'throws'] as const)('continues an automation turn when session ledger readiness %s', async (failureMode) => {
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {},
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } }))
+    })) } })
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
+    setConfigValue(db, 'config.models', JSON.stringify([model]))
+    const task = createAutomationTask(db, { name: 'ledger unavailable', schedule: { kind: 'interval', intervalMinutes: 30 },
+      prompt: 'report', deliveryPref: 'none', workDirs: [testWorkDir], modelId, modelServiceId: 'svc-ledger', modelOverride: model.name })
+    const ensureSessionLedgerReady = vi.fn(failureMode === 'returns false'
+      ? async () => false : async () => { throw new Error('injected readiness failure') })
+    const sessionStorage = createSqliteSessionStorage(db, { getWorkDirForSession: () => testWorkDir, ensureSessionLedgerReady })
+
+    const result = await runButlerTask(makeDeps({ sessionStorage }), task.id, { trigger: 'manual', requestId: 'req-ledger-unavailable' })
+
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    expect(mockCreateAnthropicClient).toHaveBeenCalledOnce()
+    expect(ensureSessionLedgerReady).toHaveBeenCalledOnce()
+  })
+
   it('uses the receipt-bound Shell working directory even when another authorized root sorts first', async () => {
     const firstRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-shell-cwd-first-'))
     const shellRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-shell-cwd-selected-'))

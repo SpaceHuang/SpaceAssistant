@@ -355,6 +355,23 @@ describe('runImRemoteAgent', () => {
     expect(mockRunToolChatSession).not.toHaveBeenCalled()
   })
 
+  it.each(['returns false', 'throws'] as const)('continues an accepted IM turn when the session ledger readiness gate %s', async (failureMode) => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'im ledger unavailable', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-1' })
+    const requestId = 'im-ledger-unavailable-request'
+    const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, requestId, 'im-ledger-unavailable-turn')
+    const ensureSessionLedgerReady = vi.fn(failureMode === 'returns false'
+      ? async () => false : async () => { throw new Error('injected readiness failure') })
+    const sessionStorage = createSqliteSessionStorage(db, { getWorkDirForSession: () => '/tmp', ensureSessionLedgerReady })
+    mockRunToolChatSession.mockResolvedValueOnce({ ok: true, content: [{ type: 'text', text: '继续完成' }], stopReason: 'end_turn' })
+
+    await expect(runImRemoteAgent(baseArgs({ db, sessionId: session.id, requestId, turnId: acceptedTurn.turnId, acceptedTurn, sessionStorage })))
+      .resolves.toMatchObject({ ok: true })
+    expect(ensureSessionLedgerReady).toHaveBeenCalledOnce()
+    expect(mockRunToolChatSession).toHaveBeenCalledOnce()
+    db.close()
+  })
+
   it('fails before provider dispatch when the frozen service has been deleted', async () => {
     const db = makeDb()
     const session = createSession(db, { name: 'deleted-frozen-service', model: SUPPORTED_ANTHROPIC_MODEL })

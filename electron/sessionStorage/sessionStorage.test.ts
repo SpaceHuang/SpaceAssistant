@@ -129,6 +129,33 @@ describe('SQLite session storage public queries', () => {
     }
   })
 
+  it.each(['returns false', 'throws'] as const)('reads canonical context meter facts when the session ledger readiness gate %s', async (failureMode) => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'blocked canonical context meter' })
+    const workDir = '/tmp/blocked-canonical-context-meter'
+    const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
+    const requestHeader = { schemaVersion: 1, requestId: 'blocked-meter-request', attempt: 1,
+      surfaceSnapshot: { schemaVersion: 1, fingerprint: 'surface', systemFingerprint: 'system', toolsFingerprint: 'tools', surfaceTokens: 1, systemTokens: 0, toolsTokens: 0, messageTokens: 1 } }
+    const requestContext = { schemaVersion: 1, requestId: 'blocked-meter-request', attempt: 1, contextWindow: { tokens: 10_000 },
+      provider: 'test-provider', model: 'test-model', budget: { estimatorVersion: 'v1', serializationVersion: 'v1' } }
+    const storage = createSqliteSessionStorage(db, {
+      getWorkDirForSession: () => workDir,
+      ensureSessionLedgerReady: failureMode === 'returns false' ? async () => false : async () => { throw new Error('injected readiness failure') },
+      getSessionEventSink: () => { throw new Error('blocked ledger must not be opened') }
+    })
+    await storage.execution.historyFor({ sessionId: session.id }).appendBatch([{
+      invocationId: 'blocked-meter-invocation', turnId: 'blocked-meter-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'blocked-meter-event', idempotencyKey: 'blocked-meter-event', kind: 'model-request-started',
+      payload: { requestId: requestHeader.requestId, modelTurn: 1, attempt: 1,
+        sessionLedger: { location, requestHeader, requestContext } }
+    }], 0)
+
+    await expect(storage.readContextMeterEvents({ sessionId: session.id, workDir })).resolves.toEqual([
+      expect.objectContaining({ type: 'request_header', payload: requestHeader }),
+      expect.objectContaining({ type: 'request_context', payload: requestContext })
+    ])
+  })
+
   it('preserves the ordered JSONL ContextMeter stream while it still contains legacy-only request facts', async () => {
     const temp = createTempDatabase('session-context-meter-mixed-')
     const workDir = path.join(path.dirname(temp.dbPath), 'context-meter-mixed-ledger')
