@@ -186,7 +186,7 @@ describe('projection build supervisor', () => {
       expect(reads).toBe(0)
       // Poll against a generous bound: under a loaded full-suite run the worker can be
       // scheduled after retryAfter even though a fixed 120ms sleep has elapsed.
-      for (let attempts = 0; attempts < 3_000 && reads === 0; attempts += 1) {
+      for (let attempts = 0; attempts < 6_000 && reads === 0; attempts += 1) {
         await new Promise((resolve) => setTimeout(resolve, 10))
       }
       expect(reads).toBeGreaterThan(0)
@@ -197,9 +197,9 @@ describe('projection build supervisor', () => {
     } finally {
       handle?.stop()
       await handle?.quiesce()
-      temp.cleanup()
+      temp.cleanup(db)
     }
-  }, 30_000)
+  }, 75_000)
 
   it('backs off repeated claim failures and caps the delay', async () => {
     vi.useFakeTimers()

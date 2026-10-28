@@ -419,8 +419,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
           'electron/runtime/continuationSummary', 'electron/runtime/terminalOutcome', 'electron/runtime/canonicalHistory',
           'electron/turnRuntime', 'electron/chatMessageBuild', 'electron/sessionContextCompaction', 'electron/sessionMetadataKeys'].includes(edge.resolved) ||
         edge.resolved.startsWith('src/shared/') || edge.resolved.startsWith('packages/agent-sdk/') || edge.resolved.startsWith('node:') ||
-        edge.resolved === '../../node_modules/@types/proper-lockfile/index.d' ||
-        edge.resolved === '../../node_modules/@types/proper-lockfile/index.d'
+        edge.resolved === 'node_modules/@types/proper-lockfile/index.d'
     }
     return false
   }

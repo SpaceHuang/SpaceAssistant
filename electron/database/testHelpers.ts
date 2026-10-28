@@ -33,16 +33,16 @@ export function seedValidProjectionScope(db: AppDatabase, sessionId: string,
   return scopeKey
 }
 
-export function createTempDatabase(prefix: string): { db: AppDatabase; dbPath: string; cleanup: () => void } {
+export function createTempDatabase(prefix: string): { db: AppDatabase; dbPath: string; cleanup: (db?: AppDatabase) => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
   const dbPath = path.join(dir, 'test.db')
   const db = openDatabase(dbPath)
   return {
     db,
     dbPath,
-    cleanup: () => {
+    cleanup: (database = db) => {
       try {
-        db.close()
+        database.close()
       } catch {
         /* ignore */
       }

@@ -16,6 +16,7 @@ jobs:
   verify:
     name: Quality gate
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
