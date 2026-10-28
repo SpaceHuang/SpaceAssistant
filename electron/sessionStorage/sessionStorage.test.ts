@@ -12,12 +12,12 @@ import { encodeChatBodyV1 } from './domain/projectionSpec'
 import { TurnRuntime } from '../turnRuntime'
 import { bindSessionStorageContextPort, createBoundSessionContextAdapter } from './contextPortRegistry'
 import { buildToolChatMessagesFromSource } from '../chatMessageBuild'
-import { computeReplaySurfaceFingerprint, projectReplaySurface, projectReplaySurfaceWithSources } from '../../src/shared/surfaceReplay'
+import { computeReplaySurfaceFingerprint, projectReplaySurface, projectReplaySurfaceWithSources, surfaceItemIdentitiesForProjectionSubset } from '../../src/shared/surfaceReplay'
 import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
 import { getProjectedMessages, readSessionTranscriptProjection } from './infrastructure/sqlite/sessionTranscriptProjection'
 import * as sessionTranscriptProjection from './infrastructure/sqlite/sessionTranscriptProjection'
 import { drainCanonicalLedgerProjectionOutbox, enqueueCanonicalLedgerProjectionTargetInTransaction, listPendingCanonicalLedgerProjectionTargets } from '../sessionLedgerOutbox'
-import { getSessionEventSink, readSessionEvents, resolveSessionEventPaths } from '../sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readSessionEvents, resolveSessionEventPaths } from '../sessionEvents'
 import { ensureSessionLedgerReady } from '../sessionLedgerLifecycle'
 import { createProductionSessionLedgerLifecycleDependencies } from '../runtime/sessionLedgerLifecycleProduction'
 import { projectCanonicalSessionLedgerTarget } from '../runtime/sessionLedgerOutboxProjector'
@@ -192,7 +192,7 @@ describe('SQLite session storage public queries', () => {
       await sink?.close()
       db?.close()
       db = undefined
-      temp.cleanup()
+      fs.rmSync(path.dirname(temp.dbPath), { recursive: true, force: true })
       fs.rmSync(workDir, { recursive: true, force: true })
     }
   })
@@ -575,6 +575,57 @@ describe('SQLite session storage public queries', () => {
     expect(snapshot.frame.windowId).toBe('window-before-restart')
   })
 
+  it('commits and reopens a manual compaction from canonical History while the ledger stays unavailable', async () => {
+    const temp = createTempDatabase('session-context-canonical-compaction-ledger-unavailable-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'session-context-canonical-compaction-ledger-unavailable')
+    fs.mkdirSync(workDir, { recursive: true })
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'canonical compaction with unavailable ledger' })
+      appendMessagesAtomically(db, [
+        { id: 'ledger-down-u1', sessionId: session.id, role: 'user', content: 'older question '.repeat(80), timestamp: 1, status: 'sent' },
+        { id: 'ledger-down-a1', sessionId: session.id, role: 'assistant', content: 'older answer '.repeat(80), timestamp: 2, status: 'completed' },
+        { id: 'ledger-down-u2', sessionId: session.id, role: 'user', content: 'current question '.repeat(80), timestamp: 3, status: 'sent' },
+        { id: 'ledger-down-a2', sessionId: session.id, role: 'assistant', content: 'current answer '.repeat(80), timestamp: 4, status: 'completed' }
+      ])
+      const getSessionEventSinkSpy = vi.fn(() => { throw new Error('unavailable ledger must not be opened') })
+      const unavailableStorage = createSqliteSessionStorage(db, {
+        getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp', getSessionEventSink: getSessionEventSinkSpy,
+        ensureSessionLedgerReady: async () => false
+      })
+      const bound = await createBoundSessionContextAdapter(unavailableStorage.contexts, { sessionId: session.id, isBusy: () => false })
+      const result = await compactSessionContext({
+        sessionId: session.id, requestId: 'ledger-down-manual-compact', windowId: bound.windowId,
+        messages: bound.messages, totalInputBudget: 100_000, locale: 'en-US', contextAdapter: bound.adapter,
+        summarize: async () => ({ task: 'task', completed: 'done', decisions: 'decision', constraints: 'constraints',
+          pending: 'pending', blockers: 'none', nextStep: 'continue' })
+      })
+      expect(result.status).toBe('committed')
+      expect(getSessionEventSinkSpy).not.toHaveBeenCalled()
+      const beforeRestart = unavailableStorage.queries.readCanonicalCompactionReplay(session.id)
+      expect(beforeRestart.committed).toHaveLength(1)
+      const committedWindowId = beforeRestart.committed[0]?.end.payload.windowId
+
+      db.close()
+      db = openDatabase(temp.dbPath)
+      const reopenedStorage = createSqliteSessionStorage(db, {
+        getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp', getSessionEventSink: getSessionEventSinkSpy,
+        ensureSessionLedgerReady: async () => false
+      })
+      const afterRestart = reopenedStorage.queries.readCanonicalCompactionReplay(session.id)
+      expect(afterRestart.committed).toHaveLength(1)
+      expect(afterRestart.committed[0]?.end.payload.windowId).toBe(committedWindowId)
+      const restored = await createBoundSessionContextAdapter(reopenedStorage.contexts, { sessionId: session.id, isBusy: () => false })
+      expect(restored.windowId).toBe(committedWindowId)
+      expect(restored.messages[0]?.id).toMatch(/^checkpoint:/)
+    } finally {
+      db?.close()
+      db = undefined
+      temp.cleanup()
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
   it('commits manual compaction facts and the complete replacement snapshot to canonical History', async () => {
     const temp = createTempDatabase('session-context-canonical-compaction-')
     const workDir = path.join(path.dirname(temp.dbPath), 'session-context-ledger')
@@ -650,6 +701,74 @@ describe('SQLite session storage public queries', () => {
       db?.close()
       db = undefined
       temp.cleanup()
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('backfills a verified legacy JSONL compaction into canonical History idempotently', async () => {
+    const temp = createTempDatabase('session-context-legacy-compaction-backfill-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'session-context-legacy-compaction-backfill')
+    fs.mkdirSync(workDir, { recursive: true })
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'legacy compaction backfill' })
+      const messages = [
+        { id: 'legacy-backfill-u1', sessionId: session.id, role: 'user' as const, content: 'older question '.repeat(80), timestamp: 1, status: 'sent' as const },
+        { id: 'legacy-backfill-a1', sessionId: session.id, role: 'assistant' as const, content: 'older answer '.repeat(80), timestamp: 2, status: 'completed' as const },
+        { id: 'legacy-backfill-u2', sessionId: session.id, role: 'user' as const, content: 'current question '.repeat(80), timestamp: 3, status: 'sent' as const },
+        { id: 'legacy-backfill-a2', sessionId: session.id, role: 'assistant' as const, content: 'current answer '.repeat(80), timestamp: 4, status: 'completed' as const }
+      ]
+      appendMessagesAtomically(db, messages)
+      const sourceBuilt = await buildToolChatMessagesFromSource({ userDataDir: '/tmp', workDir, sourceMessages: messages,
+        currentUserMessageId: messages[2]!.id, sessionId: session.id })
+      const sourceProjection = projectReplaySurfaceWithSources(sourceBuilt)
+      const sourceIdentities = surfaceItemIdentitiesForProjectionSubset(sourceProjection, sourceProjection)
+      const sourceSurface = sourceProjection.messages.map((message, index) => ({ ...message, id: message.id ?? sourceIdentities[index]! }))
+      const checkpointMessage = { id: 'legacy-backfill-checkpoint', role: 'user' as const,
+        content: JSON.stringify({ kind: 'context_checkpoint', task: 'continue', completed: 'reviewed', decisions: 'keep', constraints: 'preserve', pending: 'continue', blockers: 'none', nextStep: 'proceed' }) }
+      const candidate = { kind: 'summary', checkpointMessage, checkpointReplayIdentity: checkpointMessage.id,
+        shadowedRanges: [{ start: messages[0]!.id, end: messages[1]!.id }] }
+      const start = { compactionId: 'legacy-backfill-compaction', windowId: session.id,
+        inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', sourceSurface), surfaceBoundaryId: messages.at(-1)!.id, targetTokens: 100 }
+      const outputSurface = projectReplaySurfaceWithSources([checkpointMessage, ...sourceSurface.slice(2)],
+        { mergeAdjacentUsers: (left, right) => left.id === checkpointMessage.id || right.id === checkpointMessage.id }).messages
+      const summary = { compactionId: start.compactionId, windowId: session.id,
+        outputSurfaceFingerprint: computeReplaySurfaceFingerprint('', outputSurface), summaryHash: computeCompactionSummaryHash(candidate),
+        shadowedRanges: candidate.shadowedRanges, candidate }
+      const legacySink = getSessionEventSink(workDir, session.id, session.createdAt)
+      await appendCompactionTransaction(legacySink, start, summary)
+      await legacySink.close()
+
+      const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
+        ensureSessionLedgerReady: async () => true })
+      const appendBatch = SqliteAgentHistory.prototype.appendBatch
+      const appendSpy = vi.spyOn(SqliteAgentHistory.prototype, 'appendBatch').mockImplementationOnce(async function (events, expectedVersion, transcriptCommit) {
+        await appendBatch.call(this, events, expectedVersion, transcriptCommit)
+        throw new Error('simulated process loss after canonical backfill commit')
+      })
+      await expect(storage.readCompactionReplay({ sessionId: session.id, workDir })).rejects.toThrow('simulated process loss')
+      appendSpy.mockRestore()
+      expect(storage.queries.readCanonicalCompactionReplay(session.id)?.committed).toHaveLength(1)
+      const firstCount = getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=? AND kind='transcript-compacted'")
+        .get(session.id) as { count: number }
+      expect(firstCount.count).toBe(1)
+
+      db.close()
+      db = openDatabase(temp.dbPath)
+      const reopenedStorage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
+        ensureSessionLedgerReady: async () => true })
+      const replayAfterRestart = await reopenedStorage.readCompactionReplay({ sessionId: session.id, workDir })
+      expect(replayAfterRestart.committed).toHaveLength(1)
+      const secondCount = getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=? AND kind='transcript-compacted'")
+        .get(session.id) as { count: number }
+      expect(secondCount.count).toBe(firstCount.count)
+      await fs.promises.rm(resolveSessionEventPaths(workDir, session.id, session.createdAt).eventsPath)
+      const replayAfterLedgerRemoval = await reopenedStorage.readCompactionReplay({ sessionId: session.id, workDir })
+      expect(replayAfterLedgerRemoval.committed).toHaveLength(1)
+    } finally {
+      db?.close()
+      db = undefined
+      fs.rmSync(path.dirname(temp.dbPath), { recursive: true, force: true })
       fs.rmSync(workDir, { recursive: true, force: true })
     }
   })

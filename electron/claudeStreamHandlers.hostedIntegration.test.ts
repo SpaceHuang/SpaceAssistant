@@ -37,7 +37,7 @@ import { capabilityRegistry } from './capabilities/registry'
 import { invalidateSkillsCache } from './skills/skillCache'
 import { isTruncatedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { getUsageStepFactsForTurn, getUsageTurnFact, updatePersistedTurnState, updateSession } from './database/operations'
+import { getUsageStepFactsForTurn, getUsageTurnFact, updateSession } from './database/operations'
 import { queryUsageAttribution } from './usageStats/usageStatsQueries'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { logAgentEvent } from './agentLogger/agentLogger'
@@ -1163,7 +1163,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
   })
 
-  it('compacts an over-budget initial Desktop request in Hosted SDK before provider dispatch even if activity cards cannot be written', async () => {
+  it.each([
+    ['ready', true],
+    ['unavailable', false]
+  ] as const)('compacts an over-budget initial Desktop request before dispatch when the ledger is %s', async (_ledgerState, ledgerReady) => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     seedTrustedModel(db, modelId)
     const endpoint = 'https://hosted.example.test'
@@ -1197,6 +1200,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'preflight-start-token',
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: contextWindow, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, enableThinking: false, locale: 'en-US' }
     })
+    const sessionStorage = createSqliteSessionStorage(db, {
+      getWorkDirForSession: () => '/tmp', getUserDataDir: () => hostedTestUserDataDir,
+      ensureSessionLedgerReady: async () => ledgerReady
+    })
     const turnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn((_requestId: string, fact: unknown) => {
       if (fact && typeof fact === 'object' && (fact as { type?: string }).type === 'system-operation-updated') throw new Error('activity projection failed')
     }) }
@@ -1205,7 +1212,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, sessionStorage, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
       turnRuntime: turnRuntime as never, emitFactEvent
     })
 
@@ -1217,10 +1224,14 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     expect(firstRequest).not.toContain(`old-user-0 `.repeat(3000))
     expect(firstRequest).toContain('current request must survive')
     const history = await new SqliteAgentHistory(getDbConnection(db)).read('preflight-request')
-    expect(history.events.some((event) => event.kind === 'transcript-compacted')).toBe(true)
+    expect(history.events.filter((event) => event.kind === 'transcript-compacted')).toHaveLength(1)
     expect(history.events.at(-1)?.kind).toBe('invocation-completed')
     const sessionEventsModule = await import('./sessionEvents')
-    expect(sessionEventsModule.appendCompactionTransaction).toHaveBeenCalledOnce()
+    if (ledgerReady) expect(sessionEventsModule.appendCompactionTransaction).toHaveBeenCalledOnce()
+    else expect(sessionEventsModule.appendCompactionTransaction).not.toHaveBeenCalled()
+    const canonicalReplay = sessionStorage.queries.readCanonicalCompactionReplay(session.id)
+    expect(canonicalReplay?.committed).toHaveLength(1)
+    expect(canonicalReplay?.committed[0]?.summary.payload.candidate).toMatchObject({ kind: 'summary' })
     expect(turnRuntime.consumeForRequest).toHaveBeenCalled()
     expect(emitFactEvent).toHaveBeenCalled()
   })

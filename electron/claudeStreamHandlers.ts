@@ -423,7 +423,9 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         }, getDefaultAgentRuntime().modelProviders)
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
-        const compactionReplay = eventWriter ? await readCompactionReplay(eventWriter.eventsPath) : { committed: [], rejected: [] }
+        const compactionReplay = eventWriter
+          ? await readCompactionReplay(eventWriter.eventsPath)
+          : sessionStorage.queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }
         const contextWindowId = authoritative.executionConfig?.continuationSource
           ? `continuation:${authoritative.executionConfig.continuationSource.continuationId}`
           : currentCompactionWindowId(compactionReplay, sessionId)
@@ -599,9 +601,13 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               !transaction.summary || typeof transaction.summary !== 'object' || Array.isArray(transaction.summary)) {
               throw new Error('HOSTED_CONTEXT_COMPACTION_TRANSACTION_INVALID')
             }
-            if (!eventWriter) throw new Error('HOSTED_CONTEXT_COMPACTION_EVENT_WRITER_REQUIRED')
             const compactionId = typeof (transaction.summary as { compactionId?: unknown }).compactionId === 'string' ? (transaction.summary as { compactionId: string }).compactionId : ''
             const pending = pendingCompactionCards.get(compactionId)
+            if (!eventWriter) {
+              if (pending) emitSystemOperation({ ...pending, status: 'succeeded', completedAt: Date.now() })
+              pendingCompactionCards.delete(compactionId)
+              return
+            }
             try {
               await appendCompactionTransaction(eventWriter, transaction.start as Record<string, unknown>, transaction.summary as Record<string, unknown>)
               if (pending) emitSystemOperation({ ...pending, status: 'succeeded', completedAt: Date.now() })
@@ -623,7 +629,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
               bodyRatio: budget.bodyBudget > 0 ? Math.max(0, (contextUsage.projectedTokens ?? surfaceSnapshot.surfaceTokens) - budget.prefixTokens) / budget.bodyBudget : 0,
               contextWindow: { tokens: budget.totalInputBudget + budget.outputReserveTokens, source: 'config' as const }
             }
-            if (!eventWriter || !session || !projection || !shouldCompact(projection, budget) || (phase !== 'preflight' && messages.length < 3)) return
+            if (!session || !projection || !shouldCompact(projection, budget) || (phase !== 'preflight' && messages.length < 3)) return
             const replayMessages = projectReplaySurface(excludeReplayOnlyMessages(messages, frozen.skillFragments))
             const messageIdentities = surfaceItemIdentities(replayMessages).map((identity, index) => {
               const messageId = (replayMessages[index] as { id?: unknown }).id

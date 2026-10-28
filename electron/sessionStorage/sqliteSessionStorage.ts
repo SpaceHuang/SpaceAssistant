@@ -49,6 +49,9 @@ import type { LifecycleTaskRegistration } from './host/ports'
 import type { ProjectionBuildSupervisorOptions } from './application/projectionBuildSupervisor'
 import { readPreparedChatBodiesInWorker, searchPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
 import { readProjectionSourceChatBodiesInWorker } from './infrastructure/sqlite/projectionSourceChatBodyWorkerClient'
+import { readLegacyProjectionMessages } from './infrastructure/sqlite/sessionLegacyQueryAdapter'
+import { buildToolChatMessagesFromSource } from '../chatMessageBuild'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurfaceWithSources, surfaceItemIdentitiesForProjectionSubset } from '../../src/shared/surfaceReplay'
 
 export { createSessionBodySourceBackfillTask }
 import { createSqliteStartupHistoryRecoveryBindings } from './infrastructure/sqlite/sessionHistoryRecoveryHost'
@@ -102,16 +105,72 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     if (!canPersist) return { replay: queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }, canPersist: false }
     const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
     const fileReplay = await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)
-    const canonicalReplay = queries.readCanonicalCompactionReplay(sessionId)
-    if (!canonicalReplay) return { replay: fileReplay, sink, canPersist: true }
+    const canonicalReplay = queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }
     const canonicalIds = new Set(canonicalReplay.committed.map(({ compactionId }) => compactionId))
     const rejectedIds = new Set(canonicalReplay.rejected.flatMap(({ compactionId }) => compactionId ? [compactionId] : []))
     const collidesWithRejectedCanonical = fileReplay.committed.some(({ compactionId }) => rejectedIds.has(compactionId))
     const hasLegacyOnlyCompaction = fileReplay.committed.some(({ compactionId }) => !canonicalIds.has(compactionId) && !rejectedIds.has(compactionId))
     if (collidesWithRejectedCanonical) throw new Error('CANONICAL_COMPACTION_REPLAY_INVALID')
+    if (hasLegacyOnlyCompaction) {
+      const sessionMessages = readLegacyProjectionMessages(db, sessionId)
+      const latestUser = [...sessionMessages].reverse().find((message) => message.role === 'user')
+      if (latestUser) {
+        const built = await buildToolChatMessagesFromSource({ userDataDir: options.getUserDataDir?.() ?? '', workDir,
+          sourceMessages: sessionMessages, currentUserMessageId: latestUser.id, sessionId })
+        const projection = projectReplaySurfaceWithSources(built)
+        const identities = surfaceItemIdentitiesForProjectionSubset(projection, projection)
+        let surface = projection.messages.map((message, index) => ({ ...message, id: message.id ?? identities[index]! }))
+        const canonicalizeJson = (value: unknown): unknown => Array.isArray(value) ? value.map(canonicalizeJson)
+          : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, item]) => [key, canonicalizeJson(item)])) : value
+        const stableJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value))
+        for (const record of fileReplay.committed) {
+          const canonicalRecord = canonicalReplay.committed.find(({ compactionId }) => compactionId === record.compactionId)
+          if (canonicalRecord) {
+            if (stableJson(canonicalRecord.start.payload) !== stableJson(record.start.payload) ||
+              stableJson(canonicalRecord.summary.payload) !== stableJson(record.summary.payload)) {
+              throw new Error('CANONICAL_COMPACTION_REPLAY_INVALID')
+            }
+          }
+          if (rejectedIds.has(record.compactionId)) continue
+          const windowId = typeof record.start.payload.windowId === 'string' ? record.start.payload.windowId : `session:${sessionId}`
+          const nextSurface = applyCommittedSurfaceShadow(surface, { committed: [record], rejected: [] }, [latestUser.id], windowId,
+            (items) => computeReplaySurfaceFingerprint('', items))
+          if (typeof record.summary.payload.outputSurfaceFingerprint !== 'string' ||
+            computeReplaySurfaceFingerprint('', nextSurface) !== record.summary.payload.outputSurfaceFingerprint) continue
+          if (canonicalRecord) {
+            surface = nextSurface
+            continue
+          }
+          const start = record.start.payload
+          const summary = record.summary.payload
+          const invocationId = `legacy-compaction-backfill:${sessionId}:${record.compactionId}`
+          const eventId = `${invocationId}:transcript-compacted`
+          const history = execution.historyFor({ sessionId })
+          const stored = await history.read(invocationId)
+          const payload = { compactionId: record.compactionId,
+            messages: nextSurface.map((message) => ({ ...message })),
+            sessionLedger: { location: { workDir, sessionId, createdAt: session.createdAt }, start, summary },
+            surfaceReplay: { windowId, inputFingerprint: start.inputSurfaceFingerprint,
+              outputFingerprint: summary.outputSurfaceFingerprint,
+              checkpointReplayIdentity: (summary.candidate as { checkpointReplayIdentity?: unknown } | undefined)?.checkpointReplayIdentity } }
+          if (stored.version > 0) {
+            const existing = stored.events.find(({ kind }) => kind === 'transcript-compacted')
+            if (!existing || stableJson(existing.payload) !== stableJson(payload)) throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+          } else {
+            await history.appendBatch([{ invocationId, turnId: invocationId, sequence: 1, schemaVersion: 1,
+              eventId, idempotencyKey: eventId, kind: 'transcript-compacted', payload }], 0)
+          }
+          surface = nextSurface
+        }
+      }
+    }
+    const refreshedCanonicalReplay = queries.readCanonicalCompactionReplay(sessionId) ?? canonicalReplay
+    const refreshedCanonicalIds = new Set(refreshedCanonicalReplay.committed.map(({ compactionId }) => compactionId))
+    const stillHasLegacyOnlyCompaction = fileReplay.committed.some(({ compactionId }) => !refreshedCanonicalIds.has(compactionId) && !rejectedIds.has(compactionId))
     // Keep the file replay as the ordered compatibility source while it contains pre-canonical facts.
     // Once every file fact has a canonical owner, History supplies the replay without a JSONL dependency.
-    return { replay: hasLegacyOnlyCompaction ? fileReplay : canonicalReplay, sink, canPersist: true }
+    return { replay: stillHasLegacyOnlyCompaction ? fileReplay : refreshedCanonicalReplay, sink, canPersist: true }
   }
   const readContextMeterEventsForLocation = async (sessionId: string, workDir: string): Promise<readonly CanonicalContextMeterEvent[]> => {
     const session = queries.readSession(sessionId)
