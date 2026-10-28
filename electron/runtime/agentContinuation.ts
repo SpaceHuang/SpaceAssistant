@@ -1,11 +1,27 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
-import type { HistorySnapshot } from '../../packages/agent-sdk/src/history'
+import type { HistoryEvent, HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
 import { runInTransaction } from '../database/transaction'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { toCanonicalModelMessages } from './canonicalHistory'
 import { mirrorCanonicalContextMessages, SqliteAgentHistory } from './sqliteAgentHistory'
+
+/** Reads one event through the canonical History owner after proving its committed session identity. */
+export function readCommittedCanonicalHistoryEvent(conn: DatabaseSync, input: {
+  sessionId: string; eventId: string; sessionSequence: number
+}): HistoryEvent | undefined {
+  const source = conn.prepare(`SELECT events.invocation_id,streams.schema_version
+    FROM agent_history_events events
+    JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id AND streams.session_id=events.session_id
+    JOIN agent_history_commit_cursor cursor ON cursor.id=events.commit_order
+    WHERE events.event_id=? AND events.session_id=? AND events.session_seq=? LIMIT 1`)
+    .get(input.eventId, input.sessionId, input.sessionSequence) as
+      { invocation_id: string; schema_version: number } | undefined
+  if (!source) return undefined
+  return new SqliteAgentHistory(conn, source.schema_version, Date.now, input.sessionId)
+    .readSync(source.invocation_id).events.find(({ eventId }) => eventId === input.eventId)
+}
 
 export type AgentContinuationRecord = Readonly<{
   continuationId: string

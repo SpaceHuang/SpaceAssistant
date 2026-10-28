@@ -17,7 +17,7 @@ import {
   buildCanonicalToolResultProjectionTargets,
   canonicalLedgerProjectionTargetId,
   drainCanonicalLedgerProjectionOutbox,
-  enqueueCanonicalLedgerProjectionTargetInTransaction,
+  enqueueCanonicalLedgerProjectionTargetInTransaction as enqueueCanonicalLedgerProjectionTargetProduction,
   listPendingCanonicalLedgerProjectionTargets,
   encodeCanonicalLedgerProjectionPayload,
   decodeCanonicalLedgerProjectionPayload,
@@ -34,6 +34,15 @@ function appendCanonicalEvent(conn: ReturnType<typeof getDbConnection>, sessionI
     invocationId: `seed-${eventId}`, turnId: `turn-${eventId}`, sequence: 1, schemaVersion: 1,
     eventId, idempotencyKey: eventId, kind: 'invocation-context-committed', payload: { context: {} }
   }], 0, { sessionId }))
+}
+
+// Most unit cases below exercise legacy pending-array compatibility. Keep those fixtures explicit;
+// production enqueue behavior is asserted separately against the canonical-v1 marker.
+function enqueueCanonicalLedgerProjectionTargetInTransaction(conn: ReturnType<typeof getDbConnection>, target: CanonicalLedgerProjectionTarget) {
+  const id = enqueueCanonicalLedgerProjectionTargetProduction(conn, target)
+  conn.prepare(`UPDATE session_ledger_projection_outbox SET expected_events_json=?,expected_event_ids_json=? WHERE target_id=?`)
+    .run(JSON.stringify(target.expectedEvents), JSON.stringify(target.expectedEventIds), id)
+  return id
 }
 
 describe('canonical session ledger outbox', () => {
@@ -131,8 +140,8 @@ describe('canonical session ledger outbox', () => {
       session.id, session.generation, target.canonicalEventId, target.projectionKind, encoded.expectedEventsJson,
       encoded.expectedEventIdsJson, encoded.payloadSha256)
 
-    expect(() => runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))).not.toThrow()
-    expect(() => runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, {
+    expect(() => runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetProduction(conn, target))).not.toThrow()
+    expect(() => runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetProduction(conn, {
       ...target, expectedEvents: [{ type: 'turn_start', payload: { turnId: 'changed-turn' } }], expectedEventIds: ['turn_start:changed-turn']
     }))).toThrow('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT')
     expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledgerLocationKey)).toHaveLength(1)
@@ -262,8 +271,8 @@ describe('canonical session ledger outbox', () => {
     ]
 
     const conn = getDbConnection(db)
-    runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, events, 0, { sessionId: session.id }))
     const targets = buildCanonicalToolResultProjectionTargets(conn, events, session.id, session.generation)
+    runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, events, 0, { sessionId: session.id, projectionTargets: targets }))
 
     expect(targets.map((target) => target.projectionKind)).toEqual([
       'request-projection', 'request-retry', 'tool-call:mapping-tool', 'request-usage', 'request-final-context',
@@ -272,6 +281,9 @@ describe('canonical session ledger outbox', () => {
     expect(targets[0]?.expectedEventIds).toEqual(['request_header:mapping-request:1', 'request_context:mapping-request:1'])
     expect(targets[4]?.expectedEventIds).toEqual(['request_context_final:mapping-request:1'])
     expect(targets).toHaveLength(8)
+    const marker = '{"encoding":"canonical-v1"}'
+    expect(conn.prepare(`SELECT expected_events_json,expected_event_ids_json FROM session_ledger_projection_outbox ORDER BY canonical_sequence,projection_order`)
+      .all()).toEqual(targets.map(() => ({ expected_events_json: marker, expected_event_ids_json: marker })))
     const resolved = targets.map((target) => {
       const source = conn.prepare('SELECT session_seq FROM agent_history_events WHERE event_id=?').get(target.canonicalEventId) as { session_seq: number }
       return resolveCanonicalSessionLedgerProjectionTarget(conn, {
@@ -304,14 +316,14 @@ describe('canonical session ledger outbox', () => {
     expect(conn.prepare('SELECT event_id FROM agent_history_events WHERE event_id=?').get(event.eventId)).toEqual({ event_id: event.eventId })
     const pending = listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)
     expect(pending).toHaveLength(1)
-    expect(JSON.parse(pending[0].expected_events_json)).toEqual(target.expectedEvents)
+    expect(JSON.parse(pending[0].expected_events_json)).toEqual({ encoding: 'canonical-v1' })
     const projected = { eventIds: target.expectedEventIds, events: target.expectedEvents }
     expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, { eventIds: [], events: [] })).toBe(false)
     expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id,
       { ...projected, events: [{ type: 'turn_start', payload: { turnId: 'drifted' } }] }, 55)).toBe(false)
-    expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 60)).toBe(true)
+    expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 60, target)).toBe(true)
     expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toEqual([])
-    expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 61)).toBe(true)
+    expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 61, target)).toBe(true)
   })
 
   it('acks an older tool-call outbox payload against an already enriched JSONL projection', () => {

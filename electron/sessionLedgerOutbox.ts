@@ -326,8 +326,9 @@ export function enqueueCanonicalLedgerProjectionTargetInTransaction(conn: Databa
     FROM agent_history_events WHERE event_id=? AND session_id=? ORDER BY session_seq DESC LIMIT 1`)
     .get(target.canonicalEventId, target.sessionId) as { sequence: number; kind: string; turn_id: string; payload_json: string } | undefined
   if (!canonical) throw new Error('SESSION_LEDGER_CANONICAL_EVENT_MISSING')
-  const eventsJson = stableJson(target.expectedEvents)
-  const eventIdsJson = stableJson(target.expectedEventIds)
+  const canonicalPayload = encodeCanonicalLedgerProjectionPayload(target.expectedEvents, target.expectedEventIds)
+  const eventsJson = canonicalPayload.expectedEventsJson
+  const eventIdsJson = canonicalPayload.expectedEventIdsJson
   const digest = canonicalLedgerProjectionPayloadDigest(target.expectedEvents, target.expectedEventIds)
   const id = canonicalLedgerProjectionTargetId(target)
   const existing = conn.prepare(`SELECT payload_sha256,expected_events_json,expected_event_ids_json,ledger_location_key,session_id,
