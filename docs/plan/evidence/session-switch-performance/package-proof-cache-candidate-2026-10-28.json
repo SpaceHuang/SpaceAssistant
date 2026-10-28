@@ -61,7 +61,7 @@
     "candidatePidTerminated": true,
     "candidateProcessesRemaining": false,
     "defaultUserDataOpened": true,
-    "defaultDatabaseRestoredOrModifiedByAgent": false,
+    "explicitDefaultDatabaseWriteOrRestoreAttempted": false,
     "temporaryCloneRemoved": true,
     "cloneRemovalNote": "The shell rejected rm -rf, then the isolated clone was removed with Python shutil after the candidate process exited."
   }
