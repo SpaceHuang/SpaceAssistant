@@ -67,6 +67,22 @@ export function readSessionLedgerReadiness(conn: DatabaseSync, ledgerLocationKey
   return row ? rowToReadiness(row) : undefined
 }
 
+/** Returns the one-query admission snapshot only when the durable ledger is current and has no pending work. */
+export function readUsableSessionLedgerAdmission(conn: DatabaseSync, location: SessionLedgerLocationInput,
+  sessionGeneration: string, processGeneration: number): SessionLedgerReadiness | undefined {
+  const identity = sessionLedgerLocationIdentity(location)
+  const row = conn.prepare(`SELECT readiness.*,
+      EXISTS(SELECT 1 FROM session_ledger_projection_outbox outbox
+        WHERE outbox.ledger_location_key=readiness.ledger_location_key AND outbox.status='pending') AS has_pending
+    FROM session_ledger_projection_state readiness WHERE readiness.ledger_location_key=?`).get(identity.key) as
+      (Record<string, unknown> & { has_pending: number | bigint }) | undefined
+  if (!row || row.session_id !== location.sessionId || row.session_generation !== sessionGeneration ||
+      row.work_dir_identity !== identity.workDirIdentity ||
+      mapSessionLedgerPhysicalState(row.state as SessionLedgerReadinessState) !== 'usable' || Number(row.has_pending) !== 0 ||
+      Number(row.owner_reconciled_process_generation) < processGeneration) return undefined
+  return rowToReadiness(row)
+}
+
 /** Creates only legacy unknown state. Existence or emptiness of a ledger can never mint bootstrap provenance. */
 export function ensureLegacyLedgerReadiness(conn: DatabaseSync, location: SessionLedgerLocationInput, sessionGeneration: string, now = Date.now()): SessionLedgerReadiness {
   const identity = sessionLedgerLocationIdentity(location)

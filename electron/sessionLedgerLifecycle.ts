@@ -14,6 +14,7 @@ import {
   invalidateSessionLedgerProof,
   markMissingLegacyLedgerBlocked,
   markSessionLedgerBlocked,
+  readUsableSessionLedgerAdmission,
   readSessionLedgerReadiness,
   recoverInterruptedSessionLedgerCheck,
   reopenBlockedSessionLedger,
@@ -369,4 +370,10 @@ export async function ensureSessionLedgerReady(input: {
       durationMs: Math.max(0, Date.now() - startedAt), failureClass: result.readiness.failureClass })
   } catch { /* Diagnostics must never affect the readiness decision. */ }
   return result
+}
+
+/** Fast admission check for already usable ledgers; stale/absent ledgers use the full repair lifecycle. */
+export async function ensureSessionLedgerAdmission(input: Parameters<typeof ensureSessionLedgerReady>[0]): Promise<SessionLedgerLifecycleResult> {
+  const admission = readUsableSessionLedgerAdmission(input.conn, input.location, input.sessionGeneration, input.processGeneration)
+  return admission ? { status: 'ready', readiness: admission } : ensureSessionLedgerReady(input)
 }

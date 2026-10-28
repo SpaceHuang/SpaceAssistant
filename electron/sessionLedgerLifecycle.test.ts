@@ -1,11 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from './database/testHelpers'
 import { getDbConnection } from './database/sqliteStore'
 import {
   ensureLegacyLedgerReadiness, beginSessionLedgerCheck, completeSessionLedgerCheck,
   beginSessionLedgerTargetCheck, completeSessionLedgerTargetCheck, type SessionLedgerReadyProof
 } from './sessionLedgerReadiness'
-import { ensureSessionLedgerReady, isSessionLedgerLifecycleLockHeld, runOutsideSessionLedgerLifecycleLock, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
+import { ensureSessionLedgerAdmission, ensureSessionLedgerReady, isSessionLedgerLifecycleLockHeld, runOutsideSessionLedgerLifecycleLock, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 import { prepareSessionLedgerProcessLockTarget } from './sessionLedgerProcessLock'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -150,6 +150,69 @@ describe('session ledger lifecycle lock', () => {
         { operation: 'proof-reused', status: 'ready', baselineScanCount: 0, projectedCount: 0, durationMs: expect.any(Number) }
       ])
       expect(first.readiness.ledgerLocationKey).toBe(readiness.ledgerLocationKey)
+    } finally { db.close() }
+  })
+
+  it('admits an already usable ledger with one database read and no file proof reads', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const rawConn = getDbConnection(db)
+      const location = { workDir: '/tmp/lifecycle-admission-fast-path', sessionId: 'ready-session', createdAt: 42 }
+      const dependencies = {
+        fileExists: async () => true,
+        readProof: async () => proof,
+        bootstrap: async () => proof,
+        baseline: async () => proof,
+        applyTarget: async () => ({ eventIds: [], events: [] })
+      }
+      expect((await ensureSessionLedgerReady({ conn: rawConn, location, sessionGeneration: 'g1', processGeneration: 1, dependencies })).status).toBe('ready')
+
+      const statements: string[] = []
+      const conn = new Proxy(rawConn, { get(target, property, receiver) {
+        if (property !== 'prepare') {
+          const value = Reflect.get(target, property, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+        return (sql: string) => {
+          statements.push(sql)
+          return target.prepare(sql)
+        }
+      } })
+      const readProof = vi.fn(async () => { throw new Error('admission must not read file proof') })
+      const fileExists = vi.fn(async () => { throw new Error('admission must not stat files') })
+      const result = await ensureSessionLedgerAdmission({ conn, location, sessionGeneration: 'g1', processGeneration: 1,
+        dependencies: { ...dependencies, readProof, fileExists } })
+
+      expect(result.status).toBe('ready')
+      expect(readProof).not.toHaveBeenCalled()
+      expect(fileExists).not.toHaveBeenCalled()
+      expect(statements).toHaveLength(1)
+      expect(statements[0]).toMatch(/SELECT/i)
+    } finally { db.close() }
+  })
+
+  it('routes a stale ledger through the repair lifecycle instead of the admission fast path', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const conn = getDbConnection(db)
+      const location = { workDir: '/tmp/lifecycle-admission-stale', sessionId: 'stale-session', createdAt: 43 }
+      const dependencies = {
+        fileExists: async () => true,
+        readProof: async () => proof,
+        bootstrap: async () => proof,
+        baseline: async () => proof,
+        applyTarget: async () => ({ eventIds: [], events: [] })
+      }
+      const first = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g1', processGeneration: 1, dependencies })
+      conn.prepare("UPDATE session_ledger_projection_state SET state='dirty' WHERE ledger_location_key=?").run(first.readiness.ledgerLocationKey)
+      const readProof = vi.fn(async () => proof)
+
+      const result = await ensureSessionLedgerAdmission({ conn, location, sessionGeneration: 'g1', processGeneration: 1,
+        dependencies: { ...dependencies, readProof } })
+
+      expect(result.status).toBe('ready')
+      expect(readProof).toHaveBeenCalled()
+      expect(result.readiness.state).toBe('ready')
     } finally { db.close() }
   })
 

@@ -83,7 +83,7 @@ import { createSessionStorageCleanupProductionBoundary } from './runtime/session
 import { SESSION_STORAGE_HISTORY_FORMAT_VERSION, SESSION_STORAGE_SPILL_FORMAT_VERSION } from './runtime/sessionStorageCleanupReleaseConfig'
 import { scheduleSessionMessageContentCleanupMaintenance } from './storage/sessionMessageContentCleanupMaintenance'
 import { scheduleSpillReferenceBackfill } from './storage/spillReferenceBackfillScheduler'
-import { ensureSessionLedgerReady, runOutsideSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
+import { ensureSessionLedgerAdmission, ensureSessionLedgerReady, runOutsideSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 import { createSessionLedgerRepairScheduler } from './sessionLedgerRepairScheduler'
 import { createProductionSessionLedgerLifecycleDependencies } from './runtime/sessionLedgerLifecycleProduction'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
@@ -582,7 +582,7 @@ app.whenReady().then(async () => {
     getUserDataDir: () => app.getPath('userData'),
     projectionBlobRoot: path.join(app.getPath('userData'), 'session-projections'),
     ensureSessionLedgerReady: async ({ session, workDir, retryBlocked = true }) => {
-      const result = await ensureSessionLedgerReady({
+      const result = await ensureSessionLedgerAdmission({
         conn: getDbConnection(db),
         location: { workDir, sessionId: session.id, createdAt: session.createdAt },
         sessionGeneration: session.generation,
