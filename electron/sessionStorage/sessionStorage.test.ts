@@ -16,7 +16,7 @@ import { computeReplaySurfaceFingerprint, projectReplaySurface, projectReplaySur
 import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
 import { getProjectedMessages, readSessionTranscriptProjection } from './infrastructure/sqlite/sessionTranscriptProjection'
 import * as sessionTranscriptProjection from './infrastructure/sqlite/sessionTranscriptProjection'
-import { drainCanonicalLedgerProjectionOutbox, enqueueCanonicalLedgerProjectionTargetInTransaction, listPendingCanonicalLedgerProjectionTargets } from '../sessionLedgerOutbox'
+import { canonicalLedgerProjectionPayloadDigest, drainCanonicalLedgerProjectionOutbox, enqueueCanonicalLedgerProjectionTargetInTransaction, listPendingCanonicalLedgerProjectionTargets } from '../sessionLedgerOutbox'
 import { appendCompactionTransaction, getSessionEventSink, readSessionEvents, resolveSessionEventPaths, setSessionEventFailureObserver } from '../sessionEvents'
 import { ensureSessionLedgerReady } from '../sessionLedgerLifecycle'
 import { createProductionSessionLedgerLifecycleDependencies } from '../runtime/sessionLedgerLifecycleProduction'
@@ -1802,6 +1802,9 @@ describe('SQLite session storage execution boundary', () => {
         expectedEventIds: ['tool_result:random-ledger-tool']
       }
       runInTransaction(ledgerConn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(ledgerConn, target))
+      ledgerConn.prepare(`UPDATE session_ledger_projection_outbox SET expected_events_json=?,expected_event_ids_json=?,payload_sha256=?
+        WHERE canonical_event_id=?`).run(JSON.stringify(target.expectedEvents), JSON.stringify(target.expectedEventIds),
+        canonicalLedgerProjectionPayloadDigest(target.expectedEvents, target.expectedEventIds), ledgerEventId)
       const sink = getSessionEventSink(ledgerRoot, session.id, session.createdAt)
       try {
         const failed = await drainCanonicalLedgerProjectionOutbox(ledgerConn, ledgerLocation.ledger_location_key,

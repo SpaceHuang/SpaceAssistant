@@ -8,11 +8,11 @@ import { getDbConnection } from '../database/sqliteStore'
 import { createSession, setConfigValue } from '../database/operations'
 import { runInTransaction } from '../database/transaction'
 import { ensureSessionLedgerReady, runOutsideSessionLedgerLifecycleLock } from '../sessionLedgerLifecycle'
-import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { createSessionLedgerRepairScheduler } from '../sessionLedgerRepairScheduler'
 import { getSessionEventSink, readCompactionReplay, readSessionEvents, retireSessionEventSink, setSessionEventFailureObserver } from '../sessionEvents'
 import { createProductionSessionLedgerLifecycleDependencies } from './sessionLedgerLifecycleProduction'
 import type { CanonicalLedgerProjectionTarget } from '../sessionLedgerOutbox'
+import { buildCanonicalToolResultProjectionTargets } from '../sessionLedgerOutbox'
 
 describe('automatic session ledger repair integration', () => {
   const databases: ReturnType<typeof createMemoryAppDb>[] = []
@@ -36,15 +36,11 @@ describe('automatic session ledger repair integration', () => {
     expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1, dependencies })).status)
       .toBe('ready')
     const oldSink = getSessionEventSink(root, session.id, session.createdAt)
-    const identity = sessionLedgerLocationIdentity(location)
     const turnId = 'automatic-recovery-turn'
     const event = { invocationId: 'automatic-recovery-invocation', turnId, sequence: 1, schemaVersion: 1,
       eventId: 'automatic-recovery-canonical-event', idempotencyKey: 'automatic-recovery-canonical-event',
-      kind: 'invocation-context-committed', payload: { context: {} } }
-    const target: CanonicalLedgerProjectionTarget = { ledgerLocationKey: identity.key, sessionId: session.id,
-      sessionGeneration: session.generation, canonicalEventId: event.eventId, canonicalSequence: 1, projectionOrder: 0,
-      projectionKind: 'invocation-terminal', expectedEvents: [{ type: 'turn_start', payload: { turnId } }],
-      expectedEventIds: [`turn_start:${turnId}`] }
+      kind: 'invocation-completed', payload: { status: 'completed', sessionLedger: { location, turnId, reason: 'completed' } } }
+    const target = buildCanonicalToolResultProjectionTargets(conn, [event], session.id, session.generation)[0] as CanonicalLedgerProjectionTarget
     runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, [event], 0,
       { sessionId: session.id, projectionTargets: [target] }))
 
