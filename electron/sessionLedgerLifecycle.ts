@@ -22,7 +22,8 @@ import {
   type SessionLedgerReadyProof,
   type SessionLedgerReadiness
 } from './sessionLedgerReadiness'
-import { drainCanonicalLedgerProjectionOutbox, type CanonicalLedgerProjectionTarget } from './sessionLedgerOutbox'
+import { drainCanonicalLedgerProjectionOutbox, type CanonicalLedgerProjectionTarget, type CanonicalLedgerProjectionTargetIdentity,
+  type CanonicalLedgerProjectionTargetResolver } from './sessionLedgerOutbox'
 import type { SessionLedgerLocationInput } from './sessionLedgerIdentity'
 import { withSessionEventWriterDrain } from './sessionEvents'
 import { withSessionLedgerProcessLock } from './sessionLedgerProcessLock'
@@ -90,6 +91,7 @@ export type SessionLedgerLifecycleDependencies = {
   applyTarget(location: SessionLedgerLocationInput, target: CanonicalLedgerProjectionTarget & { targetId: string }): Promise<{
     eventIds: readonly string[]; events: readonly SessionEventInput[]
   }>
+  resolveCanonicalTarget?: (identity: CanonicalLedgerProjectionTargetIdentity) => ReturnType<CanonicalLedgerProjectionTargetResolver>
   reconcilePreviousOwner?(location: SessionLedgerLocationInput, previousGeneration: number, processGeneration: number): Promise<void>
 }
 
@@ -308,6 +310,7 @@ export async function ensureSessionLedgerReady(input: {
           if (currentToken) completeSessionLedgerCheck(input.conn, current.ledgerLocationKey, currentToken, proof, now())
         } catch (error) {
           let failureClass = 'baseline_failed'
+          if (error instanceof Error && error.message === 'SESSION_LEDGER_PROJECTION_SOURCE_MISSING') failureClass = 'source_missing'
           if ((error as { code?: string })?.code === 'SESSION_LEDGER_BASELINE_DEGRADED' && input.dependencies.quarantineDegradedLedger) {
             try {
               await input.dependencies.quarantineDegradedLedger(input.location)
@@ -335,10 +338,12 @@ export async function ensureSessionLedgerReady(input: {
         const token = beginSessionLedgerTargetCheck(input.conn, current.ledgerLocationKey, now())
         if (!token) return { status: 'blocked', readiness: readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)! }
         const drained = await drainCanonicalLedgerProjectionOutbox(input.conn, current.ledgerLocationKey,
-          (target) => input.dependencies.applyTarget(input.location, target), now())
+          (target) => input.dependencies.applyTarget(input.location, target), now(), input.dependencies.resolveCanonicalTarget)
         projectedCount += drained.projected
         if (drained.failedTargetId) {
           markSessionLedgerBlocked(input.conn, current.ledgerLocationKey, 'target', 'projection_failed', now())
+        } else if (drained.sourceMissing?.length) {
+          markSessionLedgerBlocked(input.conn, current.ledgerLocationKey, 'target', 'source_missing', now())
         } else {
           const proof = await input.dependencies.readProof(input.location).catch(() => undefined)
           if (!proof || !completeSessionLedgerTargetCheck(input.conn, current.ledgerLocationKey, token, proof, now())) {

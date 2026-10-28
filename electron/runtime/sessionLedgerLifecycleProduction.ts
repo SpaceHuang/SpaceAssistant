@@ -22,7 +22,7 @@ import type { SessionLedgerLifecycleDependencies } from '../sessionLedgerLifecyc
 import { sessionLedgerLocationIdentity, type SessionLedgerLocationInput } from '../sessionLedgerIdentity'
 import { readSessionLedgerReadiness, type SessionLedgerReadyProof } from '../sessionLedgerReadiness'
 import { drainCanonicalLedgerProjectionOutbox } from '../sessionLedgerOutbox'
-import { projectCanonicalSessionLedgerTarget } from './sessionLedgerOutboxProjector'
+import { projectCanonicalSessionLedgerTarget, resolveCanonicalSessionLedgerProjectionTarget } from './sessionLedgerOutboxProjector'
 
 function canonicalWatermark(conn: DatabaseSync, location: SessionLedgerLocationInput): string {
   const row = conn.prepare(`SELECT events.event_id,events.session_seq FROM agent_history_events events
@@ -234,8 +234,10 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
       const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE ledger_location_key=?')
         .get(identity.key) as { ledger_location_key: string } | undefined
       if (!readiness) throw new Error('SESSION_LEDGER_READINESS_ROW_MISSING')
-      const drained = await drainCanonicalLedgerProjectionOutbox(conn, identity.key, (target) => project(location, target))
+      const drained = await drainCanonicalLedgerProjectionOutbox(conn, identity.key, (target) => project(location, target), Date.now(),
+        (targetIdentity) => resolveCanonicalSessionLedgerProjectionTarget(conn, targetIdentity))
       if (drained.failedTargetId) throw new Error('SESSION_LEDGER_BASELINE_PROJECTION_FAILED')
+      if (drained.sourceMissing?.length) throw new Error('SESSION_LEDGER_PROJECTION_SOURCE_MISSING')
       return await proof(location) ?? Promise.reject(new Error('SESSION_LEDGER_BASELINE_PROOF_MISSING'))
     },
     rebuildMissingLegacyLedger: async (location) => {
@@ -268,8 +270,10 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
         await sink.flush()
         await sink.close()
         await publishSessionEventLedgerRebuildStage(location, stage)
-        const drained = await drainCanonicalLedgerProjectionOutbox(conn, identity.key, (target) => project(location, target))
+        const drained = await drainCanonicalLedgerProjectionOutbox(conn, identity.key, (target) => project(location, target), Date.now(),
+          (targetIdentity) => resolveCanonicalSessionLedgerProjectionTarget(conn, targetIdentity))
         if (drained.failedTargetId) throw new Error('SESSION_LEDGER_REBUILD_PROJECTION_FAILED')
+        if (drained.sourceMissing?.length) throw new Error('SESSION_LEDGER_PROJECTION_SOURCE_MISSING')
         const persistedTargets = conn.prepare(`SELECT target_id,status FROM session_ledger_projection_outbox WHERE ledger_location_key=?`)
           .all(identity.key) as Array<{ target_id: string; status: string }>
         const expectedTargetIds = new Set(targets.map(canonicalLedgerProjectionTargetId))
@@ -293,6 +297,7 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
       return dependencies.rebuildMissingLegacyLedger(location)
     },
     applyTarget: project,
+    resolveCanonicalTarget: (identity) => resolveCanonicalSessionLedgerProjectionTarget(conn, identity),
     reconcilePreviousOwner: async (location) => {
       const exists = await dependencies.fileExists(location)
       if (!exists) throw new Error('SESSION_LEDGER_BASELINE_FILE_MISSING')

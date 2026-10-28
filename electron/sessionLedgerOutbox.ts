@@ -19,6 +19,13 @@ export type CanonicalLedgerProjectionTarget = {
   now?: number
 }
 
+export type CanonicalLedgerProjectionTargetIdentity = Pick<CanonicalLedgerProjectionTarget,
+  'ledgerLocationKey' | 'sessionId' | 'sessionGeneration' | 'canonicalEventId' | 'projectionOrder' | 'projectionKind'> &
+  { targetId: string; canonicalSequence: number }
+export type CanonicalLedgerProjectionTargetResolver =
+  (identity: CanonicalLedgerProjectionTargetIdentity) => Promise<CanonicalLedgerProjectionTarget | undefined> |
+  CanonicalLedgerProjectionTarget | undefined
+
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
   if (value && typeof value === 'object') {
@@ -331,11 +338,14 @@ export function enqueueCanonicalLedgerProjectionTargetInTransaction(conn: Databa
     existing.session_generation !== target.sessionGeneration || existing.canonical_event_id !== target.canonicalEventId ||
     existing.projection_kind !== target.projectionKind)) throw new Error('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT')
   if (existing) {
-    const previousEvents = JSON.parse(existing.expected_events_json) as SessionEventInput[]
-    const previousEventIds = JSON.parse(existing.expected_event_ids_json) as string[]
-    const previousDigest = canonicalLedgerProjectionPayloadDigest(previousEvents, previousEventIds)
-    if (previousDigest !== existing.payload_sha256) throw new Error('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT')
-    if (existing.payload_sha256 !== digest) {
+    let previous: DecodedCanonicalLedgerProjectionPayload
+    try { previous = decodeCanonicalLedgerProjectionPayload(existing.expected_events_json, existing.expected_event_ids_json, existing.payload_sha256) }
+    catch { throw new Error('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT') }
+    if (previous.kind === 'canonical-v1') {
+      if (previous.payloadSha256 !== digest) throw new Error('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT')
+    } else if (existing.payload_sha256 !== digest) {
+      const previousEvents = previous.expectedEvents
+      const previousEventIds = previous.expectedEventIds
       const compatibleEnrichment = isCanonicalToolCallAttributionEnrichment({
         target, previousEvents, previousEventIds, canonicalKind: canonical.kind,
         canonicalTurnId: canonical.turn_id, canonicalPayload: JSON.parse(canonical.payload_json)
@@ -375,12 +385,25 @@ export function listPendingCanonicalLedgerProjectionTargets(conn: DatabaseSync, 
 
 /** Acknowledges only after the sink confirms the complete expected event identity set. */
 export function acknowledgeCanonicalLedgerProjectionTarget(conn: DatabaseSync, targetId: string,
-  observed: { eventIds: readonly string[]; events: readonly SessionEventInput[] }, now = Date.now()): boolean {
-  const row = conn.prepare(`SELECT ledger_location_key,expected_event_ids_json,expected_events_json,status,projection_kind FROM session_ledger_projection_outbox WHERE target_id=?`)
-    .get(targetId) as { ledger_location_key: string; expected_event_ids_json: string; expected_events_json: string; status: string; projection_kind: string } | undefined
+  observed: { eventIds: readonly string[]; events: readonly SessionEventInput[] }, now = Date.now(),
+  canonicalTarget?: Pick<CanonicalLedgerProjectionTarget, 'expectedEvents' | 'expectedEventIds'>): boolean {
+  const row = conn.prepare(`SELECT ledger_location_key,expected_event_ids_json,expected_events_json,payload_sha256,status,projection_kind FROM session_ledger_projection_outbox WHERE target_id=?`)
+    .get(targetId) as { ledger_location_key: string; expected_event_ids_json: string; expected_events_json: string; payload_sha256: string; status: string; projection_kind: string } | undefined
   if (!row) return false
-  const expected = JSON.parse(row.expected_event_ids_json) as string[]
-  const expectedEvents = JSON.parse(row.expected_events_json) as SessionEventInput[]
+  let expected: readonly string[]
+  let expectedEvents: readonly SessionEventInput[]
+  try {
+    const decoded = decodeCanonicalLedgerProjectionPayload(row.expected_events_json, row.expected_event_ids_json, row.payload_sha256)
+    if (decoded.kind === 'canonical-v1') {
+      if (!canonicalTarget || canonicalLedgerProjectionPayloadDigest(canonicalTarget.expectedEvents, canonicalTarget.expectedEventIds) !== decoded.payloadSha256) return false
+      expected = canonicalTarget.expectedEventIds
+      expectedEvents = canonicalTarget.expectedEvents
+    } else {
+      expected = decoded.expectedEventIds
+      expectedEvents = decoded.expectedEvents
+      if (canonicalTarget && canonicalLedgerProjectionPayloadDigest(canonicalTarget.expectedEvents, canonicalTarget.expectedEventIds) !== row.payload_sha256) return false
+    }
+  } catch { return false }
   if (stableJson(expected) !== stableJson(observed.eventIds) || !projectionEventsMatch(row.projection_kind, expectedEvents, observed.events)) return false
   if (row.status === 'acked') return true
   return runInTransaction(conn, () => {
@@ -436,27 +459,66 @@ export async function drainCanonicalLedgerProjectionOutbox(
   conn: DatabaseSync,
   ledgerLocationKey: string,
   apply: (target: CanonicalLedgerProjectionTarget & { targetId: string }) => Promise<{ eventIds: readonly string[]; events: readonly SessionEventInput[] }>,
-  now = Date.now()
-): Promise<{ projected: number; failedTargetId?: string }> {
+  now = Date.now(),
+  resolveCanonicalTarget?: CanonicalLedgerProjectionTargetResolver
+): Promise<{ projected: number; failedTargetId?: string; sourceMissing?: Array<{ targetId: string; disposition: 'source-missing' }> }> {
   let projected = 0
+  const sourceMissing: Array<{ targetId: string; disposition: 'source-missing' }> = []
   for (const row of listPendingCanonicalLedgerProjectionTargets(conn, ledgerLocationKey)) {
-    const target = {
+    const identity: CanonicalLedgerProjectionTargetIdentity = {
       targetId: row.target_id,
       ledgerLocationKey,
       sessionId: row.session_id,
       sessionGeneration: row.session_generation,
       canonicalEventId: row.canonical_event_id,
-      projectionKind: row.projection_kind,
-      expectedEvents: JSON.parse(row.expected_events_json) as SessionEventInput[],
-      expectedEventIds: JSON.parse(row.expected_event_ids_json) as string[]
+      canonicalSequence: row.canonical_sequence,
+      projectionOrder: row.projection_order,
+      projectionKind: row.projection_kind
+    }
+    let decoded: DecodedCanonicalLedgerProjectionPayload
+    try { decoded = decodeCanonicalLedgerProjectionPayload(row.expected_events_json, row.expected_event_ids_json, row.payload_sha256) }
+    catch { return { projected, failedTargetId: row.target_id, ...(sourceMissing.length ? { sourceMissing } : {}) } }
+    let canonicalTarget: CanonicalLedgerProjectionTarget | undefined
+    if (resolveCanonicalTarget) {
+      try { canonicalTarget = await resolveCanonicalTarget(identity) }
+      catch { return { projected, failedTargetId: row.target_id, ...(sourceMissing.length ? { sourceMissing } : {}) } }
+      if (!canonicalTarget) {
+        sourceMissing.push({ targetId: row.target_id, disposition: 'source-missing' })
+        continue
+      }
+      if (canonicalLedgerProjectionTargetId(canonicalTarget) !== row.target_id || canonicalTarget.ledgerLocationKey !== ledgerLocationKey ||
+        canonicalTarget.sessionId !== row.session_id || canonicalTarget.sessionGeneration !== row.session_generation ||
+        canonicalTarget.canonicalEventId !== row.canonical_event_id || canonicalTarget.projectionKind !== row.projection_kind ||
+        (canonicalTarget.projectionOrder ?? 0) !== row.projection_order) {
+        return { projected, failedTargetId: row.target_id, ...(sourceMissing.length ? { sourceMissing } : {}) }
+      }
+      const canonicalDigest = canonicalLedgerProjectionPayloadDigest(canonicalTarget.expectedEvents, canonicalTarget.expectedEventIds)
+      if (decoded.kind === 'canonical-v1' && decoded.payloadSha256 !== canonicalDigest) {
+        return { projected, failedTargetId: row.target_id, ...(sourceMissing.length ? { sourceMissing } : {}) }
+      }
+      if (decoded.kind === 'legacy' && canonicalDigest !== row.payload_sha256) {
+        try { runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, canonicalTarget!)) }
+        catch { return { projected, failedTargetId: row.target_id, ...(sourceMissing.length ? { sourceMissing } : {}) } }
+      }
+    } else if (decoded.kind === 'canonical-v1') {
+      return { projected, failedTargetId: row.target_id, ...(sourceMissing.length ? { sourceMissing } : {}) }
+    }
+    const target = {
+      ...identity,
+      ...(canonicalTarget ? { expectedEvents: canonicalTarget.expectedEvents, expectedEventIds: canonicalTarget.expectedEventIds } : {
+        expectedEvents: decoded.kind === 'legacy' ? decoded.expectedEvents : [],
+        expectedEventIds: decoded.kind === 'legacy' ? decoded.expectedEventIds : []
+      })
     }
     try {
       const observed = await apply(target)
-      if (!acknowledgeCanonicalLedgerProjectionTarget(conn, row.target_id, observed, now)) return { projected, failedTargetId: row.target_id }
+      if (!acknowledgeCanonicalLedgerProjectionTarget(conn, row.target_id, observed, now, canonicalTarget)) {
+        return { projected, failedTargetId: row.target_id, ...(sourceMissing.length ? { sourceMissing } : {}) }
+      }
       projected += 1
     } catch {
-      return { projected, failedTargetId: row.target_id }
+      return { projected, failedTargetId: row.target_id, ...(sourceMissing.length ? { sourceMissing } : {}) }
     }
   }
-  return { projected }
+  return { projected, ...(sourceMissing.length ? { sourceMissing } : {}) }
 }

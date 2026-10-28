@@ -14,6 +14,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { getSessionEventSink, setSessionEventCommitObserver } from './sessionEvents'
+import { canonicalLedgerProjectionPayloadDigest } from './sessionLedgerOutbox'
 
 const proof: SessionLedgerReadyProof = { canonicalWatermark: 'seq:3', ledgerGeneration: 1, fileIdentity: 'dev-ino', fileBytes: 80,
   tailFrame: 'tail-hash', indexSeq: 3, indexEventCount: 3, indexBytes: 80, indexLastAt: 100 }
@@ -346,9 +347,13 @@ describe('session ledger lifecycle lock', () => {
       completeSessionLedgerCheck(conn, readiness.ledgerLocationKey, baselineToken, proof)
       conn.prepare("UPDATE session_ledger_projection_state SET state='dirty' WHERE ledger_location_key=?").run(readiness.ledgerLocationKey)
       const token = beginSessionLedgerTargetCheck(conn, readiness.ledgerLocationKey)!
+      const expectedEvents = [{ type: 'tool_result' as const, payload: { toolUseId: 'pending-tool', result: { success: true } } }]
+      const expectedEventIds = ['tool_result:pending-tool']
       conn.prepare(`INSERT INTO session_ledger_projection_outbox(target_id,ledger_location_key,session_id,session_generation,canonical_event_id,
         canonical_sequence,projection_order,projection_kind,expected_events_json,expected_event_ids_json,payload_sha256,status,created_at)
-        VALUES('pending-target',?,'s','g','canonical',1,0,'tool-result','[]','[]','digest','pending',1)`).run(readiness.ledgerLocationKey)
+        VALUES('pending-target',?,'s','g','canonical',1,0,'tool-result',?,?,?,'pending',1)`)
+        .run(readiness.ledgerLocationKey, JSON.stringify(expectedEvents), JSON.stringify(expectedEventIds),
+          canonicalLedgerProjectionPayloadDigest(expectedEvents, expectedEventIds))
       expect(completeSessionLedgerTargetCheck(conn, readiness.ledgerLocationKey, token, proof)).toBe(false)
       const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g', processGeneration: 1, retryBlocked: true,
         dependencies: {
@@ -375,8 +380,9 @@ describe('session ledger lifecycle lock', () => {
       const expectedIds = ['tool_result:target-tool']
       conn.prepare(`INSERT INTO session_ledger_projection_outbox(target_id,ledger_location_key,session_id,session_generation,canonical_event_id,
         canonical_sequence,projection_order,projection_kind,expected_events_json,expected_event_ids_json,payload_sha256,status,created_at)
-        VALUES('target-success',?,'target-session','g','canonical-target',4,0,'tool-result',?,?,'digest','pending',1)`)
-        .run(readiness.ledgerLocationKey, JSON.stringify(expectedEvents), JSON.stringify(expectedIds))
+        VALUES('target-success',?,'target-session','g','canonical-target',4,0,'tool-result',?,?,?,'pending',1)`)
+        .run(readiness.ledgerLocationKey, JSON.stringify(expectedEvents), JSON.stringify(expectedIds),
+          canonicalLedgerProjectionPayloadDigest(expectedEvents, expectedIds))
       conn.prepare("UPDATE session_ledger_projection_state SET state='dirty' WHERE ledger_location_key=?").run(readiness.ledgerLocationKey)
       let baselineCalls = 0
       let targetCalls = 0
@@ -396,6 +402,35 @@ describe('session ledger lifecycle lock', () => {
       expect(result).toMatchObject({ status: 'ready', readiness: { state: 'ready' } })
       expect({ baselineCalls, targetCalls }).toEqual({ baselineCalls: 0, targetCalls: 1 })
       expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE target_id='target-success'").get()).toEqual({ status: 'acked' })
+    } finally { db.close() }
+  })
+
+  it('preserves source-missing outbox work and blocks once after draining the healthy subset', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const conn = getDbConnection(db)
+      const location = { workDir: '/tmp/lifecycle-source-missing', sessionId: 'source-missing-session', createdAt: 6 }
+      const readiness = ensureLegacyLedgerReadiness(conn, location, 'g')
+      const baselineToken = beginSessionLedgerCheck(conn, readiness.ledgerLocationKey)!
+      completeSessionLedgerCheck(conn, readiness.ledgerLocationKey, baselineToken, proof)
+      const expectedEvents = [{ type: 'tool_result' as const, payload: { toolUseId: 'missing-tool', result: { success: true } } }]
+      const expectedEventIds = ['tool_result:missing-tool']
+      conn.prepare(`INSERT INTO session_ledger_projection_outbox(target_id,ledger_location_key,session_id,session_generation,canonical_event_id,
+        canonical_sequence,projection_order,projection_kind,expected_events_json,expected_event_ids_json,payload_sha256,status,created_at)
+        VALUES('source-missing-target',?,'source-missing-session','g','source-event-missing',1,0,'tool-result',?,?,?,'pending',1)`)
+        .run(readiness.ledgerLocationKey, JSON.stringify(expectedEvents), JSON.stringify(expectedEventIds),
+          canonicalLedgerProjectionPayloadDigest(expectedEvents, expectedEventIds))
+      conn.prepare("UPDATE session_ledger_projection_state SET state='dirty' WHERE ledger_location_key=?").run(readiness.ledgerLocationKey)
+      const applyTarget = vi.fn(async () => ({ eventIds: expectedEventIds, events: expectedEvents }))
+
+      const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g', processGeneration: 1,
+        dependencies: { fileExists: async () => true, readProof: async () => proof, bootstrap: async () => proof,
+          baseline: async () => proof, applyTarget, resolveCanonicalTarget: async () => undefined } })
+
+      expect(result).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'source_missing' } })
+      expect(applyTarget).not.toHaveBeenCalled()
+      expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE target_id='source-missing-target'").get())
+        .toEqual({ status: 'pending' })
     } finally { db.close() }
   })
 })
