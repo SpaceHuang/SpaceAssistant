@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type { BigIntStats } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
@@ -29,6 +30,23 @@ function canonicalWatermark(conn: DatabaseSync, location: SessionLedgerLocationI
   return row ? `${row.session_seq}:${row.event_id}` : 'session:-1'
 }
 
+type CachedReadyProof = { physicalFileIdentity: string; rawIndex: string; proof: SessionLedgerReadyProof }
+const readyProofCache = new Map<string, CachedReadyProof>()
+const READY_PROOF_CACHE_LIMIT = 256
+
+function physicalFileIdentity(stat: BigIntStats): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
+}
+
+function rememberReadyProof(key: string, entry: CachedReadyProof): void {
+  readyProofCache.delete(key)
+  readyProofCache.set(key, entry)
+  if (readyProofCache.size > READY_PROOF_CACHE_LIMIT) {
+    const oldestKey = readyProofCache.keys().next().value
+    if (oldestKey !== undefined) readyProofCache.delete(oldestKey)
+  }
+}
+
 export async function readSessionLedgerReadyProof(conn: DatabaseSync, location: SessionLedgerLocationInput): Promise<SessionLedgerReadyProof | undefined> {
   const identity = sessionLedgerLocationIdentity(location)
   const readiness = readSessionLedgerReadiness(conn, identity.key)
@@ -36,11 +54,11 @@ export async function readSessionLedgerReadyProof(conn: DatabaseSync, location: 
   const paths = resolveSessionEventPaths(location.workDir, location.sessionId, location.createdAt)
   let rootStat: Awaited<ReturnType<typeof fs.lstat>>
   let directoryStat: Awaited<ReturnType<typeof fs.lstat>>
-  let fileStat: Awaited<ReturnType<typeof fs.lstat>>
+  let fileStat: BigIntStats
   try {
     rootStat = await fs.lstat(paths.sessionsRoot)
     directoryStat = await fs.lstat(paths.directory)
-    fileStat = await fs.lstat(paths.eventsPath)
+    fileStat = await fs.lstat(paths.eventsPath, { bigint: true })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     throw error
@@ -55,35 +73,48 @@ export async function readSessionLedgerReadyProof(conn: DatabaseSync, location: 
     return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
   }
   if (!inside(realRoot, realDirectory) || !inside(realDirectory, realEvents)) throw new Error('SESSION_LEDGER_PATH_OUTSIDE_ROOT')
+  if (fileStat.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('SESSION_LEDGER_PROOF_FILE_TOO_LARGE')
   const indexStat = await fs.lstat(paths.indexPath)
   if (indexStat.isSymbolicLink() || !indexStat.isFile()) throw new Error('SESSION_LEDGER_INDEX_NOT_REGULAR')
   const rawIndex = await fs.readFile(paths.indexPath, 'utf8')
   const index = JSON.parse(rawIndex) as { formatVersion?: number; seq?: number; eventCount?: number; bytes?: number; lastAt?: number }
   if (index.formatVersion !== 2 || !Number.isSafeInteger(index.seq) || !Number.isSafeInteger(index.eventCount) ||
-    !Number.isSafeInteger(index.bytes) || !Number.isFinite(index.lastAt) || index.bytes !== fileStat.size) {
+    !Number.isSafeInteger(index.bytes) || !Number.isFinite(index.lastAt) || BigInt(index.bytes!) !== fileStat.size) {
     throw new Error('SESSION_LEDGER_INDEX_PROOF_INVALID')
+  }
+  const currentCanonicalWatermark = canonicalWatermark(conn, location)
+  const currentPhysicalIdentity = physicalFileIdentity(fileStat)
+  const cached = readyProofCache.get(identity.key)
+  if (cached && cached.physicalFileIdentity === currentPhysicalIdentity && cached.rawIndex === rawIndex &&
+    cached.proof.canonicalWatermark === currentCanonicalWatermark && cached.proof.ledgerGeneration === readiness.ledgerGeneration) {
+    rememberReadyProof(identity.key, cached)
+    return { ...cached.proof }
   }
   const handle = await fs.open(paths.eventsPath, 'r')
   const hash = createHash('sha256')
   try {
     const buffer = Buffer.alloc(64 * 1024)
     let offset = 0
-    while (offset < fileStat.size) {
-      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, fileStat.size - offset), offset)
+    while (offset < Number(fileStat.size)) {
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, Number(fileStat.size) - offset), offset)
       if (!bytesRead) throw new Error('SESSION_LEDGER_PROOF_FILE_CHANGED')
       hash.update(buffer.subarray(0, bytesRead))
       offset += bytesRead
     }
+    const afterHashStat = await handle.stat({ bigint: true })
+    if (physicalFileIdentity(afterHashStat) !== currentPhysicalIdentity) throw new Error('SESSION_LEDGER_PROOF_FILE_CHANGED')
   } finally { await handle.close() }
-  return {
-    canonicalWatermark: canonicalWatermark(conn, location),
+  const proof: SessionLedgerReadyProof = {
+    canonicalWatermark: currentCanonicalWatermark,
     ledgerGeneration: readiness.ledgerGeneration,
     fileIdentity: `${fileStat.dev}:${fileStat.ino}:${fileStat.mtimeMs}`,
-    fileBytes: fileStat.size,
+    fileBytes: Number(fileStat.size),
     // The version tag distinguishes complete prefix digests from legacy tail hashes.
     tailFrame: `full:${hash.digest('hex')}`,
     indexSeq: index.seq!, indexEventCount: index.eventCount!, indexBytes: index.bytes!, indexLastAt: index.lastAt!
   }
+  rememberReadyProof(identity.key, { physicalFileIdentity: currentPhysicalIdentity, rawIndex, proof })
+  return { ...proof }
 }
 
 async function legacyTailDigest(eventsPath: string, fileBytes: number): Promise<string> {

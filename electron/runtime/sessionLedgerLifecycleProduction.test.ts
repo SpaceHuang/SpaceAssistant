@@ -53,6 +53,71 @@ describe('production session ledger lifecycle', () => {
     expect(traces).toMatchObject([{ baselineScanCount: 0 }])
   })
 
+  it('reuses the full-prefix proof while the physical ledger and canonical watermark are unchanged', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-proof-reuse-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'proof-reuse', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, dependencies })).status).toBe('ready')
+
+    const openSpy = vi.spyOn(fs, 'open')
+    try {
+      await dependencies.readProof(location)
+      await dependencies.readProof(location)
+      expect(openSpy).not.toHaveBeenCalled()
+    } finally {
+      openSpy.mockRestore()
+    }
+  })
+
+  it('rehashes after an in-place same-length edit even when the file mtime is restored', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-proof-cache-invalidation-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'proof-cache-invalidation', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const identity = sessionLedgerLocationIdentity(location)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, dependencies })).status).toBe('ready')
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    await sink.appendCritical({ type: 'assistant_chunk', payload: { turnId: 'proof-cache', content: 'x' } })
+    await sink.close()
+    const proofBefore = await dependencies.readProof(location)
+    expect(proofBefore).toBeDefined()
+    if (!proofBefore) throw new Error('SESSION_LEDGER_PROOF_MISSING')
+    refreshSessionLedgerReadyProof(conn, identity.key, proofBefore)
+
+    const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
+    const beforeStat = await fs.stat(paths.eventsPath)
+    const bytes = await fs.readFile(paths.eventsPath)
+    const marker = Buffer.from('"content":"x"')
+    const markerOffset = bytes.indexOf(marker)
+    expect(markerOffset).toBeGreaterThanOrEqual(0)
+    if (markerOffset < 0) throw new Error('SESSION_LEDGER_TEST_MARKER_MISSING')
+    bytes[markerOffset + marker.length - 2] = 'y'.charCodeAt(0)
+    await fs.writeFile(paths.eventsPath, bytes)
+    await fs.utimes(paths.eventsPath, beforeStat.atime, beforeStat.mtime)
+
+    const openSpy = vi.spyOn(fs, 'open')
+    try {
+      const proofAfter = await dependencies.readProof(location)
+      expect(openSpy).toHaveBeenCalledTimes(1)
+      expect(proofAfter?.tailFrame).not.toBe(proofBefore.tailFrame)
+    } finally {
+      openSpy.mockRestore()
+    }
+  })
+
   it('migrates a healthy legacy ready proof to a full-prefix proof in place', async () => {
     const db = createMemoryAppDb()
     databases.push(db)
