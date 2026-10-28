@@ -85,6 +85,7 @@ import { scheduleSessionMessageContentCleanupMaintenance } from './storage/sessi
 import { scheduleSpillReferenceBackfill } from './storage/spillReferenceBackfillScheduler'
 import { ensureSessionLedgerAdmission, ensureSessionLedgerReady, runOutsideSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 import { createSessionLedgerRepairScheduler } from './sessionLedgerRepairScheduler'
+import { createSessionLedgerStartupMaintenance } from './sessionLedgerStartupMaintenance'
 import { createProductionSessionLedgerLifecycleDependencies } from './runtime/sessionLedgerLifecycleProduction'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
 import { withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
@@ -523,6 +524,27 @@ app.whenReady().then(async () => {
   const recoveryWorkDirs = ledgerRecovery.getAllowedRoots({ configuredWorkDir: recoveryWorkDir, profilesJson: getConfigValue(db, 'config.workDirProfiles') })
   const sessionLedgerLifecycleDependencies = createProductionSessionLedgerLifecycleDependencies(getDbConnection(db))
   const processGeneration = currentProcessGeneration(getDbConnection(db))
+  const sessionLedgerStartupMaintenance = createSessionLedgerStartupMaintenance({
+    conn: getDbConnection(db),
+    resolve: (row) => {
+      const session = sessionStorage.queries.readSession(row.session_id)
+      if (!session || session.createdAt !== row.created_at || session.generation !== row.session_generation) return undefined
+      const workDir = recoveryWorkDirs.find((root) => sessionLedgerLocationIdentity({
+        workDir: root, sessionId: session.id, createdAt: session.createdAt
+      }).workDirIdentity === row.work_dir_identity)
+      return workDir ? { location: { workDir, sessionId: session.id, createdAt: session.createdAt },
+        sessionGeneration: session.generation } : undefined
+    },
+    repair: async (location, sessionGeneration) => {
+      const result = await ensureSessionLedgerReady({ conn: getDbConnection(db), location, sessionGeneration,
+        processGeneration, retryBlocked: true, dependencies: sessionLedgerLifecycleDependencies,
+        onTrace: logSessionLedgerGateTrace })
+      return result.status === 'ready'
+    },
+    onAttempt: ({ location, status }) => logAgentEvent(status === 'repaired' ? 'info' : 'warn', 'session.history.recovery', {
+      kind: 'session-ledger-startup-maintenance', status, sessionId: location.sessionId
+    })
+  })
   let getSessionForLedgerRepair: ((sessionId: string) => { id: string; createdAt: number; generation: string } | undefined) | undefined
   let sessionLedgerRepairRequestGeneration = 0
   const sessionLedgerRepairScheduler = createSessionLedgerRepairScheduler({
@@ -615,7 +637,10 @@ app.whenReady().then(async () => {
     },
     startup: {
       recoverHistory: () => performCanonicalHistoryRecovery(),
-      recoverSessionLedgers: async () => ({ repairFailureCount: sessionLedgerRepairFailureCount })
+      recoverSessionLedgers: async () => {
+        const result = await sessionLedgerStartupMaintenance.run()
+        return { repairFailureCount: result.repairFailureCount + sessionLedgerRepairFailureCount }
+      }
     },
     maintenanceTasks: [
       createSqliteProjectionBuildTask({ db, dbPath, blobRoot: path.join(app.getPath('userData'), 'session-projections'),
