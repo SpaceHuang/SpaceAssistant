@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { getDbConnection } from '../database/sqliteStore'
+import { getDbConnection, openSqliteDatabase } from '../database/sqliteStore'
 import { createSession, setConfigValue } from '../database/operations'
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
@@ -468,6 +468,55 @@ describe('production session ledger lifecycle', () => {
     expect(resumedEvents.filter(({ type }) => type === 'request_usage')).toHaveLength(1)
     expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE ledger_location_key=? AND status<>'acked'").all(identity.key))
       .toEqual([])
+  })
+
+  it('baselines spilled canonical tool results using their hydrated source content', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-spilled-baseline-'))
+    roots.push(root)
+    const db = openSqliteDatabase(path.join(root, 'app.sqlite'))
+    databases.push(db)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'spilled-baseline', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const largeText = 'canonical-result-'.repeat(8_000)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([
+      { invocationId: 'spill-invocation', turnId: 'spill-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'spill-proposal', idempotencyKey: 'spill-proposal', kind: 'model-response-committed',
+        payload: { modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'spill-tool', name: 'read_file', input: { path: 'large.txt' } }] },
+          sessionLedger: { location, stepId: 'spill-step', toolCalls: [{ toolUseId: 'spill-tool', name: 'read_file', args: { path: 'large.txt' } }] } } },
+      { invocationId: 'spill-invocation', turnId: 'spill-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'spill-result', idempotencyKey: 'spill-result', kind: 'tool-call-finished',
+        payload: { toolCallId: 'spill-tool', result: { success: true, data: largeText },
+          sessionLedger: { location, stepId: 'spill-step', turnId: 'spill-turn', result: { success: true, data: largeText } } } }
+    ], 0)
+    const storedPayload = conn.prepare("SELECT payload_json FROM agent_history_events WHERE event_id='spill-result'").get() as { payload_json: string }
+    expect(storedPayload.payload_json).toContain('__spaceassistant_spill_v1')
+    await bootstrapEmptySessionEventLedger(root, session.id, session.createdAt, 'spill-baseline')
+
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    await dependencies.baseline(location)
+
+    const events = await readSessionEvents(resolveSessionEventPaths(root, session.id, session.createdAt).eventsPath)
+    expect(events.find(({ type }) => type === 'tool_result')?.payload).toMatchObject({
+      toolUseId: 'spill-tool', result: { success: true, data: largeText }
+    })
+
+    await retireSessionEventSink(root, session.id, session.createdAt)
+    const identity = sessionLedgerLocationIdentity(location)
+    await fs.rm(resolveSessionEventPaths(root, session.id, session.createdAt).directory, { recursive: true, force: true })
+    conn.prepare(`UPDATE session_ledger_projection_state SET state='blocked',retry_scope='baseline',failure_class='ledger_missing',
+      canonical_watermark=NULL,proof_file_identity=NULL,proof_file_bytes=NULL,proof_tail_frame=NULL,proof_index_seq=NULL,
+      proof_index_event_count=NULL,proof_index_bytes=NULL,proof_index_last_at=NULL WHERE ledger_location_key=?`).run(identity.key)
+
+    if (!dependencies.rebuildMissingLegacyLedger) throw new Error('SESSION_LEDGER_REBUILD_DEPENDENCY_MISSING')
+    await dependencies.rebuildMissingLegacyLedger(location)
+
+    const rebuilt = await readSessionEvents(resolveSessionEventPaths(root, session.id, session.createdAt).eventsPath)
+    expect(rebuilt.find(({ type }) => type === 'tool_result')?.payload).toMatchObject({
+      toolUseId: 'spill-tool', result: { success: true, data: largeText }
+    })
   })
 
   it('rebuilds a ledger after a durable physical-mismatch verdict without trusting the truncated suffix', async () => {

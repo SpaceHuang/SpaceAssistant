@@ -171,9 +171,11 @@ export interface ToolCallGateArgs {
   imPolicySnapshot?: import('../remote/remoteToolPolicy').RemoteSecurityPolicyConfig['policySnapshot']
   /** Versioned authorization identity for the lane's persisted policy domain. */
   policyBinding?: { domain: 'desktop' | 'im' | 'automation'; policyBehaviorVersion: string; revision: number; epoch: number }
-  /** Trusted user task evidence; absent/truncated tasks never consume or create a scope grant. */
+  /** Display-only task digest and its loss marker; cache identity uses the exact host evidence below. */
   taskDigest?: string
   taskDigestTruncated?: boolean
+  /** Exact task plus complete serialized authoritative context; oversized or missing evidence cannot cache. */
+  reviewScopeTaskIdentity?: string
   reviewScopeCache?: ReviewScopeCache
   /** Host-resolved provenance for the MCP query/data scope; never read from model arguments. */
   mcpQuerySource?: 'public' | 'local-sensitive' | 'unknown'
@@ -1471,14 +1473,15 @@ async function buildReviewScopeCandidate(
   writePathFact: WritePathFact | undefined,
   readPathFact: import('./extractors/readPathFacts').ReadPathFact | undefined
 ): Promise<ReviewScopeCandidate | undefined> {
-  if (!args.reviewScopeCache || args.taskDigestTruncated || !args.taskDigest?.trim() || !args.policyBinding || args.policyBinding.domain === 'automation') return undefined
+  if (!args.reviewScopeCache || typeof args.reviewScopeTaskIdentity !== 'string' || !args.reviewScopeTaskIdentity ||
+    Buffer.byteLength(args.reviewScopeTaskIdentity, 'utf8') > 64 * 1024 || !args.policyBinding || args.policyBinding.domain === 'automation') return undefined
   if (lane === 'desktop' && args.toolName === 'grep' && readPathFact) {
     return {
       lane, sessionId: args.sessionId, subjectId: args.userDataDir,
       authorizationDomain: { id: args.policyBinding.domain, revision: args.policyBinding.revision, epoch: args.policyBinding.epoch },
       toolName: 'grep', operation: 'search', objects: [{ role: 'root', value: readPathFact.normalizedPath }],
         environment: args.workDir, policyVersion: args.policyBinding.policyBehaviorVersion,
-        exactParameters: { recursive: args.toolInput.recursive === true }, taskConstraint: args.taskDigest
+        exactParameters: { recursive: args.toolInput.recursive === true }, taskConstraint: args.reviewScopeTaskIdentity
     }
   }
   if (args.toolName !== 'edit_file' && args.toolName !== 'write_file') return undefined
@@ -1505,6 +1508,6 @@ async function buildReviewScopeCandidate(
     authorizationDomain: { id: args.policyBinding.domain, revision: args.policyBinding.revision, epoch: args.policyBinding.epoch },
     toolName, operation, objects: [{ role: 'target', value: writePathFact.normalizedPath }],
     environment: args.workDir, policyVersion: args.policyBinding.policyBehaviorVersion,
-    exactParameters, taskConstraint: args.taskDigest
+    exactParameters, taskConstraint: args.reviewScopeTaskIdentity
   }
 }

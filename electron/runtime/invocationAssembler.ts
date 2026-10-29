@@ -143,6 +143,8 @@ export interface AgentInvocationMaterials {
   maxToolLoopRounds?: number
   approvalTaskDigest?: string
   approvalTaskDigestTruncated?: boolean
+  /** Exact, host-derived task plus full frozen conversation evidence for scope-cache identity. */
+  approvalReviewScopeTaskIdentity?: string
   /** 有界前序会话摘录，仅供安全审批解析 follow-up 指代；不形成授权。 */
   approvalConversationContext?: string
   remoteContext?: import('../tools/types').RemoteContext
@@ -844,6 +846,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(currentPolicyBinding() ? { policyBinding: currentPolicyBinding() } : {}),
       ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),
       ...(materials.approvalTaskDigestTruncated ? { taskDigestTruncated: true } : {}),
+      ...(materials.approvalReviewScopeTaskIdentity ? { reviewScopeTaskIdentity: materials.approvalReviewScopeTaskIdentity } : {}),
       reviewScopeCache: getDefaultAgentRuntime().reviewScopeCache,
       ...(currentWikiConfig !== undefined ? { wikiConfig: currentWikiConfig } : {}),
       effectiveRules: current.effectiveRules,
@@ -1094,6 +1097,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(materials.deadlineAt !== undefined ? { deadlineAt: materials.deadlineAt } : {}),
         ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),
         ...(materials.approvalTaskDigestTruncated ? { taskDigestTruncated: true } : {}),
+        ...(materials.approvalReviewScopeTaskIdentity ? { reviewScopeTaskIdentity: materials.approvalReviewScopeTaskIdentity } : {}),
         ...(materials.approvalConversationContext ? { conversationContext: materials.approvalConversationContext } : {}),
         ...(materials.taskAccessPermissions?.authorizationRecord ? { taskAuthorizationRecord: materials.taskAccessPermissions.authorizationRecord } : {}),
         invokeApproval: (invocation) => {

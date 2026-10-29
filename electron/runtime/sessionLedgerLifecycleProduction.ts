@@ -21,6 +21,7 @@ import { sessionLedgerLocationIdentity, type SessionLedgerLocationInput } from '
 import { readSessionLedgerReadiness, type SessionLedgerReadyProof } from '../sessionLedgerReadiness'
 import { drainCanonicalLedgerProjectionOutbox } from '../sessionLedgerOutbox'
 import { projectCanonicalSessionLedgerTarget, resolveCanonicalSessionLedgerProjectionTarget } from './sessionLedgerOutboxProjector'
+import { SqliteAgentHistory } from './sqliteAgentHistory'
 
 function canonicalWatermark(conn: DatabaseSync, location: SessionLedgerLocationInput): string {
   const row = conn.prepare(`SELECT events.event_id,events.session_seq FROM agent_history_events events
@@ -41,14 +42,14 @@ export async function readSessionLedgerReadyProof(conn: DatabaseSync, location: 
 }
 
 function readCanonicalSessionHistory(conn: DatabaseSync, sessionId: string): HistoryEvent[] {
-  return conn.prepare(`SELECT events.invocation_id,events.sequence,events.event_id,events.idempotency_key,events.turn_id,
-      events.schema_version,events.kind,events.payload_json
+  const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+  return conn.prepare(`SELECT events.event_id,events.session_seq
     FROM agent_history_events events JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
     WHERE streams.session_id=? ORDER BY events.session_seq,events.commit_order`).all(sessionId).map((raw) => {
-      const row = raw as { invocation_id: string; sequence: number; event_id: string; idempotency_key: string; turn_id: string;
-        schema_version: number; kind: HistoryEvent['kind']; payload_json: string }
-      return { invocationId: row.invocation_id, sequence: row.sequence, eventId: row.event_id, idempotencyKey: row.idempotency_key,
-        turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind, payload: JSON.parse(row.payload_json) }
+      const row = raw as { event_id: string; session_seq: number }
+      const event = history.readCommittedSessionEventSync({ sessionId, eventId: row.event_id, sessionSequence: row.session_seq })
+      if (!event) throw new Error('SESSION_LEDGER_CANONICAL_HISTORY_EVENT_MISSING')
+      return event
     })
 }
 

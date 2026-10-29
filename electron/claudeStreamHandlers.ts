@@ -14,7 +14,7 @@ import { runToolChatSession, DESKTOP_TOOL_LOOP_MAX_ROUNDS } from './toolChatLoop
 import { assembleInvocation } from './runtime/invocationAssembler'
 import { createAgentSdkSessionEventProjector } from './runtime/agentSdkSessionEventProjection'
 import { isAppLocale } from '../src/shared/locale'
-import { buildApprovalConversationContext, buildApprovalTaskEvidence } from '../src/shared/approvalTaskDigest'
+import { buildApprovalConversationContext, buildApprovalTaskEvidence, buildApprovalTaskIdentity } from '../src/shared/approvalTaskDigest'
 import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
 import { MAX_CHAT_API_CONTENT_BLOCKS, MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
 import { trimClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
@@ -519,9 +519,9 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         )
         const needsToolWorkDir = builtinCandidates.length > 0 || mayBuildMcpToolSnapshot(listProfiles(db))
         const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId) : ''
-        const approvalTaskEvidence = buildApprovalTaskEvidence(
-          authoritative.messages.find((m) => m.id === authoritative.currentUserMessageId)?.content ?? ''
-        )
+        const currentApprovalTaskMessage = authoritative.messages.find((message) =>
+          message.id === authoritative.currentUserMessageId && message.role === 'user')
+        const approvalTaskEvidence = buildApprovalTaskEvidence(currentApprovalTaskMessage?.content ?? '')
         // facts/context boundary: prior visible user/assistant text only helps resolve follow-up references;
         // approvalAgent renders it inside the untrusted evidence fence and never treats it as authorization.
         const approvalConversationContext = buildApprovalConversationContext(authoritative.messages, authoritative.currentUserMessageId)
@@ -578,6 +578,10 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           // §6 桌面授权证据：当前 turn 用户消息摘要进审批线索包「已声明的任务」段
           approvalTaskDigest: approvalTaskEvidence.digest,
           approvalTaskDigestTruncated: approvalTaskEvidence.truncated,
+          ...(currentApprovalTaskMessage ? (() => {
+            const taskIdentity = buildApprovalTaskIdentity(authoritative.messages, authoritative.currentUserMessageId)
+            return taskIdentity ? { approvalReviewScopeTaskIdentity: taskIdentity } : {}
+          })() : {}),
           ...(approvalConversationContext ? { approvalConversationContext } : {}),
           workDir: sessionWorkDir,
           ...(deps.getWorkDirManager ? { workDirManager: deps.getWorkDirManager() } : {}),

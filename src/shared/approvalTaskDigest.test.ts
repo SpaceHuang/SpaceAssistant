@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildApprovalConversationContext } from './approvalTaskDigest'
+import { buildApprovalConversationContext, buildApprovalTaskIdentity } from './approvalTaskDigest'
 
 describe('buildApprovalConversationContext', () => {
   it('keeps the prior user request and assistant option that a short follow-up refers to', () => {
@@ -37,5 +37,18 @@ describe('buildApprovalConversationContext', () => {
 
   it('returns no context if current user message cannot be located', () => {
     expect(buildApprovalConversationContext([{ id: 'prior', role: 'user', content: 'task' }], 'missing')).toBeUndefined()
+  })
+
+  it('builds an exact cache identity from the raw task and complete selected reference context', () => {
+    const makeMessages = (assistantContent: string, task: string) => [
+      { id: 'prior-user', role: 'user', content: 'Original request' },
+      { id: 'prior-assistant', role: 'assistant', content: assistantContent },
+      { id: 'current', role: 'user', content: task }
+    ]
+    const base = buildApprovalTaskIdentity(makeMessages('Update the release notes.', 'continue'), 'current')
+    expect(base).not.toBe(buildApprovalTaskIdentity(makeMessages('Delete the draft.', 'continue'), 'current'))
+    expect(base).not.toBe(buildApprovalTaskIdentity(makeMessages('Update the release notes.', 'con\ntinue'), 'current'))
+    expect(base).toContain('Update the release notes.')
+    expect(buildApprovalTaskIdentity([{ id: 'prior', role: 'user', content: 'task' }], 'missing')).toBeUndefined()
   })
 })
