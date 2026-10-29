@@ -949,13 +949,57 @@ describe('SQLite session storage public queries', () => {
       getDbConnection(db).prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?')
         .run(JSON.stringify(shortenedPayload), compactedEvent.eventId)
 
+      // A newer canonical manual compaction already exists when the old snapshot is upgraded.
+      const secondInput = [checkpointMessage, ...sourceSurface.slice(2),
+        { id: 'short-backfill-u3', role: 'user' as const, content: 'later question', timestamp: 5 },
+        { id: 'short-backfill-a3', role: 'assistant' as const, content: 'later answer', timestamp: 6 }]
+      const secondCheckpoint = { id: 'newer-checkpoint', role: 'user' as const,
+        content: JSON.stringify({ kind: 'context_checkpoint', task: 'continue', completed: 'newer reviewed',
+          decisions: 'newer summary', constraints: 'preserve', pending: 'continue', blockers: 'none', nextStep: 'proceed' }) }
+      const secondCandidate = { kind: 'summary' as const, checkpointMessage: secondCheckpoint,
+        checkpointReplayIdentity: secondCheckpoint.id,
+        shadowedRanges: [{ start: checkpointMessage.id, end: 'short-backfill-a2' }] }
+      const secondStart = { compactionId: 'newer-canonical-manual', windowId: session.id,
+        inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', secondInput),
+        surfaceBoundaryId: 'short-backfill-a3', targetTokens: 100 }
+      const secondOutput = [secondCheckpoint, ...secondInput.slice(-2)]
+      const secondSummary = { compactionId: secondStart.compactionId, windowId: session.id,
+        outputSurfaceFingerprint: computeReplaySurfaceFingerprint('', secondOutput),
+        summaryHash: computeCompactionSummaryHash(secondCandidate), shadowedRanges: secondCandidate.shadowedRanges,
+        candidate: secondCandidate }
+      const secondInvocation = 'manual-compaction-after-legacy'
+      await history.appendBatch([
+        { invocationId: secondInvocation, turnId: secondInvocation, sequence: 1, schemaVersion: 1,
+          eventId: `${secondInvocation}:compacted`, idempotencyKey: `${secondInvocation}:compacted`, kind: 'transcript-compacted',
+          payload: { compactionId: secondStart.compactionId, messages: secondOutput,
+            sessionLedger: { location: { workDir, sessionId: session.id, createdAt: session.createdAt }, start: secondStart, summary: secondSummary },
+            surfaceReplay: { windowId: session.id, inputFingerprint: secondStart.inputSurfaceFingerprint,
+              outputFingerprint: secondSummary.outputSurfaceFingerprint, checkpointReplayIdentity: secondCheckpoint.id } } },
+        { invocationId: secondInvocation, turnId: secondInvocation, sequence: 2, schemaVersion: 1,
+          eventId: `${secondInvocation}:completed`, idempotencyKey: `${secondInvocation}:completed`, kind: 'invocation-completed',
+          payload: { status: 'completed', completedAt: Date.now() } }
+      ], 0)
+      const currentSink = getSessionEventSink(workDir, session.id, session.createdAt)
+      await appendCompactionTransaction(currentSink, secondStart, secondSummary)
+      await currentSink.close()
+      expect(storage.queries.readCanonicalCompactionReplay(session.id)?.committed).toHaveLength(2)
+      const beforeUpgrade = await history.readLatestInvocationForSession(session.id)
+      expect(beforeUpgrade.kind).toBe('completed')
+      const expectedRequest = toCanonicalModelMessages([...secondOutput, { role: 'user', content: 'next hosted request' }])
+      if (beforeUpgrade.kind === 'completed') {
+        expect(beforeUpgrade.snapshot.invocationId).toBe(secondInvocation)
+        expect(resolveCanonicalRequestCutover({ snapshot: beforeUpgrade.snapshot, requestMessages: expectedRequest,
+          requiredUserMessage: expectedRequest.at(-1)! })).toEqual({ kind: 'matched', messages: expectedRequest })
+      }
+
       await storage.readCompactionReplay({ sessionId: session.id, workDir })
       const latest = await history.readLatestInvocationForSession(session.id)
       if (latest.kind !== 'completed') throw new Error('upgraded Hosted transcript snapshot is not complete')
+      expect(latest.snapshot.invocationId).toContain(':session-transcript-snapshot:')
       const latestPayload = latest.snapshot.events.find(({ kind }) => kind === 'transcript-compacted')?.payload as { messages?: Array<{ id?: string }> } | undefined
-      expect(latestPayload?.messages?.map(({ id }) => id)).toEqual(expect.arrayContaining(['short-backfill-u3', 'short-backfill-a3']))
+      expect(latestPayload?.messages?.map(({ id }) => id)).toEqual(secondOutput.map(({ id }) => id))
       const requestMessages = toCanonicalModelMessages([
-        checkpointMessage, ...sourceSurface.slice(2),
+        secondCheckpoint,
         { id: 'short-backfill-u3', role: 'user' as const, content: 'later question', timestamp: 5 },
         { id: 'short-backfill-a3', role: 'assistant' as const, content: 'later answer', timestamp: 6 },
         { role: 'user' as const, content: 'next hosted request' }
@@ -963,6 +1007,10 @@ describe('SQLite session storage public queries', () => {
       const cutover = resolveCanonicalRequestCutover({ snapshot: latest.snapshot, requestMessages, requiredUserMessage: requestMessages.at(-1)! })
       expect(cutover.kind).toBe('matched')
       if (cutover.kind === 'matched') expect(cutover.messages).toEqual(requestMessages)
+      await storage.readCompactionReplay({ sessionId: session.id, workDir })
+      const afterRestart = await history.readLatestInvocationForSession(session.id)
+      expect(afterRestart.kind).toBe('completed')
+      if (afterRestart.kind === 'completed') expect(afterRestart.snapshot.invocationId).toBe(latest.snapshot.invocationId)
     } finally {
       db?.close()
       db = undefined

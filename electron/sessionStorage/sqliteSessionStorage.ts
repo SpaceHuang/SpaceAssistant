@@ -128,18 +128,22 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       WHERE streams.session_id=? AND events.kind='transcript-compacted' AND substr(streams.invocation_id,1,length(?))=?`)
       .all(sessionId, backfillPrefix, backfillPrefix) as Array<{ invocation_id: string; payload_json: string }>
     const versionedBackfills = new Set<string>()
+    const sessionSnapshotBackfills = new Set<string>()
     for (const row of backfillEvents) {
       try {
-        const payload = JSON.parse(row.payload_json) as { backfillSnapshotVersion?: unknown }
+        const payload = JSON.parse(row.payload_json) as { backfillSnapshotVersion?: unknown; sourceCompactionIds?: unknown }
         if (payload.backfillSnapshotVersion !== 2) continue
         versionedBackfills.add(row.invocation_id)
+        if (Array.isArray(payload.sourceCompactionIds)) {
+          for (const compactionId of payload.sourceCompactionIds) if (typeof compactionId === 'string') sessionSnapshotBackfills.add(compactionId)
+        }
       } catch { /* Invalid snapshots are handled by canonical History validation when read. */ }
     }
     const hasBackfillWithoutCurrentSnapshot = canonicalReplay.committed.some(({ compactionId }) => {
       if (!canonicalIds.has(compactionId)) return false
       const invocationId = `${backfillPrefix}${compactionId}`
       if (!backfillEvents.some((row) => row.invocation_id === invocationId)) return false
-      return !versionedBackfills.has(invocationId) && !backfillEvents.some((row) =>
+      return !sessionSnapshotBackfills.has(compactionId) && !versionedBackfills.has(invocationId) && !backfillEvents.some((row) =>
         row.invocation_id.startsWith(`${invocationId}:transcript-snapshot:`) && versionedBackfills.has(row.invocation_id))
     })
     const backfillRecords = [...fileReplay.committed, ...canonicalReplay.committed.filter(({ compactionId }) =>
@@ -154,6 +158,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
         const projection = projectReplaySurfaceWithSources(built)
         const identities = surfaceItemIdentitiesForProjectionSubset(projection, projection)
         let surface = projection.messages.map((message, index) => ({ ...message, id: message.id ?? identities[index]! }))
+        const needsSessionSnapshot: string[] = []
         const canonicalizeJson = (value: unknown): unknown => Array.isArray(value) ? value.map(canonicalizeJson)
           : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
             .map(([key, item]) => [key, canonicalizeJson(item)])) : value
@@ -235,37 +240,9 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
               throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
             }
             if (stableJson(existingMessages) !== stableJson(expectedMessages) || existingPayload?.backfillSnapshotVersion !== 2) {
-              // Older partial backfills captured a shorter transcript. Publish the current
-              // source-backed suffix as a newer snapshot before closing the immutable stream.
-              const transcriptVersion = createHash('sha256').update(stableJson(expectedMessages)).digest('hex').slice(0, 24)
-              const snapshotInvocationId = `${invocationId}:transcript-snapshot:${transcriptVersion}`
-              const snapshotEventId = `${snapshotInvocationId}:transcript-compacted`
-              const snapshotCompletedEventId = `${snapshotInvocationId}:completed`
-              const existingSnapshot = await history.read(snapshotInvocationId)
-              const snapshotPayload = { compactionId: record.compactionId, messages: expectedMessages, backfillSnapshotVersion: 2 }
-              if (existingSnapshot.version === 0) {
-                await history.appendBatch([
-                  { invocationId: snapshotInvocationId, turnId: snapshotInvocationId, sequence: 1, schemaVersion: 1,
-                    eventId: snapshotEventId, idempotencyKey: snapshotEventId, kind: 'transcript-compacted', payload: snapshotPayload },
-                  { invocationId: snapshotInvocationId, turnId: snapshotInvocationId, sequence: 2, schemaVersion: 1,
-                    eventId: snapshotCompletedEventId, idempotencyKey: snapshotCompletedEventId, kind: 'invocation-completed',
-                    payload: { status: 'completed', completedAt: Date.now() } }
-                ], 0)
-              } else {
-                const snapshot = existingSnapshot.events.find(({ kind }) => kind === 'transcript-compacted')
-                if (!snapshot || stableJson(snapshot.payload) !== stableJson(snapshotPayload)) {
-                  throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
-                }
-                const snapshotTerminal = existingSnapshot.events.at(-1)
-                if (existingSnapshot.version === 1 && snapshotTerminal?.kind === 'transcript-compacted') {
-                  await history.appendBatch([{ invocationId: snapshotInvocationId, turnId: snapshotInvocationId, sequence: 2,
-                    schemaVersion: 1, eventId: snapshotCompletedEventId, idempotencyKey: snapshotCompletedEventId,
-                    kind: 'invocation-completed', payload: { status: 'completed', completedAt: Date.now() } }], existingSnapshot.version)
-                } else if (existingSnapshot.version !== 2 || snapshotTerminal?.kind !== 'invocation-completed' ||
-                  (snapshotTerminal.payload as { status?: unknown }).status !== 'completed') {
-                  throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
-                }
-              }
+              // Do not publish an intermediate snapshot here: a later canonical manual
+              // compaction in this same replay chain may supersede this surface.
+              needsSessionSnapshot.push(record.compactionId)
             }
             const terminal = stored.events.at(-1)
             if (stored.version === 1 && terminal?.kind === 'transcript-compacted') {
@@ -279,6 +256,34 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
               eventId, idempotencyKey: eventId, kind: 'transcript-compacted', payload }, completedEvent], 0)
           }
           surface = nextSurface
+        }
+        if (needsSessionSnapshot.length > 0) {
+          const sourceCompactionIds = [...new Set(needsSessionSnapshot)].sort()
+          const transcriptVersion = createHash('sha256').update(stableJson({ sourceCompactionIds, messages: surface })).digest('hex').slice(0, 24)
+          const snapshotInvocationId = `${backfillPrefix}session-transcript-snapshot:${transcriptVersion}`
+          const snapshotEventId = `${snapshotInvocationId}:transcript-compacted`
+          const snapshotCompletedEventId = `${snapshotInvocationId}:completed`
+          const snapshotPayload = { messages: surface.map((message) => ({ ...message })), backfillSnapshotVersion: 2, sourceCompactionIds }
+          const existingSnapshot = await execution.historyFor({ sessionId }).read(snapshotInvocationId)
+          if (existingSnapshot.version === 0) {
+            await execution.historyFor({ sessionId }).appendBatch([
+              { invocationId: snapshotInvocationId, turnId: snapshotInvocationId, sequence: 1, schemaVersion: 1,
+                eventId: snapshotEventId, idempotencyKey: snapshotEventId, kind: 'transcript-compacted', payload: snapshotPayload },
+              { invocationId: snapshotInvocationId, turnId: snapshotInvocationId, sequence: 2, schemaVersion: 1,
+                eventId: snapshotCompletedEventId, idempotencyKey: snapshotCompletedEventId, kind: 'invocation-completed',
+                payload: { status: 'completed', completedAt: Date.now() } }
+            ], 0)
+          } else {
+            const snapshot = existingSnapshot.events.find(({ kind }) => kind === 'transcript-compacted')
+            if (!snapshot || stableJson(snapshot.payload) !== stableJson(snapshotPayload)) throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+            const terminal = existingSnapshot.events.at(-1)
+            if (existingSnapshot.version === 1 && terminal?.kind === 'transcript-compacted') {
+              await execution.historyFor({ sessionId }).appendBatch([{ invocationId: snapshotInvocationId, turnId: snapshotInvocationId,
+                sequence: 2, schemaVersion: 1, eventId: snapshotCompletedEventId, idempotencyKey: snapshotCompletedEventId,
+                kind: 'invocation-completed', payload: { status: 'completed', completedAt: Date.now() } }], existingSnapshot.version)
+            } else if (existingSnapshot.version !== 2 || terminal?.kind !== 'invocation-completed' ||
+              (terminal.payload as { status?: unknown }).status !== 'completed') throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+          }
         }
       }
     }
