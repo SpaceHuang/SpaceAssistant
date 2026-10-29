@@ -149,7 +149,6 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
           signal.accountAuthorization === 'authorized' && signal.sideEffect === 'read' &&
           signal.completeness === 'complete' && signal.dataDestinations.length === 0
         ) tokens.add('mcp-public-read')
-        if (signal.accountAuthorization === 'unauthorized') tokens.add('mcp-account-unauthorized')
         if (signal.completeness === 'capability-description-stale') tokens.add('mcp-capability-description-stale')
         break
       case 'browser-action':

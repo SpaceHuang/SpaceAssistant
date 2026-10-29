@@ -31,7 +31,7 @@ describe('McpServerForm public-read trust', () => {
     expect(onPatch).toHaveBeenCalledWith({ publicReadOnlyTools: { search: descriptorHash } })
   })
 
-  it('emits a separate descriptor-bound account-use authorization when explicitly selected', () => {
+  it('records the descriptor-bound local tool marker when explicitly selected', () => {
     const descriptorHash = 'a'.repeat(64)
     const draft = { ...newMcpServerDraft(), name: 'Docs', enabledToolNames: ['search'] }
     const onPatch = vi.fn()
@@ -53,7 +53,7 @@ describe('McpServerForm public-read trust', () => {
         </App>
       </ConfigProvider>
     )
-    fireEvent.click(screen.getByRole('checkbox', { name: '允许此连接账户调用' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: '确认此工具可用于公开只读审核' }))
     expect(onPatch).toHaveBeenCalledWith({ accountAuthorizedTools: { search: descriptorHash } })
     expect(onPatch).not.toHaveBeenCalledWith({ publicReadOnlyTools: { search: descriptorHash } })
   })
@@ -78,7 +78,7 @@ describe('McpServerForm public-read trust', () => {
       </ConfigProvider>
     )
     const trustLabel = screen.getByText('信任为仅读取公开数据').closest('label')
-    const accountLabel = screen.getByText('允许此连接账户调用').closest('label')
+    const accountLabel = screen.getByText('确认此工具可用于公开只读审核').closest('label')
     expect((trustLabel?.querySelector('input[type="checkbox"]') as HTMLInputElement | null)?.disabled).toBe(true)
     expect((accountLabel?.querySelector('input[type="checkbox"]') as HTMLInputElement | null)?.disabled).toBe(true)
   })

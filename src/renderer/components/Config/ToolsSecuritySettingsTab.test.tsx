@@ -533,6 +533,19 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     expect(within(writeRow).getByText(/write_file/)).toBeTruthy()
   })
 
+  it('IM 标准套餐的公开只读 MCP 规则显示自动审核', async () => {
+    const rule = DEFAULT_POLICY_RULES.find((entry) => entry.id === 'im-mcp-public-read-review')!
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL, rules: [...MODEL.rules, { id: rule.id, when: rule.when, action: rule.action,
+        defaultAction: rule.action, enabled: true, locked: false, reason: rule.reason,
+        overridden: false, lanes: ['wechat', 'feishu'] }]
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    const row = (await within(panel).findByText('im-mcp-public-read-review')).closest('tr')!
+    expect(within(row).getByText('自动审核')).toBeTruthy()
+  })
+
   it('标准套餐桌面：mcp-tool-ask 行显示「自动审核」（ask 经 effectiveActionFor 变换）且只读', { timeout: 20000 }, async () => {
     renderTab()
     const panel = await screen.findByRole('tabpanel')
@@ -646,9 +659,6 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     const panel = await screen.findByRole('tabpanel')
     for (const rule of rules) {
       const row = (await within(panel).findByText(rule.id)).closest('tr')!
-      if (rule.id === 'mcp-account-unauthorized-deny') {
-        expect(within(row as HTMLElement).getByText('MCP 账户未获授权访问请求的数据范围')).toBeTruthy()
-      }
       const selector = within(row as HTMLElement).getByRole('combobox')
       expect(selector.closest('.ant-select')!.className, rule.id).not.toContain('ant-select-disabled')
       expect(within(row as HTMLElement).getAllByText(/^(禁止|直接执行|人工批准|自动审核)$/).length).toBeGreaterThan(0)

@@ -111,8 +111,7 @@ const EXPECTED_RULE_IDS = [
   'ingress-direct-other-deny',
   'ingress-feishu-group-deny',
   'lark-message-group-human',
-  'lark-message-target-unknown-human',
-  'mcp-account-unauthorized-deny'
+  'lark-message-target-unknown-human'
 ]
 
 describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {

@@ -85,8 +85,6 @@ function PolicyPackageSection({
     const baseRuleId = rule.id.startsWith('scope-') ? rule.id.replace(/^scope-(strict|loose)-/, '') : rule.id
     const reasonKey = `toolsSecurity.policy.ruleReasons.${baseRuleId}`
     switch (rule.id) {
-      case 'mcp-account-unauthorized-deny':
-        return t('toolsSecurity.policy.mcpAccountUnauthorizedReason')
       case 'remote-browser-disabled':
         return t('toolsSecurity.policy.remoteBrowserDisabledReason')
       case 'remote-outbound-budget-pause-wechat':

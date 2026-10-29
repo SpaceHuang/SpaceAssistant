@@ -1,6 +1,8 @@
 import type { McpServerProfile, McpToolDescriptor } from '../../src/shared/mcpTypes'
 import { hashMcpToolDescription, hashMcpToolSchema } from './mcpToolRegistry'
 
+// facts: accountAuthorization is a legacy wire name for the local tool-use marker, not a service ACL.
+// Policy: mcp-tool-ask decides invocation; public-read evidence only classifies the review.
 export type PublicMcpReadAuthorization = {
   querySource: 'public' | 'unknown'
   accountAuthorization: 'authorized' | 'unknown'

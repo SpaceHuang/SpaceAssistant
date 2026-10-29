@@ -679,15 +679,6 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   // B5：annotations 是 server 单方面声明的不可信输入，放行仅限桌面 lane——远程链路（wechat/feishu）
   // 不消费该豁免，只读工具一样可能把本地数据带回 IM 会话，落 mcp-tool-ask 确认。
   {
-    id: 'mcp-account-unauthorized-deny',
-    when: 'invocation',
-    match: { signals: ['mcp-account-unauthorized'] },
-    denyClass: 'forbidden',
-    action: 'deny',
-    locked: true,
-    reason: 'MCP account is not authorized for the requested data scope'
-  },
-  {
     id: 'automation-mcp-permission-missing-deny',
     when: 'invocation',
     match: { lane: ['automation'], signals: ['automation-mcp-permission:missing'] },
@@ -718,7 +709,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { signals: ['mcp-tool'] },
     denyClass: 'insufficient-info',
     action: 'ask',
-    reason: 'MCP 工具调用需确认'
+    reason: 'MCP 工具调用由 SpaceAssistant 按当前策略审核'
   },
   {
     id: 'im-low-risk-create',

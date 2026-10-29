@@ -85,7 +85,7 @@ export interface McpServerProfile {
   enabledToolNames: string[]
   /** User-authored public-read trust, bound to the exact registered descriptor hash per original tool name. */
   publicReadOnlyTools?: Record<string, string>
-  /** Explicit user authorization for this configured MCP connection to invoke each exact tool descriptor. */
+  /** Legacy field name: user-authored SpaceAssistant tool-use marker bound to each exact descriptor; not the service account or data permissions. */
   accountAuthorizedTools?: Record<string, string>
   /** FR6（对齐 Claude Code alwaysLoad 语义）：true = 该服务工具始终全量注入（跳过延迟与索引）；缺省跟随全局档位。 */
   alwaysLoad?: boolean
@@ -126,7 +126,7 @@ export interface McpServerWriteInput {
   enabledToolNames: string[]
   /** Explicit user declaration that these exact descriptors only read public data. */
   publicReadOnlyTools?: Record<string, string>
-  /** Explicit user authorization for this configured MCP connection to invoke each exact tool descriptor. */
+  /** Legacy field name: user-authored SpaceAssistant tool-use marker bound to each exact descriptor; not the service account or data permissions. */
   accountAuthorizedTools?: Record<string, string>
   /** FR14：与 McpServerProfile.alwaysLoad 同步（写入 payload 字段；strict schema 未收录即抛错）。 */
   alwaysLoad?: boolean

@@ -688,6 +688,37 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
     expect(r.decision.type).toBe('require-confirm')
   })
 
+  // policy: standard IM calls use mcp-tool-ask regardless of a service-side account model.
+  it.each(['wechat', 'feishu'] as const)('standard %s reviews a local MCP call without account authorization', async (lane) => {
+    const r = await evaluateToolCallGate(base({
+      lane,
+      remoteContext: remoteContext({ source: lane }),
+      toolName: 'mcp_example_fetch_url',
+      toolInput: { url: 'https://example.com' },
+      mcpEntry: mcpEntry(),
+      effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES }),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    }))
+    expect(r.decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'agent' })
+  })
+
+  // policy: im-standard-v2 delegates verified public MCP reads to the approval agent in both IM lanes.
+  it.each(['wechat', 'feishu'] as const)('standard %s sends verified public MCP reads to the approval agent', async (lane) => {
+    const r = await evaluateToolCallGate(base({
+      lane,
+      remoteContext: remoteContext({ source: lane }),
+      toolName: 'mcp_example_search',
+      toolInput: { query: 'public documentation' },
+      mcpQuerySource: 'public',
+      mcpAccountAuthorization: 'authorized',
+      mcpEntry: mcpEntry({ originalName: 'search', annotations: { readOnlyHint: true, destructiveHint: false },
+        inputSchema: { type: 'object', required: ['query'] } }),
+      effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES }),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    }))
+    expect(r.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-mcp-public-read-review', answerer: 'agent' })
+  })
+
   it('unknown MCP capability without a trusted descriptor cannot receive read-only treatment', async () => {
     const r = await evaluateToolCallGate(base({
       toolName: 'mcp_example_fetch_url',
@@ -702,7 +733,7 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
     ['local-sensitive query source', 'local-sensitive', 'authorized', 'require-confirm'],
     ['unknown query source', 'unknown', 'authorized', 'require-confirm'],
     ['unknown account permission', 'public', 'unknown', 'require-confirm'],
-    ['denied account permission', 'public', 'unauthorized', 'deny']
+    ['legacy unauthorized account fact', 'public', 'unauthorized', 'require-confirm']
   ] as const)('does not auto-allow an annotated read with %s', async (_caseName, mcpQuerySource, mcpAccountAuthorization, expectedDecision) => {
     const r = await evaluateToolCallGate(base({
       toolName: 'mcp_example_search',
@@ -716,7 +747,6 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
       })
     }))
     expect(r.decision.type).toBe(expectedDecision)
-    if (expectedDecision === 'deny') expect(r.decision).toMatchObject({ ruleId: 'mcp-account-unauthorized-deny' })
     expect(r.facts.signals.some((signal) => signal.kind === 'mcp-readonly')).toBe(false)
   })
 

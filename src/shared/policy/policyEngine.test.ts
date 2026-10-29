@@ -1271,7 +1271,7 @@ describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）',
     }
   })
 
-  it('IM standard 将其他 MCP 调用默认交给审核 Agent，拒绝规则仍优先', () => {
+  it('IM standard 将 MCP 调用交给审核 Agent，不把服务端账号状态当作本地拒绝依据', () => {
     const imStandard = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
     const unknownMcp = mkFacts('mcp__srv__fetch', 'write', [
       { kind: 'mcp-tool', serverId: 'srv', toolName: 'fetch' }
@@ -1286,7 +1286,7 @@ describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）',
           querySource: 'public', accountAuthorization: 'unauthorized', completeness: 'complete', missingFacts: [],
           argNames: ['url'], argsDigest: 'digest', argsTruncated: false }
       ]), mkContext(lane), DEFAULT_POLICY_RULES, deps({ transform: imStandard }))
-      expect(unauthorized).toMatchObject({ type: 'deny', ruleId: 'mcp-account-unauthorized-deny' })
+      expect(unauthorized).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'agent' })
     }
   })
 
