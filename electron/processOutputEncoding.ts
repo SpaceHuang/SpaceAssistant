@@ -70,6 +70,11 @@ export function buildPythonScriptEnv(base: NodeJS.ProcessEnv = process.env): Nod
 /** Freeze the child environment for run_script; remote IM scripts cannot inherit proxy routing. */
 export function buildScriptExecutionEnv(base: NodeJS.ProcessEnv = process.env, lane?: string, networkReviewCandidate = false): NodeJS.ProcessEnv {
   const env = buildPythonScriptEnv(base)
+  if (networkReviewCandidate) {
+    // Static network candidates must not load import hooks or modules from caller-controlled paths.
+    delete env.PYTHONPATH
+    delete env.PYTHONHOME
+  }
   if (networkReviewCandidate && (lane === 'wechat' || lane === 'feishu')) {
     for (const key of Object.keys(env)) if (/^(http|https|all|no)_proxy$/i.test(key)) delete env[key]
   }

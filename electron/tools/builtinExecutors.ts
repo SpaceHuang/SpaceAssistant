@@ -2447,7 +2447,10 @@ export const runScriptExecutor: ToolExecutor = {
       if (language === 'python') {
         const interpreter = await resolvePythonInterpreter(ctx.toolsConfig.pythonPath)
         command = interpreter.command
-        commandArgs = ['-c', code]
+        // Python isolated mode ignores cwd, PYTHONPATH, and user site imports. Safe-path mode
+        // prevents an unreviewed requests.py/package in the session workDir from executing
+        // during an approved static network candidate.
+        commandArgs = [...(ctx.scriptNetworkReviewCandidate ? ['-I'] : []), '-c', code]
         interpreterName = 'python'
         fallbackFrom = interpreter.fallbackFrom
       } else {

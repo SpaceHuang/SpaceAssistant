@@ -478,6 +478,20 @@ describe('executeWeChatSend', () => {
     }))
   })
 
+  it('does not read an oversized external text attachment before rejecting it', async () => {
+    const file = path.join(workDir, 'oversized.txt')
+    await fs.writeFile(file, '')
+    await fs.truncate(file, 25 * 1024 * 1024 + 1)
+    const readFile = vi.spyOn(fs, 'readFile')
+    try {
+      const result = await inspectWeChatTaskReplyAttachment(workDir, undefined, file)
+      expect(result.attachmentAuthorized).toBe(false)
+      expect(readFile).not.toHaveBeenCalledWith(file)
+    } finally {
+      readFile.mockRestore()
+    }
+  })
+
   it('T11：Agent 批准目录外普通附件后，实际上传字节与审批摘要一致', async () => {
     mockBot.reply.mockResolvedValue(undefined)
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-approved-outside-'))

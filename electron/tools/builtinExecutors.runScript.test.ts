@@ -307,6 +307,43 @@ describe('run_script language dispatch', () => {
     } finally { handle.release() }
   })
 
+  it('omitted language uses Python semantics when binding a static network candidate', async () => {
+    const code = "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)"
+    const runtime = { ...ctx(), lane: 'wechat' } as { expectedScriptEnvironmentDigest?: string; expectedScriptSettingsDigest?: string; expectedScriptNetworkReviewCandidate?: boolean }
+    const executor = vi.fn(async () => ({ success: true }))
+    const tool = createRunScriptRegisteredTool({ name: 'run_script', execute: executor } as never)
+    const handle = await tool.begin({ code }, {
+      requestId: 'omitted-language', toolUseId: 'omitted-language-call', signal: new AbortController().signal,
+      executionContext: runtime
+    })
+    try {
+      handle.awaitConfirmation(); handle.confirm(); handle.beginValidation()
+      const facts = tool.getPreparedFacts?.(handle.prepared) as { settingsDigest: string; environmentDigest?: string }
+      runtime.expectedScriptSettingsDigest = facts.settingsDigest
+      runtime.expectedScriptNetworkReviewCandidate = true
+      runtime.expectedScriptEnvironmentDigest = facts.environmentDigest ?? stableScriptMaterialDigest(buildScriptExecutionEnv(process.env, 'wechat', true))
+      await expect(handle.validatePrepared({ signal: new AbortController().signal, runtimeContext: runtime } as never)).resolves.toBeUndefined()
+    } finally { handle.release() }
+  })
+
+  it.skipIf(!pythonInterpreter)('static network Python execution does not import a module shadowed from cwd', async () => {
+    const { mkdtemp, writeFile, readFile, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'script-import-isolation-'))
+    const sentinel = join(dir, 'unreviewed-import-ran')
+    await writeFile(join(dir, 'requests.py'), `from pathlib import Path\nPath(${JSON.stringify(sentinel)}).write_text('yes')\ndef get(*args, **kwargs): pass\n`)
+    try {
+      const result = await runScriptExecutor.execute({ language: 'python', code: "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)" }, {
+        ...ctx(), workDir: dir, lane: 'wechat', scriptEnvironment: buildScriptExecutionEnv(process.env, 'wechat', true), scriptNetworkReviewCandidate: true
+      } as never)
+      // This host may not have requests installed; the security property is that the
+      // workDir shadow module never runs, regardless of whether the real dependency exists.
+      expect(typeof result.success).toBe('boolean')
+      await expect(readFile(sentinel)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  })
+
   it('executes JavaScript and TypeScript with Node after gate-level language selection', async () => {
     const executor = runScriptExecutor
     const context = () => ({

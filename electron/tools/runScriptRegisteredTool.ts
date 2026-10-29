@@ -61,7 +61,7 @@ export function createRunScriptRegisteredTool(executor: ToolExecutor): Registere
     plan: async (input, planning) => {
       const runtime = planning.executionContext as RuntimeExecutionContext | undefined
       if (!runtime) throw new Error('RUN_SCRIPT_RUNTIME_CONTEXT_REQUIRED')
-      const networkReviewCandidate = input.language === 'python' && typeof input.code === 'string' && hasStaticNetworkReviewCandidate(input.code)
+      const networkReviewCandidate = (input.language === undefined || input.language === 'python') && typeof input.code === 'string' && hasStaticNetworkReviewCandidate(input.code)
       const environment = networkReviewCandidate ? scriptEnvironment(runtime, true) : undefined
       const environmentDigest = environment ? stableScriptMaterialDigest(environment) : undefined
       return { input: structuredClone(input), settings: scriptSettings(runtime), ...(environment ? { environment } : {}), environmentDigest, networkReviewCandidate }
@@ -106,6 +106,7 @@ export function createRunScriptRegisteredTool(executor: ToolExecutor): Registere
         userDataDir: prepared.settings.userDataDir,
         toolsConfig,
         ...(prepared.environment ? { scriptEnvironment: structuredClone(prepared.environment) } : {}),
+        scriptNetworkReviewCandidate: prepared.networkReviewCandidate,
         requestId: execution.requestId,
         toolUseId: execution.toolUseId,
         signal: execution.signal
