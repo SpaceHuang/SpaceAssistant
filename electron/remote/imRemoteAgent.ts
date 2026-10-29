@@ -523,7 +523,7 @@ export async function runImRemoteAgent(args: {
     const res = await runToolChatSession(invocation, ports, {
       onHostedTurnHandoff: createHostedTurnHandoff({
         agentSdk, history: ports.history!, invocationId: args.acceptedTurn?.turnId ?? args.turnId ?? requestId, turnId: args.acceptedTurn?.turnId ?? args.turnId ?? requestId, acceptedTurn: args.acceptedTurn,
-        sessionQueries: storage.queries, sessionExecution: storage.execution, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds,
+        sessionQueries: storage.queries, sessionExecution: storage.execution, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt,
         ...(args.remoteContext.trackContext ? { trackScopedModelInput: true } : {}),
         ...(args.confirmationAdapter ? { confirmationAdapter: args.confirmationAdapter } : {})
       })
