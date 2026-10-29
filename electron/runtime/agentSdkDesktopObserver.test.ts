@@ -509,10 +509,33 @@ describe('createAgentSdkDesktopObserver', () => {
       requestId: 'r', sessionId: 's', turnId: 't',
       sessionEventLocation: { workDir: '/workspace', sessionId: 's', createdAt: 123 }
     })
-    await expect(observer.prepareProviderRetry?.({ attempt: 2, modelTurn: 3, routeId: 'route', requestId: 'r:round:3', code: 'provider_context_overflow' })).resolves.toEqual({
+    await expect(observer.prepareProviderRetry?.({ attempt: 2, attemptInRequest: 3, maxAttempts: 3, modelTurn: 3, routeId: 'route', requestId: 'r:round:3', code: 'provider_context_overflow', reasonCode: 'PROVIDER_CONTEXT_OVERFLOW', recoveryKind: 'overflow', plannedWaitMs: 0 })).resolves.toEqual({
       location: { workDir: '/workspace', sessionId: 's', createdAt: 123 },
       requestRetry: { turnId: 't', stepId: 'r', requestId: 'r:round:3', attempt: 2, backoffMs: 0, code: 'provider_context_overflow' }
     })
+  })
+
+  it('projects one retry system operation and settles it without exposing provider text', async () => {
+    const facts: AssistantFactEvent[] = []
+    const observer = createAgentSdkDesktopObserver({ requestId: 'r', sessionId: 's', turnId: 't', emitFactEvent: (event) => facts.push(event) })
+    const retry = { attempt: 1, attemptInRequest: 2, maxAttempts: 5, modelTurn: 1, routeId: 'route', requestId: 'r:round:1', code: 'provider_rate_limit', reasonCode: 'PROVIDER_RATE_LIMIT', recoveryKind: 'transient' as const, plannedWaitMs: 2500 }
+    await observer.onProviderRetry?.(retry)
+    await observer.onProviderRetry?.({ ...retry, attempt: 2, attemptInRequest: 3, plannedWaitMs: 4000 })
+    await observer.onTurnFailed?.({ error: new Error('secret provider body'), status: 'cancelled' })
+    const operations = facts.filter((event): event is Extract<AssistantFactEvent, { type: 'system-operation-updated' }> => event.type === 'system-operation-updated')
+    expect(operations).toHaveLength(3)
+    expect(operations[0]?.operation).toMatchObject({ id: 'r:round:1:provider-retry', kind: 'provider-retry', status: 'running', attemptInRequest: 2, maxAttempts: 5, plannedWaitMs: 2500 })
+    expect(operations[1]?.operation).toMatchObject({ id: 'r:round:1:provider-retry', status: 'running', attemptInRequest: 3, plannedWaitMs: 4000 })
+    expect(operations[2]?.operation).toMatchObject({ id: 'r:round:1:provider-retry', status: 'cancelled' })
+    expect(JSON.stringify(operations)).not.toContain('secret provider body')
+  })
+
+  it('marks the retry operation recovered when the turn completes', async () => {
+    const facts: AssistantFactEvent[] = []
+    const observer = createAgentSdkDesktopObserver({ requestId: 'r', sessionId: 's', turnId: 't', emitFactEvent: (event) => facts.push(event) })
+    await observer.onProviderRetry?.({ attempt: 1, attemptInRequest: 2, maxAttempts: 3, modelTurn: 1, routeId: 'route', requestId: 'r:round:1', code: 'provider_rate_limit', reasonCode: 'PROVIDER_RATE_LIMIT', recoveryKind: 'transient', plannedWaitMs: 100 })
+    await observer.onTurnFinished?.({ text: 'ok', messages: [], modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1 } })
+    expect(facts.at(-1)).toMatchObject({ type: 'system-operation-updated', operation: { id: 'r:round:1:provider-retry', status: 'succeeded' } })
   })
 
   it('projects accepted chunks and tool lifecycle into legacy session events and facts in source order', async () => {

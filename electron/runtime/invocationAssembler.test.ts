@@ -2050,10 +2050,10 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })
     expect(result).toMatchObject({ reasonCode: 'PROVIDER_CONTEXT_OVERFLOW', messages: [{ role: 'user', content: 'current' }] })
     expect(emitSessionEvent).not.toHaveBeenCalled()
-    await ports.observer.onProviderRetry?.({ attempt: 1, modelTurn: 2, routeId: 'test-route', requestId: 'req-overflow:round:2', code: 'provider_context_overflow' })
+    await ports.observer.onProviderRetry?.({ attempt: 1, attemptInRequest: 2, maxAttempts: 2, modelTurn: 2, routeId: 'test-route', requestId: 'req-overflow:round:2', code: 'provider_context_overflow', reasonCode: 'PROVIDER_CONTEXT_OVERFLOW', recoveryKind: 'overflow', plannedWaitMs: 1250 })
     expect(emitSessionEvent).toHaveBeenCalledWith({
       type: 'request_retry',
-      payload: { turnId: 'turn-overflow', stepId: 'req-overflow', requestId: 'req-overflow:round:2', attempt: 1, backoffMs: 0, code: 'provider_context_overflow' }
+      payload: { turnId: 'turn-overflow', stepId: 'req-overflow', requestId: 'req-overflow:round:2', attempt: 1, backoffMs: 1250, code: 'provider_context_overflow' }
     })
   })
 

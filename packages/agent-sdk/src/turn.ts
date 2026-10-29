@@ -126,9 +126,9 @@ export type AgentTurnObserver = Readonly<{
   prepareUsageAttribution?(input: Readonly<{ modelTurn: number; request: PreparedModelCall['request'] }>): Record<string, unknown> | void
   onContextReplacementSettled?(result: Readonly<{ phase: 'preflight' | 'turn-boundary'; status: 'committed' | 'stale' | 'busy' | 'no-op' | 'uncompressible' | 'commit-uncertain'; historyPayload: Record<string, import('./context').JsonValue> }>): void | Promise<void>
   prepareModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Readonly<{ sessionLedger?: unknown; requestProjection?: unknown; requestMetadata?: Readonly<Record<string, unknown>>; requestPatch?: Partial<PreparedModelCall['request']> }> | void | Promise<Readonly<{ sessionLedger?: unknown; requestProjection?: unknown; requestMetadata?: Readonly<Record<string, unknown>>; requestPatch?: Partial<PreparedModelCall['request']> }> | void>
-  onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
+  onProviderRetry?(retry: Readonly<{ attempt: number; attemptInRequest: number; maxAttempts: number; modelTurn: number; routeId: string; requestId: string; code: string; reasonCode: string; recoveryKind: 'transient' | 'idle-timeout' | 'overflow' | 'effort'; plannedWaitMs: number; serverAskedMs?: number; retryAt?: number }>): void | Promise<void>
   onModelAttemptDiscarded?(attempt: Readonly<{ attempt: number; modelTurn: number; reasonCode: string }>): void | Promise<void>
-  prepareProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): Readonly<{ location: unknown; requestRetry: Record<string, unknown> }> | void | Promise<Readonly<{ location: unknown; requestRetry: Record<string, unknown> }> | void>
+  prepareProviderRetry?(retry: Readonly<{ attempt: number; attemptInRequest: number; maxAttempts: number; modelTurn: number; routeId: string; requestId: string; code: string; reasonCode: string; recoveryKind: 'transient' | 'idle-timeout' | 'overflow' | 'effort'; plannedWaitMs: number; serverAskedMs?: number; retryAt?: number }>): Readonly<{ location: unknown; requestRetry: Record<string, unknown> }> | void | Promise<Readonly<{ location: unknown; requestRetry: Record<string, unknown> }> | void>
   prepareContextBoundaryEvidence?(response: Readonly<{ message: CanonicalTurnMessage; finishReason: Extract<import('./model').StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; modelTurn: number }>): Readonly<{ sessionLedger?: unknown; contextBoundaryEvidence?: unknown }> | void | Promise<Readonly<{ sessionLedger?: unknown; contextBoundaryEvidence?: unknown }> | void>
   onOutputRecovery?(recovery: Readonly<{ attempt: number; modelTurn: number; requestId: string; toolCalls: readonly CanonicalToolExecutionCall[]; willRetry: boolean; toolCallErrorContent: string; sessionLedgerEvents: readonly HistoryEvent[] }>): void | Promise<void>
   onModelChunk?(chunk: Exclude<import('./model').StreamChunk, { type: 'finish' }>): void | Promise<void>
@@ -1119,6 +1119,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       sessionLedger?: Record<string, unknown>
       attempt?: number
       attemptSource?: typeof attemptSource
+      retryAt?: number
     }): Promise<void> => {
       const usage = details.usage
       const attempt = details.attempt ?? providerAttempt
@@ -1139,6 +1140,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           physical: details.outcome !== 'not-dispatched',
           attemptSource: structuredClone(details.attemptSource ?? attemptSource),
           outcome: details.outcome,
+          ...(details.retryAt !== undefined ? { retryAt: details.retryAt } : {}),
           ...(pendingWaitBudgetOverrunMs > 0 ? { waitBudgetOverrunMs: pendingWaitBudgetOverrunMs } : {}),
           ...(details.errorClass ? { errorClass: details.errorClass } : {}),
           ...(details.sessionLedger && Object.keys(details.sessionLedger).length ? { sessionLedger: structuredClone(details.sessionLedger) } : {}),
@@ -1178,6 +1180,15 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       }) : undefined
       if (!recovery) return undefined
       if (!/^[A-Z0-9_]{1,64}$/.test(recovery.reasonCode)) throw new Error('provider recovery reasonCode must be a stable uppercase code')
+      const recoveryKind = ('recoveryKind' in recovery ? recovery.recoveryKind : undefined) ?? inferRecoveryKind(recovery.reasonCode)
+      const recordNotDispatched = async (errorClass: string, retryAt?: number): Promise<void> => recordProviderAttemptResult({
+        outcome: 'not-dispatched', errorClass, attempt: providerAttempt + 1,
+        attemptSource: { kind: 'recovery', recoveryKind }, ...(retryAt !== undefined ? { retryAt } : {})
+      })
+      if (input.request.signal?.aborted) {
+        await recordNotDispatched(isTurnTimeoutSignal(input.request.signal) ? 'TURN_TIMED_OUT' : 'TURN_CANCELLED', recovery.retryAt)
+        throwIfAborted(input.request.signal)
+      }
       const recordDiscardedUsage = async (response: NonNullable<typeof details.response>, attempt: number): Promise<Record<string, unknown> | undefined> => {
         const requestForAttempt = { ...requestTemplate, messages: structuredClone(messages) }
         const attributionInput = input.observer?.prepareUsageAttribution?.({ modelTurn: modelTurns, request: requestForAttempt })
@@ -1204,28 +1215,24 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           kind: 'model-attempt-discarded',
           payload: { modelTurn: modelTurns, attempt: providerAttempt, reasonCode: recovery.reasonCode, finishReason: details.response.finishReason, usage: details.response.usage, ...(sessionLedger ? { sessionLedger } : {}) }
         }])
+        await recordNotDispatched(recovery.reasonCode, recovery.retryAt)
         throwIfAborted(input.request.signal)
         throw new ModelAttemptRecoveryRejectedError(recovery.reasonCode, { ...(recovery.serverAskedMs !== undefined ? { serverAskedMs: recovery.serverAskedMs } : {}), ...(recovery.retryAt !== undefined ? { retryAt: recovery.retryAt } : {}) })
       }
       throwIfAborted(input.request.signal)
       providerAttemptBudget = Math.max(2, Math.min(5, Number.isInteger(recovery.maxAttempts) ? recovery.maxAttempts! : 2))
-      if (providerAttempt >= providerAttemptBudget) throw new ModelAttemptRecoveryRejectedError('RETRY_LIMIT_EXCEEDED')
+      if (providerAttempt >= providerAttemptBudget) {
+        await recordNotDispatched('RETRY_LIMIT_EXCEEDED', recovery.retryAt)
+        throw new ModelAttemptRecoveryRejectedError('RETRY_LIMIT_EXCEEDED', { ...(recovery.retryAt !== undefined ? { retryAt: recovery.retryAt } : {}) })
+      }
       retryCameFromCompleteResponse = Boolean(details.response)
       const plannedWaitMs = recovery.plannedWaitMs ?? recovery.retryAfterMs ?? 0
-      const recoveryKind = recovery.recoveryKind ?? inferRecoveryKind(recovery.reasonCode)
       if (recoveryKind === 'transient' && (waitBudgetRemainingMs <= 0 || plannedWaitMs > waitBudgetRemainingMs)) {
-        await recordProviderAttemptResult({ outcome: 'not-dispatched', errorClass: 'PROVIDER_RETRY_BUDGET_EXHAUSTED', attempt: providerAttempt + 1, attemptSource: { kind: 'recovery', recoveryKind } })
+        await recordNotDispatched('PROVIDER_RETRY_BUDGET_EXHAUSTED', recovery.retryAt)
         throw new ModelAttemptRecoveryRejectedError('PROVIDER_RETRY_BUDGET_EXHAUSTED', {
           ...(recovery.serverAskedMs !== undefined ? { serverAskedMs: recovery.serverAskedMs } : {}),
           ...(recovery.retryAt !== undefined ? { retryAt: recovery.retryAt } : {})
         })
-      }
-      if (plannedWaitMs > 0) {
-        const waitStartedAt = monotonicNow()
-        await (input.waitForRetry ?? waitForRetry)(plannedWaitMs, input.request.signal)
-        const actualWaitMs = Math.max(0, monotonicNow() - waitStartedAt)
-        waitBudgetRemainingMs = consumeProviderRetryWaitBudget(waitBudgetRemainingMs, actualWaitMs)
-        pendingWaitBudgetOverrunMs = Math.max(0, actualWaitMs - plannedWaitMs)
       }
       const recoveredMessages = structuredClone([...recovery.messages])
       if (input.currentUserMessageId && input.requiredUserMessage &&
@@ -1288,7 +1295,14 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           modelTurn: modelTurns,
           routeId: input.routeId,
           requestId: `${invocationId}:round:${modelTurns}`,
-          code: recovery.retryEvent.code
+          code: recovery.retryEvent.code,
+          reasonCode: recovery.reasonCode,
+          attemptInRequest: providerAttempt + 1,
+          maxAttempts: providerAttemptBudget,
+          recoveryKind,
+          plannedWaitMs,
+          ...(recovery.serverAskedMs !== undefined ? { serverAskedMs: recovery.serverAskedMs } : {}),
+          ...(recovery.retryAt !== undefined ? { retryAt: recovery.retryAt } : {})
         }
         const retryLedger = await input.observer?.prepareProviderRetry?.(retry)
         await appendHistory([{
@@ -1298,8 +1312,15 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             modelTurn: retry.modelTurn,
             routeId: retry.routeId,
             retryAttempt: retry.attempt,
+            attemptInRequest: retry.attemptInRequest,
+            maxAttempts: retry.maxAttempts,
             code: recovery.retryEvent.code,
-            backoffMs: recovery.retryAfterMs ?? 0,
+            reasonCode: recovery.reasonCode,
+            recoveryKind,
+            plannedWaitMs,
+            backoffMs: plannedWaitMs,
+            ...(retry.serverAskedMs !== undefined ? { serverAskedMs: retry.serverAskedMs } : {}),
+            ...(retry.retryAt !== undefined ? { retryAt: retry.retryAt } : {}),
             ...(retryLedger ? { sessionLedger: { location: retryLedger.location, requestRetry: retryLedger.requestRetry } } : {})
           }
         }])
@@ -1311,6 +1332,27 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         const onProviderRetry = () => input.observer?.onProviderRetry?.(retry)
         if (input.observer?.criticalModelRequestProjection) await onProviderRetry()
         else await observe(input.observer, 'model-request', onProviderRetry)
+      }
+      if (plannedWaitMs > 0) {
+        const waitStartedAt = monotonicNow()
+        try {
+          await (input.waitForRetry ?? waitForRetry)(plannedWaitMs, input.request.signal)
+        } catch (error) {
+          if (input.request.signal?.aborted) {
+            const reason = isTurnTimeoutSignal(input.request.signal) ? 'TURN_TIMED_OUT' : 'TURN_CANCELLED'
+            await recordNotDispatched(reason, recovery.retryAt)
+            throw abortErrorForSignal(input.request.signal)
+          }
+          throw error
+        }
+        const actualWaitMs = Math.max(0, monotonicNow() - waitStartedAt)
+        waitBudgetRemainingMs = consumeProviderRetryWaitBudget(waitBudgetRemainingMs, actualWaitMs)
+        pendingWaitBudgetOverrunMs = Math.max(0, actualWaitMs - plannedWaitMs)
+      }
+      if (input.request.signal?.aborted) {
+        const reason = isTurnTimeoutSignal(input.request.signal) ? 'TURN_TIMED_OUT' : 'TURN_CANCELLED'
+        await recordNotDispatched(reason, recovery.retryAt)
+        throw abortErrorForSignal(input.request.signal)
       }
       throwIfAborted(input.request.signal)
       messages.splice(0, messages.length, ...recoveredMessages)

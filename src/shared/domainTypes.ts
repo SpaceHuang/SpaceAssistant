@@ -900,7 +900,7 @@ export interface Message {
 
 export type SystemOperationRecord = Readonly<{
   id: string
-  kind: 'context-compaction'
+  kind: 'context-compaction' | 'provider-retry'
   status: 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled'
   startedAt: number
   completedAt?: number
@@ -908,6 +908,11 @@ export type SystemOperationRecord = Readonly<{
   afterPercent?: number
   reason?: 'SUMMARY_TIMEOUT' | 'SUMMARY_INVALID' | 'SUMMARY_UNAVAILABLE' | 'SUMMARY_FAILED' | 'NO_GAIN' | 'UNCOMPRESSIBLE' | 'LATE_DISCARDED'
     | 'REPAIR_ALREADY_COMMITTED' | 'REPAIR_FALLBACK_FULL_EXPAND' | 'REPAIR_ORIGINAL_WINDOW' | 'REPAIR_NEW_SPLIT'
+    | 'PROVIDER_RETRY_FAILED' | 'PROVIDER_RETRY_INTERRUPTED' | 'PROVIDER_RETRY_RESULT_UNKNOWN'
+  attemptInRequest?: number
+  maxAttempts?: number
+  plannedWaitMs?: number
+  retryAt?: number
 }>
 
 export interface ModelEntry {

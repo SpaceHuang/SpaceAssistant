@@ -2011,14 +2011,18 @@ describe('runAgentTurn', () => {
     const permits = new InMemorySafetyPermitStore()
     const order: string[] = []
     const recoverProviderAttempt = vi.fn(async ({ messages, error }: { messages: readonly CanonicalModelMessage[]; error?: unknown }) => error
-      ? { reasonCode: 'CONTEXT_OVERFLOW', messages, retryEvent: { attempt: 1, code: 'provider_context_overflow' } }
+      ? { reasonCode: 'CONTEXT_OVERFLOW', messages, plannedWaitMs: 500, retryEvent: { attempt: 1, code: 'provider_context_overflow' } }
       : undefined)
     const onModelRequest = vi.fn(({ attempt }: { attempt: number; modelTurn: number }) => { order.push(`request:${attempt}`) })
     const contextProjectionCommitter = vi.fn(async (_candidate: import('../src/context').ContextReplacement) => { order.push('context-projection') })
     const onProviderRetry = vi.fn(async () => {
       const events = (await history.read('inv')).events
       expect(events.some((event) => event.kind === 'transcript-compacted')).toBe(true)
-      expect(events.some((event) => event.kind === 'provider-retry-scheduled')).toBe(true)
+      expect(events.find((event) => event.kind === 'provider-retry-scheduled')?.payload).toMatchObject({
+        requestId: 'inv:round:1', attemptInRequest: 2, maxAttempts: 2, reasonCode: 'CONTEXT_OVERFLOW',
+        recoveryKind: 'overflow', plannedWaitMs: 500, backoffMs: 500
+      })
+      expect(order).not.toContain('wait')
       order.push('retry-event')
     })
 
@@ -2027,7 +2031,8 @@ describe('runAgentTurn', () => {
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
       prepareTool: async () => { throw new Error('unused') },
       toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
-      history, contextProjectionCommitter, maxModelTurns: 1, recoverProviderAttempt, observer: {
+      history, contextProjectionCommitter, maxModelTurns: 1, recoverProviderAttempt,
+      waitForRetry: async () => { order.push('wait') }, observer: {
         onModelRequest, onProviderRetry, criticalModelRequestProjection: true,
         onModelAttemptDiscarded: () => { order.push('attempt-discarded') }
       }
@@ -2039,8 +2044,12 @@ describe('runAgentTurn', () => {
       { modelTurn: 1, attempt: 1 },
       { modelTurn: 1, attempt: 2 }
     ])
-    expect(onProviderRetry).toHaveBeenCalledWith({ attempt: 1, modelTurn: 1, routeId: route.routeId, requestId: 'inv:round:1', code: 'provider_context_overflow' })
-    expect(order).toEqual(['request:1', 'context-projection', 'attempt-discarded', 'retry-event', 'request:2'])
+    expect(onProviderRetry).toHaveBeenCalledWith({
+      attempt: 1, attemptInRequest: 2, maxAttempts: 2, modelTurn: 1, routeId: route.routeId,
+      requestId: 'inv:round:1', code: 'provider_context_overflow', reasonCode: 'CONTEXT_OVERFLOW',
+      recoveryKind: 'overflow', plannedWaitMs: 500
+    })
+    expect(order).toEqual(['request:1', 'context-projection', 'attempt-discarded', 'retry-event', 'wait', 'request:2'])
     expect(contextProjectionCommitter).toHaveBeenCalledOnce()
     const recoveryProjection = contextProjectionCommitter.mock.calls[0]?.[0] as { reason?: string; historyPayload?: Record<string, unknown> }
     expect(recoveryProjection).toMatchObject({
@@ -2162,6 +2171,73 @@ describe('runAgentTurn', () => {
     setTimeout(() => controller.abort(), 10)
     await expect(attempt).rejects.toThrow()
     expect(calls).toBe(1)
+    const events = (await history.read('inv-retry-cancel')).events
+    expect(events.some((event) => event.kind === 'provider-retry-scheduled')).toBe(true)
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'provider-attempt-result', payload: expect.objectContaining({ attempt: 2, physical: false, outcome: 'not-dispatched', errorClass: 'TURN_CANCELLED' }) }))
+  })
+
+  it('does not wait or dispatch if the scheduled retry event cannot be appended', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'retry-schedule-failure', stream: () => {
+      calls += 1
+      return (async function* () { throw Object.assign(new Error('rate limited'), { status: 429 }) })()
+    } })
+    const delegate = new MemoryHistory()
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], version: number) => {
+        if (events.some((event) => event.kind === 'provider-retry-scheduled')) throw new Error('retry schedule append failed')
+        return delegate.appendBatch(events, version)
+      },
+      read: (invocationId: string) => delegate.read(invocationId)
+    }
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('retry-schedule-failure', [])
+    const permits = new InMemorySafetyPermitStore()
+    const waits: number[] = []
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'retry-schedule-failure', history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 10 }, maxModelTurns: 1,
+      recoverProviderAttempt: async ({ error, messages }) => error ? ({ kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 5, recoveryKind: 'transient', plannedWaitMs: 45_000, retryEvent: { attempt: 1, code: 'provider_rate_limit' } }) : undefined,
+      waitForRetry: async (delayMs) => { waits.push(delayMs) },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' })))
+    })).rejects.toThrow('retry schedule append failed')
+    expect(waits).toEqual([])
+    expect(calls).toBe(1)
+  })
+
+  it('stops before another recovery when a retry attempt result cannot be appended', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'retry-result-failure', stream: () => {
+      calls += 1
+      return (async function* () { throw Object.assign(new Error('rate limited'), { status: 429 }) })()
+    } })
+    const delegate = new MemoryHistory()
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], version: number) => {
+        if (events.some((event) => event.kind === 'provider-attempt-result' && (event.payload as { attempt?: number }).attempt === 2)) throw new Error('retry result append failed')
+        return delegate.appendBatch(events, version)
+      },
+      read: (invocationId: string) => delegate.read(invocationId)
+    }
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('retry-result-failure', [])
+    const permits = new InMemorySafetyPermitStore()
+    const recoverProviderAttempt = vi.fn(async ({ error, messages }: { error?: unknown; messages: readonly CanonicalModelMessage[] }) => error
+      ? ({ kind: 'retry' as const, reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 3, recoveryKind: 'transient' as const, retryEvent: { attempt: 1, code: 'provider_rate_limit' } })
+      : undefined)
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'retry-result-failure', history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 10 }, maxModelTurns: 1,
+      recoverProviderAttempt,
+      waitForRetry: async () => undefined,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' })))
+    })).rejects.toThrow('retry result append failed')
+    expect(calls).toBe(2)
+    expect(recoverProviderAttempt).toHaveBeenCalledOnce()
   })
 
   it('uses the full 45-second Retry-After delay without a hidden 30-second cap', async () => {

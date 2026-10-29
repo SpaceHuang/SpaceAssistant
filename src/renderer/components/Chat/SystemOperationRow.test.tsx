@@ -24,6 +24,24 @@ describe('SystemOperationRow', () => {
     expect(screen.getByRole('status').textContent).not.toContain('压缩失败')
   })
 
+  it('shows retry attempt and wait details, then folds into a terminal status', () => {
+    const retry = (status: SystemOperationRecord['status']) => operation(status, {
+      kind: 'provider-retry', attemptInRequest: 2, maxAttempts: 5, plannedWaitMs: 2_100
+    })
+    const { rerender } = render(<SystemOperationRow operation={retry('running')} />)
+    expect(screen.getByRole('status').textContent).toContain('正在重试（第 2/5 次，约 3 秒后）')
+    rerender(<SystemOperationRow operation={retry('succeeded')} />)
+    expect(screen.getByRole('status').textContent).toContain('已恢复')
+    rerender(<SystemOperationRow operation={retry('failed')} />)
+    expect(screen.getByRole('status').textContent).toContain('重试失败')
+    rerender(<SystemOperationRow operation={retry('cancelled')} />)
+    expect(screen.getByRole('status').textContent).toContain('重试已取消')
+    rerender(<SystemOperationRow operation={{ ...retry('cancelled'), reason: 'PROVIDER_RETRY_INTERRUPTED' }} />)
+    expect(screen.getByRole('status').textContent).toContain('重试已中断')
+    rerender(<SystemOperationRow operation={{ ...retry('failed'), reason: 'PROVIDER_RETRY_RESULT_UNKNOWN' }} />)
+    expect(screen.getByRole('status').textContent).toContain('重试结果未知')
+  })
+
   it('reveals a failure reason only after the user expands it', () => {
     render(<SystemOperationRow operation={operation('failed', { reason: 'SUMMARY_TIMEOUT' })} />)
     expect(screen.getByRole('status').textContent).toContain('压缩失败')
