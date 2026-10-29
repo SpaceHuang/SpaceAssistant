@@ -58,6 +58,7 @@ export function createAgentSdkConfirmationPort(input: {
     context: GateConfirmationContext,
     selectedMemory?: unknown
   ): void
+  onScopeApproved?(call: Parameters<ConfirmationPort>[0]['call'], context: GateConfirmationContext, primaryOutcome: ConfirmOutcome): void
   defer?(
     call: Parameters<ConfirmationPort>[0]['call'],
     outcome: ToolConfirmationResult,
@@ -94,7 +95,10 @@ export function createAgentSdkConfirmationPort(input: {
       ...(confirmation.context.factsProvenance ? { factsProvenance: confirmation.context.factsProvenance } : {}),
       ...confirmation.context.decision,
       ...(typeof confirmation.context.modelJustification === 'string' ? { modelJustification: confirmation.context.modelJustification } : {}),
-      ...(confirmation.context.modelJustificationTruncated === true ? { modelJustificationTruncated: true } : {})
+      ...(confirmation.context.modelJustificationTruncated === true ? { modelJustificationTruncated: true } : {}),
+      ...(confirmation.context.reviewScopeCandidate && typeof confirmation.context.reviewScopeCandidate === 'object'
+        ? { reviewScopeCandidate: confirmation.context.reviewScopeCandidate as ConfirmRequest['reviewScopeCandidate'] }
+        : {})
     }
     const lane = confirmation.context.lane
     const imHumanApproval = confirmation.answerer === 'user' && confirmation.context.decision.disposition === 'human-required' &&
@@ -184,6 +188,9 @@ export function createAgentSdkConfirmationPort(input: {
         if (deferred) return deferred
       }
       if (outcome.kind === 'approved') input.onApproved?.(confirmation.call, outcome, confirmation, confirmation.context as GateConfirmationContext, outcome.selectedMemory)
+      if (!confirmation.signal?.aborted && 'outcome' in result && result.outcome.kind === 'approved') {
+        input.onScopeApproved?.(confirmation.call, confirmation.context as GateConfirmationContext, result.outcome)
+      }
       if (outcome.kind === 'denied' && outcome.answerer === 'user' && normalizedTarget) {
         explicitDenials.set(JSON.stringify([confirmation.modelTurn, confirmation.call.toolName, normalizedTarget]), {
           ...(outcome.userMessage ? { userMessage: outcome.userMessage } : {})

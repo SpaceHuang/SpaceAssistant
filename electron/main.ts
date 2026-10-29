@@ -106,7 +106,7 @@ import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from
 import { projectRendererLongTaskMessage, projectRendererSessionSwitchTraceMessage } from './agentLogger/agentLogProjection'
 import { extractWebContentsConsoleMessage } from './consoleMessage'
 import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
-import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { getDefaultAgentRuntime, setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { createDesktopAgentRuntime } from './runtime/desktopAgentRuntime'
 import { CallAdmissionGate, getCallAdmissionGate, setCallAdmissionGate } from './runtime/callAdmissionGate'
 import { resetActiveAdmissionOnStartup } from './storage/callAdmissionStore'
@@ -1506,6 +1506,7 @@ app.on('before-quit', (event) => {
   if (quitCleanupDone) return
   event.preventDefault()
   isQuitting = true
+  try { getDefaultAgentRuntime().reviewScopeCache.clearAll() } catch { /* Startup may fail before runtime assembly. */ }
   turnDisplayPublisherStop?.()
   turnDisplayPublisherStop = null
   // 必须在启动异步 cleanup 之前同步切断事件生产，否则 flush 与最后一批

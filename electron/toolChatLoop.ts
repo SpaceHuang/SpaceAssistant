@@ -16,6 +16,7 @@ import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { countVisibleTitleMessagesForSuggest, reachedCumulativeMessagesForTitleSuggest } from './sessionTitleSuggest'
 import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
+import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort } from '../packages/agent-sdk/src/history'
 import { createUnknownEffectBeforeDispatchLease } from './runtime/unknownEffectRecovery'
 import { McpConnectionManager } from './mcp/mcpConnectionManager'
@@ -94,7 +95,6 @@ import {
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
 import { computeDeferredPlan, computeEffectiveToolsWithExposureApproval } from './effectiveTools'
-import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { requestImExposureApproval } from './remote/imIngressApprovalPrompt'
 import { requireAutomationShellWorkingDirectory } from './toolsConfigRuntime'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
@@ -128,6 +128,10 @@ export function clearSessionToolResources(sessionId: string): void {
   releaseAllWritePathsForSession(sessionId)
   clearBrowserSessionTrust(sessionId)
   clearBrowserSessionActTrust(sessionId)
+  try {
+    const cache = getDefaultAgentRuntime().reviewScopeCache
+    for (const lane of ['desktop', 'feishu', 'wechat'] as const) cache.clearSession(lane, sessionId)
+  } catch { /* Runtime may not be assembled in isolated tooling processes. */ }
 }
 
 export type ClaudeContentBlockMessage = {

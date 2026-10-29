@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
+import { ReviewScopeCache } from './reviewScopeCache'
+import { captureFileIdentity, safeAtomicWrite } from '../safeAtomicWrite'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -68,6 +70,80 @@ describe('buildToolCallGateArgs', () => {
       await fs.rm(rootA, { recursive: true, force: true })
       await fs.rm(rootB, { recursive: true, force: true })
     }
+  })
+})
+
+describe('review scope cache gate integration', () => {
+  it('binds trusted tasks and produces a candidate without bypassing current gate checks', async () => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-review-scope-')))
+    try {
+      const target = path.join(dir, 'note.txt')
+      await fs.writeFile(target, 'before')
+      const cache = new ReviewScopeCache()
+      const taskConstraint = 'Update note.txt for the requested release.'
+      const args = base({ toolName: 'edit_file', toolInput: { path: 'note.txt', oldText: 'before', newText: 'after' }, workDir: dir,
+        sessionId: 'review-session', userDataDir: '/profile', taskDigest: taskConstraint, reviewScopeCache: cache,
+        policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-policy-v1', revision: 0, epoch: 0 } })
+      const result = await evaluateToolCallGate(args)
+      expect(result.reviewScopeCandidate).toMatchObject({ toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target }] })
+      expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'default-write-execute-ask', answerer: 'agent' })
+      expect(await evaluateToolCallGate({ ...args, taskDigest: 'Instead, modify unrelated files.' })).not.toMatchObject({ reviewScopeCandidate: result.reviewScopeCandidate })
+      expect((await evaluateToolCallGate({ ...args, taskDigestTruncated: true })).reviewScopeCandidate).toBeUndefined()
+      expect((await evaluateToolCallGate({ ...args, taskDigest: undefined })).reviewScopeCandidate).toBeUndefined()
+      const excluded = await Promise.all([
+        evaluateToolCallGate({ ...args, toolName: 'write_file', toolInput: { path: 'script.py', content: 'ordinary text' } }),
+        evaluateToolCallGate({ ...args, toolName: 'write_file', toolInput: { path: 'program.bin', content: '#!/bin/sh\necho hi' } }),
+        evaluateToolCallGate({ ...args, toolName: 'write_file', toolInput: { path: '.gitlab-ci.yml', content: 'ordinary yaml' } })
+      ])
+      expect(excluded.every((entry) => entry.reviewScopeCandidate === undefined)).toBe(true)
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('review scope cache gate integration', () => {
+  it('binds the candidate to complete trusted task and host-derived object', async () => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-review-scope-')))
+    try {
+      await fs.writeFile(path.join(dir, 'note.txt'), 'before')
+      const args = base({ toolName: 'edit_file', toolInput: { path: 'note.txt', oldText: 'before', newText: 'after' }, workDir: dir,
+        sessionId: 'review-session', userDataDir: '/profile', taskDigest: 'Update note.txt for release.', reviewScopeCache: new ReviewScopeCache(),
+        policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-policy-v1', revision: 0, epoch: 0 } })
+      const result = await evaluateToolCallGate(args)
+      expect(result.reviewScopeCandidate).toMatchObject({ toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: path.join(dir, 'note.txt') }] })
+      expect(result.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+      expect((await evaluateToolCallGate({ ...args, taskDigestTruncated: true })).reviewScopeCandidate).toBeUndefined()
+      expect((await evaluateToolCallGate({ ...args, taskDigest: undefined })).reviewScopeCandidate).toBeUndefined()
+    } finally { await fs.rm(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('review scope receipt final-check', () => {
+  it('consumes only a current file receipt and revokes after external content changes', async () => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-review-receipt-')))
+    const target = path.join(dir, 'note.txt')
+    try {
+      await fs.writeFile(target, 'before')
+      const cache = new ReviewScopeCache()
+      const args = base({ toolName: 'edit_file', toolInput: { path: 'note.txt', oldText: 'before', newText: 'after' }, workDir: dir,
+        sessionId: 'receipt-session', userDataDir: '/profile', taskDigest: 'Update note.txt.', reviewScopeCache: cache,
+        policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-policy-v1', revision: 0, epoch: 0 } })
+      const candidate = await evaluateToolCallGate(args)
+      const scope = candidate.reviewScopeCandidateScope!
+      const digest = candidate.reviewScopeCandidateDigest!
+      expect(cache.grant({ scope, source: 'agent', scopeCandidateDigest: digest })).toBe(true)
+      const identity = await captureFileIdentity(target)
+      const write = await safeAtomicWrite({ targetPath: target, parentReal: dir, body: 'before', expectedIdentity: identity, captureReceipt: true })
+      expect(cache.activateFirstWrite(scope, digest, write.receipt!)).toBe(true)
+      const hit = await evaluateToolCallGate(args)
+      expect(hit.decision).toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+      expect(hit.writePathFact).toBeDefined()
+      await fs.writeFile(target, 'external edit')
+      const miss = await evaluateToolCallGate(args)
+      expect(miss.decision.type).toBe('require-confirm')
+      expect(cache.state(scope)).toBeNull()
+    } finally { await fs.rm(dir, { recursive: true, force: true }) }
   })
 })
 

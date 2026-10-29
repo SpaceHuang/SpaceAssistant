@@ -11,6 +11,7 @@ const scope = (overrides: Partial<Parameters<ReviewScopeCache['candidateDigest']
   objects: [{ role: 'target', value: '/work/a.txt' }],
   environment: '/work',
   policyVersion: 'policy-v7',
+  taskConstraint: 'Update the requested document.',
   exactParameters: { replace: 'first text', options: { b: 2, a: 1 } },
   ...overrides
 })
@@ -59,6 +60,15 @@ describe('ReviewScopeCache', () => {
     expect(cache.candidateDigest(first)).not.toBe(digest)
   })
 
+  it('rejects a late digest-only grant after the host cleared the session secret', () => {
+    const cache = new ReviewScopeCache()
+    const candidate = scope()
+    const digest = cache.candidateDigest(candidate)
+    cache.clearSession(candidate.lane, candidate.sessionId)
+    expect(cache.grantDigest({ lane: candidate.lane, sessionId: candidate.sessionId, source: 'agent',
+      scopeCandidateDigest: digest, firstWrite: true })).toBe(false)
+  })
+
   it('rejects over-capacity records and only evicts active entries, never pending writes', () => {
     const cache = new ReviewScopeCache({ maxEntriesPerSession: 1, maxEntriesTotal: 1, maxEntryBytes: 16_384 })
     const first = scope()
@@ -100,5 +110,54 @@ describe('ReviewScopeCache', () => {
     const lease = cache.beginWrite(candidate)!
     expect(cache.failWrite(lease)).toBe(true)
     expect(cache.lookup(candidate)).toBeNull()
+  })
+})
+
+describe('ReviewScopeCache randomized state invariants', () => {
+  it('preserves capacity, receipt, and generation invariants under seeded operation sequences', () => {
+    let seed = 0x6d2b79f5
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed }
+    const cache = new ReviewScopeCache({ maxEntriesPerSession: 3, maxEntriesTotal: 3 })
+    const scopes = Array.from({ length: 5 }, (_, index) => scope({
+      sessionId: `random-${index % 2}`, objects: [{ role: 'target', value: `/work/${index}.txt` }],
+      exactParameters: { oldText: `old-${index}`, replaceAll: false }, taskConstraint: `Task ${index}`
+    }))
+    const staleLeases: Array<{ scopeIndex: number; lease: ReturnType<ReviewScopeCache['beginWrite']> }> = []
+    for (let step = 0; step < 300; step++) {
+      const index = random() % scopes.length
+      const current = scopes[index]!
+      const operation = random() % 7
+      const digest = cache.candidateDigest(current)
+      if (operation === 0) cache.grant({ scope: current, source: 'agent', scopeCandidateDigest: digest })
+      else if (operation === 1) cache.activateFirstWrite(current, digest, {
+        dev: 1, ino: index + 10, mode: 0o100600, size: index, nlink: 1, sha256: (index.toString(16).padStart(2, '0')).repeat(32)
+      })
+      else if (operation === 2) {
+        const lease = cache.beginWrite(current)
+        if (lease) staleLeases.push({ scopeIndex: index, lease })
+      } else if (operation === 3) {
+        const held = staleLeases.splice(0, 1)[0]
+        if (held) cache.completeWrite(held.lease!, {
+          dev: 1, ino: held.scopeIndex + 30, mode: 0o100600, size: held.scopeIndex, nlink: 1,
+          sha256: 'c'.repeat(64)
+        })
+      } else if (operation === 4) {
+        const held = staleLeases.splice(0, 1)[0]
+        if (held?.lease) cache.failWrite(held.lease)
+      } else if (operation === 5) cache.revoke(current)
+      else if (random() % 2) cache.clearSession(current.lane, current.sessionId)
+      else cache.clearAll()
+
+      expect(cache.size).toBeLessThanOrEqual(3)
+      for (const candidate of scopes) {
+        const state = cache.state(candidate)
+        if (!state) continue
+        if (state.state === 'active') expect(state.receipt).toMatchObject({ nlink: 1, sha256: /^[a-f0-9]{64}$/ })
+        else expect(state.receipt).toBeUndefined()
+      }
+    }
+    cache.clearAll()
+    expect(cache.size).toBe(0)
+    for (const candidate of scopes) expect(cache.state(candidate)).toBeNull()
   })
 })

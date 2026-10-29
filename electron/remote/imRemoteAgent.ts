@@ -13,6 +13,7 @@ import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../s
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import type { RemoteContext } from '../tools/types'
+import { buildApprovalTaskEvidence } from '../../src/shared/approvalTaskDigest'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { readAppLocale } from '../appIpc'
 import { resolveLlmCredentialsForPair } from '../llmServiceResolver'
@@ -476,7 +477,10 @@ export async function runImRemoteAgent(args: {
       historyFacts,
       ...(sessionEventLocation ? { sessionEventLocation } : {}),
       remoteContext,
-      ...(currentUserMessage?.content ? { approvalTaskDigest: currentUserMessage.content } : {}),
+      ...(currentUserMessage?.content ? (() => {
+        const evidence = buildApprovalTaskEvidence(currentUserMessage.content)
+        return { approvalTaskDigest: evidence.digest, approvalTaskDigestTruncated: evidence.truncated }
+      })() : {}),
       ...(args.remoteContext.source === 'feishu' || args.remoteContext.source === 'wechat'
         ? { imOrchestrationToolRegistry: createImOrchestrationToolRegistry(args.db, args.taskControlSafetyPort ?? createDeferredTodoTaskControlSafetyPort({
             todoStore: createDeferredTodoStore(args.db), dispatchDeferred: async () => ({ dispatched: false })

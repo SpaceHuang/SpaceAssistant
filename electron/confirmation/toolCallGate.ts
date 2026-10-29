@@ -122,6 +122,9 @@ import { sanitizeAgentText } from '../../src/shared/agentSafeText'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 import { CONFIRMATION_LABELS } from '../../src/shared/confirmation/labels'
 import { createInvocationFactsSnapshot } from '../../src/shared/confirmation/invocationFactsSnapshot'
+import { ReviewScopeCache, type ReviewScopeCandidate } from './reviewScopeCache'
+import { verifyReviewFileReceipt } from '../safeAtomicWrite'
+import { isReviewScopeWriteEligible } from './reviewScopeEligibility'
 
 
 /** 出站写工具判定（等价现 toolChatLoop.isOutboundWriteTool：未知/非读 fail-closed 计写）。 */
@@ -168,6 +171,10 @@ export interface ToolCallGateArgs {
   imPolicySnapshot?: import('../remote/remoteToolPolicy').RemoteSecurityPolicyConfig['policySnapshot']
   /** Versioned authorization identity for the lane's persisted policy domain. */
   policyBinding?: { domain: 'desktop' | 'im' | 'automation'; policyBehaviorVersion: string; revision: number; epoch: number }
+  /** Trusted user task evidence; absent/truncated tasks never consume or create a scope grant. */
+  taskDigest?: string
+  taskDigestTruncated?: boolean
+  reviewScopeCache?: ReviewScopeCache
   /** Host-resolved provenance for the MCP query/data scope; never read from model arguments. */
   mcpQuerySource?: 'public' | 'local-sensitive' | 'unknown'
   /** Host-resolved permission for the configured MCP account and referenced data scope. */
@@ -256,6 +263,10 @@ export interface ToolCallGateResult {
   wechatMediaPathFact?: ReadPathFact
   feishuMediaFact?: FeishuMediaTargetFact
   writePathFact?: WritePathFact
+  reviewScopeCandidate?: import('../../src/shared/confirmation/types').ReviewScopeApprovalCandidate
+  /** Host-only materials for write receipt handoff; never copied into approval clues or logs. */
+  reviewScopeCandidateScope?: ReviewScopeCandidate
+  reviewScopeCandidateDigest?: string
   /** Host-issued output binding attestation; consumed by the execution permit final-check. */
   automationOutputBinding?: { binding: Extract<TargetBinding, { kind: 'output' }>; runOutputDir: string }
   /** Host-issued result-directory grant attestation; consumed by the execution permit final-check. */
@@ -1046,10 +1057,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         : [rule.match.toolName]
     for (const name of names) autoEvaluatorRoutes.set(name, rule.id)
   }
+  const reviewScopeCandidate = await buildReviewScopeCandidate(args, lane, writePathFact, readPathFact)
+  let reviewScopeEntry = reviewScopeCandidate ? args.reviewScopeCache?.lookup(reviewScopeCandidate) : null
+  if (reviewScopeCandidate && reviewScopeEntry?.receipt && writePathFact && !await verifyReviewFileReceipt(writePathFact.normalizedPath, reviewScopeEntry.receipt)) {
+    args.reviewScopeCache?.revoke(reviewScopeCandidate)
+    reviewScopeEntry = null
+  }
+  const reviewScopeGrant = reviewScopeEntry ? { source: reviewScopeEntry.source } : undefined
   const deps: PolicyEngineDeps = {
     cache,
     config,
     migrationComplete: isRemoteSecurityMigrationComplete({ policySnapshot: args.imPolicySnapshot }),
+    ...(reviewScopeGrant ? { reviewScopeGrant } : {}),
     // 档位动作变换（§2.1）：引擎合成规则（default-write-execute-ask）经同源变换参与「自动」
     transform: (r) => effectiveActionFor(lane, lanePackage, r),
     autoEvaluator: (f) => {
@@ -1329,6 +1348,17 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     previousFactsRevision: 0
   })
   result.factsSnapshot = factsSnapshot
+  if (reviewScopeCandidate && args.reviewScopeCache) {
+    try {
+      result.reviewScopeCandidate = {
+        scopeCandidateDigest: args.reviewScopeCache.candidateDigest(reviewScopeCandidate),
+        toolName: reviewScopeCandidate.toolName, operation: reviewScopeCandidate.operation,
+        objects: reviewScopeCandidate.objects.map(({ role, value }) => ({ role, target: value }))
+      }
+      result.reviewScopeCandidateScope = reviewScopeCandidate
+      result.reviewScopeCandidateDigest = result.reviewScopeCandidate.scopeCandidateDigest
+    } catch { /* Invalid evidence disables the optimization. */ }
+  }
   const policyDomain = lane === 'wechat' || lane === 'feishu' ? 'im' : lane === 'automation' ? 'automation' : 'desktop'
   const policyDecision = createPolicyDecision({
     decision, invocationId: args.requestId ?? args.sessionId, toolUseId: args.toolUseId ?? args.requestId ?? args.sessionId,
@@ -1433,4 +1463,43 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   result.automationOutputBinding = automationOutputBinding
   result.automationOutputScope = automationOutputScope
   return result
+}
+
+async function buildReviewScopeCandidate(
+  args: ToolCallGateArgs,
+  lane: ExecutionLane,
+  writePathFact: WritePathFact | undefined,
+  readPathFact: import('./extractors/readPathFacts').ReadPathFact | undefined
+): Promise<ReviewScopeCandidate | undefined> {
+  if (!args.reviewScopeCache || args.taskDigestTruncated || !args.taskDigest?.trim() || !args.policyBinding || args.policyBinding.domain === 'automation') return undefined
+  if (lane === 'desktop' && args.toolName === 'grep' && readPathFact) {
+    return {
+      lane, sessionId: args.sessionId, subjectId: args.userDataDir,
+      authorizationDomain: { id: args.policyBinding.domain, revision: args.policyBinding.revision, epoch: args.policyBinding.epoch },
+      toolName: 'grep', operation: 'search', objects: [{ role: 'root', value: readPathFact.normalizedPath }],
+        environment: args.workDir, policyVersion: args.policyBinding.policyBehaviorVersion,
+        exactParameters: { recursive: args.toolInput.recursive === true }, taskConstraint: args.taskDigest
+    }
+  }
+  if (args.toolName !== 'edit_file' && args.toolName !== 'write_file') return undefined
+  if (!writePathFact || writePathFact.zone !== 'workdir-normal' || !['file', 'missing'].includes(writePathFact.targetKind)) return undefined
+  const subjectId = lane === 'desktop' ? args.userDataDir : args.remoteContext?.authOwner
+  if (!subjectId || lane === 'automation') return undefined
+  const proposedContent = args.toolName === 'write_file'
+    ? typeof args.toolInput.content === 'string' ? args.toolInput.content : undefined
+    : typeof args.toolInput.newText === 'string' ? args.toolInput.newText : undefined
+  if (args.toolName === 'write_file' && proposedContent === undefined) return undefined
+  if (!await isReviewScopeWriteEligible({ target: writePathFact, workDir: args.workDir, ...(proposedContent !== undefined ? { proposedContent } : {}) })) return undefined
+  const toolName = args.toolName
+  const operation = toolName === 'edit_file' ? 'edit' : 'write'
+  const exactParameters = toolName === 'edit_file'
+    ? { oldText: args.toolInput.oldText, replaceAll: args.toolInput.replaceAll === true }
+    : {}
+  return {
+    lane: lane as ReviewScopeCandidate['lane'], sessionId: args.sessionId, subjectId,
+    authorizationDomain: { id: args.policyBinding.domain, revision: args.policyBinding.revision, epoch: args.policyBinding.epoch },
+    toolName, operation, objects: [{ role: 'target', value: writePathFact.normalizedPath }],
+    environment: args.workDir, policyVersion: args.policyBinding.policyBehaviorVersion,
+    exactParameters, taskConstraint: args.taskDigest
+  }
 }

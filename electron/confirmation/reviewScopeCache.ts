@@ -15,6 +15,8 @@ export interface ReviewScopeCandidate {
   readonly objects: readonly { readonly role: string; readonly value: string }[]
   readonly environment: string
   readonly policyVersion: string
+  /** Complete authoritative task text; only its session-keyed HMAC is retained. */
+  readonly taskConstraint: string
   /** Host-projected capability parameters; never pass raw model parameters here. */
   readonly exactParameters: unknown
 }
@@ -101,7 +103,7 @@ function sessionKey(lane: ReviewScopeLane, sessionId: string): string {
 function validateCandidate(scope: ReviewScopeCandidate): void {
   if (!scope || !['desktop', 'feishu', 'wechat'].includes(scope.lane) || !scope.sessionId.trim() || !scope.subjectId.trim() ||
     !scope.authorizationDomain?.id.trim() || !Number.isSafeInteger(scope.authorizationDomain.revision) || scope.authorizationDomain.revision < 0 ||
-    !Number.isSafeInteger(scope.authorizationDomain.epoch) || scope.authorizationDomain.epoch < 0 || !scope.environment.trim() || !scope.policyVersion.trim()) {
+    !Number.isSafeInteger(scope.authorizationDomain.epoch) || scope.authorizationDomain.epoch < 0 || !scope.environment.trim() || !scope.policyVersion.trim() || !scope.taskConstraint.trim()) {
     throw new Error('REVIEW_SCOPE_IDENTITY_INVALID')
   }
   if ((scope.toolName === 'edit_file' && scope.operation !== 'edit') || (scope.toolName === 'write_file' && scope.operation !== 'write') ||
@@ -166,6 +168,7 @@ export class ReviewScopeCache {
       objects,
       environment: scope.environment,
       policyVersion: scope.policyVersion,
+      taskConstraint: scope.taskConstraint,
       exactParameters: scope.exactParameters
     })
     return createHmac('sha256', secret).update(canonical).digest('hex')
@@ -193,6 +196,19 @@ export class ReviewScopeCache {
     return true
   }
 
+  /** Register only a host-issued, reviewer-echoed opaque candidate digest. */
+  grantDigest(input: { lane: ReviewScopeLane; sessionId: string; source: ReviewScopeSource; scopeCandidateDigest: string; firstWrite: boolean }): boolean {
+    const digest = input.scopeCandidateDigest
+    if (!HASH_PATTERN.test(digest) || !input.sessionId.trim()) return false
+    const key = sessionKey(input.lane, input.sessionId)
+    if (!this.sessionSecrets.has(key)) return false
+    const state: ReviewScopeState = input.firstWrite ? 'pending_first_write' : 'active'
+    const estimatedBytes = Buffer.byteLength(JSON.stringify({ digest, key, source: input.source, state, generation: this.generation + 1 }))
+    if (estimatedBytes > this.maxEntryBytes || this.entries.has(digest) || !this.makeRoom(key)) return false
+    this.entries.set(digest, { digest, sessionKey: key, source: input.source, state, generation: ++this.generation, touchedAt: this.now() })
+    return true
+  }
+
   lookup(scope: ReviewScopeCandidate): ReviewScopeEntryView | null {
     let digest: string
     try { digest = this.candidateDigest(scope) } catch { return null }
@@ -200,6 +216,13 @@ export class ReviewScopeCache {
     if (!entry || entry.state !== 'active') return null
     entry.touchedAt = this.now()
     return this.toView(entry)
+  }
+
+  state(scope: ReviewScopeCandidate): ReviewScopeEntryView | null {
+    let digest: string
+    try { digest = this.candidateDigest(scope) } catch { return null }
+    const entry = this.entries.get(digest)
+    return entry ? this.toView(entry) : null
   }
 
   activateFirstWrite(scope: ReviewScopeCandidate, scopeCandidateDigest: string, receipt: ReviewFileReceipt): boolean {
