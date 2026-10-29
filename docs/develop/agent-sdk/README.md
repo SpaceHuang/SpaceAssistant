@@ -139,9 +139,13 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 
 ## 在途 / 草稿箱（in-flight）
 
-`in-flight/` 目录**不再为空**（2026-10-15 新增一篇），另有一个按 §2.2 约定**原地保留**的未开工大规划：
+`in-flight/` 目录当前有 3 篇，均为本会话产出的方案（压缩 / 重试 / 暂停）：
 
-- [agent-long-task-stability-improvement-plan.md](./in-flight/agent-long-task-stability-improvement-plan.md) —— **草稿（未实施）**：长程任务稳定性改进方案（2026-10-15，`main` 新增）；自述「当前实现分析与分阶段改造方案；首批不改运行时代码」。
+- [context-compaction-summary-quality-plan.md](./in-flight/context-compaction-summary-quality-plan.md) —— **实施中**（2026-10-29 核验）：自动压缩的摘要质量与触发时机。阶段 1（阈值可配，`4718e532`）与阶段 3（设置页，`8cf7de55`）已实现；阶段 2 主体已实现（`e15f3c5c`）但**验收待逐项核对**（见文末附录 A2）；阶段 4 按决策不做。此前自述「未实施」，已按 `docs-guide` §3.0 更正。
+- [provider-retry-backoff-plan.md](./in-flight/provider-retry-backoff-plan.md) —— **草稿（未实施）**：模型服务重试策略。决策 `D-1`～`D-6` 已全部批复，代码未改动（仍是 3 次尝试、无退避）。
+- [turn-budget-pause-plan.md](./in-flight/turn-budget-pause-plan.md) —— **草稿（未实施）**：回合预算耗尽改为阶段暂停。决策 `D-1`～`D-5` 已批，代码未改动。
+
+> **2026-10-29 去重**：原 `in-flight/agent-long-task-stability-improvement-plan.md` 与 [`../agent-long-task-stability-improvement-plan.md`](../agent-long-task-stability-improvement-plan.md) 重名重复。经比对（357 行 vs 323 行，且后者缺「首批阶段实施记录」），保留根下那份作为唯一现行版本；in-flight 旧稿已 `git mv` 至 [`../archive/agent-sdk/`](../archive/agent-sdk/agent-long-task-stability-improvement-plan.md) 并标注取代关系。
 
 - [runtime/](./runtime/)（01–10 + README，11 篇）—— **草稿（未实施）**：Runtime 目标形态设计与实施计划。核验（2026-10-14）：独有符号 `wake_one`、`bWaitAll`、`namedQuota`、`quotaLease`、`callStateMachine` **全部 0 命中**，无实现提交 → 真正在途。
 
@@ -151,7 +155,7 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 
 ## 归档
 
-已完成迭代原件见 [`../archive/agent-sdk/`](../archive/agent-sdk/)（16 件），含生命周期改进与契约矩阵、上下文 token 成本优化、`agent-core-contract-path-refactor-plan.md`（旧称，文件名保留）、驱动权限重构、失败 turn 续跑、工具错误恢复与 turn 连续性、`batch3-p0-evidence-audit.md`。映射见 [`../archive/INDEX.md`](../archive/INDEX.md)。
+已完成迭代原件见 [`../archive/agent-sdk/`](../archive/agent-sdk/)（20 件），含生命周期改进与契约矩阵、上下文 token 成本优化、`agent-core-contract-path-refactor-plan.md`（旧称，文件名保留）、驱动权限重构、失败 turn 续跑、工具错误恢复与 turn 连续性、`batch3-p0-evidence-audit.md`，以及 2026-10-29 迁入的重名旧稿 `agent-long-task-stability-improvement-plan.md`（现行版本见 develop 主题根）。映射见 [`../archive/INDEX.md`](../archive/INDEX.md)。
 
 ## 核验记录
 

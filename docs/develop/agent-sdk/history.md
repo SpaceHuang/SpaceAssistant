@@ -23,10 +23,14 @@
 | 2026-10-14 | `b26bce20` | 强化续跑恢复与 UI 行为 | — | 续跑恢复更稳 |
 | 2026-09-05 | `958f93c8` | Agent Loop 单路径重构分支合入 | `agent-loop-single-path-refactor-plan.md`（已归档） | 原判「在途」，核验更正为已实现 |
 | 2026-10-03 | `51193571` | 工具派发中止与 transcript 空洞安全化 | `tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md`（已归档） | 同上；`requestObservation` 见 `packages/agent-sdk/src/turn.ts` |
+| 2026-10-27 | `4718e532` | 让自动压缩的触发比例可配置：默认 80%、范围 60–90%，并消除三处字面量 | [`in-flight/context-compaction-summary-quality-plan.md`](./in-flight/context-compaction-summary-quality-plan.md) | 常量 `CONTEXT_COMPACTION_TRIGGER_RATIO` 单一定义；预算对象与决策指纹共用同一变量，钳制引用同一常量 |
+| 2026-10-28 | `8cf7de55` | 模型设置页新增自动压缩阈值项（滑块 + 范围校验 + 保存） | 同上 | 阈值从配置文件进入用户可调界面 |
+| 2026-10-28 | `e15f3c5c` | 自动压缩改用结构化摘要（七栏目 + 执行事实），并补取消、迟到丢弃与无收益跳过 | 同上 | 自动压缩不再只留 1200 字截断；系统操作卡片出现 `skipped` / `cancelled` / `failed` 与对应原因码。方案中 `AC-10`/`AC-15`/`AC-16`/`AC-17`/`AC-20`/`AC-21` 仍未核实 |
 
 ## 存疑（文档与记录不一致）
 
 - `mcp-timeout-turn-failure-isolation-plan.md` 自述「修订版尚未复评」，实际 `a01a6d49` 已实现并合入（2026-10-14）——**状态滞后，以代码为准**。
+- `in-flight/context-compaction-summary-quality-plan.md` 曾自述「在途草稿，未实施」，但 `4718e532`、`8cf7de55`、`e15f3c5c` 已实现阶段 1、3 与阶段 2 主体（2026-10-27/28）。2026-10-29 已按 `docs-guide` §3.0 更正为「实施中」——**状态滞后，以代码为准**；阶段 2 的验收仍未逐项闭合，不得当作已完成引用。
 
 ## 取证命令
 
