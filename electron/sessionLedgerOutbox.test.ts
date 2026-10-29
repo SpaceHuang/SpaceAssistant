@@ -284,6 +284,7 @@ describe('canonical session ledger outbox', () => {
     const marker = '{"encoding":"canonical-v1"}'
     expect(conn.prepare(`SELECT expected_events_json,expected_event_ids_json FROM session_ledger_projection_outbox ORDER BY canonical_sequence,projection_order`)
       .all()).toEqual(targets.map(() => ({ expected_events_json: marker, expected_event_ids_json: marker })))
+    const fullInvocationRead = vi.spyOn(SqliteAgentHistory.prototype, 'readSync')
     const resolved = targets.map((target) => {
       const source = conn.prepare('SELECT session_seq FROM agent_history_events WHERE event_id=?').get(target.canonicalEventId) as { session_seq: number }
       return resolveCanonicalSessionLedgerProjectionTarget(conn, {
@@ -292,6 +293,8 @@ describe('canonical session ledger outbox', () => {
         canonicalSequence: source.session_seq, projectionOrder: target.projectionOrder ?? 0, projectionKind: target.projectionKind
       })
     })
+    expect(fullInvocationRead).not.toHaveBeenCalled()
+    fullInvocationRead.mockRestore()
     expect(resolved.map((target) => target?.expectedEventIds)).toEqual(targets.map(({ expectedEventIds }) => expectedEventIds))
   })
 

@@ -11,16 +11,7 @@ import { mirrorCanonicalContextMessages, SqliteAgentHistory } from './sqliteAgen
 export function readCommittedCanonicalHistoryEvent(conn: DatabaseSync, input: {
   sessionId: string; eventId: string; sessionSequence: number
 }): HistoryEvent | undefined {
-  const source = conn.prepare(`SELECT events.invocation_id,streams.schema_version
-    FROM agent_history_events events
-    JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id AND streams.session_id=events.session_id
-    JOIN agent_history_commit_cursor cursor ON cursor.id=events.commit_order
-    WHERE events.event_id=? AND events.session_id=? AND events.session_seq=? LIMIT 1`)
-    .get(input.eventId, input.sessionId, input.sessionSequence) as
-      { invocation_id: string; schema_version: number } | undefined
-  if (!source) return undefined
-  return new SqliteAgentHistory(conn, source.schema_version, Date.now, input.sessionId)
-    .readSync(source.invocation_id).events.find(({ eventId }) => eventId === input.eventId)
+  return new SqliteAgentHistory(conn, 1, Date.now, input.sessionId).readCommittedSessionEventSync(input)
 }
 
 export type AgentContinuationRecord = Readonly<{

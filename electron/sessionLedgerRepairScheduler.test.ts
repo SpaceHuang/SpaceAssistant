@@ -91,6 +91,22 @@ describe('session ledger repair scheduler', () => {
     scheduler.stop()
   })
 
+  it('reports an unauthorized repair as skipped instead of recovered or retrying forever', async () => {
+    vi.useFakeTimers()
+    const statuses: string[] = []
+    const scheduler = createSessionLedgerRepairScheduler({
+      repair: async () => ({ status: 'skipped', reason: 'location-not-authorized' }),
+      onAttempt: ({ status }) => statuses.push(status),
+      initialDelayMs: 100,
+      maxDelayMs: 200
+    })
+    scheduler.request({ workDir: '/outside', sessionId: 'unmanaged', createdAt: 1 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(statuses).toEqual(['skipped'])
+    expect(scheduler.pendingCount()).toBe(0)
+    scheduler.stop()
+  })
+
   it('converges a fixed-seed interleaving of invalidations without losing a requested generation', async () => {
     vi.useFakeTimers()
     const desired = new Map<string, number>()

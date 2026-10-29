@@ -767,17 +767,26 @@ describe('SQLite session storage public queries', () => {
       const legacySink = getSessionEventSink(workDir, session.id, session.createdAt)
       await appendCompactionTransaction(legacySink, start, summary)
       await legacySink.close()
+      // Normal conversation turns after the old compaction must remain a suffix of its output.
+      appendMessagesAtomically(db, [
+        { id: 'legacy-backfill-u3', sessionId: session.id, role: 'user', content: 'later question', timestamp: 5, status: 'sent' },
+        { id: 'legacy-backfill-a3', sessionId: session.id, role: 'assistant', content: 'later answer', timestamp: 6, status: 'completed' }
+      ])
 
       const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
         ensureSessionLedgerReady: async () => true })
       const appendBatch = SqliteAgentHistory.prototype.appendBatch
       const appendSpy = vi.spyOn(SqliteAgentHistory.prototype, 'appendBatch').mockImplementationOnce(async function (events, expectedVersion, transcriptCommit) {
-        await appendBatch.call(this, events, expectedVersion, transcriptCommit)
+        await appendBatch.call(this, events.slice(0, 1), expectedVersion, transcriptCommit)
         throw new Error('simulated process loss after canonical backfill commit')
       })
       await expect(storage.readCompactionReplay({ sessionId: session.id, workDir })).rejects.toThrow('simulated process loss')
       appendSpy.mockRestore()
       expect(storage.queries.readCanonicalCompactionReplay(session.id)?.committed).toHaveLength(1)
+      const backfillHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+      const backfillInvocationId = `legacy-compaction-backfill:${session.id}:legacy-backfill-compaction`
+      expect(backfillHistory.readSync(backfillInvocationId).events.map(({ kind }) => kind)).toEqual(['transcript-compacted'])
+      expect(await backfillHistory.readLatestInvocationForSession(session.id)).toMatchObject({ kind: 'unavailable' })
       const firstCount = getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=? AND kind='transcript-compacted'")
         .get(session.id) as { count: number }
       expect(firstCount.count).toBe(1)
@@ -788,6 +797,10 @@ describe('SQLite session storage public queries', () => {
         ensureSessionLedgerReady: async () => true })
       const replayAfterRestart = await reopenedStorage.readCompactionReplay({ sessionId: session.id, workDir })
       expect(replayAfterRestart.committed).toHaveLength(1)
+      const reopenedHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+      expect(reopenedHistory.readSync(backfillInvocationId).events.map(({ kind }) => kind))
+        .toEqual(['transcript-compacted', 'invocation-completed'])
+      expect(await reopenedHistory.readLatestInvocationForSession(session.id)).toMatchObject({ kind: 'completed' })
       const secondCount = getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=? AND kind='transcript-compacted'")
         .get(session.id) as { count: number }
       expect(secondCount.count).toBe(firstCount.count)

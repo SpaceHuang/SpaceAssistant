@@ -19,6 +19,7 @@ import {
   quarantineSessionEventLedgerForPhysicalMismatch,
   recoverInterruptedSessionEventLedgerQuarantine,
   createSessionEventLedgerRebuildStage,
+  publishSessionEventLedgerRebuildStage,
   discardSessionEventLedgerRebuildStage,
   appendCompactionTransaction,
   ensureCompactionTransaction,
@@ -188,6 +189,31 @@ describe('session events', () => {
       expect((await fs.stat(root)).isDirectory()).toBe(true)
     } finally {
       await discardSessionEventLedgerRebuildStage(location, stage)
+    }
+  })
+
+  it('allows rebuilding a missing event stream when only its derived index remains', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-orphan-index-'))
+    const location = { workDir: root, sessionId: 'orphan-index', createdAt: 1 }
+    const paths = resolveSessionEventPaths(root, location.sessionId, location.createdAt)
+    await fs.mkdir(paths.directory, { recursive: true })
+    const orphanIndex = JSON.stringify({ formatVersion: 2, seq: 7, eventCount: 7, bytes: 700, lastAt: 7 })
+    await fs.writeFile(paths.indexPath, orphanIndex)
+    const stage = await createSessionEventLedgerRebuildStage(location)
+    try {
+      expect(await fs.readFile(paths.indexPath, 'utf8')).toBe(orphanIndex)
+      expect(stage.stageRoot).toContain('.ledger-rebuild-')
+      const stagedContents = `${JSON.stringify({ seq: 1, time: 8, type: 'turn_start', payload: { turnId: 'rebuilt' } })}\n`
+      await fs.mkdir(path.dirname(stage.eventsPath), { recursive: true })
+      await fs.writeFile(stage.eventsPath, stagedContents)
+      await fs.writeFile(stage.indexPath, JSON.stringify({ formatVersion: 2, seq: 1, eventCount: 1,
+        bytes: Buffer.byteLength(stagedContents), lastAt: 8 }))
+      await publishSessionEventLedgerRebuildStage(location, stage)
+      expect(await fs.readFile(paths.eventsPath, 'utf8')).toBe(stagedContents)
+      expect(JSON.parse(await fs.readFile(paths.indexPath, 'utf8'))).toMatchObject({ seq: 1, eventCount: 1 })
+    } finally {
+      await discardSessionEventLedgerRebuildStage(location, stage).catch(() => undefined)
+      await fs.rm(root, { recursive: true, force: true })
     }
   })
 

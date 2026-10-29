@@ -51,7 +51,9 @@ describe('manual context compaction IPC ContextPort integration', () => {
       invocationId: 'invalid-compaction-sidecar', turnId: 'invalid-compaction-turn', sequence: 1, schemaVersion: 1,
       eventId: 'invalid-compaction-sidecar:event:1', idempotencyKey: 'invalid-compaction-sidecar:transcript-compacted:1',
       kind: 'transcript-compacted', payload: { compactionId: 'legacy-compaction-without-boundary', messages: [{ role: 'user', content: 'x' }],
-        sessionLedger: { location: { workDir: '/tmp', sessionId: session.id, createdAt: session.createdAt }, start: { compactionId: 'legacy-compaction-without-boundary' } } }
+        sessionLedger: { location: { workDir: '/tmp', sessionId: session.id, createdAt: session.createdAt },
+          start: { compactionId: 'legacy-compaction-without-boundary', windowId: `session:${session.id}`, inputSurfaceFingerprint: 'previously-compacted-window' },
+          summary: { compactionId: 'legacy-compaction-without-boundary', windowId: `session:${session.id}`, outputSurfaceFingerprint: 'lost-output-window' } } }
     }], 0)
     const observedAvailability = baseStorage.availability.inspect(session.id)
     const healthyAvailability = { ...observedAvailability,
@@ -114,6 +116,7 @@ describe('manual context compaction IPC ContextPort integration', () => {
       { sessionId: session.id, requestId: 'ipc-compact-recovery-pending' })).resolves.toEqual({ status: 'unavailable' })
     expect(summarizeSessionContext).toHaveBeenCalledOnce()
     await expect(handlers.get('chat:get-session-compaction-markers')!({ sender: window.webContents }, session.id)).resolves.toEqual([
+      { compactionId: 'legacy-compaction-without-boundary', windowId: `session:${session.id}`, outputSurfaceFingerprint: 'lost-output-window' },
       { compactionId: (result as { compactionId: string }).compactionId, windowId: (result as { windowId: string }).windowId,
         outputSurfaceFingerprint: (result as { outputSurfaceFingerprint: string }).outputSurfaceFingerprint }
     ])

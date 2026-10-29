@@ -69,7 +69,9 @@ export function inspectLostCompactionRepairEvidence(input: Readonly<{
     previousRangeEnd = end
     return true
   }))
-  const positiveCompactionEvidence = input.replay.committed.length > 0 || input.replay.rejected.some(({ compactionId }) => Boolean(compactionId))
+  // Rejections describe malformed or incomplete attempts; only a validated commit proves that
+  // compacted content was actually applied to a conversation.
+  const positiveCompactionEvidence = input.replay.committed.length > 0
   const classification = classifyCompactionRecoveryEvidence({
     checkpointAvailable: hasCheckpoint,
     positiveCompactionEvidence,

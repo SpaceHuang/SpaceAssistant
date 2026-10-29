@@ -61,6 +61,12 @@ describe('inspectLostCompactionRepairEvidence', () => {
       .toMatchObject({ action: 'full-expand', classification: 'compaction-unknown' })
   })
 
+  it('does not treat rejected uncommitted attempts as proof that compaction was applied', () => {
+    const replay = { committed: [], rejected: [{ compactionId: 'duplicate-start', reason: 'duplicate-start' }] }
+    expect(inspectLostCompactionRepairEvidence({ replay, messages: [{ id: 'm1', content: 'still complete' }] }))
+      .toMatchObject({ classification: 'compaction-unknown', action: 'full-expand' })
+  })
+
   it('selects new-split only when compression is positively recorded but its original range is unavailable', () => {
     const replay = { committed: [{ compactionId: 'known-compressed',
       start: { seq: 1, type: 'compaction_start' as const, payload: { compactionId: 'known-compressed' } },

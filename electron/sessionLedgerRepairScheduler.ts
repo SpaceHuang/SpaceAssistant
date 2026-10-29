@@ -1,8 +1,9 @@
 import { sessionLedgerLocationIdentity, type SessionLedgerLocationInput } from './sessionLedgerIdentity'
 
 type RepairSchedulerOptions = {
-  repair: (location: SessionLedgerLocationInput, retireSink: boolean) => Promise<boolean>
-  onAttempt?: (result: { status: 'recovered' | 'retrying'; attempt: number; retryInMs: number }) => void
+  repair: (location: SessionLedgerLocationInput, retireSink: boolean) => Promise<boolean | { status: 'skipped'; reason: string }>
+  onAttempt?: (result: { status: 'recovered' | 'retrying' | 'skipped'; attempt: number; retryInMs: number;
+    location?: SessionLedgerLocationInput; reason?: string }) => void
   initialDelayMs?: number
   maxDelayMs?: number
   setTimer?: typeof setTimeout
@@ -44,10 +45,16 @@ export function createSessionLedgerRepairScheduler(options: RepairSchedulerOptio
     entry.running = true
     const retireSink = entry.retireSink
     entry.retireSink = false
-    let recovered = false
+    let recovered: boolean | { status: 'skipped'; reason: string } = false
     try { recovered = await options.repair(entry.location, retireSink) } catch { recovered = false }
     entry.running = false
     if (stopped || pending.get(key) !== entry) return
+    if (typeof recovered === 'object' && recovered.status === 'skipped') {
+      try { options.onAttempt?.({ status: 'skipped', attempt: entry.attempt + 1, retryInMs: 0,
+        location: entry.location, reason: recovered.reason }) } catch { /* diagnostics are best effort */ }
+      pending.delete(key)
+      return
+    }
     if (recovered) {
       if (entry.requestedAgain) {
         entry.requestedAgain = false

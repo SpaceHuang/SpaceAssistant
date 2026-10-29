@@ -85,6 +85,7 @@ import { scheduleSessionMessageContentCleanupMaintenance } from './storage/sessi
 import { scheduleSpillReferenceBackfill } from './storage/spillReferenceBackfillScheduler'
 import { ensureSessionLedgerAdmission, ensureSessionLedgerReady, runOutsideSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 import { createSessionLedgerRepairScheduler } from './sessionLedgerRepairScheduler'
+import { isSessionLedgerRecoveryRootAllowed, listManagedButlerSessionLedgerRoots } from './sessionLedgerRecoveryRoots'
 import { createSessionLedgerStartupMaintenance } from './sessionLedgerStartupMaintenance'
 import { createProductionSessionLedgerLifecycleDependencies } from './runtime/sessionLedgerLifecycleProduction'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
@@ -522,7 +523,22 @@ app.whenReady().then(async () => {
   let sessionHistoryRecoverySucceeded = false
   const recoveryWorkDir = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
   const ledgerRecovery = createSessionLedgerRecoveryBindings()
-  const recoveryWorkDirs = ledgerRecovery.getAllowedRoots({ configuredWorkDir: recoveryWorkDir, profilesJson: getConfigValue(db, 'config.workDirProfiles') })
+  const userDataDir = app.getPath('userData')
+  const getConfiguredRecoveryWorkDirs = () => ledgerRecovery.getAllowedRoots({
+    configuredWorkDir: getConfigValue(db, 'config.workDir') ?? recoveryWorkDir,
+    profilesJson: getConfigValue(db, 'config.workDirProfiles')
+  })
+  const getRecoveryWorkDirs = () => [...new Set([
+    ...getConfiguredRecoveryWorkDirs(),
+    ...listManagedButlerSessionLedgerRoots(userDataDir)
+  ])]
+  const isAuthorizedLedgerRoot = (workDir: string, sessionId: string): boolean => {
+    return isSessionLedgerRecoveryRootAllowed({ userDataDir, workDir, sessionId,
+      configuredRoots: getConfiguredRecoveryWorkDirs(),
+      hasButlerTaskSessionLink: (taskId, ownerSessionId) => Boolean(getDbConnection(db).prepare(`SELECT 1 FROM automation_task_runs
+        WHERE task_id=? AND session_id=? LIMIT 1`).get(taskId, ownerSessionId)) })
+  }
+  const recoveryWorkDirs = getRecoveryWorkDirs()
   const sessionLedgerLifecycleDependencies = createProductionSessionLedgerLifecycleDependencies(getDbConnection(db))
   const processGeneration = currentProcessGeneration(getDbConnection(db))
   const sessionLedgerStartupMaintenance = createSessionLedgerStartupMaintenance({
@@ -530,9 +546,8 @@ app.whenReady().then(async () => {
     resolve: (row) => {
       const session = sessionStorage.queries.readSession(row.session_id)
       if (!session || session.createdAt !== row.created_at || session.generation !== row.session_generation) return undefined
-      const workDir = recoveryWorkDirs.find((root) => sessionLedgerLocationIdentity({
-        workDir: root, sessionId: session.id, createdAt: session.createdAt
-      }).workDirIdentity === row.work_dir_identity)
+      const workDir = getRecoveryWorkDirs().find((root) => isAuthorizedLedgerRoot(root, session.id) &&
+        sessionLedgerLocationIdentity({ workDir: root, sessionId: session.id, createdAt: session.createdAt }).workDirIdentity === row.work_dir_identity)
       return workDir ? { location: { workDir, sessionId: session.id, createdAt: session.createdAt },
         sessionGeneration: session.generation } : undefined
     },
@@ -550,9 +565,9 @@ app.whenReady().then(async () => {
   let sessionLedgerRepairRequestGeneration = 0
   const sessionLedgerRepairScheduler = createSessionLedgerRepairScheduler({
     repair: async (location, retireSink) => runOutsideSessionLedgerLifecycleLock(async () => {
-      if (!recoveryWorkDirs.some((root) => path.resolve(root) === path.resolve(location.workDir))) return true
+      if (!isAuthorizedLedgerRoot(location.workDir, location.sessionId)) return { status: 'skipped', reason: 'location-not-authorized' }
       const session = getSessionForLedgerRepair?.(location.sessionId)
-      if (!session || session.createdAt !== location.createdAt) return true
+      if (!session || session.createdAt !== location.createdAt) return { status: 'skipped', reason: 'session-identity-mismatch' }
       try {
         if (retireSink) await retireSessionEventSink(location.workDir, location.sessionId, location.createdAt)
         const result = await ensureSessionLedgerReady({ conn: getDbConnection(db), location,
@@ -567,8 +582,9 @@ app.whenReady().then(async () => {
         return false
       }
     }),
-    onAttempt: ({ status, attempt, retryInMs }) => logAgentEvent(status === 'recovered' ? 'info' : 'warn', 'session.history.recovery', {
-      kind: 'session-ledger-auto-repair', status, attempt, retryInMs
+    onAttempt: ({ status, attempt, retryInMs, location, reason }) => logAgentEvent(status === 'recovered' ? 'info' : 'warn', 'session.history.recovery', {
+      kind: 'session-ledger-auto-repair', status, attempt, retryInMs,
+      ...(location ? { sessionId: location.sessionId, workDir: location.workDir } : {}), ...(reason ? { reason } : {})
     })
   })
   setSessionEventFailureObserver((location) => handleSessionLedgerEventFailure({ conn: getDbConnection(db),

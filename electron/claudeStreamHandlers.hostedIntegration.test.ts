@@ -1144,7 +1144,14 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'boundary-start-token',
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: MODEL_BASELINE[modelId]!.maximumContext, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, enableThinking: false, locale: 'en-US' }
     })
-    injectedCompactionReplay = { committed: [], rejected: [{ compactionId: 'legacy-compaction-boundary-lost', reason: 'canonical-session-ledger-missing-or-invalid' }] }
+    injectedCompactionReplay = { committed: [{ compactionId: 'legacy-compaction-boundary-lost',
+      start: { seq: 1, type: 'compaction_start', payload: { compactionId: 'legacy-compaction-boundary-lost',
+        windowId: session.id, inputSurfaceFingerprint: 'previously-compacted-window' } },
+      summary: { seq: 2, type: 'compaction_summary', payload: { compactionId: 'legacy-compaction-boundary-lost',
+        windowId: session.id, outputSurfaceFingerprint: 'lost-output-window' } },
+      end: { seq: 3, type: 'compaction_end', payload: { compactionId: 'legacy-compaction-boundary-lost',
+        windowId: session.id, status: 'committed', startSeq: 1, summarySeq: 2,
+        inputSurfaceFingerprint: 'previously-compacted-window', outputSurfaceFingerprint: 'lost-output-window' } } }], rejected: [] }
     const repairTurnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn() }
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,

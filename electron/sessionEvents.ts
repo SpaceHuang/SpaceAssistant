@@ -802,10 +802,17 @@ export async function createSessionEventLedgerRebuildStage(
   const realRoot = await fs.realpath(paths.sessionsRoot)
   const realDirectory = await fs.realpath(paths.directory)
   if (!isPathInside(realRoot, realDirectory)) throw new Error('SESSION_LEDGER_REBUILD_PATH_OUTSIDE_ROOT')
-  for (const target of [paths.eventsPath, paths.indexPath]) {
-    await fs.lstat(target).then(() => { throw new Error('SESSION_LEDGER_REBUILD_TARGET_EXISTS') }).catch((error) => {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    })
+  await fs.lstat(paths.eventsPath).then(() => { throw new Error('SESSION_LEDGER_REBUILD_TARGET_EXISTS') }).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  })
+  // The index is derived from JSONL and may safely remain until the complete replacement
+  // has been staged. Reject special files, but do not let a stale index block source rebuild.
+  const orphanIndex = await fs.lstat(paths.indexPath).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  })
+  if (orphanIndex && (orphanIndex.isSymbolicLink() || !orphanIndex.isFile() || orphanIndex.nlink !== 1)) {
+    throw new Error('SESSION_LEDGER_REBUILD_INDEX_INVALID')
   }
   await ensureCanonicalRebuildMarker(paths, sessionLedgerLocationIdentity(location).key)
   await cleanupSessionEventLedgerRebuildStages(paths.directory)
@@ -836,12 +843,19 @@ export async function publishSessionEventLedgerRebuildStage(
     const stat = await fs.lstat(source)
     if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) throw new Error('SESSION_LEDGER_REBUILD_STAGE_FILE_INVALID')
   }
-  for (const destination of [target.eventsPath, target.indexPath]) {
-    await fs.lstat(destination).then(() => { throw new Error('SESSION_LEDGER_REBUILD_TARGET_EXISTS') }).catch((error) => {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    })
+  await fs.lstat(target.eventsPath).then(() => { throw new Error('SESSION_LEDGER_REBUILD_TARGET_EXISTS') }).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  })
+  const existingIndex = await fs.lstat(target.indexPath).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  })
+  if (existingIndex && (existingIndex.isSymbolicLink() || !existingIndex.isFile() || existingIndex.nlink !== 1)) {
+    throw new Error('SESSION_LEDGER_REBUILD_INDEX_INVALID')
   }
   await fs.rename(stage.eventsPath, target.eventsPath)
+  // Once the replacement source is visible, its index can be recreated without losing facts.
+  if (existingIndex) await fs.rm(target.indexPath)
   await fs.rename(stage.indexPath, target.indexPath)
   await fs.rm(stage.stageRoot, { recursive: true, force: true })
 }
