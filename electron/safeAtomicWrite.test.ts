@@ -6,6 +6,7 @@ import vm from 'node:vm'
 import { resolveSafeWriteTarget } from './pathSecurity'
 import {
   SAFE_WRITE_TEMP_PREFIX,
+  SafeAtomicWriteUncertainError,
   cleanupSafeWriteTemps,
   captureFileIdentity,
   safeAtomicWrite,
@@ -71,6 +72,55 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
     expect(JSON.parse(firstResultEnd > 0 ? output.slice(0, firstResultEnd) : output))
       .toMatchObject({ ok: false, caseId: 'write-committed-receipt-invalid' })
     expect(await fs.readFile(target.targetPath, 'utf8')).toBe('tampered')
+  })
+
+  it.each(['linkSync', 'renameSync'] as const)('preserves uncertain status when post-commit readback sees truncation after %s', async (commitMethod) => {
+    const targetPath = path.join(workDir, `truncated-${commitMethod}.txt`)
+    if (commitMethod === 'renameSync') await fs.writeFile(targetPath, 'prior')
+    const expectedFileIdentity = commitMethod === 'renameSync' ? (() => {
+      const st = require('fs').statSync(targetPath)
+      return { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, nlink: st.nlink }
+    })() : null
+    const parent = require('fs').statSync(workDir)
+    const payload = JSON.stringify({ directory: workDir,
+      expectedDirectoryIdentity: { dev: parent.dev, ino: parent.ino, mode: parent.mode, size: parent.size, mtimeMs: parent.mtimeMs },
+      targetName: path.basename(targetPath), tempName: `.sa-wtmp-truncated-${commitMethod}`, bodyBase64: Buffer.from('approved').toString('base64'),
+      expectedFileIdentity, mode: 0o600, captureReceipt: true })
+    const realFs = require('fs') as typeof import('fs')
+    const injectedFs = Object.create(realFs) as typeof import('fs')
+    const localPath = (value: string) => path.isAbsolute(value) ? value : path.join(workDir, value)
+    injectedFs.readFileSync = ((file: unknown, ...args: unknown[]) => file === 0 ? payload : realFs.readFileSync(localPath(file as string), ...(args as never[]))) as typeof realFs.readFileSync
+    injectedFs.statSync = ((value: string, ...args: unknown[]) => realFs.statSync(localPath(value), ...(args as never[]))) as typeof realFs.statSync
+    injectedFs.lstatSync = ((value: string, ...args: unknown[]) => realFs.lstatSync(localPath(value), ...(args as never[]))) as typeof realFs.lstatSync
+    injectedFs.openSync = ((value: string, ...args: unknown[]) => realFs.openSync(localPath(value), ...(args as never[]))) as typeof realFs.openSync
+    injectedFs.unlinkSync = ((value: string) => realFs.unlinkSync(localPath(value))) as typeof realFs.unlinkSync
+    const originalCommit = realFs[commitMethod].bind(realFs) as (from: string, to: string) => void
+    injectedFs[commitMethod] = ((from: string, to: string) => {
+      originalCommit(localPath(from), localPath(to))
+      realFs.truncateSync(localPath(to), 0)
+    }) as typeof realFs[typeof commitMethod]
+    let output = ''
+    const fakeProcess = { stdout: { write: (text: string) => { output += text } }, exit: () => { throw new Error('worker-exit') } }
+    try {
+      vm.runInNewContext(DIRECTORY_WRITER_SOURCE, { require: (name: string) => name === 'node:fs' ? injectedFs : require(name), process: fakeProcess,
+        Buffer, Atomics, Int32Array, SharedArrayBuffer, JSON, Error })
+    } catch (error) {
+      if ((error as Error).message !== 'worker-exit') throw error
+    }
+    const firstResultEnd = output.indexOf('}{') + 1
+    expect(JSON.parse(firstResultEnd > 0 ? output.slice(0, firstResultEnd) : output))
+      .toMatchObject({ ok: false, caseId: 'write-committed-receipt-invalid' })
+    expect(await fs.readFile(targetPath, 'utf8')).toBe('')
+  })
+
+  it('maps a committed receipt failure to SafeAtomicWriteUncertainError', async () => {
+    const worker = vi.spyOn(directoryHandleWriterModule, 'writeFileAtomicallyBoundToDirectory').mockResolvedValue({
+      ok: false, caseId: 'write-committed-receipt-invalid'
+    })
+    try {
+      await expect(safeAtomicWrite({ targetPath: path.join(workDir, 'uncertain.txt'), parentReal: workDir,
+        body: 'approved', expectedIdentity: null, captureReceipt: true })).rejects.toBeInstanceOf(SafeAtomicWriteUncertainError)
+    } finally { worker.mockRestore() }
   })
 
   it('creates a new file via link commit', async () => {

@@ -43,6 +43,8 @@ const target = path.join('.', input.targetName)
 const temp = path.join('.', input.tempName)
 let tempCreated = false
 let tempFd = null
+let committed = false
+const failCommitted = () => fail('write-committed-receipt-invalid')
 try {
   if (path.basename(input.targetName) !== input.targetName || path.basename(input.tempName) !== input.tempName) throw new Error('invalid basename')
   const directoryBefore = identity(fs.statSync('.'))
@@ -90,22 +92,24 @@ try {
   if (input.expectedFileIdentity === null) {
     if (latestTarget !== null) { fail('write-target-exists'); process.exit(0) }
     retryTransient(() => fs.linkSync(temp, target))
+    committed = true
     fs.unlinkSync(temp)
     tempCreated = false
   } else {
     if (latestTarget === null || !sameFile(latestTarget, input.expectedFileIdentity)) { fail('write-file-identity-changed'); process.exit(0) }
     retryTransient(() => fs.renameSync(temp, target))
+    committed = true
     tempCreated = false
   }
   const final = identity(fs.lstatSync(target))
-  if (final.nlink !== 1) { fail('write-file-identity-changed'); process.exit(0) }
+  if (final.nlink !== 1) { failCommitted(); process.exit(0) }
   if (input.captureReceipt) {
     const hash = crypto.createHash('sha256')
     const readBuffer = Buffer.alloc(64 * 1024)
     let readOffset = 0
     while (readOffset < receiptIdentity.size) {
       const bytesRead = fs.readSync(fd, readBuffer, 0, Math.min(readBuffer.length, receiptIdentity.size - readOffset), readOffset)
-      if (bytesRead <= 0) { fail('write-file-identity-changed'); process.exit(0) }
+      if (bytesRead <= 0) { failCommitted(); process.exit(0) }
       hash.update(readBuffer.subarray(0, bytesRead))
       readOffset += bytesRead
     }
@@ -113,11 +117,11 @@ try {
     const check = identity(fs.lstatSync(target))
     if (opened.dev !== receiptIdentity.dev || opened.ino !== receiptIdentity.ino || opened.mode !== receiptIdentity.mode || opened.size !== receiptIdentity.size || opened.mtimeMs !== receiptIdentity.mtimeMs || hash.copy().digest('hex') !== approvedSha256 ||
       opened.dev !== check.dev || opened.ino !== check.ino || opened.mode !== check.mode || opened.size !== check.size || opened.mtimeMs !== check.mtimeMs ||
-      opened.nlink !== 1 || check.nlink !== 1 || (check.mode & 0o170000) !== 0o100000) { fail('write-committed-receipt-invalid'); process.exit(0) }
+      opened.nlink !== 1 || check.nlink !== 1 || (check.mode & 0o170000) !== 0o100000) { failCommitted(); process.exit(0) }
     process.stdout.write(JSON.stringify({ ok: true, identity: final, receipt: { dev: opened.dev, ino: opened.ino, mode: opened.mode, size: opened.size, nlink: opened.nlink, sha256: hash.digest('hex') } }))
   } else process.stdout.write(JSON.stringify({ ok: true, identity: final }))
 } catch {
-  fail('write-directory-unavailable')
+  fail(committed ? 'write-committed-receipt-invalid' : 'write-directory-unavailable')
 } finally {
   if (tempFd !== null) { try { fs.closeSync(tempFd) } catch {} }
   if (tempCreated) { try { fs.unlinkSync(temp) } catch {} }
