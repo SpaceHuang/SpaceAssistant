@@ -76,15 +76,15 @@
 
 ### 阶段 2：服务端等待与单次上限
 
-- [～] **T3｜保留原始等待值并接通单次裁决**。范围：`electron/runtime/agentSdkProviderRecovery.ts`、`packages/agent-sdk/src/turn.ts`、相关错误码/端口定义及两侧对应测试。覆盖 Retry-After 数值和 HTTP-date、45 秒精确等待、120 秒超限、无提示不编造时间，验证拒绝时 provider 未再次调用。测试注入时钟，不真实等待。
+- [x] **T3｜保留原始等待值并接通单次裁决**。范围：`electron/runtime/agentSdkProviderRecovery.ts`、`packages/agent-sdk/src/turn.ts`、相关错误码/端口定义及两侧对应测试。覆盖 Retry-After 数值和 HTTP-date、45 秒精确等待、120 秒超限、无提示不编造时间，验证拒绝时 provider 未再次调用。测试注入时钟，不真实等待。
   - 产物 / 完成判据：`AC-2`、`AC-16`、`AC-17` 的时间解析部分。命令：`npm exec vitest run electron/runtime/agentSdkProviderRecovery.test.ts packages/agent-sdk/test/turn.test.ts`；类型或边界变动时运行 `npm run typecheck:agent-sdk` 和 `npm run check:agent-sdk`。
-  - 证据：待填写。
-- [ ] **G2｜阶段 2 关闭**。证据来自 T3；执行定向测试、`npm run build:electron:incremental`、`npm test`。在隔离工作树回退阶段 2，确认阶段 1 的审计与重试测试仍通过，记录回退对象和结果；提交阶段 2。
-  - 证据：待填写。
+  - 证据：RED：新增 45 秒与 120 秒边界用例，旧代码分别把 45 秒截为 30 秒、把 120 秒错误安排为 30 秒重试。GREEN：两文件定向运行 180 tests passed；覆盖 HTTP-date 注入时钟、45 秒精确调度（集成捕获实际 `setTimeout` 参数）、120 秒单次上限拒绝、`serverAskedMs` / `retryAt` 透传及拒绝后 provider 调用次数仍为 1。`npm run typecheck:agent-sdk`、`npm run check:agent-sdk` 通过。
+- [x] **G2｜阶段 2 关闭**。证据来自 T3；执行定向测试、`npm run build:electron:incremental`、`npm test`。在隔离工作树回退阶段 2，确认阶段 1 的审计与重试测试仍通过，记录回退对象和结果；提交阶段 2。
+  - 证据：`npm run build:electron:incremental` 通过；`npm test` 通过，1228 files passed / 1 skipped，11845 tests passed / 140 skipped，约 25m48s，期间 Node `MaxListenersExceededWarning` 不影响退出码。阶段 2 代码提交 `13920bf0aa26efa53a8813260fbdfb23da88919f`。隔离回退：临时 worktree 在该提交上执行 `git revert --no-edit 13920bf0aa26efa53a8813260fbdfb23da88919f` 后运行五组测试（providerRecovery、sqliteAgentHistory、sessionLedgerOutbox、turn、history），5 files / 435 tests passed，阶段 1 审计与退避保持有效；临时 worktree/分支已删除。`git diff --check` 通过，评审未发现阶段阻断项。
 
 ### 阶段 3：回合等待预算
 
-- [ ] **T4｜实现回合余额与边界**。范围：`packages/agent-sdk/src/turn.ts`、`invocation.ts`、相关宿主恢复端口及 `packages/agent-sdk/test/turn.test.ts`、`electron/runtime/agentSdkProviderRecovery.test.ts`。覆盖跨 modelTurn 共享、单调时钟实耗扣减、取消、实测超支、恰好耗尽、零余额与零/正候选、各专用恢复；按 G0 明确的顺序断言返回码、是否派发、审计与计数。加入随机操作序列及状态不变量，并固定随机种子以便复现。
+- [～] **T4｜实现回合余额与边界**。范围：`packages/agent-sdk/src/turn.ts`、`invocation.ts`、相关宿主恢复端口及 `packages/agent-sdk/test/turn.test.ts`、`electron/runtime/agentSdkProviderRecovery.test.ts`。覆盖跨 modelTurn 共享、单调时钟实耗扣减、取消、实测超支、恰好耗尽、零余额与零/正候选、各专用恢复；按 G0 明确的顺序断言返回码、是否派发、审计与计数。加入随机操作序列及状态不变量，并固定随机种子以便复现。
   - 产物 / 完成判据：`AC-7`、`AC-13`、`AC-14`、`AC-15`、`AC-17` 的超余额部分及完整 `AC-27`；实现零余额拒绝的 `not-dispatched` 记录，断言不增加物理及分类计数。命令：`npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/runtime/agentSdkProviderRecovery.test.ts`；`npm run typecheck:agent-sdk`。
   - 证据：待填写。
 - [ ] **G3｜阶段 3 关闭**。证据来自 T4 的 AC-7、AC-13、AC-14、AC-15、AC-17 超余额部分及完整 AC-27；执行定向测试、`npm run build:electron:incremental`、`npm test`。在隔离工作树回退阶段 3，验证阶段 2 单次上限与阶段 1 记录仍有效；提交阶段 3。
