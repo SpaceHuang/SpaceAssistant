@@ -21,6 +21,7 @@ import { resolveReadPermitTarget } from '../confirmation/readPermitExecutor'
 import { recordPolicyExecutionVeto } from '../confirmation/audit'
 import { readDirectoryBoundToIdentity } from '../confirmation/directoryHandleReader'
 import { validateWriteExecutionPermit } from '../confirmation/writeExecutionPermit'
+import { beginReviewScopeWrite } from '../confirmation/reviewScopeWrite'
 import { resolvePermittedWriteTarget } from '../confirmation/writePermitExecutor'
 import { resolveWikiMount } from '../wiki/wikiMount'
 import { acquireWikiWriteMutex } from '../wiki/wikiWriteMutex'
@@ -963,21 +964,26 @@ export const editFileExecutor: ToolExecutor = {
         if (ctx.writeExecutionPermit !== writePermitAtStart) {
           return { ...writePermitFailure(new Error('write-permit-changed-during-execution')), duration: Date.now() - started }
         }
+        const reviewScopeWrite = beginReviewScopeWrite(ctx)
+        let writeReceipt: Awaited<ReturnType<typeof safeAtomicWrite>>
         try {
-          await safeAtomicWrite({
+          writeReceipt = await safeAtomicWrite({
             targetPath: abs,
             parentReal: writeTarget.parentReal,
             body: next,
             expectedIdentity,
+            ...(reviewScopeWrite.captureReceipt ? { captureReceipt: true } : {}),
             ...(ctx.writeExecutionPermit ? { expectedParentIdentity: ctx.writeExecutionPermit.target.parentIdentity } : {}),
             signal: op
           })
         } catch (e) {
+          reviewScopeWrite.fail()
           if (e instanceof SafeAtomicWriteUncertainError) throw e
           const ab = fileToolAbortResult(op, '编辑超时', started)
           if (ab) return ab
           throw e
         }
+        reviewScopeWrite.complete(writeReceipt.receipt)
         await recordFileStateAfterWrite(ctx.fileStateCache, abs, next)
         return {
           success: true,
@@ -1105,21 +1111,26 @@ export const writeFileExecutor: ToolExecutor = {
       if (ctx.writeExecutionPermit !== writePermitAtStart) {
         return { ...writePermitFailure(new Error('write-permit-changed-during-execution')), duration: Date.now() - started }
       }
+      const reviewScopeWrite = beginReviewScopeWrite(ctx)
+      let writeReceipt: Awaited<ReturnType<typeof safeAtomicWrite>>
       try {
-        await safeAtomicWrite({
+        writeReceipt = await safeAtomicWrite({
           targetPath: abs,
           parentReal: writeTarget.parentReal,
           body,
           expectedIdentity,
+          ...(reviewScopeWrite.captureReceipt ? { captureReceipt: true } : {}),
           ...(ctx.writeExecutionPermit ? { expectedParentIdentity: ctx.writeExecutionPermit.target.parentIdentity } : {}),
           signal: op
         })
       } catch (e) {
+        reviewScopeWrite.fail()
         if (e instanceof SafeAtomicWriteUncertainError) throw e
         const ab = fileToolAbortResult(op, '写入超时，可稍后重试', started)
         if (ab) return ab
         throw e
       }
+      reviewScopeWrite.complete(writeReceipt.receipt)
       await recordFileStateAfterWrite(ctx.fileStateCache, abs, body)
       const lineStats = boundedWriteLineStats(beforeContent, body)
       return { success: true, data: { path: rel, bytesWritten: Buffer.byteLength(body, 'utf8'), ...lineStats }, duration: Date.now() - started }

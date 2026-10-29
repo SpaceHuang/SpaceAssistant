@@ -7,7 +7,8 @@ import {
   SAFE_WRITE_TEMP_PREFIX,
   cleanupSafeWriteTemps,
   captureFileIdentity,
-  safeAtomicWrite
+  safeAtomicWrite,
+  verifyReviewFileReceipt
 } from './safeAtomicWrite'
 import * as directoryHandleWriterModule from './confirmation/directoryHandleWriter'
 
@@ -23,6 +24,18 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
   afterEach(async () => {
     await fs.rm(workDir, { recursive: true, force: true }).catch(() => {})
     await fs.rm(outside, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('returns a content and open-handle receipt only when explicitly requested', async () => {
+    const target = await resolveSafeWriteTarget(workDir, 'receipt.txt')
+    const result = await safeAtomicWrite({ targetPath: target.targetPath, parentReal: target.parentReal,
+      body: 'receipt body', expectedIdentity: null, captureReceipt: true })
+    expect(result.receipt).toMatchObject({ size: 12, nlink: 1, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    const written = await fs.stat(target.targetPath)
+    expect(result.receipt).toMatchObject({ dev: written.dev, ino: written.ino })
+    expect(await verifyReviewFileReceipt(target.targetPath, result.receipt!)).toBe(true)
+    await fs.writeFile(target.targetPath, 'changed')
+    expect(await verifyReviewFileReceipt(target.targetPath, result.receipt!)).toBe(false)
   })
 
   it('creates a new file via link commit', async () => {
