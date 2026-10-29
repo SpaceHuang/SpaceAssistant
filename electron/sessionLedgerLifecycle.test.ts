@@ -1,11 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from './database/testHelpers'
 import { getDbConnection } from './database/sqliteStore'
 import {
   ensureLegacyLedgerReadiness, beginSessionLedgerCheck, completeSessionLedgerCheck,
-  beginSessionLedgerTargetCheck, completeSessionLedgerTargetCheck, type SessionLedgerReadyProof
+  type SessionLedgerReadyProof
 } from './sessionLedgerReadiness'
-import { ensureSessionLedgerReady, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
+import { ensureSessionLedgerAdmission, ensureSessionLedgerReady, isSessionLedgerLifecycleLockHeld, runOutsideSessionLedgerLifecycleLock, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 import { prepareSessionLedgerProcessLockTarget } from './sessionLedgerProcessLock'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -14,11 +14,23 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { getSessionEventSink, setSessionEventCommitObserver } from './sessionEvents'
+import { canonicalLedgerProjectionPayloadDigest, drainCanonicalLedgerProjectionOutbox } from './sessionLedgerOutbox'
 
-const proof: SessionLedgerReadyProof = { canonicalWatermark: 'seq:3', ledgerGeneration: 1, fileIdentity: 'dev-ino', fileBytes: 80,
-  tailFrame: 'tail-hash', indexSeq: 3, indexEventCount: 3, indexBytes: 80, indexLastAt: 100 }
+const proof: SessionLedgerReadyProof = { canonicalWatermark: 'seq:3', ledgerGeneration: 1 }
 
 describe('session ledger lifecycle lock', () => {
+  it('runs a scheduled repair outside the failure caller lock context', async () => {
+    const key = createHash('sha256').update(randomUUID()).digest('hex')
+    await withSessionLedgerLifecycleLock(key, async () => {
+      expect(isSessionLedgerLifecycleLockHeld(key)).toBe(true)
+      await runOutsideSessionLedgerLifecycleLock(async () => {
+        await Promise.resolve()
+        expect(isSessionLedgerLifecycleLockHeld(key)).toBe(false)
+      })
+      expect(isSessionLedgerLifecycleLockHeld(key)).toBe(true)
+    })
+  })
+
   it('serializes ledger maintenance with writers across processes', async () => {
     const key = createHash('sha256').update(randomUUID()).digest('hex')
     const target = await prepareSessionLedgerProcessLockTarget(key)
@@ -110,7 +122,7 @@ describe('session ledger lifecycle lock', () => {
     } finally { db.close() }
   })
 
-  it('builds one baseline proof then reuses it until the file or index proof changes', async () => {
+  it('builds one baseline then reuses ready state without reading retired file proof', async () => {
     const db = createMemoryAppDb()
     try {
       const conn = getDbConnection(db)
@@ -132,12 +144,103 @@ describe('session ledger lifecycle lock', () => {
       expect(first.status).toBe('ready')
       expect(second.status).toBe('ready')
       expect(counters.baseline).toBe(1)
-      expect(counters.read).toBe(2)
+      expect(counters.read).toBe(0)
       expect(traces).toMatchObject([
         { operation: 'baseline', status: 'ready', baselineScanCount: 1, projectedCount: 0, durationMs: expect.any(Number) },
         { operation: 'proof-reused', status: 'ready', baselineScanCount: 0, projectedCount: 0, durationMs: expect.any(Number) }
       ])
       expect(first.readiness.ledgerLocationKey).toBe(readiness.ledgerLocationKey)
+    } finally { db.close() }
+  })
+
+  it('admits an already usable ledger with one database read and no file proof reads', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const rawConn = getDbConnection(db)
+      const location = { workDir: '/tmp/lifecycle-admission-fast-path', sessionId: 'ready-session', createdAt: 42 }
+      const dependencies = {
+        fileExists: async () => true,
+        readProof: async () => proof,
+        bootstrap: async () => proof,
+        baseline: async () => proof,
+        applyTarget: async () => ({ eventIds: [], events: [] })
+      }
+      expect((await ensureSessionLedgerReady({ conn: rawConn, location, sessionGeneration: 'g1', processGeneration: 1, dependencies })).status).toBe('ready')
+
+      const statements: string[] = []
+      const conn = new Proxy(rawConn, { get(target, property, receiver) {
+        if (property !== 'prepare') {
+          const value = Reflect.get(target, property, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+        return (sql: string) => {
+          statements.push(sql)
+          return target.prepare(sql)
+        }
+      } })
+      const readProof = vi.fn(async () => { throw new Error('admission must not read file proof') })
+      const fileExists = vi.fn(async () => { throw new Error('admission must not stat files') })
+      const result = await ensureSessionLedgerAdmission({ conn, location, sessionGeneration: 'g1', processGeneration: 1,
+        dependencies: { ...dependencies, readProof, fileExists } })
+
+      expect(result.status).toBe('ready')
+      expect(readProof).not.toHaveBeenCalled()
+      expect(fileExists).not.toHaveBeenCalled()
+      expect(statements).toHaveLength(1)
+      expect(statements[0]).toMatch(/SELECT/i)
+    } finally { db.close() }
+  })
+
+  it('routes a stale ledger through the repair lifecycle instead of the admission fast path', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const conn = getDbConnection(db)
+      const location = { workDir: '/tmp/lifecycle-admission-stale', sessionId: 'stale-session', createdAt: 43 }
+      const dependencies = {
+        fileExists: async () => true,
+        readProof: async () => proof,
+        bootstrap: async () => proof,
+        baseline: async () => proof,
+        applyTarget: async () => ({ eventIds: [], events: [] })
+      }
+      const first = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g1', processGeneration: 1, dependencies })
+      conn.prepare("UPDATE session_ledger_projection_state SET state='dirty' WHERE ledger_location_key=?").run(first.readiness.ledgerLocationKey)
+      const readProof = vi.fn(async () => proof)
+
+      const result = await ensureSessionLedgerAdmission({ conn, location, sessionGeneration: 'g1', processGeneration: 1,
+        dependencies: { ...dependencies, readProof } })
+
+      expect(result.status).toBe('ready')
+      expect(readProof).not.toHaveBeenCalled()
+      expect(result.readiness.state).toBe('ready')
+    } finally { db.close() }
+  })
+
+  it('reuses ready state without consulting retired physical proof metadata', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const conn = getDbConnection(db)
+      const location = { workDir: '/tmp/lifecycle-physical-mismatch', sessionId: 'legacy-session', createdAt: 21 }
+      const readiness = ensureLegacyLedgerReadiness(conn, location, 'g1')
+      const fullProof = proof
+      const rebuildPhysicalMismatch = vi.fn(async () => fullProof)
+      const dependencies = {
+        fileExists: async () => true,
+        readProof: async () => fullProof,
+        bootstrap: async () => fullProof,
+        baseline: async () => fullProof,
+        rebuildPhysicalMismatch,
+        applyTarget: async () => ({ eventIds: [], events: [] })
+      }
+      const first = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g1', processGeneration: 1, dependencies })
+      expect(first.status).toBe('ready')
+      const recovered = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g1', processGeneration: 1,
+        retryBlocked: true, dependencies })
+
+      expect(rebuildPhysicalMismatch).not.toHaveBeenCalled()
+      expect(recovered).toMatchObject({ status: 'ready', readiness: { state: 'ready' } })
+      expect(conn.prepare('SELECT ledger_generation FROM session_ledger_projection_state WHERE ledger_location_key=?').get(readiness.ledgerLocationKey))
+        .toEqual({ ledger_generation: 1 })
     } finally { db.close() }
   })
 
@@ -226,7 +329,7 @@ describe('session ledger lifecycle lock', () => {
     } finally { db.close() }
   })
 
-  it('blocks only a target whose canonical projection cannot be committed and preserves the pending obligation', async () => {
+  it('blocks a dirty baseline when its pending projection cannot be committed', async () => {
     const db = createMemoryAppDb()
     try {
       const conn = getDbConnection(db)
@@ -235,25 +338,27 @@ describe('session ledger lifecycle lock', () => {
       const baselineToken = beginSessionLedgerCheck(conn, readiness.ledgerLocationKey)!
       completeSessionLedgerCheck(conn, readiness.ledgerLocationKey, baselineToken, proof)
       conn.prepare("UPDATE session_ledger_projection_state SET state='dirty' WHERE ledger_location_key=?").run(readiness.ledgerLocationKey)
-      const token = beginSessionLedgerTargetCheck(conn, readiness.ledgerLocationKey)!
+      const expectedEvents = [{ type: 'tool_result' as const, payload: { toolUseId: 'pending-tool', result: { success: true } } }]
+      const expectedEventIds = ['tool_result:pending-tool']
       conn.prepare(`INSERT INTO session_ledger_projection_outbox(target_id,ledger_location_key,session_id,session_generation,canonical_event_id,
         canonical_sequence,projection_order,projection_kind,expected_events_json,expected_event_ids_json,payload_sha256,status,created_at)
-        VALUES('pending-target',?,'s','g','canonical',1,0,'tool-result','[]','[]','digest','pending',1)`).run(readiness.ledgerLocationKey)
-      expect(completeSessionLedgerTargetCheck(conn, readiness.ledgerLocationKey, token, proof)).toBe(false)
+        VALUES('pending-target',?,'s','g','canonical',1,0,'tool-result',?,?,?,'pending',1)`)
+        .run(readiness.ledgerLocationKey, JSON.stringify(expectedEvents), JSON.stringify(expectedEventIds),
+          canonicalLedgerProjectionPayloadDigest(expectedEvents, expectedEventIds))
       const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g', processGeneration: 1, retryBlocked: true,
         dependencies: {
           fileExists: async () => true,
           readProof: async () => proof,
           bootstrap: async () => proof,
-          baseline: async () => proof,
+          baseline: async () => { throw new Error('SESSION_LEDGER_BASELINE_PROJECTION_FAILED') },
           applyTarget: async () => { throw new Error('sink unavailable') }
         } })
-      expect(result).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', retryScope: 'target', failureClass: 'projection_failed' } })
+      expect(result).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', retryScope: 'baseline', failureClass: 'baseline_failed' } })
       expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE target_id='pending-target'").get()).toEqual({ status: 'pending' })
     } finally { db.close() }
   })
 
-  it('drains a dirty proof-backed target without repeating the full baseline scan', async () => {
+  it('drains a dirty target through the authoritative baseline path', async () => {
     const db = createMemoryAppDb()
     try {
       const conn = getDbConnection(db)
@@ -265,27 +370,69 @@ describe('session ledger lifecycle lock', () => {
       const expectedIds = ['tool_result:target-tool']
       conn.prepare(`INSERT INTO session_ledger_projection_outbox(target_id,ledger_location_key,session_id,session_generation,canonical_event_id,
         canonical_sequence,projection_order,projection_kind,expected_events_json,expected_event_ids_json,payload_sha256,status,created_at)
-        VALUES('target-success',?,'target-session','g','canonical-target',4,0,'tool-result',?,?,'digest','pending',1)`)
-        .run(readiness.ledgerLocationKey, JSON.stringify(expectedEvents), JSON.stringify(expectedIds))
+        VALUES('target-success',?,'target-session','g','canonical-target',4,0,'tool-result',?,?,?,'pending',1)`)
+        .run(readiness.ledgerLocationKey, JSON.stringify(expectedEvents), JSON.stringify(expectedIds),
+          canonicalLedgerProjectionPayloadDigest(expectedEvents, expectedIds))
       conn.prepare("UPDATE session_ledger_projection_state SET state='dirty' WHERE ledger_location_key=?").run(readiness.ledgerLocationKey)
       let baselineCalls = 0
       let targetCalls = 0
+      const applyTarget = vi.fn(async (target: { expectedEventIds: readonly string[]; expectedEvents: readonly import('./sessionEvents').SessionEventInput[] }) => {
+        targetCalls += 1
+        return { eventIds: target.expectedEventIds, events: target.expectedEvents }
+      })
       const dependencies = {
         fileExists: async () => true,
         readProof: async () => proof,
         bootstrap: async () => proof,
-        baseline: async () => { baselineCalls += 1; return proof },
-        applyTarget: async (_location: typeof location, target: { targetId: string; expectedEventIds: readonly string[]; expectedEvents: readonly import('./sessionEvents').SessionEventInput[] }) => {
-          targetCalls += 1
-          return { eventIds: target.expectedEventIds, events: target.expectedEvents }
-        }
+        baseline: async () => {
+          baselineCalls += 1
+          const drained = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledgerLocationKey,
+            (target) => applyTarget(target))
+          if (drained.failedTargetId) throw new Error('SESSION_LEDGER_BASELINE_PROJECTION_FAILED')
+          return proof
+        },
+        applyTarget: async (_location: typeof location, target: Parameters<typeof applyTarget>[0]) => applyTarget(target)
       }
 
       const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g', processGeneration: 1, dependencies })
 
       expect(result).toMatchObject({ status: 'ready', readiness: { state: 'ready' } })
-      expect({ baselineCalls, targetCalls }).toEqual({ baselineCalls: 0, targetCalls: 1 })
+      expect({ baselineCalls, targetCalls }).toEqual({ baselineCalls: 1, targetCalls: 1 })
       expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE target_id='target-success'").get()).toEqual({ status: 'acked' })
+    } finally { db.close() }
+  })
+
+  it('preserves source-missing outbox work and blocks once after draining the healthy subset', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const conn = getDbConnection(db)
+      const location = { workDir: '/tmp/lifecycle-source-missing', sessionId: 'source-missing-session', createdAt: 6 }
+      const readiness = ensureLegacyLedgerReadiness(conn, location, 'g')
+      const baselineToken = beginSessionLedgerCheck(conn, readiness.ledgerLocationKey)!
+      completeSessionLedgerCheck(conn, readiness.ledgerLocationKey, baselineToken, proof)
+      const expectedEvents = [{ type: 'tool_result' as const, payload: { toolUseId: 'missing-tool', result: { success: true } } }]
+      const expectedEventIds = ['tool_result:missing-tool']
+      conn.prepare(`INSERT INTO session_ledger_projection_outbox(target_id,ledger_location_key,session_id,session_generation,canonical_event_id,
+        canonical_sequence,projection_order,projection_kind,expected_events_json,expected_event_ids_json,payload_sha256,status,created_at)
+        VALUES('source-missing-target',?,'source-missing-session','g','source-event-missing',1,0,'tool-result',?,?,?,'pending',1)`)
+        .run(readiness.ledgerLocationKey, JSON.stringify(expectedEvents), JSON.stringify(expectedEventIds),
+          canonicalLedgerProjectionPayloadDigest(expectedEvents, expectedEventIds))
+      conn.prepare("UPDATE session_ledger_projection_state SET state='dirty' WHERE ledger_location_key=?").run(readiness.ledgerLocationKey)
+      const applyTarget = vi.fn(async () => ({ eventIds: expectedEventIds, events: expectedEvents }))
+
+      const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g', processGeneration: 1,
+        dependencies: { fileExists: async () => true, readProof: async () => proof, bootstrap: async () => proof,
+          baseline: async () => {
+            const drained = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledgerLocationKey, applyTarget,
+              Date.now(), async () => undefined)
+            if (drained.sourceMissing?.length) throw new Error('SESSION_LEDGER_PROJECTION_SOURCE_MISSING')
+            return proof
+          }, applyTarget, resolveCanonicalTarget: async () => undefined } })
+
+      expect(result).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'source_missing' } })
+      expect(applyTarget).not.toHaveBeenCalled()
+      expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE target_id='source-missing-target'").get())
+        .toEqual({ status: 'pending' })
     } finally { db.close() }
   })
 })

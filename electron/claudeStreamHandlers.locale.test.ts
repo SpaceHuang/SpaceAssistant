@@ -220,7 +220,7 @@ describe('claudeStreamHandlers locale', () => {
       })
     })
     expect(hostedOptions).toMatchObject({ onHostedTurnHandoff: expect.any(Function) })
-    expect(mockReadCompactionMarkers).toHaveBeenCalledWith(expect.any(String))
+    expect(mockReadCompactionMarkers).not.toHaveBeenCalled()
     db.close()
   })
 
@@ -271,12 +271,11 @@ describe('claudeStreamHandlers locale', () => {
     await expect(execute(makeSender(), {
       requestId: 'event-failure-request', turnId: 'event-failure-turn', turnStartToken: 'event-failure-token', sessionId: session.id
     })).resolves.toMatchObject({
-      ok: false,
-      error: 'JSONL append failed',
+      ok: true,
       eventPersistenceFailed: true,
       eventPersistenceErrors: expect.any(Array)
     })
-    expect(sink.appendCritical).toHaveBeenCalledTimes(3)
+    expect(sink.appendCritical).toHaveBeenCalledOnce()
     db.close()
   })
 

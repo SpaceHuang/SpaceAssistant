@@ -41,7 +41,7 @@ import { getUsageStepFactsForTurn, getUsageTurnFact, updateSession } from './dat
 import { queryUsageAttribution } from './usageStats/usageStatsQueries'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { logAgentEvent } from './agentLogger/agentLogger'
-import { foldCompactionEvents } from '../src/shared/compactionEvents'
+import { computeCompactionSummaryHash, foldCompactionEvents } from '../src/shared/compactionEvents'
 import { createSessionTurnRuntime, createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createBoundSessionContextAdapter } from './sessionStorage/contextPortRegistry'
 import { commitSessionTranscript, readSessionTranscript } from './database/sessionTranscript'
@@ -94,6 +94,7 @@ vi.mock('./secureApiKey', () => ({
 
 let sessionEvents: Array<{ seq: number; time: number; type: string; payload: Record<string, unknown> }>
 let failNextSessionEventType: string | undefined
+let failNextSessionEventError: Error | undefined
 let useRealSessionEventFiles = false
 let injectedCompactionReplay: { committed: Array<{ compactionId: string; start: { type: 'compaction_start'; seq: number; payload: Record<string, unknown> }; summary: { type: 'compaction_summary'; seq: number; payload: Record<string, unknown> }; end: { type: 'compaction_end'; seq: number; payload: Record<string, unknown> } }>; rejected: Array<{ compactionId?: string; reason: string }> } | undefined
 vi.mock('./sessionEvents', async (importOriginal) => {
@@ -113,7 +114,9 @@ vi.mock('./sessionEvents', async (importOriginal) => {
           appendCritical: async (event: { type: string; payload: Record<string, unknown> }) => {
             if (failNextSessionEventType === event.type) {
               failNextSessionEventType = undefined
-              throw new Error(`injected ${event.type} session event failure`)
+              const error = failNextSessionEventError ?? new Error(`injected ${event.type} session event failure`)
+              failNextSessionEventError = undefined
+              throw error
             }
             return sink.appendCritical(event)
           }
@@ -123,7 +126,9 @@ vi.mock('./sessionEvents', async (importOriginal) => {
         appendCritical: vi.fn(async (event: { type: string; payload: Record<string, unknown> }) => {
           if (failNextSessionEventType === event.type) {
             failNextSessionEventType = undefined
-            throw new Error(`injected ${event.type} session event failure`)
+            const error = failNextSessionEventError ?? new Error(`injected ${event.type} session event failure`)
+            failNextSessionEventError = undefined
+            throw error
           }
           const committed = { seq: sessionEvents.length + 1, time: Date.now(), ...event }
           sessionEvents.push(committed)
@@ -212,6 +217,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     handlers.clear()
     sessionEvents = []
     failNextSessionEventType = undefined
+    failNextSessionEventError = undefined
     useRealSessionEventFiles = false
     injectedCompactionReplay = undefined
     providerCalls = 0
@@ -839,7 +845,12 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       .toEqual({ status: 'commit_uncertain' })
   })
 
-  it('continues a Desktop turn from canonical SQLite when the secondary event ledger is blocked', async () => {
+  it.each([
+    ['readiness blocked', false, undefined, false],
+    ['readiness throws', undefined, undefined, true],
+    ['turn_start append fails', true, 'turn_start', false, undefined],
+    ['ENOSPC is returned by the ledger writer', true, 'turn_start', false, new Error('ENOSPC: no space left on device')]
+  ] as const)('continues a Desktop turn from canonical SQLite when the secondary event ledger %s', async (_mode, ledgerReady, failOnEvent, throwReadiness, injectedError) => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     seedTrustedModel(db, modelId)
     const endpoint = 'https://hosted.example.test'
@@ -859,6 +870,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     setDefaultAgentRuntime(runtime)
 
     const session = createSession(db, { name: 'blocked-secondary-ledger', model: modelId, maxTokens: 512, fixedWorkDir: workDir })
+    if (failOnEvent) {
+      failNextSessionEventType = failOnEvent
+      failNextSessionEventError = injectedError
+    }
     const user = appendMessage(db, { id: 'blocked-ledger-user', sessionId: session.id, role: 'user', content: 'continue this session', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'blocked-ledger-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
     createPersistedTurn(db, {
@@ -867,27 +882,52 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'blocked-ledger-token',
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
+    const checkpointMessage = { id: 'blocked-ledger-checkpoint', role: 'user', content: 'prior work summary' }
+    const candidate = { kind: 'summary', checkpointMessage, checkpointReplayIdentity: checkpointMessage.id, shadowedRanges: [] }
+    const compactionId = 'blocked-ledger-existing-compaction'
+    const start = { compactionId, windowId: session.id, inputSurfaceFingerprint: 'blocked-ledger-input', surfaceBoundaryId: user.message.id }
+    const summary = { compactionId, windowId: session.id, summaryHash: computeCompactionSummaryHash(candidate),
+      outputSurfaceFingerprint: 'blocked-ledger-output', shadowedRanges: [], candidate }
+    const replay = foldCompactionEvents([
+      { seq: 1, type: 'compaction_start', payload: start },
+      { seq: 2, type: 'compaction_summary', payload: summary },
+      { seq: 3, type: 'compaction_end', payload: { compactionId, windowId: session.id, status: 'committed', startSeq: 1, summarySeq: 2,
+        inputSurfaceFingerprint: start.inputSurfaceFingerprint, outputSurfaceFingerprint: summary.outputSurfaceFingerprint, summaryHash: summary.summaryHash } }
+    ])
     const sessionStorage = createSqliteSessionStorage(db, {
       getWorkDirForSession: () => workDir, getUserDataDir: () => hostedTestUserDataDir,
-      ensureSessionLedgerReady: async () => false
+      ensureSessionLedgerReady: async () => {
+        if (throwReadiness) throw new Error('injected Desktop readiness failure')
+        return ledgerReady ?? false
+      }
     })
+    const readReplay = vi.fn(async () => replay)
+    const sessionStorageWithReplay = { ...sessionStorage, readCompactionReplay: readReplay }
+    const turnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn() }
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
       getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({}), getAppDatabase: () => db, sessionStorage,
+      getWikiConfig: () => ({}), getAppDatabase: () => db, sessionStorage: sessionStorageWithReplay,
       getBrowserDetectContext: () => ({ workDir }),
-      turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
+      turnRuntime: turnRuntime as never
     })
 
     const result = await execute(makeSender(), {
       requestId: 'blocked-ledger-request', turnId: 'blocked-ledger-turn', turnStartToken: 'blocked-ledger-token', sessionId: session.id
     })
 
+    if (!result.ok) throw new Error(`Blocked-ledger turn failed: ${result.error}`)
     expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'canonical history still works' }] })
+    if (failOnEvent || throwReadiness) expect(result).toMatchObject({ eventPersistenceFailed: true,
+      eventPersistenceErrors: [expect.objectContaining({ code: 'EVENT_PERSISTENCE_FAILED' })] })
     expect(providerCalls).toBe(1)
     expect(sessionEvents).toEqual([])
+    expect(readReplay).toHaveBeenCalledWith({ sessionId: session.id, workDir })
+    expect(turnRuntime.consumeForRequest).toHaveBeenCalledWith('blocked-ledger-request', expect.objectContaining({
+      type: 'compaction-committed', compactionId, windowId: session.id
+    }), 'blocked-ledger-turn')
     expect((await new SqliteAgentHistory(getDbConnection(db)).read('blocked-ledger-request')).events.at(-1)?.kind).toBe('invocation-completed')
   })
 
@@ -1104,12 +1144,21 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'boundary-start-token',
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: MODEL_BASELINE[modelId]!.maximumContext, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, enableThinking: false, locale: 'en-US' }
     })
+    injectedCompactionReplay = { committed: [{ compactionId: 'legacy-compaction-boundary-lost',
+      start: { seq: 1, type: 'compaction_start', payload: { compactionId: 'legacy-compaction-boundary-lost',
+        windowId: session.id, inputSurfaceFingerprint: 'previously-compacted-window' } },
+      summary: { seq: 2, type: 'compaction_summary', payload: { compactionId: 'legacy-compaction-boundary-lost',
+        windowId: session.id, outputSurfaceFingerprint: 'lost-output-window' } },
+      end: { seq: 3, type: 'compaction_end', payload: { compactionId: 'legacy-compaction-boundary-lost',
+        windowId: session.id, status: 'committed', startSeq: 1, summarySeq: 2,
+        inputSurfaceFingerprint: 'previously-compacted-window', outputSurfaceFingerprint: 'lost-output-window' } } }], rejected: [] }
+    const repairTurnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn() }
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: ['read_file'] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
-      turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
+      turnRuntime: repairTurnRuntime as never
     })
 
     const result = await execute(makeSender(), { requestId: 'boundary-request', turnId: 'boundary-turn', turnStartToken: 'boundary-start-token', sessionId: session.id })
@@ -1121,12 +1170,40 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const compacted = history.events.find((event) => event.kind === 'transcript-compacted')
     expect(compacted).toBeDefined()
     expect(compacted?.payload).toMatchObject({
+      sessionLedger: { start: { reason: 'lost_compaction_repair', repairMarker: 'repair:new-split', repairIdentity: { branch: 'new-split' } } },
       requiredUserMessage: { id: 'boundary-current-user', message: { role: 'user', content: 'current request must survive' } },
       messages: expect.arrayContaining([
         expect.objectContaining({ role: 'user', content: expect.stringContaining('"kind":"context_checkpoint"') }),
         expect.objectContaining({ role: 'user', content: 'current request must survive' })
       ])
     })
+    const staleSession = createSession(db, { name: 'hosted-boundary-repair-source-change', model: modelId, maxTokens: MODEL_BASELINE[modelId]!.maxTokens })
+    appendMessage(db, { id: 'repair-stale-prior-user', sessionId: staleSession.id, role: 'user', content: 'old user context '.repeat(9000), timestamp: 0, status: 'sent' })
+    appendMessage(db, { id: 'repair-stale-prior-assistant', sessionId: staleSession.id, role: 'assistant', content: 'old assistant context '.repeat(9000), timestamp: 0.5, status: 'sent' })
+    const staleUser = appendMessage(db, { id: 'repair-stale-current-user', sessionId: staleSession.id, role: 'user', content: 'current request', timestamp: 1, status: 'sent' })
+    const staleAssistant = appendMessage(db, { id: 'repair-stale-assistant', sessionId: staleSession.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'repair-stale-turn', requestId: 'repair-stale-request', sessionId: staleSession.id,
+      userMessageId: staleUser.message.id, assistantMessageId: staleAssistant.message.id, contextBoundarySequence: staleUser.sequence,
+      state: 'prepared', startToken: 'repair-stale-start', executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint,
+        llmServiceId: 'svc-hosted', system: '', maximumContext: MODEL_BASELINE[modelId]!.maximumContext,
+        maxTokens: MODEL_BASELINE[modelId]!.maxTokens, enableThinking: false, locale: 'en-US' } })
+    const summaryCallsBeforeStaleTurn = summaryStub.call.mock.calls.length
+    summaryStub.call.mockImplementationOnce(async () => {
+      appendMessage(db, { id: 'repair-stale-concurrent-user', sessionId: staleSession.id, role: 'user', content: 'arrived during repair', timestamp: 3, status: 'sent' })
+      return { content: [{ type: 'text', text: JSON.stringify({ task: 'Task', completed: 'Done', decisions: 'Decision', constraints: 'Constraint', pending: 'Pending', blockers: 'None', nextStep: 'Continue' }) }] }
+    })
+    const staleResult = await execute(makeSender(), { requestId: 'repair-stale-request', turnId: 'repair-stale-turn',
+      turnStartToken: 'repair-stale-start', sessionId: staleSession.id })
+    expect(staleResult).toMatchObject({ ok: true })
+    expect(summaryStub.call.mock.calls.length).toBeGreaterThan(summaryCallsBeforeStaleTurn)
+    const repairOperationReasons = repairTurnRuntime.consumeForRequest.mock.calls.flatMap(([requestId, fact]) => {
+      if (requestId !== 'repair-stale-request' || !fact || typeof fact !== 'object' || (fact as { type?: string }).type !== 'system-operation-updated') return []
+      return [(fact as { operation: { reason?: string } }).operation.reason]
+    })
+    expect(repairOperationReasons).toContain('LATE_DISCARDED')
+    const staleHistory = await new SqliteAgentHistory(getDbConnection(db)).read('repair-stale-request')
+    expect(staleHistory.events.some((event) => event.kind === 'transcript-compacted' &&
+      (event.payload as { sessionLedger?: { start?: { reason?: string } } }).sessionLedger?.start?.reason === 'lost_compaction_repair')).toBe(false)
     expect(history.events.at(-1)?.kind).toBe('invocation-completed')
     const sessionEventsModule = await import('./sessionEvents')
     expect(sessionEventsModule.appendCompactionTransaction).toHaveBeenCalledOnce()
@@ -1163,7 +1240,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
   })
 
-  it('compacts an over-budget initial Desktop request in Hosted SDK before provider dispatch even if activity cards cannot be written', async () => {
+  it.each([
+    ['ready', true],
+    ['unavailable', false]
+  ] as const)('compacts an over-budget initial Desktop request before dispatch when the ledger is %s', async (_ledgerState, ledgerReady) => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     seedTrustedModel(db, modelId)
     const endpoint = 'https://hosted.example.test'
@@ -1197,6 +1277,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'preflight-start-token',
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: contextWindow, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, enableThinking: false, locale: 'en-US' }
     })
+    const sessionStorage = createSqliteSessionStorage(db, {
+      getWorkDirForSession: () => '/tmp', getUserDataDir: () => hostedTestUserDataDir,
+      ensureSessionLedgerReady: async () => ledgerReady
+    })
     const turnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn((_requestId: string, fact: unknown) => {
       if (fact && typeof fact === 'object' && (fact as { type?: string }).type === 'system-operation-updated') throw new Error('activity projection failed')
     }) }
@@ -1205,7 +1289,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, sessionStorage, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
       turnRuntime: turnRuntime as never, emitFactEvent
     })
 
@@ -1217,10 +1301,14 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     expect(firstRequest).not.toContain(`old-user-0 `.repeat(3000))
     expect(firstRequest).toContain('current request must survive')
     const history = await new SqliteAgentHistory(getDbConnection(db)).read('preflight-request')
-    expect(history.events.some((event) => event.kind === 'transcript-compacted')).toBe(true)
+    expect(history.events.filter((event) => event.kind === 'transcript-compacted')).toHaveLength(1)
     expect(history.events.at(-1)?.kind).toBe('invocation-completed')
     const sessionEventsModule = await import('./sessionEvents')
-    expect(sessionEventsModule.appendCompactionTransaction).toHaveBeenCalledOnce()
+    if (ledgerReady) expect(sessionEventsModule.appendCompactionTransaction).toHaveBeenCalledOnce()
+    else expect(sessionEventsModule.appendCompactionTransaction).not.toHaveBeenCalled()
+    const canonicalReplay = sessionStorage.queries.readCanonicalCompactionReplay(session.id)
+    expect(canonicalReplay?.committed).toHaveLength(1)
+    expect(canonicalReplay?.committed[0]?.summary.payload.candidate).toMatchObject({ kind: 'summary' })
     expect(turnRuntime.consumeForRequest).toHaveBeenCalled()
     expect(emitFactEvent).toHaveBeenCalled()
   })
@@ -1971,7 +2059,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
   })
 
-  it('keeps Desktop Hosted interrupted tool projections repairable from file SQLite after restart', async () => {
+  it('keeps Desktop Hosted canonical tool history successful and repairs a failed file projection after restart', async () => {
     useRealSessionEventFiles = true
     workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-hosted-tool-jsonl-recovery-'))
     db.close()
@@ -2027,8 +2115,9 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       turnStartToken: 'hosted-tool-recovery-start', sessionId: session.id
     })
 
-    expect(result).toMatchObject({ ok: false })
-    expect(providerCalls).toBe(1)
+    expect(result).toMatchObject({ ok: true, eventPersistenceFailed: true,
+      content: [{ type: 'text', text: 'answer after durable tool call' }] })
+    expect(providerCalls).toBe(2)
     const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
     const beforeSink = getSessionEventSink(workDir, session.id, session.createdAt)
     try {
@@ -5071,7 +5160,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     executeShell.mockRestore()
   })
 
-  it('stops Hosted tool dispatch when its critical tool_call ledger projection fails', async () => {
+  it('continues Hosted tool dispatch when its critical tool_call ledger projection fails', async () => {
     workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-hosted-ledger-failure-'))
     await fs.writeFile(path.join(workDir, 'note.txt'), 'must not be read after ledger failure')
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
@@ -5124,24 +5213,23 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
     failNextSessionEventType = 'tool_call'
 
-    await execute(makeSender(), {
+    const result = await execute(makeSender(), {
       requestId: 'hosted-ledger-failure-request', turnId: 'hosted-ledger-failure-turn',
       turnStartToken: 'hosted-ledger-failure-start', sessionId: session.id
     })
 
-    expect(providerCalls).toBe(1)
+    expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'unexpectedly continued after ledger failure' }] })
+    expect(providerCalls).toBe(2)
     const history = await new SqliteAgentHistory(getDbConnection(db)).read('hosted-ledger-failure-request')
     expect(history.events.map((event) => event.kind)).toContain('model-response-committed')
-    expect(history.events.map((event) => event.kind)).not.toContain('tool-call-started')
-    expect(history.events.map((event) => event.kind)).not.toContain('tool-call-finished')
-    expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-      toolCallId: 'hosted-ledger-failure-read', reason: 'HOST_PROJECTION_FAILED'
-    })
-    expect(history.events.at(-1)?.kind).toBe('invocation-interrupted')
+    expect(history.events.map((event) => event.kind)).toContain('tool-call-started')
+    expect(history.events.map((event) => event.kind)).toContain('tool-call-finished')
+    expect(history.events.map((event) => event.kind)).not.toContain('tool-call-not-dispatched')
+    expect(history.events.at(-1)?.kind).toBe('invocation-completed')
     expect(sessionEvents.map((event) => event.type)).not.toContain('tool_call')
   })
 
-  it('does not commit a Hosted response when its critical request_usage projection fails', async () => {
+  it('keeps the canonical Hosted response when its request_usage sidecar projection fails', async () => {
     workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-hosted-usage-failure-'))
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     seedTrustedModel(db, modelId)
@@ -5193,8 +5281,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
 
     expect(providerCalls).toBe(1)
     const history = await new SqliteAgentHistory(getDbConnection(db)).read('hosted-usage-failure-request')
-    expect(history.events.map((event) => event.kind)).not.toContain('model-response-committed')
-    expect(history.events.at(-1)?.kind).toBe('invocation-failed')
+    expect(history.events.map((event) => event.kind)).toContain('model-response-committed')
+    expect(history.events.at(-1)?.kind).toBe('invocation-completed')
     expect(sessionEvents.map((event) => event.type)).not.toContain('request_usage')
   })
 

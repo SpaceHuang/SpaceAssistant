@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { compactSessionContext, createSessionContextCheckpointMessage, isSessionContextCheckpointWorthCompacting } from './sessionContextCompaction'
+import { compactSessionContext, createSessionContextCheckpointMessage, createLostCompactionRepairId, lostCompactionRepairFallback, isSessionContextCheckpointWorthCompacting } from './sessionContextCompaction'
 import { appendCompactionTransaction, type SessionEventSink } from './sessionEvents'
 import { computeReplaySurfaceFingerprint, projectReplaySurface, surfaceItemIdentities } from '../src/shared/surfaceReplay'
 import { createContextRegistrar, createSessionContextAdapter, type ContextPort } from '../packages/agent-sdk/src/context'
 import { safeSummaryContentText } from '../src/shared/safeSummaryText'
+import { foldCompactionEvents } from '../src/shared/compactionEvents'
 
 function makeSink() {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = []
@@ -30,6 +31,24 @@ const fingerprint = computeReplaySurfaceFingerprint('', projectReplaySurface(mes
 const summarizeFixture = async () => ({ task: 'Prior task', completed: 'Earlier tasks', decisions: 'Prior decision', constraints: 'Keep exact IDs', pending: 'Next step', blockers: 'None', nextStep: 'Continue' })
 
 describe('safe summary text projection', () => {
+  it('falls back to full expansion only after a new-split repair itself fails', () => {
+    expect(lostCompactionRepairFallback('new-split', { status: 'failed' })).toEqual({ status: 'context-too-large', fallback: 'full-expand' })
+    expect(lostCompactionRepairFallback('new-split', { status: 'uncompressible' })).toEqual({ status: 'context-too-large', fallback: 'full-expand' })
+    expect(lostCompactionRepairFallback('new-split', { status: 'busy' })).toEqual({ status: 'busy' })
+    expect(lostCompactionRepairFallback('new-split', { status: 'stale' })).toEqual({ status: 'stale' })
+    expect(lostCompactionRepairFallback('new-split', { status: 'commit-uncertain' })).toEqual({ status: 'commit-uncertain' })
+    expect(lostCompactionRepairFallback('replay-original', { status: 'failed' })).toEqual({ status: 'failed' })
+  })
+
+  it('derives a stable repair identity from the source snapshot, lost window, and repair branch', () => {
+    const input = { sessionId: 's1', sourceVersion: 'watermark:42', lostWindow: { start: 'm1', end: 'm8' }, branch: 'replay-original' as const }
+    const first = createLostCompactionRepairId(input)
+    expect(createLostCompactionRepairId(input)).toBe(first)
+    expect(first).toMatch(/^lost-compaction-repair:s1:[a-f0-9]{64}$/)
+    expect(createLostCompactionRepairId({ ...input, sourceVersion: 'watermark:43' })).not.toBe(first)
+    expect(createLostCompactionRepairId({ ...input, branch: 'new-split' })).not.toBe(first)
+  })
+
   it('omits image and nested binary payloads while retaining readable text', () => {
     const imagePayload = 'aGVsbG8='.repeat(100)
     const projected = safeSummaryContentText([
@@ -79,7 +98,7 @@ describe('manual session context compaction', () => {
     const summarize = vi.fn(async () => ({ task: 'Prior task', completed: 'Earlier tasks', decisions: 'Prior decision', constraints: 'Keep exact IDs', pending: 'Next step', blockers: 'None', nextStep: 'Continue' }))
     const { sink, events } = makeSink()
     await compactSessionContext({ sessionId: 's1', requestId: 'recovery-facts', windowId: 'window-1', messages, totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, messages), recoveryFacts, summarize })
-    expect(summarize).toHaveBeenCalledWith(expect.any(Array), 'en-US', recoveryFacts)
+    expect(summarize).toHaveBeenCalledWith(expect.any(Array), 'en-US', recoveryFacts, undefined)
     const candidate = events[1]?.payload.candidate as { checkpointMessage: { content: string } }
     expect(JSON.parse(candidate.checkpointMessage.content)).toMatchObject({ unresolvedEffectIds: ['origin:call-1'], toolOutcomes: [{ id: 'origin:call-1', outcome: 'unknown-after-dispatch' }] })
   })
@@ -102,6 +121,65 @@ describe('manual session context compaction', () => {
     expect(result.status).toBe('committed')
     expect(contextPort.commitReplacement).toHaveBeenCalledOnce()
     expect(commits[0]).toMatchObject({ reason: 'manual-compact', candidate: { output: { items: expect.any(Array) } } })
+  })
+
+  it('reuses a canonical repair commit after restart without summarizing again', async () => {
+    const { sink, events } = makeSink()
+    const repair = { sourceVersion: 'watermark:42', lostWindow: { start: 'lost-start', end: 'lost-end' }, branch: 'new-split' as const,
+      replay: { committed: [], rejected: [] } }
+    const summarize = vi.fn(summarizeFixture)
+    const first = await compactSessionContext({ sessionId: 's1', requestId: 'repair', windowId: 'window-1', messages,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, messages), repair, summarize })
+    expect(first.status).toBe('committed')
+    expect(summarize).toHaveBeenCalledOnce()
+    const replay = foldCompactionEvents(events.map(({ type, payload }, index) => ({ type: type as 'compaction_start' | 'compaction_summary' | 'compaction_end', payload, seq: index + 1 })))
+    const restartRepair = { ...repair, replay }
+    const changedAfterCommit = [...messages, { id: 'u3', role: 'user' as const, content: 'later message' }]
+    const resumed = await compactSessionContext({ sessionId: 's1', requestId: 'repair', windowId: 'window-1', messages: changedAfterCommit,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, changedAfterCommit), repair: restartRepair, summarize })
+    expect(resumed).toEqual(first)
+    expect(summarize).toHaveBeenCalledOnce()
+    expect(events.filter(({ type }) => type === 'compaction_summary')).toHaveLength(1)
+    expect(events[0]?.payload).toMatchObject({ compactionId: first.compactionId, reason: 'lost_compaction_repair', repairIdentity: { branch: 'new-split', sourceVersion: 'watermark:42' } })
+  })
+
+  it('starts a fresh manual compaction for a new request after a repair checkpoint', async () => {
+    const { sink, events } = makeSink()
+    const repair = { sourceVersion: 'watermark:42', lostWindow: { start: 'lost-start', end: 'lost-end' }, branch: 'new-split' as const,
+      replay: { committed: [], rejected: [] } }
+    const summarize = vi.fn(summarizeFixture)
+    const repaired = await compactSessionContext({ sessionId: 's1', requestId: 'repair-request', windowId: 'window-1', messages,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, messages), repair, summarize })
+    expect(repaired.status).toBe('committed')
+
+    const currentMessages = [
+      { id: 'checkpoint-after-repair', role: 'user' as const, content: JSON.stringify({ kind: 'context_checkpoint', task: 'continue work' }) },
+      ...messages.slice(-2),
+      { id: 'u3', role: 'user' as const, content: 'New question '.repeat(120) },
+      { id: 'a3', role: 'assistant' as const, content: 'New answer '.repeat(120) }
+    ]
+    const manual = await compactSessionContext({ sessionId: 's1', requestId: 'manual-after-repair', windowId: 'window-2',
+      messages: currentMessages, totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, currentMessages), summarize })
+
+    expect(manual.status).toBe('committed')
+    expect(manual.compactionId).not.toBe(repaired.compactionId)
+    expect(manual.compactionId).toContain('user-compact:s1:manual-after-repair:')
+    expect(summarize).toHaveBeenCalledTimes(2)
+    expect(events.filter(({ type }) => type === 'compaction_start').map(({ payload }) => payload.reason))
+      .toEqual(['lost_compaction_repair', 'user_compact'])
+  })
+
+  it('replays the exact verified source window when repair metadata is complete', async () => {
+    const { sink, events } = makeSink()
+    const identities = surfaceItemIdentities(projectReplaySurface(messages))
+    const summarize = vi.fn(async () => summarizeFixture())
+    const replay = await compactSessionContext({ sessionId: 's1', requestId: 'repair-original', windowId: 'window-1', messages,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, messages), summarize,
+      repair: { sourceVersion: 'watermark:42', lostWindow: { start: identities[0]!, end: identities[1]! }, lostRanges: [{ start: identities[0]!, end: identities[1]! }], branch: 'replay-original', replay: { committed: [], rejected: [] } } })
+    expect(replay.status).toBe('committed')
+    expect(events[1]?.payload.shadowedRanges).toEqual([{ start: identities[0], end: identities[1] }])
+    expect(summarize).toHaveBeenCalledOnce()
+    expect(summarize.mock.calls[0]?.[0].map(({ content }) => content.trim())).toEqual(messages.slice(0, 2).map(({ content }) => content.trim()))
   })
 
   it('commits one user_compact transaction without creating a message, turn, or tool event', async () => {
@@ -130,7 +208,32 @@ describe('manual session context compaction', () => {
     expect(stale.events).toHaveLength(0)
     const failedSink = makeSink()
     failedSink.sink.appendCritical = vi.fn(async () => { throw new Error('disk failed') }) as never
-    await expect(compactSessionContext({ sessionId: 's1', requestId: 'r', windowId: 'window-1', messages, totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(failedSink.sink, messages), summarize: summarizeFixture })).resolves.toMatchObject({ status: 'failed' })
+    await expect(compactSessionContext({ sessionId: 's1', requestId: 'r', windowId: 'window-1', messages, totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(failedSink.sink, messages), summarize: summarizeFixture })).resolves.toMatchObject({ status: 'commit-uncertain' })
+  })
+
+  it('returns explicit cancel and commit-uncertain repair exits', async () => {
+    const canceled = new AbortController()
+    const canceledSink = makeSink()
+    const repair = { sourceVersion: 'watermark:42', lostWindow: { start: 'lost-start', end: 'lost-end' }, branch: 'new-split' as const,
+      replay: { committed: [], rejected: [] } }
+    const cancelResult = await compactSessionContext({ sessionId: 's1', requestId: 'cancel', windowId: 'window-1', messages,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(canceledSink.sink, messages), signal: canceled.signal, repair,
+      summarize: async () => { canceled.abort(); return summarizeFixture() } })
+    expect(cancelResult).toEqual({ status: 'cancel' })
+    expect(canceledSink.events).toHaveLength(0)
+
+    const registrar = createContextRegistrar()
+    const surfaceMessages = projectReplaySurface(messages)
+    const identities = surfaceItemIdentities(surfaceMessages)
+    const base = registrar.captureFrame({ scope: { kind: 'session', sessionId: 's1' }, frame: { items: surfaceMessages.map((message, index) => ({ replayIdentity: identities[index]!, sourceMessageIds: [messages[index]!.id!], message, sourceData: {} })), system: '', windowId: 'window-1', pendingTools: [] }, binding: { kind: 'session', surfaceFingerprint: fingerprint } })
+    const port = {
+      readCurrent: async () => base,
+      commitReplacement: async () => ({ status: 'commit-uncertain' as const, error: new Error('lost acknowledgement') }),
+    }
+    const uncertain = await compactSessionContext({ sessionId: 's1', requestId: 'uncertain', windowId: 'window-1', messages,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: { port, registerTransformation: (input) => registrar.registerTransformation(input) }, repair,
+      summarize: summarizeFixture })
+    expect(uncertain).toEqual({ status: 'commit-uncertain' })
   })
 
   it('binds the prepared fingerprint to the complete current surface, including a new tail message', async () => {

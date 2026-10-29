@@ -41,11 +41,20 @@ describe('manual context compaction IPC ContextPort integration', () => {
       { id: 'ipc-a2', sessionId: session.id, role: 'assistant', content: 'Current assistant context '.repeat(120), timestamp: 4, status: 'completed' }
     ])
     const sink = { eventsPath: '/tmp/session-context-ipc', indexPath: '/tmp/session-context-ipc-index', appendCritical: vi.fn(), appendChunk: vi.fn(), waitForCapacity: vi.fn(), flush: vi.fn(), close: vi.fn() }
+    let replayForStorage = { committed: [], rejected: [] } as unknown
     const baseStorage = createSqliteSessionStorage(db, {
       getWorkDirForSession: () => '/tmp', getUserDataDir: () => '/tmp',
-      getSessionEventSink: () => sink as never, readCompactionReplay: async () => ({ committed: [], rejected: [] } as never)
+      getSessionEventSink: () => sink as never, readCompactionReplay: async () => replayForStorage as never
     })
     await baseStorage.recovery.recover()
+    await baseStorage.execution.historyFor({ sessionId: session.id }).appendBatch([{
+      invocationId: 'invalid-compaction-sidecar', turnId: 'invalid-compaction-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'invalid-compaction-sidecar:event:1', idempotencyKey: 'invalid-compaction-sidecar:transcript-compacted:1',
+      kind: 'transcript-compacted', payload: { compactionId: 'legacy-compaction-without-boundary', messages: [{ role: 'user', content: 'x' }],
+        sessionLedger: { location: { workDir: '/tmp', sessionId: session.id, createdAt: session.createdAt },
+          start: { compactionId: 'legacy-compaction-without-boundary', windowId: `session:${session.id}`, inputSurfaceFingerprint: 'previously-compacted-window' },
+          summary: { compactionId: 'legacy-compaction-without-boundary', windowId: `session:${session.id}`, outputSurfaceFingerprint: 'lost-output-window' } } }
+    }], 0)
     const observedAvailability = baseStorage.availability.inspect(session.id)
     const healthyAvailability = { ...observedAvailability,
       globalFence: { state: 'ready' as const, source: { recoveryState: 'ready' as const } },
@@ -73,23 +82,41 @@ describe('manual context compaction IPC ContextPort integration', () => {
       getApiKey: async () => null, setApiKey: async () => undefined, getBrowserDetectContext: () => ({ isPackaged: false, appPath: '/tmp', devRoot: '/tmp' })
     })
 
-    const result = await handlers.get('chat:compact-session-context')!({ sender: window.webContents }, { sessionId: session.id, requestId: 'ipc-compact-1' })
+    const [result, competing] = await Promise.all([
+      handlers.get('chat:compact-session-context')!({ sender: window.webContents }, { sessionId: session.id, requestId: 'ipc-compact-1' }),
+      handlers.get('chat:compact-session-context')!({ sender: window.webContents }, { sessionId: session.id, requestId: 'ipc-compact-1-duplicate' })
+    ])
 
-    expect(result).toMatchObject({ status: 'committed', windowId: expect.any(String), outputSurfaceFingerprint: expect.any(String) })
+    expect(result).toMatchObject({ status: 'committed', repairBranch: 'new-split', windowId: expect.any(String), outputSurfaceFingerprint: expect.any(String) })
+    expect(competing).toEqual({ status: 'busy' })
     expect(projectionReadEvents[0]).toBe('ensure')
     expect(projectionReadEvents.indexOf('ensure')).toBeLessThan(projectionReadEvents.indexOf('select'))
     expect(resolveLlmCredentialsForModel).toHaveBeenCalledOnce()
     expect(summarizeSessionContext).toHaveBeenCalledOnce()
     expect(appendCompactionTransaction).toHaveBeenCalledOnce()
-    expect(appendCompactionTransaction).toHaveBeenCalledWith(sink, expect.objectContaining({ reason: 'user_compact' }), expect.objectContaining({ candidate: expect.objectContaining({ kind: 'summary' }) }))
+    expect(appendCompactionTransaction).toHaveBeenCalledWith(sink, expect.objectContaining({ reason: 'lost_compaction_repair', repairIdentity: expect.objectContaining({ branch: 'new-split' }) }), expect.objectContaining({ candidate: expect.objectContaining({ kind: 'summary' }) }))
     expect(storage.contexts).toMatchObject({ readCurrent: expect.any(Function), commitReplacement: expect.any(Function) })
     expect(inspectAvailability).toHaveBeenCalledWith(session.id)
+    const startPayload = vi.mocked(appendCompactionTransaction).mock.calls[0]![1] as Record<string, unknown>
+    const summaryPayload = vi.mocked(appendCompactionTransaction).mock.calls[0]![2] as Record<string, unknown>
+    replayForStorage = { committed: [{ compactionId: (result as { compactionId: string }).compactionId,
+      start: { seq: 1, type: 'compaction_start', payload: startPayload },
+      summary: { seq: 2, type: 'compaction_summary', payload: summaryPayload },
+      end: { seq: 3, type: 'compaction_end', payload: { compactionId: (result as { compactionId: string }).compactionId,
+        status: 'committed', outputWindowId: (result as { windowId: string }).windowId,
+        outputSurfaceFingerprint: (result as { outputSurfaceFingerprint: string }).outputSurfaceFingerprint } } }], rejected: [] }
+    const retried = await handlers.get('chat:compact-session-context')!({ sender: window.webContents },
+      { sessionId: session.id, requestId: 'ipc-compact-1' })
+    expect(retried).toEqual(result)
+    expect(summarizeSessionContext).toHaveBeenCalledOnce()
+    expect(appendCompactionTransaction).toHaveBeenCalledOnce()
     inspectAvailability.mockReturnValue({ ...healthyAvailability,
       globalFence: { state: 'pending', source: { recoveryState: 'pending' } } })
     await expect(handlers.get('chat:compact-session-context')!({ sender: window.webContents },
       { sessionId: session.id, requestId: 'ipc-compact-recovery-pending' })).resolves.toEqual({ status: 'unavailable' })
     expect(summarizeSessionContext).toHaveBeenCalledOnce()
     await expect(handlers.get('chat:get-session-compaction-markers')!({ sender: window.webContents }, session.id)).resolves.toEqual([
+      { compactionId: 'legacy-compaction-without-boundary', windowId: `session:${session.id}`, outputSurfaceFingerprint: 'lost-output-window' },
       { compactionId: (result as { compactionId: string }).compactionId, windowId: (result as { windowId: string }).windowId,
         outputSurfaceFingerprint: (result as { outputSurfaceFingerprint: string }).outputSurfaceFingerprint }
     ])

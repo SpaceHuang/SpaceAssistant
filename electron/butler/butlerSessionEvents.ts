@@ -15,7 +15,7 @@ import type { SessionStorage } from '../sessionStorage/host/ports'
 
 export type ButlerSessionEvents = {
   /** 会话台账 sink（管家回合的事件文件写入器）。 */
-  sink: SessionEventSink
+  sink?: SessionEventSink
   /** runToolChatSession 的 invocation.events.onSessionEvent 实现。 */
   emitSessionEvent: (event: SessionEventInput) => Promise<void>
   /** runToolChatSession 的 invocation.events.onFact 实现。 */
@@ -32,6 +32,8 @@ export function createButlerSessionEvents(args: {
   assistantMessageId: string
   sessionStorage: SessionStorage
   failClosedCriticalEvents?: boolean
+  enableLedger?: boolean
+  onLedgerFailure?(error: unknown): void
 }): Promise<ButlerSessionEvents> {
   const automationRoot = path.resolve(args.userDataDir, 'automation-sessions')
   const privateRoot = path.resolve(automationRoot, args.taskId)
@@ -48,11 +50,20 @@ export function createButlerSessionEvents(args: {
     await access(canonical, constants.R_OK | constants.W_OK | constants.X_OK)
     return canonical
   }
-  return initialize().then((canonicalRoot) => {
-  const sink = getSessionEventSink(canonicalRoot, args.sessionId, args.sessionCreatedAt)
+  const reportLedgerFailure = (error: unknown): void => {
+    try { args.onLedgerFailure?.(error) } catch { /* diagnostics must not affect Hosted execution */ }
+  }
+  const root = args.enableLedger === false ? Promise.resolve(undefined) : initialize().catch((error) => { reportLedgerFailure(error); return undefined })
+  return root.then((canonicalRoot) => {
+  let sink: SessionEventSink | undefined
+  if (canonicalRoot) {
+    try { sink = getSessionEventSink(canonicalRoot, args.sessionId, args.sessionCreatedAt) }
+    catch (error) { reportLedgerFailure(error) }
+  }
   const emitSessionEvent = async (event: SessionEventInput): Promise<void> => {
     // R1：tool_call_delta.partialJson 原文不落台账（chunk 拼接可还原凭据）
     const persistable = stripPartialJsonForPersist(event)
+    if (!sink) return
     if (persistable.type === 'assistant_chunk') {
       try {
         await sink.waitForCapacity()
@@ -65,8 +76,9 @@ export function createButlerSessionEvents(args: {
     try {
       await sink.appendCritical(persistable)
     } catch (error) {
-      // Legacy compatibility remains diagnostic-only; Hosted callers stop before
-      // dispatch so startup recovery can repair the canonical History envelope.
+      reportLedgerFailure(error)
+      sink = undefined
+      // Canonical History is authoritative; the secondary ledger stays diagnostic-only.
       if (args.failClosedCriticalEvents) throw error
     }
   }

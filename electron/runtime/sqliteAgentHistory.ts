@@ -1467,6 +1467,35 @@ export class SqliteAgentHistory implements HistoryPort {
     return { invocationId: stream?.invocation_id ?? invocationId, version: stream?.version ?? 0, schemaVersion: stream?.schema_version ?? this.schemaVersion, events }
   }
 
+  /** Reads one committed, session-owned event without hydrating its containing invocation. */
+  readCommittedSessionEventSync(input: { sessionId: string; eventId: string; sessionSequence: number }): HistoryEvent | undefined {
+    const row = this.conn.prepare(`SELECT events.invocation_id,events.sequence,events.event_id,events.idempotency_key,
+        events.turn_id,events.schema_version,events.kind,events.payload_json,events.session_id,
+        streams.version AS stream_version,streams.schema_version AS stream_schema_version,streams.session_id AS stream_session_id
+      FROM agent_history_events events
+      JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
+      JOIN agent_history_commit_cursor cursor ON cursor.id=events.commit_order
+      WHERE events.event_id=? AND events.session_id=? AND events.session_seq=? LIMIT 1`)
+      .get(input.eventId, input.sessionId, input.sessionSequence) as (EventRow & {
+        stream_version: number; stream_schema_version: number; stream_session_id: string | null
+      }) | undefined
+    if (!row) return undefined
+    if (row.session_id !== input.sessionId || row.stream_session_id !== input.sessionId ||
+      row.schema_version !== row.stream_schema_version || row.schema_version !== this.schemaVersion ||
+      !Number.isSafeInteger(row.sequence) || row.sequence < 1 || row.sequence > row.stream_version) {
+      throw new HistoryCorruptionError(input.eventId, 'committed session History event ownership or version is invalid')
+    }
+    try {
+      const event = fromRow(row)
+      const hydrated = this.spillStore ? this.hydrateLargeToolResultSync(event) : event
+      validateHistoryBatch([hydrated])
+      return hydrated
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'SPILL_CONTENT_UNAVAILABLE') throw error
+      throw new HistoryCorruptionError(input.eventId, error instanceof Error ? error.message : String(error))
+    }
+  }
+
   private async spillLargeCanonicalPayload(event: HistoryEvent): Promise<HistoryEvent> {
     if (!event.payload || typeof event.payload !== 'object') return event
     const payload = event.payload as Record<string, unknown>

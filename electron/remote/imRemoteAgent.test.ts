@@ -355,6 +355,49 @@ describe('runImRemoteAgent', () => {
     expect(mockRunToolChatSession).not.toHaveBeenCalled()
   })
 
+  it.each(['returns false', 'throws'] as const)('continues an accepted IM turn when the session ledger readiness gate %s', async (failureMode) => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'im ledger unavailable', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-1' })
+    const requestId = 'im-ledger-unavailable-request'
+    const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, requestId, 'im-ledger-unavailable-turn')
+    const ensureSessionLedgerReady = vi.fn(failureMode === 'returns false'
+      ? async () => false : async () => { throw new Error('injected readiness failure') })
+    const sessionStorage = createSqliteSessionStorage(db, { getWorkDirForSession: () => '/tmp', ensureSessionLedgerReady })
+    mockRunToolChatSession.mockResolvedValueOnce({ ok: true, content: [{ type: 'text', text: '继续完成' }], stopReason: 'end_turn' })
+
+    await expect(runImRemoteAgent(baseArgs({ db, sessionId: session.id, requestId, turnId: acceptedTurn.turnId, acceptedTurn, sessionStorage })))
+      .resolves.toMatchObject({ ok: true })
+    expect(ensureSessionLedgerReady).toHaveBeenCalledOnce()
+    expect(mockRunToolChatSession).toHaveBeenCalledOnce()
+    db.close()
+  })
+
+  it.each(['turn_start', 'step_start'] as const)('continues an accepted IM turn when the %s ledger append fails', async (failedEvent) => {
+    const db = makeDb()
+    const session = createSession(db, { name: `im ${failedEvent} ledger append failure`, model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-1' })
+    const requestId = `im-${failedEvent}-ledger-failure-request`
+    const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, requestId, `im-${failedEvent}-ledger-failure-turn`)
+    const sessionStorage = createSqliteSessionStorage(db, { getWorkDirForSession: () => '/tmp', ensureSessionLedgerReady: async () => true })
+    mockRunToolChatSession.mockResolvedValueOnce({ ok: true, content: [{ type: 'text', text: 'completed despite ledger failure' }], stopReason: 'end_turn' })
+    const append = SessionEventWriter.prototype.appendCritical
+    let shouldFail = true
+    const appendSpy = vi.spyOn(SessionEventWriter.prototype, 'appendCritical').mockImplementation(function (this: SessionEventWriter, event) {
+      if (event.type === failedEvent && shouldFail) {
+        shouldFail = false
+        return Promise.reject(new Error(`injected ${failedEvent} failure`))
+      }
+      return append.call(this, event)
+    })
+    try {
+      await expect(runImRemoteAgent(baseArgs({ db, sessionId: session.id, requestId, turnId: acceptedTurn.turnId, acceptedTurn, sessionStorage })))
+        .resolves.toMatchObject({ ok: true, summary: 'completed despite ledger failure' })
+      expect(mockRunToolChatSession).toHaveBeenCalledOnce()
+    } finally {
+      appendSpy.mockRestore()
+      db.close()
+    }
+  })
+
   it('fails before provider dispatch when the frozen service has been deleted', async () => {
     const db = makeDb()
     const session = createSession(db, { name: 'deleted-frozen-service', model: SUPPORTED_ANTHROPIC_MODEL })

@@ -102,7 +102,7 @@ vi.mock('./butlerSessionEvents', async (importOriginal) => {
       const events = await actual.createButlerSessionEvents(args)
       return {
         ...events,
-        sink: {
+        sink: events.sink ? {
           ...events.sink,
           appendCritical: async (event: import('../sessionEvents').SessionEventInput) => {
             if (sessionEventFailure.nextType === event.type) {
@@ -111,7 +111,7 @@ vi.mock('./butlerSessionEvents', async (importOriginal) => {
             }
             return events.sink.appendCritical(event)
           }
-        },
+        } : undefined,
         emitSessionEvent: async (event: import('../sessionEvents').SessionEventInput) => {
           if (sessionEventFailure.nextType === event.type) {
             sessionEventFailure.nextType = undefined
@@ -332,6 +332,47 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(run.configSnapshot?.routeIdentity).toBeTruthy()
     expect(getSession(db, run.sessionId!)?.fixedWorkDir).toBe(await fs.realpath(workDir))
     await fs.rm(workDir, { recursive: true, force: true })
+  })
+
+  it.each(['returns false', 'throws'] as const)('continues an automation turn when session ledger readiness %s', async (failureMode) => {
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {},
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } }))
+    })) } })
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
+    setConfigValue(db, 'config.models', JSON.stringify([model]))
+    const task = createAutomationTask(db, { name: 'ledger unavailable', schedule: { kind: 'interval', intervalMinutes: 30 },
+      prompt: 'report', deliveryPref: 'none', workDirs: [testWorkDir], modelId, modelServiceId: 'svc-ledger', modelOverride: model.name })
+    const ensureSessionLedgerReady = vi.fn(failureMode === 'returns false'
+      ? async () => false : async () => { throw new Error('injected readiness failure') })
+    const sessionStorage = createSqliteSessionStorage(db, { getWorkDirForSession: () => testWorkDir, ensureSessionLedgerReady })
+
+    const result = await runButlerTask(makeDeps({ sessionStorage }), task.id, { trigger: 'manual', requestId: 'req-ledger-unavailable' })
+
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    expect(mockCreateAnthropicClient).toHaveBeenCalledOnce()
+    expect(ensureSessionLedgerReady).toHaveBeenCalledOnce()
+  })
+
+  it('persists Butler session ownership while the run is active and retains it after failure', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
+    setConfigValue(db, 'config.models', JSON.stringify([model]))
+    const task = createAutomationTask(db, { name: 'ledger ownership timing', schedule: { kind: 'interval', intervalMinutes: 30 },
+      prompt: 'report', deliveryPref: 'none', workDirs: [testWorkDir], modelId, modelServiceId: 'svc-ledger-ownership', modelOverride: model.name })
+    let activeLink: unknown
+    let createdSessionId = ''
+
+    const result = await runButlerTask(makeDeps({ onSessionCreated: (session: { id: string }) => {
+      createdSessionId = session.id
+      activeLink = getDbConnection(db).prepare('SELECT status,session_id FROM automation_task_runs WHERE task_id=? ORDER BY created_at DESC LIMIT 1').get(task.id)
+      throw new Error('injected failure after session creation')
+    } }), task.id, { trigger: 'manual', requestId: 'req-butler-session-link-failure' })
+
+    expect(result.ok).toBe(false)
+    expect(activeLink).toEqual({ status: 'running', session_id: createdSessionId })
+    expect(getLatestRunForTask(db, task.id)).toMatchObject({ status: 'failed', sessionId: createdSessionId })
   })
 
   it('uses the receipt-bound Shell working directory even when another authorized root sorts first', async () => {
@@ -999,7 +1040,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     }
   })
 
-  it('Automation Hosted projection failure preserves History and stops tool dispatch', async () => {
+  it.each(['turn_start', 'tool_call'] as const)('Automation Hosted %s secondary ledger failure preserves canonical History and continues tool dispatch', async (failedEvent) => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-hosted-ledger-failure-'))
     try {
       await fs.writeFile(path.join(workDir, 'note.txt'), 'must not be read')
@@ -1015,6 +1056,10 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
             async *[Symbol.asyncIterator]() {},
             finalMessage: vi.fn(async () => {
               providerCalls += 1
+              if (providerCalls > 1) return {
+                content: [{ type: 'text', text: 'finished after secondary ledger failure' }],
+                stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 4 }
+              }
               return {
                 content: [{ type: 'tool_use', id: 'butler-ledger-read', name: 'read_file', input: { path: 'note.txt' } }],
                 stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 4 }
@@ -1023,22 +1068,20 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
           }))
         }
       })
-      sessionEventFailure.nextType = 'tool_call'
+      sessionEventFailure.nextType = failedEvent
 
       const result = await runButlerTask(makeDeps({ getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir }), task.id, {
         trigger: 'manual', requestId: 'req-butler-ledger-projection-failure'
       })
 
-      expect(result.ok).toBe(false)
-      expect(providerCalls).toBe(1)
-      expect(getLatestRunForTask(db, task.id)?.status).toBe('failed')
+      expect(result).toMatchObject({ ok: true, summary: 'finished after secondary ledger failure' })
+      expect(providerCalls).toBe(2)
+      expect(getLatestRunForTask(db, task.id)?.status).toBe('completed')
       const history = await new SqliteAgentHistory(getDbConnection(db)).read('req-butler-ledger-projection-failure')
       expect(history.events.map((event) => event.kind)).toContain('model-response-committed')
-      expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'butler-ledger-read', reason: 'HOST_PROJECTION_FAILED'
-      })
-      expect(history.events.map((event) => event.kind)).not.toContain('tool-call-started')
-      expect(history.events.map((event) => event.kind)).not.toContain('tool-call-finished')
+      expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: 'butler-ledger-read' })
+      expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ toolCallId: 'butler-ledger-read' })
+      expect(history.events.map((event) => event.kind)).not.toContain('tool-call-not-dispatched')
     } finally {
       await fs.rm(workDir, { recursive: true, force: true })
     }
@@ -1155,7 +1198,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     } finally { await fs.rm(workDir, { recursive: true, force: true }) }
   })
 
-  it('Automation recovers a committed tool result after its SessionEvent projection fails', async () => {
+  it('Automation completes a turn after its SessionEvent tool-result projection fails', async () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-hosted-result-recovery-'))
     let createdSessionId = ''
     try {
@@ -1183,12 +1226,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         onSessionCreated: (session: { id: string }) => { createdSessionId = session.id }
       }), task.id, { trigger: 'manual', requestId: 'req-butler-result-recovery' })
 
-      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('tool projection failed') })
-      expect(getLatestRunForTask(db, task.id)).toMatchObject({
-        status: 'failed',
-        error: expect.stringContaining('tool projection failed')
-      })
-      expect(providerCalls).toBe(1)
+      expect(result).toMatchObject({ ok: true, summary: 'read completed' })
+      expect(getLatestRunForTask(db, task.id)).toMatchObject({ status: 'completed' })
+      expect(providerCalls).toBe(2)
       expect(executor).toHaveBeenCalledOnce()
       const session = getSession(db, createdSessionId)!
       const beforeRecoverySink = getSessionEventSink(automationEventsRoot(task.id), session.id, session.createdAt)
@@ -1204,35 +1244,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       expect(canonicalResult?.payload).toMatchObject({ toolCallId: 'butler-result-recovery-read', sessionLedger: {
         location: { workDir: automationEventsRoot(task.id), sessionId: session.id, createdAt: session.createdAt }, result: expect.any(Object)
       } })
-      expect(canonicalEvents.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'tool-projection-failed' } })
-      const resultLedger = canonicalResult!.payload.sessionLedger as { result: Record<string, unknown>; stepId: string }
-      const recoveryErrors: unknown[] = []
-      const repairs = {
-        repairToolLedger: async (location: { workDir: string; sessionId: string; createdAt: number }, projection: Record<string, unknown>) => {
-          const recoverySink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-          try { await ensureToolResultEvent(recoverySink, projection as never) }
-          finally { await recoverySink.close() }
-        }
-      }
-      await history.recoverInterruptedInvocations({ ...repairs, onToolLedgerRepairError: (error) => recoveryErrors.push(error) })
-      await history.recoverInterruptedInvocations({ ...repairs, onToolLedgerRepairError: (error) => recoveryErrors.push(error) })
-      const recoveredSink = getSessionEventSink(automationEventsRoot(task.id), session.id, session.createdAt)
-      try {
-        const recovered = await readSessionEvents(recoveredSink.eventsPath)
-        expect(recoveryErrors).toEqual([])
-        expect(executor).toHaveBeenCalledOnce()
-        expect(recovered.filter((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toMatchObject([
-          expect.objectContaining({ type: 'tool_result', payload: {
-            invocationRequestId: 'req-butler-result-recovery',
-            requestId: 'req-butler-result-recovery',
-            lane: 'automation',
-            turnId: resultTurnId,
-            stepId: resultLedger.stepId,
-            toolUseId: 'butler-result-recovery-read',
-            result: resultLedger.result
-          } })
-        ])
-      } finally { await recoveredSink.close() }
+      expect(canonicalEvents.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
+      expect(canonicalResult?.payload).toMatchObject({ toolCallId: 'butler-result-recovery-read', sessionLedger: { result: expect.any(Object) } })
+      expect(executor).toHaveBeenCalledOnce()
     } finally { await fs.rm(workDir, { recursive: true, force: true }) }
   })
 

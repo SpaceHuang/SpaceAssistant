@@ -7,13 +7,15 @@ import { getDbConnection } from '../database/sqliteStore'
 import { createSession, setConfigValue } from '../database/operations'
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { bootstrapEmptySessionEventLedger, getSessionEventSink, readSessionEvents, resolveSessionEventPaths, setSessionEventCommitObserver } from '../sessionEvents'
-import { ensureLegacyLedgerReadiness, refreshSessionLedgerReadyProof } from '../sessionLedgerReadiness'
-import { ensureSessionLedgerReady } from '../sessionLedgerLifecycle'
+import { bootstrapEmptySessionEventLedger, getSessionEventSink, readSessionEvents, resolveSessionEventPaths, retireSessionEventSink, setSessionEventCommitObserver } from '../sessionEvents'
+import { ensureLegacyLedgerReadiness, markSessionLedgerBlocked, refreshSessionLedgerReadyProof } from '../sessionLedgerReadiness'
+import { ensureSessionLedgerReady, runOutsideSessionLedgerLifecycleLock } from '../sessionLedgerLifecycle'
+import { createSessionLedgerRepairScheduler } from '../sessionLedgerRepairScheduler'
 import { createProductionSessionLedgerLifecycleDependencies } from './sessionLedgerLifecycleProduction'
 import { createSessionLedgerCompactionDependencyGuard } from '../sessionStorage/infrastructure/sqlite/sessionEventRetentionAdapter'
 import { runSessionEventRetentionMaintenance } from '../storage/sessionEventRetention'
 import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
+import * as sessionLedgerOutbox from '../sessionLedgerOutbox'
 
 describe('production session ledger lifecycle', () => {
   const databases: ReturnType<typeof createMemoryAppDb>[] = []
@@ -53,7 +55,7 @@ describe('production session ledger lifecycle', () => {
     expect(traces).toMatchObject([{ baselineScanCount: 0 }])
   })
 
-  it('reuses the full-prefix proof while the physical ledger and canonical watermark are unchanged', async () => {
+  it('reads readiness proof from canonical state without opening or hashing the ledger file', async () => {
     const db = createMemoryAppDb()
     databases.push(db)
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-proof-reuse-'))
@@ -68,15 +70,14 @@ describe('production session ledger lifecycle', () => {
 
     const openSpy = vi.spyOn(fs, 'open')
     try {
-      await dependencies.readProof(location)
-      await dependencies.readProof(location)
+      expect(await dependencies.readProof(location)).toEqual({ canonicalWatermark: 'session:-1', ledgerGeneration: 0 })
       expect(openSpy).not.toHaveBeenCalled()
     } finally {
       openSpy.mockRestore()
     }
   })
 
-  it('rehashes after an in-place same-length edit even when the file mtime is restored', async () => {
+  it('ignores out-of-band same-length file edits in the retired physical proof path', async () => {
     const db = createMemoryAppDb()
     databases.push(db)
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-proof-cache-invalidation-'))
@@ -111,14 +112,14 @@ describe('production session ledger lifecycle', () => {
     const openSpy = vi.spyOn(fs, 'open')
     try {
       const proofAfter = await dependencies.readProof(location)
-      expect(openSpy).toHaveBeenCalledTimes(1)
-      expect(proofAfter?.tailFrame).not.toBe(proofBefore.tailFrame)
+      expect(openSpy).not.toHaveBeenCalled()
+      expect(proofAfter).toEqual(proofBefore)
     } finally {
       openSpy.mockRestore()
     }
   })
 
-  it('migrates a healthy legacy ready proof to a full-prefix proof in place', async () => {
+  it('ignores retired physical proof columns for a healthy ready ledger', async () => {
     const db = createMemoryAppDb()
     databases.push(db)
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-legacy-proof-upgrade-'))
@@ -137,7 +138,7 @@ describe('production session ledger lifecycle', () => {
     const upgraded = await ready()
 
     expect(upgraded.status).toBe('ready')
-    expect(upgraded.readiness.proofTailFrame).toMatch(/^full:/)
+    expect(upgraded.readiness.proofTailFrame).toBeNull()
     expect(upgraded.readiness.failureClass).toBeNull()
   })
 
@@ -167,12 +168,12 @@ describe('production session ledger lifecycle', () => {
 
     const upgraded = await ready()
 
-    expect(upgraded).toMatchObject({ status: 'ready', readiness: { state: 'ready', proofTailFrame: expect.stringMatching(/^full:/) } })
+    expect(upgraded).toMatchObject({ status: 'ready', readiness: { state: 'ready', proofTailFrame: null } })
     expect((await readSessionEvents(resolveSessionEventPaths(root, session.id, session.createdAt).eventsPath))
       .map(({ payload }) => payload.toolUseId)).toContain('legacy-tool')
   })
 
-  it('blocks incremental projection when previously proved ledger bytes were truncated and the writer regrows the file', async () => {
+  it('keeps canonical history available when retired physical proof metadata is stale', async () => {
     const db = createMemoryAppDb()
     databases.push(db)
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-truncated-proof-'))
@@ -208,13 +209,9 @@ describe('production session ledger lifecycle', () => {
     await writer.close()
 
     const result = await ready()
-    expect(result).toMatchObject({ status: 'blocked', readiness: {
-      state: 'blocked', retryScope: 'baseline', failureClass: 'physical_proof_mismatch'
-    } })
-    expect((await readSessionEvents(paths.eventsPath)).map((event) => event.payload.toolUseId)).not.toContain('tool-1')
-    expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id='event-2'").get())
-      .toEqual({ status: 'pending' })
-    expect((await ready()).status).toBe('blocked')
+    expect(result).toMatchObject({ status: 'ready', readiness: { state: 'ready', failureClass: null } })
+    expect(conn.prepare("SELECT event_id FROM agent_history_events WHERE session_id=? AND event_id='event-1'")
+      .get(session.id)).toEqual({ event_id: 'event-1' })
   })
 
   it('keeps a resumable session ledger through retention and allows the session to reopen', async () => {
@@ -339,8 +336,21 @@ describe('production session ledger lifecycle', () => {
     }
     await simulateWholeLedgerLoss()
 
-    const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1,
-      retryBlocked: true, dependencies })
+    const scheduler = createSessionLedgerRepairScheduler({ repair: (repairLocation, retireSink) => runOutsideSessionLedgerLifecycleLock(async () => {
+      if (retireSink) await retireSessionEventSink(repairLocation.workDir, repairLocation.sessionId, repairLocation.createdAt)
+      return (await ensureSessionLedgerReady({ conn, location: repairLocation, sessionGeneration: session.generation,
+        processGeneration: 1, retryBlocked: true, dependencies })).status === 'ready'
+    }) })
+    let result: Awaited<ReturnType<typeof ensureSessionLedgerReady>>
+    try {
+      const deferred = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1,
+        retryBlocked: false, dependencies })
+      expect(deferred).toMatchObject({ status: 'blocked', readiness: { failureClass: 'ledger_missing' } })
+      scheduler.request(location, { retireSink: true, generation: `${deferred.readiness.ledgerGeneration}:ledger_missing` })
+      await vi.waitFor(() => expect(scheduler.pendingCount()).toBe(0))
+      result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1,
+        retryBlocked: false, dependencies })
+    } finally { scheduler.stop() }
 
     expect(result).toMatchObject({ status: 'ready', readiness: { state: 'ready', failureClass: null } })
     const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
@@ -370,6 +380,73 @@ describe('production session ledger lifecycle', () => {
     expect(mixedEvents.filter(({ type }) => type === 'request_usage')).toHaveLength(1)
 
     await simulateWholeLedgerLoss()
+    const publishedPaths = resolveSessionEventPaths(root, session.id, session.createdAt)
+    const originalRenameForIndex = fs.rename.bind(fs)
+    const indexPublishSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === publishedPaths.indexPath) throw new Error('injected post-jsonl index publish interruption')
+      return originalRenameForIndex(from, to)
+    })
+    try {
+      const interruptedPublish = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+        processGeneration: 1, retryBlocked: true, dependencies })
+      expect(interruptedPublish).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'baseline_failed' } })
+      const publishedEvents = await readSessionEvents(publishedPaths.eventsPath)
+      expect(publishedEvents.map(({ type }) => type)).toContain('tool_call')
+      expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE ledger_location_key=? AND status<>'pending'").all(identity.key))
+        .toEqual([])
+      await expect(fs.lstat(publishedPaths.indexPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally { indexPublishSpy.mockRestore() }
+    const resumedAfterPublish = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, retryBlocked: true, dependencies })
+    expect(resumedAfterPublish).toMatchObject({ status: 'ready', readiness: { state: 'ready' } })
+    expect(JSON.parse(await fs.readFile(publishedPaths.indexPath, 'utf8'))).toMatchObject({ formatVersion: 2 })
+    expect((await fs.readdir(publishedPaths.directory)).filter((name) => name.startsWith('.ledger-rebuild-'))).toEqual([])
+    expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE ledger_location_key=? AND status<>'acked'").all(identity.key))
+      .toEqual([])
+
+    await simulateWholeLedgerLoss()
+    const drainSpy = vi.spyOn(sessionLedgerOutbox, 'drainCanonicalLedgerProjectionOutbox')
+      .mockResolvedValueOnce({ projected: 0, failedTargetId: 'injected-ack-interruption' })
+    try {
+      const interruptedAck = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+        processGeneration: 1, retryBlocked: true, dependencies })
+      expect(interruptedAck).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'baseline_failed' } })
+      const publishedEvents = await readSessionEvents(paths.eventsPath)
+      expect(publishedEvents).toHaveLength(5)
+      expect(publishedEvents.map(({ type }) => type)).toEqual(expect.arrayContaining([
+        'tool_call', 'request_usage', 'compaction_start', 'compaction_summary', 'compaction_end'
+      ]))
+      expect(JSON.parse(await fs.readFile(paths.indexPath, 'utf8'))).toMatchObject({ formatVersion: 2 })
+      expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE ledger_location_key=? AND status<>'pending'").all(identity.key))
+        .toEqual([])
+    } finally { drainSpy.mockRestore() }
+    const resumedAck = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, retryBlocked: true, dependencies })
+    expect(resumedAck).toMatchObject({ status: 'ready', readiness: { state: 'ready' } })
+    expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE ledger_location_key=? AND status<>'acked'").all(identity.key))
+      .toEqual([])
+
+    await simulateWholeLedgerLoss()
+    const publishTargetPath = resolveSessionEventPaths(root, session.id, session.createdAt)
+    const originalRenameForEvents = fs.rename.bind(fs)
+    const eventPublishSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === publishTargetPath.eventsPath) throw new Error('injected canonical jsonl publish interruption')
+      return originalRenameForEvents(from, to)
+    })
+    try {
+      const interruptedFilePublish = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+        processGeneration: 1, retryBlocked: true, dependencies })
+      expect(interruptedFilePublish).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'baseline_failed' } })
+      await expect(fs.lstat(publishTargetPath.eventsPath)).rejects.toMatchObject({ code: 'ENOENT' })
+      expect((await fs.readdir(publishTargetPath.directory)).filter((name) => name.startsWith('.ledger-rebuild-'))).toEqual([])
+      expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE ledger_location_key=? AND status<>'pending'").all(identity.key))
+        .toEqual([])
+    } finally { eventPublishSpy.mockRestore() }
+    const resumedFilePublish = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, retryBlocked: true, dependencies })
+    expect(resumedFilePublish).toMatchObject({ status: 'ready', readiness: { state: 'ready' } })
+
+    await simulateWholeLedgerLoss()
     const originalAppendFile = fs.appendFile.bind(fs)
     let appendCount = 0
     const appendSpy = vi.spyOn(fs, 'appendFile').mockImplementation(async (filePath, data, ...options) => {
@@ -381,6 +458,7 @@ describe('production session ledger lifecycle', () => {
       const interrupted = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1,
         retryBlocked: true, dependencies })
       expect(interrupted).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'baseline_failed' } })
+      await expect(fs.lstat(resolveSessionEventPaths(root, session.id, session.createdAt).eventsPath)).rejects.toMatchObject({ code: 'ENOENT' })
     } finally { appendSpy.mockRestore() }
     const resumed = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1,
       retryBlocked: true, dependencies })
@@ -390,6 +468,95 @@ describe('production session ledger lifecycle', () => {
     expect(resumedEvents.filter(({ type }) => type === 'request_usage')).toHaveLength(1)
     expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE ledger_location_key=? AND status<>'acked'").all(identity.key))
       .toEqual([])
+  })
+
+  it('rebuilds a ledger after a durable physical-mismatch verdict without trusting the truncated suffix', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-shortened-rebuild-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'shortened-ledger-rebuild', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1, dependencies })).status)
+      .toBe('ready')
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([{ invocationId: 'shortened-invocation', turnId: 'shortened-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'shortened-model-response', idempotencyKey: 'shortened-model-response', kind: 'model-response-committed',
+      payload: { modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'shortened-tool', name: 'read_file', input: { path: 'canonical.txt' } }] },
+        sessionLedger: { location, stepId: 'shortened-step', toolCalls: [{ toolUseId: 'shortened-tool', name: 'read_file', args: { path: 'canonical.txt' } }] } }
+    }], 0)
+    expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1, dependencies })).status)
+      .toBe('ready')
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    await sink.appendCritical({ type: 'assistant_chunk', payload: { turnId: 'shortened-turn', text: 'preserve original bytes before rebuild' } })
+    expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1, dependencies })).status)
+      .toBe('ready')
+    await sink.close()
+    const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
+    const intact = await fs.readFile(paths.eventsPath, 'utf8')
+    const shortened = intact.slice(0, -10)
+    await fs.writeFile(paths.eventsPath, shortened)
+    const identity = sessionLedgerLocationIdentity(location)
+    expect(markSessionLedgerBlocked(conn, identity.key, 'baseline', 'physical_proof_mismatch')).toBe(true)
+
+    const scheduler = createSessionLedgerRepairScheduler({ repair: (repairLocation) => runOutsideSessionLedgerLifecycleLock(async () =>
+      (await ensureSessionLedgerReady({ conn, location: repairLocation, sessionGeneration: session.generation,
+        processGeneration: 1, retryBlocked: true, dependencies })).status === 'ready') })
+    try {
+      const deferred = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+        processGeneration: 1, retryBlocked: false, dependencies })
+      expect(deferred).toMatchObject({ status: 'blocked', readiness: { failureClass: 'physical_proof_mismatch' } })
+      scheduler.request(location, { generation: `${deferred.readiness.ledgerGeneration}:${deferred.readiness.failureClass}` })
+      await vi.waitFor(() => expect(scheduler.pendingCount()).toBe(0))
+      const recovered = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+        processGeneration: 1, retryBlocked: false, dependencies })
+      expect(recovered).toMatchObject({ status: 'ready', readiness: { state: 'ready' } })
+    } finally { scheduler.stop() }
+    const quarantineRoot = path.join(root, 'sessions', '.quarantine')
+    const archives = await fs.readdir(quarantineRoot)
+    expect(archives).toHaveLength(1)
+    const archive = path.join(quarantineRoot, archives[0]!)
+    expect(await fs.readFile(path.join(archive, 'events.jsonl'), 'utf8')).toBe(shortened)
+    expect(JSON.parse(await fs.readFile(path.join(archive, 'manifest.json'), 'utf8')))
+      .toMatchObject({ reason: 'physical_proof_mismatch', state: 'complete' })
+    const restored = await readSessionEvents(paths.eventsPath)
+    expect(restored.filter(({ type, payload }) => type === 'tool_call' && payload.toolUseId === 'shortened-tool')).toHaveLength(1)
+    expect(restored.some(({ type, payload }) => type === 'assistant_chunk' && payload.turnId === 'shortened-turn')).toBe(false)
+  })
+
+  it('does not use retired index byte-count metadata to gate an already-ready ledger', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-index-repair-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'index proof mismatch', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1, dependencies })).status)
+      .toBe('ready')
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'index-repair-turn' } })
+    expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1, dependencies })).status)
+      .toBe('ready')
+    await sink.close()
+    const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
+    const originalEvents = await fs.readFile(paths.eventsPath, 'utf8')
+    const originalIndex = JSON.parse(await fs.readFile(paths.indexPath, 'utf8')) as Record<string, unknown>
+    await fs.writeFile(paths.indexPath, JSON.stringify({ ...originalIndex, bytes: 0 }))
+
+    const recovered = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, retryBlocked: true, dependencies })
+
+    expect(recovered).toMatchObject({ status: 'ready', readiness: { state: 'ready' } })
+    expect(await fs.readFile(paths.eventsPath, 'utf8')).toBe(originalEvents)
+    const unchangedIndex = JSON.parse(await fs.readFile(paths.indexPath, 'utf8')) as { bytes: number; eventCount: number }
+    expect(unchangedIndex.bytes).toBe(0)
+    expect(unchangedIndex.eventCount).toBe(originalIndex.eventCount)
   })
 
   it('bootstraps a new location from its creation credential before the first ledger-dependent turn', async () => {
@@ -573,5 +740,82 @@ describe('production session ledger lifecycle', () => {
     expect(result).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'ledger_missing' } })
     const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
     await expect(fs.lstat(paths.eventsPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('quarantines a degraded legacy ledger and records the blocked availability reason', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-degraded-quarantine-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'degraded-quarantine', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    const first = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, dependencies })
+    expect(first.status).toBe('ready')
+    const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'unique-quarantined-fact' } })
+    await sink.close()
+    const original = `${await fs.readFile(paths.eventsPath, 'utf8')}{unreadable-record}\n`
+    await fs.writeFile(paths.eventsPath, original)
+    conn.prepare("UPDATE session_ledger_projection_state SET state='unknown',origin='legacy',bootstrap_id=NULL WHERE session_id=?")
+      .run(session.id)
+
+    const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, dependencies })
+
+    expect(result).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'ledger_degraded_quarantined' } })
+    await expect(fs.readFile(paths.eventsPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    const quarantineRoot = path.join(root, 'sessions', '.quarantine')
+    const archives = await fs.readdir(quarantineRoot)
+    expect(archives).toHaveLength(1)
+    expect(await fs.readFile(path.join(quarantineRoot, archives[0]!, 'events.jsonl'), 'utf8')).toBe(original)
+    expect(JSON.parse(await fs.readFile(path.join(quarantineRoot, archives[0]!, 'manifest.json'), 'utf8')))
+      .toMatchObject({ state: 'complete', integrity: 'degraded', eventCount: 1 })
+  })
+
+  it('recovers an interrupted quarantine before retrying a missing-ledger rebuild', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-quarantine-resume-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'quarantine-resume', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1, dependencies })
+    const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'unique-fact' } })
+    await sink.close()
+    const original = `${await fs.readFile(paths.eventsPath, 'utf8')}{malformed}\n`
+    await fs.writeFile(paths.eventsPath, original)
+    conn.prepare("UPDATE session_ledger_projection_state SET state='unknown',origin='legacy',bootstrap_id=NULL WHERE session_id=?")
+      .run(session.id)
+    const originalRename = fs.rename.bind(fs)
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (from === paths.eventsPath) throw new Error('injected quarantine interruption')
+      return originalRename(from, to)
+    })
+    try {
+      const interrupted = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+        processGeneration: 1, dependencies })
+      expect(interrupted).toMatchObject({ status: 'blocked', readiness: { failureClass: 'ledger_quarantine_failed' } })
+    } finally { renameSpy.mockRestore() }
+
+    const resumed = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, retryBlocked: true, dependencies })
+
+    expect(resumed).toMatchObject({ status: 'blocked', readiness: { failureClass: 'baseline_failed' } })
+    await expect(fs.lstat(paths.eventsPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    const archives = await fs.readdir(path.join(root, 'sessions', '.quarantine'))
+    expect(archives).toHaveLength(1)
+    const archive = path.join(root, 'sessions', '.quarantine', archives[0]!)
+    expect(await fs.readFile(path.join(archive, 'events.jsonl'), 'utf8')).toBe(original)
+    expect(JSON.parse(await fs.readFile(path.join(archive, 'manifest.json'), 'utf8'))).toMatchObject({ state: 'complete' })
   })
 })

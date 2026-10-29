@@ -238,7 +238,7 @@ export type SpaceAssistantApi = {
   usageDelete: (sessionId: string) => Promise<void>
 
   chatGetMessages: (payload: { sessionId: string; limit?: number; offset?: number }) => Promise<Message[]>
-  chatCompactSessionContext: (payload: { sessionId: string; requestId: string }) => Promise<({ status: 'committed' } & import('./compactionEvents').CompactionMarker) | { status: 'no-op' | 'uncompressible' | 'busy' | 'failed' | 'stale' | 'forbidden' | 'session-not-found' }>
+  chatCompactSessionContext: (payload: { sessionId: string; requestId: string }) => Promise<({ status: 'committed'; repairBranch?: 'replay-original' | 'new-split' } & import('./compactionEvents').CompactionMarker) | { status: 'no-op' | 'uncompressible' | 'busy' | 'failed' | 'stale' | 'cancel' | 'commit-uncertain' | 'context-too-large' | 'forbidden' | 'session-not-found' }>
   chatGetSessionCompactionMarkers: (sessionId: string) => Promise<import('./compactionEvents').CompactionMarker[]>
   chatGetApiContextBaseline: (payload: {
     sessionId: string

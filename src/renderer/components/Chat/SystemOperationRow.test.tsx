@@ -42,4 +42,14 @@ describe('SystemOperationRow', () => {
     expect(screen.getByRole('status').textContent).toContain('未压缩（上下文已变化）')
     expect(screen.getByRole('status').textContent).not.toContain('%')
   })
+
+  it('tells the user when a lost compaction was replayed, re-split, or left fully expanded', () => {
+    const { rerender } = render(<SystemOperationRow operation={operation('succeeded', { reason: 'REPAIR_ORIGINAL_WINDOW' })} />)
+    expect(screen.getByRole('status').textContent).toContain('早期摘要已按原窗口重新生成')
+    rerender(<SystemOperationRow operation={operation('succeeded', { reason: 'REPAIR_NEW_SPLIT' })} />)
+    expect(screen.getByRole('status').textContent).toContain('早期上下文已按当前历史重新切分')
+    rerender(<SystemOperationRow operation={operation('failed', { reason: 'REPAIR_FALLBACK_FULL_EXPAND' })} />)
+    fireEvent.click(screen.getByRole('button', { name: '查看原因' }))
+    expect(screen.getByText(/完整历史已保留/)).toBeTruthy()
+  })
 })

@@ -70,10 +70,10 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
     persist: async ({ operationId, expectedSurfaceFingerprint, outputFingerprint, output, historyPayload }) => {
       if (input.isBusy()) return { status: 'busy' as const }
       if (await latestFingerprint() !== expectedSurfaceFingerprint) return { status: 'stale' as const }
-      if (!input.canPersist || !input.sink) return { status: 'uncompressible' as const }
       const transaction = historyPayload as { start?: Record<string, unknown>; summary?: Record<string, unknown> }
       if (!transaction.start || !transaction.summary) throw new Error('SESSION_CONTEXT_TRANSACTION_REQUIRED')
       await input.commitCanonicalCompaction({ operationId, compactionId: String(transaction.start.compactionId ?? operationId), output, historyPayload: historyPayload as Record<string, unknown> })
+      if (!input.canPersist || !input.sink) return { status: 'committed' as const }
       await appendCompactionTransaction(input.sink, transaction.start, transaction.summary)
       return { status: 'committed' as const }
     }

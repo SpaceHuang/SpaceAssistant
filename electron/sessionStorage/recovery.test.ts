@@ -143,10 +143,10 @@ describe('SessionRecoveryPort', () => {
         expect.objectContaining({ sessionId: failedSession.id, invocationId: 'host-failed-recovery-invocation', failureClass: 'ledger-repair-pending' })
       ]))
       expect(storageHost.storage.availability.inspect(failedSession.id)).toMatchObject({
-        globalFence: { state: 'degraded' }, content: { state: 'readable' }, execution: { state: 'ready' }, ledger: { state: 'blocked' }
+        globalFence: { state: 'degraded' }, content: { state: 'readable' }, execution: { state: 'ready' }, ledger: { state: 'degraded', readinessState: 'blocked', reasonCode: 'ledger-blocked' }
       })
       expect(storageHost.storage.availability.inspect(healthySession.id)).toMatchObject({
-        globalFence: { state: 'degraded' }, content: { state: 'readable' }, execution: { state: 'ready' }, ledger: { state: 'ready' }
+        globalFence: { state: 'degraded' }, content: { state: 'readable' }, execution: { state: 'ready' }, ledger: { state: 'ready', readinessState: 'ready' }
       })
     } finally {
       temp.cleanup()
@@ -224,14 +224,14 @@ describe('SessionRecoveryPort', () => {
 
       expect(availability.content).toMatchObject({ state: 'readable', source: { sessionGeneration: session.generation } })
       expect(availability.execution).toMatchObject({ state: 'pending-recovery', source: { sessionId: session.id, transcriptVersion: 0 } })
-      expect(availability.ledger).toMatchObject({ state: 'unknown', source: { sessionId: session.id } })
+      expect(availability.ledger).toMatchObject({ state: 'degraded', readinessState: 'unknown', reasonCode: 'readiness-missing', source: { sessionId: session.id } })
       expect(availability.maintenance).toMatchObject({ state: 'paused', tasks: [{ taskId: 'projection-build', status: 'paused' }] })
       expect(availability.globalFence.state).toBe('pending')
       expect(availability.globalFence.source).toEqual({ recoveryState: 'pending' })
       expect(availability.maintenance.source).toEqual([{ taskId: 'projection-build', status: 'paused' }])
       await storage.recovery.recover()
       expect(storage.availability.inspect(session.id)).toMatchObject({
-        globalFence: { state: 'ready' }, content: { state: 'readable' }, execution: { state: 'ready' }, ledger: { state: 'unknown' },
+        globalFence: { state: 'ready' }, content: { state: 'readable' }, execution: { state: 'ready' }, ledger: { state: 'degraded', readinessState: 'unknown', reasonCode: 'readiness-missing' },
         maintenance: { state: 'paused' }
       })
       const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
@@ -239,7 +239,7 @@ describe('SessionRecoveryPort', () => {
       expect(markMissingLegacyLedgerBlocked(getDbConnection(db), readiness.ledgerLocationKey)).toBe(true)
       expect(storage.availability.inspect(session.id)).toMatchObject({
         content: { state: 'readable' }, execution: { state: 'ready' },
-        ledger: { state: 'blocked', source: { locationKey: sessionLedgerLocationIdentity(location).key, failureClass: 'ledger_missing' } }
+        ledger: { state: 'degraded', readinessState: 'blocked', reasonCode: 'ledger-blocked', source: { locationKey: sessionLedgerLocationIdentity(location).key, failureClass: 'ledger_missing' } }
       })
       const activeUser = appendMessage(db, { id: 'availability-active-user', sessionId: session.id, role: 'user', content: 'turn still active', timestamp: 3, status: 'sent' })
       appendMessage(db, { id: 'availability-active-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 4, status: 'streaming' })
@@ -247,7 +247,7 @@ describe('SessionRecoveryPort', () => {
         assistantMessageId: 'availability-active-assistant', userMessageId: activeUser.message.id, state: 'executing' })
       expect(storage.availability.inspect(session.id)).toMatchObject({
         content: { state: 'readable' }, execution: { state: 'busy' },
-        globalFence: { state: 'ready' }, ledger: { state: 'blocked' }
+        globalFence: { state: 'ready' }, ledger: { state: 'degraded', readinessState: 'blocked', reasonCode: 'ledger-blocked' }
       })
       const claim = storage.execution.claimExecution({ sessionId: session.id, turnId: 'availability-active-turn', ownerId: 'availability-owner' })
       expect(claim).toMatchObject({ acquired: true })

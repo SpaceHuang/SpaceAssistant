@@ -1,11 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
-import type { HistorySnapshot } from '../../packages/agent-sdk/src/history'
+import type { HistoryEvent, HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
 import { runInTransaction } from '../database/transaction'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { toCanonicalModelMessages } from './canonicalHistory'
 import { mirrorCanonicalContextMessages, SqliteAgentHistory } from './sqliteAgentHistory'
+
+/** Reads one event through the canonical History owner after proving its committed session identity. */
+export function readCommittedCanonicalHistoryEvent(conn: DatabaseSync, input: {
+  sessionId: string; eventId: string; sessionSequence: number
+}): HistoryEvent | undefined {
+  return new SqliteAgentHistory(conn, 1, Date.now, input.sessionId).readCommittedSessionEventSync(input)
+}
 
 export type AgentContinuationRecord = Readonly<{
   continuationId: string

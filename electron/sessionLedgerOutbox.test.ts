@@ -10,17 +10,23 @@ import { getDbConnection } from './database/sqliteStore'
 import { createSession, setConfigValue } from './database/operations'
 import { updateSessionOwnership } from './database/operations'
 import { runInTransaction } from './database/transaction'
+import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
 import { ensureLegacyLedgerReadiness } from './sessionLedgerReadiness'
 import {
   acknowledgeCanonicalLedgerProjectionTarget,
   buildCanonicalToolResultProjectionTargets,
+  canonicalLedgerProjectionTargetId,
   drainCanonicalLedgerProjectionOutbox,
-  enqueueCanonicalLedgerProjectionTargetInTransaction,
+  enqueueCanonicalLedgerProjectionTargetInTransaction as enqueueCanonicalLedgerProjectionTargetProduction,
   listPendingCanonicalLedgerProjectionTargets,
+  encodeCanonicalLedgerProjectionPayload,
+  decodeCanonicalLedgerProjectionPayload,
+  canonicalLedgerProjectionPayloadDigest,
   type CanonicalLedgerProjectionTarget
 } from './sessionLedgerOutbox'
 import { getSessionEventSink, readSessionEvents, type SessionEventSink } from './sessionEvents'
-import { projectCanonicalSessionLedgerTarget } from './runtime/sessionLedgerOutboxProjector'
+import { projectCanonicalSessionLedgerTarget, resolveCanonicalSessionLedgerProjectionTarget } from './runtime/sessionLedgerOutboxProjector'
+import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { toolResultProjectionPayloadMatches } from './sessionLedgerProjectionCompatibility'
 
 function appendCanonicalEvent(conn: ReturnType<typeof getDbConnection>, sessionId: string, eventId: string) {
@@ -30,11 +36,218 @@ function appendCanonicalEvent(conn: ReturnType<typeof getDbConnection>, sessionI
   }], 0, { sessionId }))
 }
 
+// Most unit cases below exercise legacy pending-array compatibility. Keep those fixtures explicit;
+// production enqueue behavior is asserted separately against the canonical-v1 marker.
+function enqueueCanonicalLedgerProjectionTargetInTransaction(conn: ReturnType<typeof getDbConnection>, target: CanonicalLedgerProjectionTarget) {
+  const id = enqueueCanonicalLedgerProjectionTargetProduction(conn, target)
+  conn.prepare(`UPDATE session_ledger_projection_outbox SET expected_events_json=?,expected_event_ids_json=? WHERE target_id=?`)
+    .run(JSON.stringify(target.expectedEvents), JSON.stringify(target.expectedEventIds), id)
+  return id
+}
+
 describe('canonical session ledger outbox', () => {
   const databases: ReturnType<typeof createMemoryAppDb>[] = []
   afterEach(() => { for (const db of databases.splice(0)) db.close() })
 
-  it('maps every canonical session sidecar kind to an exact ordered projection target', () => {
+  it('encodes a versioned canonical marker while preserving a digest of canonical projection material', () => {
+    const expectedEvents: CanonicalLedgerProjectionTarget['expectedEvents'] = [
+      { type: 'turn_start', payload: { turnId: 'turn-1' } }
+    ]
+    const expectedEventIds = ['turn_start:turn-1']
+    const encoded = encodeCanonicalLedgerProjectionPayload(expectedEvents, expectedEventIds)
+
+    expect(encoded).toEqual({
+      expectedEventsJson: '{"encoding":"canonical-v1"}',
+      expectedEventIdsJson: '{"encoding":"canonical-v1"}',
+      payloadSha256: canonicalLedgerProjectionPayloadDigest(expectedEvents, expectedEventIds)
+    })
+    expect(encoded.payloadSha256).toBe('89f0de3e5818a0cf8bf4623202fe55b89e1b0c8a0956f808ebc7de7d0f16f7c5')
+    expect(decodeCanonicalLedgerProjectionPayload(encoded.expectedEventsJson, encoded.expectedEventIdsJson, encoded.payloadSha256))
+      .toEqual({ kind: 'canonical-v1', payloadSha256: encoded.payloadSha256 })
+  })
+
+  it('decodes legacy array payload rows and checks their original canonical digest', () => {
+    const expectedEvents: CanonicalLedgerProjectionTarget['expectedEvents'] = [
+      { type: 'turn_end', payload: { turnId: 'turn-1', reason: 'completed' } }
+    ]
+    const expectedEventIds = ['turn_end:turn-1']
+    const digest = canonicalLedgerProjectionPayloadDigest(expectedEvents, expectedEventIds)
+
+    expect(decodeCanonicalLedgerProjectionPayload(JSON.stringify(expectedEvents), JSON.stringify(expectedEventIds), digest))
+      .toEqual({ kind: 'legacy', expectedEvents, expectedEventIds })
+  })
+
+  it('rejects mixed, unknown, malformed, or digest-mismatched outbox payload encodings', () => {
+    const marker = '{"encoding":"canonical-v1"}'
+    const validDigest = 'a'.repeat(64)
+    expect(() => decodeCanonicalLedgerProjectionPayload(marker, '[]', validDigest)).toThrow('SESSION_LEDGER_OUTBOX_PAYLOAD_ENCODING_INVALID')
+    expect(() => decodeCanonicalLedgerProjectionPayload('{"encoding":"canonical-v2"}', '{"encoding":"canonical-v2"}', validDigest))
+      .toThrow('SESSION_LEDGER_OUTBOX_PAYLOAD_ENCODING_UNSUPPORTED')
+    expect(() => decodeCanonicalLedgerProjectionPayload('{"encoding":"canonical-v1","extra":true}', '{"encoding":"canonical-v1"}', validDigest))
+      .toThrow('SESSION_LEDGER_OUTBOX_PAYLOAD_ENCODING_INVALID')
+    expect(() => decodeCanonicalLedgerProjectionPayload('{', '{', validDigest))
+      .toThrow('SESSION_LEDGER_OUTBOX_PAYLOAD_ENCODING_INVALID')
+    expect(() => decodeCanonicalLedgerProjectionPayload(marker, marker, 'not-a-digest'))
+      .toThrow('SESSION_LEDGER_OUTBOX_PAYLOAD_DIGEST_INVALID')
+    expect(() => decodeCanonicalLedgerProjectionPayload('[{}]', '["event"]', 'b'.repeat(64)))
+      .toThrow('SESSION_LEDGER_OUTBOX_PAYLOAD_DIGEST_MISMATCH')
+  })
+
+  it('stores the identity-only marker in the existing NOT NULL outbox columns', () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const session = createSession(db, { name: 'versioned outbox format' })
+    const conn = getDbConnection(db)
+    const readiness = ensureLegacyLedgerReadiness(conn, {
+      workDir: '/tmp/versioned-outbox-format', sessionId: session.id, createdAt: session.createdAt
+    }, session.generation)
+    appendCanonicalEvent(conn, session.id, 'format-canonical-event')
+    const expectedEvents: CanonicalLedgerProjectionTarget['expectedEvents'] = [
+      { type: 'turn_start', payload: { turnId: 'format-turn' } }
+    ]
+    const expectedEventIds = ['turn_start:format-turn']
+    const encoded = encodeCanonicalLedgerProjectionPayload(expectedEvents, expectedEventIds)
+
+    conn.prepare(`INSERT INTO session_ledger_projection_outbox(target_id,ledger_location_key,session_id,session_generation,
+      canonical_event_id,canonical_sequence,projection_order,projection_kind,expected_events_json,expected_event_ids_json,
+      payload_sha256,status,created_at) VALUES(?,?,?,?,?,1,0,'invocation-terminal',?,?,?,'pending',1)`)
+      .run('format-target', readiness.ledgerLocationKey, session.id, session.generation, 'format-canonical-event',
+        encoded.expectedEventsJson, encoded.expectedEventIdsJson, encoded.payloadSha256)
+    const persisted = conn.prepare(`SELECT expected_events_json,expected_event_ids_json,payload_sha256
+      FROM session_ledger_projection_outbox WHERE target_id='format-target'`).get() as {
+        expected_events_json: string; expected_event_ids_json: string; payload_sha256: string
+      }
+    expect(decodeCanonicalLedgerProjectionPayload(persisted.expected_events_json, persisted.expected_event_ids_json, persisted.payload_sha256))
+      .toEqual({ kind: 'canonical-v1', payloadSha256: encoded.payloadSha256 })
+  })
+
+  it('treats a duplicate canonical-only target as idempotent and rejects changed source material', () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const session = createSession(db, { name: 'canonical marker enqueue retry' })
+    const conn = getDbConnection(db)
+    const readiness = ensureLegacyLedgerReadiness(conn, { workDir: '/tmp/canonical-marker-enqueue-retry',
+      sessionId: session.id, createdAt: session.createdAt }, session.generation)
+    appendCanonicalEvent(conn, session.id, 'canonical-marker-enqueue-event')
+    const target: CanonicalLedgerProjectionTarget = { ledgerLocationKey: readiness.ledgerLocationKey, sessionId: session.id,
+      sessionGeneration: session.generation, canonicalEventId: 'canonical-marker-enqueue-event', projectionKind: 'invocation-terminal',
+      expectedEvents: [{ type: 'turn_start', payload: { turnId: 'marker-turn' } }], expectedEventIds: ['turn_start:marker-turn'] }
+    const encoded = encodeCanonicalLedgerProjectionPayload(target.expectedEvents, target.expectedEventIds)
+    const targetId = canonicalLedgerProjectionTargetId(target)
+    conn.prepare(`INSERT INTO session_ledger_projection_outbox(target_id,ledger_location_key,session_id,session_generation,
+      canonical_event_id,canonical_sequence,projection_order,projection_kind,expected_events_json,expected_event_ids_json,
+      payload_sha256,status,created_at) VALUES(?,?,?,?,?,1,0,?,?,?,?,'pending',1)`).run(targetId, readiness.ledgerLocationKey,
+      session.id, session.generation, target.canonicalEventId, target.projectionKind, encoded.expectedEventsJson,
+      encoded.expectedEventIdsJson, encoded.payloadSha256)
+
+    expect(() => runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetProduction(conn, target))).not.toThrow()
+    expect(() => runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetProduction(conn, {
+      ...target, expectedEvents: [{ type: 'turn_start', payload: { turnId: 'changed-turn' } }], expectedEventIds: ['turn_start:changed-turn']
+    }))).toThrow('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT')
+    expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledgerLocationKey)).toHaveLength(1)
+  })
+
+  it('materializes identity-only targets from canonical History and drains healthy work past missing sources', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const session = createSession(db, { name: 'canonical outbox materialization' })
+    const conn = getDbConnection(db)
+    const location = { workDir: '/tmp/canonical-outbox-materialization', sessionId: session.id, createdAt: session.createdAt }
+    const readiness = ensureLegacyLedgerReadiness(conn, location, session.generation)
+    const prefixEvent: HistoryEvent = { invocationId: 'materialize-invocation', turnId: 'materialize-turn', sequence: 1,
+      schemaVersion: 1, eventId: 'materialize-context', idempotencyKey: 'materialize-context', kind: 'invocation-context-committed', payload: { context: {} } }
+    const responseEvent: HistoryEvent = { invocationId: 'materialize-invocation', turnId: 'materialize-turn', sequence: 2,
+      schemaVersion: 1, eventId: 'materialize-response', idempotencyKey: 'materialize-response', kind: 'model-response-committed',
+      payload: { message: { toolCalls: [{ id: 'materialize-tool' }, { id: 'materialize-tool-legacy' }] } } }
+    const canonicalEvent: HistoryEvent = { invocationId: 'materialize-invocation', turnId: 'materialize-turn', sequence: 3,
+      schemaVersion: 1, eventId: 'materialize-event', idempotencyKey: 'materialize-event', kind: 'tool-call-finished',
+      payload: { toolCallId: 'materialize-tool', sessionLedger: { location, stepId: 'materialize-step',
+        result: { success: true, data: { value: 'from-history' } } } } }
+    const legacyCanonicalEvent: HistoryEvent = { invocationId: 'materialize-invocation', turnId: 'materialize-turn', sequence: 4,
+      schemaVersion: 1, eventId: 'materialize-legacy-event', idempotencyKey: 'materialize-legacy-event', kind: 'tool-call-finished',
+      payload: { toolCallId: 'materialize-tool-legacy', sessionLedger: { location, stepId: 'materialize-step-legacy',
+        result: { success: true, data: { value: 'legacy-array' } } } } }
+    runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn,
+      [prefixEvent, responseEvent, canonicalEvent, legacyCanonicalEvent], 0, { sessionId: session.id }))
+    const target = buildCanonicalToolResultProjectionTargets(conn, [canonicalEvent], session.id, session.generation)[0]!
+    const legacyTarget = buildCanonicalToolResultProjectionTargets(conn, [legacyCanonicalEvent], session.id, session.generation)[0]!
+    runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))
+    runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, legacyTarget))
+    const encoded = encodeCanonicalLedgerProjectionPayload(target.expectedEvents, target.expectedEventIds)
+    conn.prepare(`UPDATE session_ledger_projection_outbox SET expected_events_json=?,expected_event_ids_json=?,payload_sha256=?
+      WHERE target_id=?`).run(encoded.expectedEventsJson, encoded.expectedEventIdsJson, encoded.payloadSha256,
+      canonicalLedgerProjectionTargetId(target))
+
+    const missingTarget: CanonicalLedgerProjectionTarget = { ...target, canonicalEventId: 'source-no-longer-present',
+      expectedEvents: [{ type: 'tool_result', payload: { toolUseId: 'missing-source' } }], expectedEventIds: ['tool_result:missing-source'] }
+    const missingEncoding = encodeCanonicalLedgerProjectionPayload(missingTarget.expectedEvents, missingTarget.expectedEventIds)
+    conn.prepare(`INSERT INTO session_ledger_projection_outbox(target_id,ledger_location_key,session_id,session_generation,
+      canonical_event_id,canonical_sequence,projection_order,projection_kind,expected_events_json,expected_event_ids_json,
+      payload_sha256,status,created_at) VALUES(?,?,?,?,?,1,0,?,?,?,?,'pending',1)`).run(
+      canonicalLedgerProjectionTargetId(missingTarget), readiness.ledgerLocationKey, session.id, session.generation,
+      missingTarget.canonicalEventId, missingTarget.projectionKind, missingEncoding.expectedEventsJson,
+      missingEncoding.expectedEventIdsJson, missingEncoding.payloadSha256)
+
+    const applied: string[] = []
+    const result = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledgerLocationKey, async (pending) => {
+      applied.push(pending.canonicalEventId)
+      return { events: pending.expectedEvents, eventIds: pending.expectedEventIds }
+    }, Date.now(), (identity) => resolveCanonicalSessionLedgerProjectionTarget(conn, identity))
+
+    expect(result).toEqual({ projected: 2, sourceMissing: [{ targetId: canonicalLedgerProjectionTargetId(missingTarget), disposition: 'source-missing' }] })
+    expect(applied).toEqual([target.canonicalEventId, legacyTarget.canonicalEventId])
+    expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledgerLocationKey).map(({ canonical_event_id }) => canonical_event_id))
+      .toEqual([missingTarget.canonicalEventId])
+    const repeated = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledgerLocationKey, async (pending) => {
+      applied.push(pending.canonicalEventId)
+      return { events: pending.expectedEvents, eventIds: pending.expectedEventIds }
+    }, Date.now(), (identity) => resolveCanonicalSessionLedgerProjectionTarget(conn, identity))
+    expect(repeated).toEqual({ projected: 0, sourceMissing: [{ targetId: canonicalLedgerProjectionTargetId(missingTarget), disposition: 'source-missing' }] })
+    expect(applied).toEqual([target.canonicalEventId, legacyTarget.canonicalEventId])
+  })
+
+  it('rehydrates spill-backed canonical payloads before materializing outbox targets', async () => {
+    const temp = createTempDatabase('session-ledger-canonical-spill-materialization-')
+    const session = createSession(temp.db, { name: 'canonical spill materialization' })
+    const conn = getDbConnection(temp.db)
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'canonical-spill-materialization-root-'))
+    const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
+    const largeBody = `${'a'.repeat(60_000)}UNIQUE_MIDDLE_${'b'.repeat(60_000)}`
+    const largeResult = { success: true, data: largeBody }
+    try {
+      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+      await history.appendBatch([
+        { invocationId: 'spill-materialize-invocation', turnId: 'spill-materialize-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'spill-materialize-response', idempotencyKey: 'spill-materialize-response', kind: 'model-response-committed',
+          payload: { message: { role: 'assistant', toolCalls: [{ id: 'spill-materialize-tool', name: 'read_file', input: { path: 'a.txt' } }] },
+            sessionLedger: { location, stepId: 'spill-materialize-step', toolCalls: [{ toolUseId: 'spill-materialize-tool', name: 'read_file', args: { path: 'a.txt' } }] } } },
+        { invocationId: 'spill-materialize-invocation', turnId: 'spill-materialize-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'spill-materialize-result', idempotencyKey: 'spill-materialize-result', kind: 'tool-call-finished',
+          payload: { toolCallId: 'spill-materialize-tool', result: largeResult,
+            sessionLedger: { location, stepId: 'spill-materialize-step', result: largeResult } } }
+      ], 0)
+      const identity = sessionLedgerLocationIdentity(location)
+      const spilled = conn.prepare("SELECT payload_json FROM agent_history_events WHERE event_id='spill-materialize-result'")
+        .get() as { payload_json: string }
+      expect(spilled.payload_json).not.toContain('UNIQUE_MIDDLE')
+
+      const captured: import('./sessionEvents').SessionEventInput[][] = []
+      const drained = await drainCanonicalLedgerProjectionOutbox(conn, identity.key, async (target) => {
+        if (target.projectionKind === 'tool-result') captured.push([...target.expectedEvents])
+        return { events: target.expectedEvents, eventIds: target.expectedEventIds }
+      }, Date.now(), (targetIdentity) => resolveCanonicalSessionLedgerProjectionTarget(conn, targetIdentity))
+
+      expect(drained).toEqual({ projected: 2 })
+      expect(captured[0]?.[0]?.payload.result).toEqual(largeResult)
+      expect(listPendingCanonicalLedgerProjectionTargets(conn, identity.key)).toEqual([])
+    } finally {
+      temp.cleanup()
+      await fs.rm(workDir, { recursive: true, force: true })
+      await fs.rm(path.dirname(temp.dbPath), { recursive: true, force: true })
+    }
+  })
+
+  it('maps and resolves every canonical session sidecar kind to an exact ordered projection target', () => {
     const db = createMemoryAppDb()
     databases.push(db)
     const session = createSession(db, { name: 'outbox mapping' })
@@ -54,10 +267,12 @@ describe('canonical session ledger outbox', () => {
       make('mapping-result', 4, 'tool-call-finished', { toolCallId: 'mapping-tool', sessionLedger: { location, stepId: 'mapping-step', result: { success: true } } }),
       make('mapping-compaction', 5, 'transcript-compacted', { sessionLedger: { location,
         start: { compactionId: 'mapping-compaction' }, summary: { compactionId: 'mapping-compaction' } } }),
-      make('mapping-terminal', 6, 'invocation-interrupted', { sessionLedger: { location, turnId: 'mapping-turn', reason: 'interrupted' } })
+      make('mapping-terminal', 6, 'invocation-interrupted', { status: 'interrupted', sessionLedger: { location, turnId: 'mapping-turn', reason: 'interrupted' } })
     ]
 
-    const targets = buildCanonicalToolResultProjectionTargets(getDbConnection(db), events, session.id, session.generation)
+    const conn = getDbConnection(db)
+    const targets = buildCanonicalToolResultProjectionTargets(conn, events, session.id, session.generation)
+    runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, events, 0, { sessionId: session.id, projectionTargets: targets }))
 
     expect(targets.map((target) => target.projectionKind)).toEqual([
       'request-projection', 'request-retry', 'tool-call:mapping-tool', 'request-usage', 'request-final-context',
@@ -65,6 +280,22 @@ describe('canonical session ledger outbox', () => {
     ])
     expect(targets[0]?.expectedEventIds).toEqual(['request_header:mapping-request:1', 'request_context:mapping-request:1'])
     expect(targets[4]?.expectedEventIds).toEqual(['request_context_final:mapping-request:1'])
+    expect(targets).toHaveLength(8)
+    const marker = '{"encoding":"canonical-v1"}'
+    expect(conn.prepare(`SELECT expected_events_json,expected_event_ids_json FROM session_ledger_projection_outbox ORDER BY canonical_sequence,projection_order`)
+      .all()).toEqual(targets.map(() => ({ expected_events_json: marker, expected_event_ids_json: marker })))
+    const fullInvocationRead = vi.spyOn(SqliteAgentHistory.prototype, 'readSync')
+    const resolved = targets.map((target) => {
+      const source = conn.prepare('SELECT session_seq FROM agent_history_events WHERE event_id=?').get(target.canonicalEventId) as { session_seq: number }
+      return resolveCanonicalSessionLedgerProjectionTarget(conn, {
+        targetId: canonicalLedgerProjectionTargetId(target), ledgerLocationKey: target.ledgerLocationKey,
+        sessionId: target.sessionId, sessionGeneration: target.sessionGeneration, canonicalEventId: target.canonicalEventId,
+        canonicalSequence: source.session_seq, projectionOrder: target.projectionOrder ?? 0, projectionKind: target.projectionKind
+      })
+    })
+    expect(fullInvocationRead).not.toHaveBeenCalled()
+    fullInvocationRead.mockRestore()
+    expect(resolved.map((target) => target?.expectedEventIds)).toEqual(targets.map(({ expectedEventIds }) => expectedEventIds))
   })
 
   it('commits the canonical event and exact projection obligation atomically, then acks only a complete identity set', () => {
@@ -88,14 +319,14 @@ describe('canonical session ledger outbox', () => {
     expect(conn.prepare('SELECT event_id FROM agent_history_events WHERE event_id=?').get(event.eventId)).toEqual({ event_id: event.eventId })
     const pending = listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)
     expect(pending).toHaveLength(1)
-    expect(JSON.parse(pending[0].expected_events_json)).toEqual(target.expectedEvents)
+    expect(JSON.parse(pending[0].expected_events_json)).toEqual({ encoding: 'canonical-v1' })
     const projected = { eventIds: target.expectedEventIds, events: target.expectedEvents }
     expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, { eventIds: [], events: [] })).toBe(false)
     expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id,
       { ...projected, events: [{ type: 'turn_start', payload: { turnId: 'drifted' } }] }, 55)).toBe(false)
-    expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 60)).toBe(true)
+    expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 60, target)).toBe(true)
     expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toEqual([])
-    expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 61)).toBe(true)
+    expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 61, target)).toBe(true)
   })
 
   it('acks an older tool-call outbox payload against an already enriched JSONL projection', () => {
@@ -206,40 +437,73 @@ describe('canonical session ledger outbox', () => {
     expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toEqual([])
   })
 
-  it('keeps seeded ledger retry obligations durable across reopen and acknowledges exactly once', async () => {
+  it('keeps mixed legacy and canonical retry obligations durable across reopen and acknowledges exactly once', async () => {
     const temp = createTempDatabase('session-ledger-seeded-retry-')
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-seeded-retry-sink-'))
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-mixed-retry-sink-'))
     let db = temp.db
     let reopened = false
+    let sink: SessionEventSink | undefined
     try {
       setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: root, isDefault: true }]))
-      const session = createSession(db, { name: 'seeded ledger retry', workDirProfileId: 'p' })
-      const conn = getDbConnection(db)
+      const session = createSession(db, { name: 'mixed ledger retry', workDirProfileId: 'p' })
+      let conn = getDbConnection(db)
       const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { ledger_location_key: string }
-      const eventId = `seeded-retry-${(0x1ed6e >>> 0).toString(16)}`
-      appendCanonicalEvent(conn, session.id, eventId)
-      const target: CanonicalLedgerProjectionTarget = { ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id,
-        sessionGeneration: session.generation, canonicalEventId: eventId, projectionKind: 'tool-result',
-        expectedEvents: [{ type: 'tool_result', payload: { toolUseId: 'seeded-tool', stepId: 'seeded-step', result: { success: true } } }], expectedEventIds: ['tool_result:seeded-tool'] }
-      runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))
-      const sink = getSessionEventSink(root, session.id, session.createdAt)
-      try {
-        const failure = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key, async () => { throw new Error('seeded sink failure') })
-        expect(failure.failedTargetId).toBeTruthy()
-        expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toHaveLength(1)
-        const dbPath = temp.dbPath
-        db.close()
-        db = openDatabase(dbPath)
-        reopened = true
-        const reopenedConn = getDbConnection(db)
-        expect(listPendingCanonicalLedgerProjectionTargets(reopenedConn, readiness.ledger_location_key)).toHaveLength(1)
-        const apply = (pending: CanonicalLedgerProjectionTarget & { targetId: string }) => projectCanonicalSessionLedgerTarget(sink, pending)
-        expect(await drainCanonicalLedgerProjectionOutbox(reopenedConn, readiness.ledger_location_key, apply)).toEqual({ projected: 1 })
-        expect(await drainCanonicalLedgerProjectionOutbox(reopenedConn, readiness.ledger_location_key, apply)).toEqual({ projected: 0 })
-        expect(listPendingCanonicalLedgerProjectionTargets(reopenedConn, readiness.ledger_location_key)).toEqual([])
-        expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'tool_result' && event.payload.toolUseId === 'seeded-tool')).toHaveLength(1)
-      } finally { await sink.close() }
+      const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+      const invocationId = 'mixed-ledger-invocation'
+      const responseEvent: HistoryEvent = { invocationId, turnId: 'mixed-ledger-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'mixed-ledger-response', idempotencyKey: 'mixed-ledger-response', kind: 'model-response-committed',
+        payload: { message: { role: 'assistant', content: 'done', toolCalls: [] }, sessionLedger: { location, requestUsage: {
+          requestId: 'mixed-ledger-request', usage: { inputTokens: 3 }
+        }, requestContext: { requestId: 'mixed-ledger-request', attempt: 1, turnId: 'mixed-ledger-turn', contextUsage: { inputTokens: 3 } } } } }
+      const contextEvent: HistoryEvent = { invocationId, turnId: 'mixed-ledger-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'mixed-ledger-context', idempotencyKey: 'mixed-ledger-context', kind: 'invocation-context-committed', payload: { context: {} } }
+      const targets = buildCanonicalToolResultProjectionTargets(conn, [responseEvent], session.id, session.generation)
+      expect(targets.map(({ projectionKind }) => projectionKind)).toEqual(['request-usage', 'request-final-context'])
+      runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, [contextEvent, responseEvent], 0,
+        { sessionId: session.id, projectionTargets: targets }))
+
+      const canonicalTarget = targets[0]!
+      const canonicalEncoded = encodeCanonicalLedgerProjectionPayload(canonicalTarget.expectedEvents, canonicalTarget.expectedEventIds)
+      conn.prepare(`UPDATE session_ledger_projection_outbox SET expected_events_json=?,expected_event_ids_json=?,payload_sha256=? WHERE target_id=?`)
+        .run(canonicalEncoded.expectedEventsJson, canonicalEncoded.expectedEventIdsJson, canonicalEncoded.payloadSha256,
+          canonicalLedgerProjectionTargetId(canonicalTarget))
+      expect(conn.prepare(`SELECT expected_events_json,expected_event_ids_json FROM session_ledger_projection_outbox WHERE target_id=?`)
+        .get(canonicalLedgerProjectionTargetId(canonicalTarget))).toEqual({
+          expected_events_json: '{"encoding":"canonical-v1"}', expected_event_ids_json: '{"encoding":"canonical-v1"}'
+        })
+      expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toHaveLength(2)
+
+      const failure = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key,
+        async () => { throw new Error('simulated sink failure') }, Date.now(),
+        (identity) => resolveCanonicalSessionLedgerProjectionTarget(conn, identity))
+      expect(failure).toMatchObject({ projected: 0, failedTargetId: expect.any(String) })
+      expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toHaveLength(2)
+
+      db.close()
+      db = openDatabase(temp.dbPath)
+      conn = getDbConnection(db)
+      reopened = true
+      sink = getSessionEventSink(root, session.id, session.createdAt)
+      const apply = (target: CanonicalLedgerProjectionTarget & { targetId: string }) => projectCanonicalSessionLedgerTarget(sink!, target)
+      const replayed = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key, apply, Date.now(),
+        (identity) => resolveCanonicalSessionLedgerProjectionTarget(conn, identity))
+      expect(replayed).toEqual({ projected: 2 })
+      expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toEqual([])
+
+      db.close()
+      db = openDatabase(temp.dbPath)
+      conn = getDbConnection(db)
+      const repeated = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key, apply, Date.now(),
+        (identity) => resolveCanonicalSessionLedgerProjectionTarget(conn, identity))
+      expect(repeated).toEqual({ projected: 0 })
+      expect(conn.prepare(`SELECT status,count(*) as count FROM session_ledger_projection_outbox GROUP BY status ORDER BY status`).all())
+        .toEqual([{ status: 'acked', count: 2 }])
+      const events = await readSessionEvents(sink.eventsPath)
+      expect(events.filter(({ type }) => type === 'request_usage')).toHaveLength(1)
+      expect(events.filter(({ type }) => type === 'request_header')).toHaveLength(0)
+      expect(events.filter(({ type }) => type === 'request_context')).toHaveLength(1)
     } finally {
+      await sink?.close()
       db.close()
       await fs.rm(root, { recursive: true, force: true })
       if (!reopened) temp.cleanup()

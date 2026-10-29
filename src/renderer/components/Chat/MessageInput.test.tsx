@@ -197,6 +197,22 @@ describe('MessageInput plus menu', () => {
   })
 
   it.each([
+    ['replay-original', '早期上下文摘要已按原窗口重新生成'],
+    ['new-split', '早期上下文已按当前历史重新切分并压缩']
+  ] as const)('announces recovered compaction branch %s', async (repairBranch, expected) => {
+    const original = window.api.chatCompactSessionContext
+    window.api.chatCompactSessionContext = vi.fn(async () => ({ status: 'committed' as const, compactionId: 'repair-id', windowId: 'w1', outputSurfaceFingerprint: 'fp1', repairBranch }))
+    try {
+      renderInput()
+      fireEvent.click(screen.getByRole('button', { name: '添加图片' }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: '压缩上下文' }))
+      expect(await screen.findByText(expected)).toBeTruthy()
+    } finally {
+      window.api.chatCompactSessionContext = original
+    }
+  })
+
+  it.each([
     ['no-op', '当前上下文无需压缩'],
     ['uncompressible', '当前上下文无法安全压缩'],
     ['busy', '会话正在运行，请稍后再试'],

@@ -13,8 +13,24 @@ import {
   type SessionEventInput,
   type SessionEventSink
 } from '../sessionEvents'
-import type { CanonicalLedgerProjectionTarget } from '../sessionLedgerOutbox'
+import { type CanonicalLedgerProjectionTarget } from '../sessionLedgerOutbox'
+import { buildCanonicalToolResultProjectionTargets, canonicalLedgerProjectionTargetId,
+  type CanonicalLedgerProjectionTargetIdentity } from '../sessionLedgerOutbox'
+import { readCommittedCanonicalHistoryEvent } from './agentContinuation'
+import type { DatabaseSync } from 'node:sqlite'
 import { sessionEventProjectionMatches, sessionEventProjectionSchemasCompatible, toolCallProjectionPayloadMatches, toolResultProjectionPayloadMatches } from '../sessionLedgerProjectionCompatibility'
+
+export function resolveCanonicalSessionLedgerProjectionTarget(conn: DatabaseSync,
+  identity: CanonicalLedgerProjectionTargetIdentity): CanonicalLedgerProjectionTarget | undefined {
+  const event = readCommittedCanonicalHistoryEvent(conn, {
+    sessionId: identity.sessionId, eventId: identity.canonicalEventId, sessionSequence: identity.canonicalSequence
+  })
+  if (!event) return undefined
+  const targets = buildCanonicalToolResultProjectionTargets(conn, [event], identity.sessionId, identity.sessionGeneration)
+  return targets.find((target) => canonicalLedgerProjectionTargetId(target) === identity.targetId &&
+    target.ledgerLocationKey === identity.ledgerLocationKey && target.projectionKind === identity.projectionKind &&
+    (target.projectionOrder ?? 0) === (identity.projectionOrder ?? 0))
+}
 
 /** Applies a canonical outbox target through the existing idempotent ledger projection primitive. */
 export async function projectCanonicalSessionLedgerTarget(

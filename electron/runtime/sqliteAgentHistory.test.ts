@@ -33,6 +33,7 @@ import { enableCanonicalSessionWriteAuthority } from '../sessionStorage/infrastr
 import { createSpillStore, readCanonicalSpillReferences, reconcileSpillOrphansAgainstCanonicalHistory, type SpillStore } from '../storage/spillStore'
 import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivityTimeline'
 import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
+import { resolveCanonicalSessionLedgerProjectionTarget } from './sessionLedgerOutboxProjector'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 function createDb(dbPath = ':memory:'): DatabaseSync {
@@ -135,18 +136,41 @@ describe('SqliteAgentHistory', () => {
         sessionLedger: { location, stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } } } }
     ], 0)
 
-    const target = conn.prepare(`SELECT outbox.projection_kind,outbox.canonical_event_id,outbox.expected_event_ids_json,outbox.expected_events_json,
+    const target = conn.prepare(`SELECT outbox.target_id,outbox.ledger_location_key,outbox.session_id,outbox.session_generation,
+      outbox.canonical_event_id,outbox.canonical_sequence,outbox.projection_order,outbox.projection_kind,
+      outbox.expected_event_ids_json,outbox.expected_events_json,
       state.origin,state.state FROM session_ledger_projection_outbox outbox
       JOIN session_ledger_projection_state state USING(ledger_location_key) WHERE outbox.canonical_event_id='outbox-result'`).get()
     expect(target).toMatchObject({ projection_kind: 'tool-result', canonical_event_id: 'outbox-result', origin: 'legacy', state: 'dirty' })
-    expect(JSON.parse((target as { expected_event_ids_json: string }).expected_event_ids_json)).toEqual(['tool_result:outbox-tool'])
-    expect(JSON.parse((target as { expected_events_json: string }).expected_events_json)).toEqual([{
+    const targetRow = target as { target_id: string; ledger_location_key: string; session_id: string; session_generation: string;
+      canonical_event_id: string; canonical_sequence: number; projection_order: number; projection_kind: string;
+      expected_event_ids_json: string; expected_events_json: string }
+    expect(JSON.parse(targetRow.expected_event_ids_json)).toEqual({ encoding: 'canonical-v1' })
+    expect(JSON.parse(targetRow.expected_events_json)).toEqual({ encoding: 'canonical-v1' })
+    const resolvedTarget = resolveCanonicalSessionLedgerProjectionTarget(conn, {
+      targetId: targetRow.target_id, ledgerLocationKey: targetRow.ledger_location_key, sessionId: targetRow.session_id,
+      sessionGeneration: targetRow.session_generation, canonicalEventId: targetRow.canonical_event_id,
+      canonicalSequence: targetRow.canonical_sequence, projectionOrder: targetRow.projection_order,
+      projectionKind: targetRow.projection_kind
+    })
+    expect(resolvedTarget?.expectedEventIds).toEqual(['tool_result:outbox-tool'])
+    expect(resolvedTarget?.expectedEvents).toEqual([{
       type: 'tool_result', schemaVersion: 2, payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } }
     }])
-    const proposalTarget = conn.prepare(`SELECT projection_kind,canonical_event_id,expected_events_json FROM session_ledger_projection_outbox
-      WHERE canonical_event_id='outbox-proposal'`).get() as { projection_kind: string; canonical_event_id: string; expected_events_json: string }
+    const proposalTarget = conn.prepare(`SELECT target_id,ledger_location_key,session_id,session_generation,canonical_event_id,
+      canonical_sequence,projection_order,projection_kind,expected_event_ids_json,expected_events_json FROM session_ledger_projection_outbox
+      WHERE canonical_event_id='outbox-proposal'`).get() as typeof targetRow
     expect(proposalTarget).toMatchObject({ projection_kind: 'tool-call:outbox-tool', canonical_event_id: 'outbox-proposal' })
-    expect(JSON.parse(proposalTarget.expected_events_json)).toEqual([{
+    expect(JSON.parse(proposalTarget.expected_event_ids_json)).toEqual({ encoding: 'canonical-v1' })
+    expect(JSON.parse(proposalTarget.expected_events_json)).toEqual({ encoding: 'canonical-v1' })
+    const resolvedProposal = resolveCanonicalSessionLedgerProjectionTarget(conn, {
+      targetId: proposalTarget.target_id, ledgerLocationKey: proposalTarget.ledger_location_key, sessionId: proposalTarget.session_id,
+      sessionGeneration: proposalTarget.session_generation, canonicalEventId: proposalTarget.canonical_event_id,
+      canonicalSequence: proposalTarget.canonical_sequence, projectionOrder: proposalTarget.projection_order,
+      projectionKind: proposalTarget.projection_kind
+    })
+    expect(resolvedProposal?.expectedEventIds).toEqual(['tool_call:outbox-tool'])
+    expect(resolvedProposal?.expectedEvents).toEqual([{
       type: 'tool_call', schemaVersion: 2, payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', name: 'read_file', args: { path: 'a.txt' }, turnId: 'turn-1' }
     }])
     await fs.rm(workDir, { recursive: true, force: true })
@@ -197,11 +221,22 @@ describe('SqliteAgentHistory', () => {
       kind: 'model-request-started', payload: { requestId: requestHeader.requestId, modelTurn: 1, attempt: 1,
         sessionLedger: { location, requestHeader, requestContext } } }], 0)
 
-    const row = conn.prepare(`SELECT projection_kind,expected_event_ids_json,expected_events_json FROM session_ledger_projection_outbox
-      WHERE canonical_event_id='request-projection-event'`).get() as { projection_kind: string; expected_event_ids_json: string; expected_events_json: string }
+    const row = conn.prepare(`SELECT target_id,ledger_location_key,session_id,session_generation,canonical_event_id,
+      canonical_sequence,projection_order,projection_kind,expected_event_ids_json,expected_events_json FROM session_ledger_projection_outbox
+      WHERE canonical_event_id='request-projection-event'`).get() as { target_id: string; ledger_location_key: string; session_id: string;
+        session_generation: string; canonical_event_id: string; canonical_sequence: number; projection_order: number;
+        projection_kind: string; expected_event_ids_json: string; expected_events_json: string }
     expect(row.projection_kind).toBe('request-projection')
-    expect(JSON.parse(row.expected_event_ids_json)).toEqual(['request_header:request-invocation:round:1:1', 'request_context:request-invocation:round:1:1'])
-    expect(JSON.parse(row.expected_events_json)).toEqual([
+    expect(JSON.parse(row.expected_event_ids_json)).toEqual({ encoding: 'canonical-v1' })
+    expect(JSON.parse(row.expected_events_json)).toEqual({ encoding: 'canonical-v1' })
+    const resolved = resolveCanonicalSessionLedgerProjectionTarget(conn, {
+      targetId: row.target_id, ledgerLocationKey: row.ledger_location_key, sessionId: row.session_id,
+      sessionGeneration: row.session_generation, canonicalEventId: row.canonical_event_id,
+      canonicalSequence: row.canonical_sequence, projectionOrder: row.projection_order,
+      projectionKind: row.projection_kind
+    })
+    expect(resolved?.expectedEventIds).toEqual(['request_header:request-invocation:round:1:1', 'request_context:request-invocation:round:1:1'])
+    expect(resolved?.expectedEvents).toEqual([
       { type: 'request_header', payload: requestHeader }, { type: 'request_context', payload: requestContext }
     ])
     await fs.rm(workDir, { recursive: true, force: true })

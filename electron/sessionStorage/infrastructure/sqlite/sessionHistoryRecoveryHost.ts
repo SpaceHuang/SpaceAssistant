@@ -43,7 +43,7 @@ export function createSqliteStartupHistoryRecoveryBindings(
         const session = getSession(db, location.sessionId)
         if (!session) throw new Error('SESSION_LEDGER_SESSION_MISSING')
         if (!(await input.ensureSessionLedgerReady({ location, sessionGeneration: session.generation }))) {
-          throw new Error('SESSION_LEDGER_BLOCKED')
+          throw new Error('session ledger repair deferred because readiness is unavailable')
         }
         return operation()
       }

@@ -3,14 +3,14 @@ import { getDbConnection } from '../database/sqliteStore'
 import { getSession } from '../database/operations'
 import { createSpillStoreForDatabase } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict, type SpillDescriptor } from '../storage/spillProtocol'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { SessionStorage, SessionStorageHost, SessionStorageStartupCoordination } from './host/ports'
 import { createSessionCommands } from './commands'
 import { createSessionQueries } from './queries'
 import { createSessionExecutionStore } from './execution'
 import { createSessionCommitService } from './application/sessionCommitService'
 import { createSessionStorageContextRouter } from './contextPortRegistry'
-import { getSessionEventSink, readCompactionReplay, readSessionEvents } from '../sessionEvents'
+import { getSessionEventSink, notifySessionEventLedgerFailure, readCompactionReplay, readSessionEvents } from '../sessionEvents'
 import type { CompactionReplay } from '../../src/shared/compactionEvents'
 import type { CanonicalContextMeterEvent, PreparedChatBodyView } from './public/model'
 import { createStorageSessionContextAdapter } from './contextAdapter'
@@ -49,6 +49,9 @@ import type { LifecycleTaskRegistration } from './host/ports'
 import type { ProjectionBuildSupervisorOptions } from './application/projectionBuildSupervisor'
 import { readPreparedChatBodiesInWorker, searchPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
 import { readProjectionSourceChatBodiesInWorker } from './infrastructure/sqlite/projectionSourceChatBodyWorkerClient'
+import { readLegacyProjectionMessages } from './infrastructure/sqlite/sessionLegacyQueryAdapter'
+import { buildToolChatMessagesFromSource } from '../chatMessageBuild'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurfaceWithSources, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset } from '../../src/shared/surfaceReplay'
 
 export { createSessionBodySourceBackfillTask }
 import { createSqliteStartupHistoryRecoveryBindings } from './infrastructure/sqlite/sessionHistoryRecoveryHost'
@@ -101,22 +104,215 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     const canPersist = !options.ensureSessionLedgerReady || await options.ensureSessionLedgerReady({ session, workDir, retryBlocked: false })
     if (!canPersist) return { replay: queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }, canPersist: false }
     const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
-    const fileReplay = await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)
-    const canonicalReplay = queries.readCanonicalCompactionReplay(sessionId)
-    if (!canonicalReplay) return { replay: fileReplay, sink, canPersist: true }
+    let fileReplay: CompactionReplay
+    try {
+      fileReplay = await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)
+    } catch (error) {
+      notifySessionEventLedgerFailure({ workDir, sessionId: session.id, createdAt: session.createdAt }, error)
+      throw error
+    }
+    const canonicalReplay = queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }
     const canonicalIds = new Set(canonicalReplay.committed.map(({ compactionId }) => compactionId))
     const rejectedIds = new Set(canonicalReplay.rejected.flatMap(({ compactionId }) => compactionId ? [compactionId] : []))
     const collidesWithRejectedCanonical = fileReplay.committed.some(({ compactionId }) => rejectedIds.has(compactionId))
     const hasLegacyOnlyCompaction = fileReplay.committed.some(({ compactionId }) => !canonicalIds.has(compactionId) && !rejectedIds.has(compactionId))
+    const backfillPrefix = `legacy-compaction-backfill:${sessionId}:`
+    const hasPartialCanonicalBackfill = Boolean(getDbConnection(db).prepare(`SELECT 1
+      FROM agent_history_streams streams
+      JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
+      WHERE streams.session_id=? AND streams.version=1 AND substr(streams.invocation_id,1,length(?))=?
+        AND events.kind='transcript-compacted' LIMIT 1`).get(sessionId, backfillPrefix, backfillPrefix))
+    const backfillEvents = getDbConnection(db).prepare(`SELECT streams.invocation_id,events.payload_json
+      FROM agent_history_streams streams
+      JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
+      WHERE streams.session_id=? AND events.kind='transcript-compacted' AND substr(streams.invocation_id,1,length(?))=?`)
+      .all(sessionId, backfillPrefix, backfillPrefix) as Array<{ invocation_id: string; payload_json: string }>
+    const versionedBackfills = new Set<string>()
+    const sessionSnapshotBackfills = new Set<string>()
+    for (const row of backfillEvents) {
+      try {
+        const payload = JSON.parse(row.payload_json) as { backfillSnapshotVersion?: unknown; sourceCompactionIds?: unknown }
+        if (payload.backfillSnapshotVersion !== 2) continue
+        versionedBackfills.add(row.invocation_id)
+        if (Array.isArray(payload.sourceCompactionIds)) {
+          for (const compactionId of payload.sourceCompactionIds) if (typeof compactionId === 'string') sessionSnapshotBackfills.add(compactionId)
+        }
+      } catch { /* Invalid snapshots are handled by canonical History validation when read. */ }
+    }
+    const hasBackfillWithoutCurrentSnapshot = canonicalReplay.committed.some(({ compactionId }) => {
+      if (!canonicalIds.has(compactionId)) return false
+      const invocationId = `${backfillPrefix}${compactionId}`
+      if (!backfillEvents.some((row) => row.invocation_id === invocationId)) return false
+      return !sessionSnapshotBackfills.has(compactionId) && !versionedBackfills.has(invocationId) && !backfillEvents.some((row) =>
+        row.invocation_id.startsWith(`${invocationId}:transcript-snapshot:`) && versionedBackfills.has(row.invocation_id))
+    })
+    const backfillRecords = [...fileReplay.committed, ...canonicalReplay.committed.filter(({ compactionId }) =>
+      !fileReplay.committed.some((record) => record.compactionId === compactionId))]
     if (collidesWithRejectedCanonical) throw new Error('CANONICAL_COMPACTION_REPLAY_INVALID')
+    if (hasLegacyOnlyCompaction || hasPartialCanonicalBackfill || hasBackfillWithoutCurrentSnapshot) {
+      const sessionMessages = readLegacyProjectionMessages(db, sessionId)
+      const latestUser = [...sessionMessages].reverse().find((message) => message.role === 'user')
+      if (latestUser) {
+        const built = await buildToolChatMessagesFromSource({ userDataDir: options.getUserDataDir?.() ?? '', workDir,
+          sourceMessages: sessionMessages, currentUserMessageId: latestUser.id, sessionId })
+        const projection = projectReplaySurfaceWithSources(built)
+        const identities = surfaceItemIdentitiesForProjectionSubset(projection, projection)
+        let surface = projection.messages.map((message, index) => ({ ...message, id: message.id ?? identities[index]! }))
+        const needsSessionSnapshot: string[] = []
+        const canonicalizeJson = (value: unknown): unknown => Array.isArray(value) ? value.map(canonicalizeJson)
+          : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, item]) => [key, canonicalizeJson(item)])) : value
+        const stableJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value))
+        for (const record of backfillRecords) {
+          const canonicalRecord = canonicalReplay.committed.find(({ compactionId }) => compactionId === record.compactionId)
+          if (canonicalRecord) {
+            if (stableJson(canonicalRecord.start.payload) !== stableJson(record.start.payload) ||
+              stableJson(canonicalRecord.summary.payload) !== stableJson(record.summary.payload)) {
+              throw new Error('CANONICAL_COMPACTION_REPLAY_INVALID')
+            }
+          }
+          if (rejectedIds.has(record.compactionId)) continue
+          const windowId = [record.summary, record.end].map((event) => event.payload.outputWindowId)
+            .find((value): value is string => typeof value === 'string') ??
+            [record.end, record.summary, record.start].map((event) => event.payload.windowId)
+              .find((value): value is string => typeof value === 'string') ?? `session:${sessionId}`
+          const inputSurface = surface
+          const nextSurface = applyCommittedSurfaceShadow(surface, { committed: [record], rejected: [] }, [latestUser.id], windowId,
+            (items) => computeReplaySurfaceFingerprint('', items))
+          const boundaryId = typeof record.start.payload.surfaceBoundaryId === 'string' ? record.start.payload.surfaceBoundaryId : undefined
+          const currentIdentities = surfaceItemIdentities(inputSurface)
+          const boundaryIndex = boundaryId ? inputSurface.findIndex(({ id }, index) => id === boundaryId || currentIdentities[index] === boundaryId) : -1
+          const historicalIds = boundaryIndex >= 0 ? new Set(inputSurface.slice(0, boundaryIndex + 1).map(({ id }) => id)) : undefined
+          const candidate = record.summary.payload.candidate
+          const checkpoint = candidate && typeof candidate === 'object'
+            ? (candidate as { checkpointMessage?: unknown }).checkpointMessage : undefined
+          const checkpointId = checkpoint && typeof checkpoint === 'object' && typeof (checkpoint as { id?: unknown }).id === 'string'
+            ? (checkpoint as { id: string }).id : undefined
+          const historicalOutput = historicalIds
+            ? nextSurface.filter(({ id }) => historicalIds.has(id) || id === checkpointId)
+            : nextSurface
+          if (typeof record.summary.payload.outputSurfaceFingerprint !== 'string' ||
+            computeReplaySurfaceFingerprint('', historicalOutput) !== record.summary.payload.outputSurfaceFingerprint) continue
+          if (canonicalRecord) {
+            surface = nextSurface
+            // The canonical compaction commit and compatibility backfill stream are separate
+            // writes. A crash between them leaves a one-event backfill to close on retry.
+            const backfillId = `legacy-compaction-backfill:${sessionId}:${record.compactionId}`
+            const partialBackfill = await execution.historyFor({ sessionId }).read(backfillId)
+            if (partialBackfill.version === 0) continue
+          }
+          const start = record.start.payload
+          const summary = record.summary.payload
+          const invocationId = `legacy-compaction-backfill:${sessionId}:${record.compactionId}`
+          const eventId = `${invocationId}:transcript-compacted`
+          const completedEventId = `${invocationId}:completed`
+          const history = execution.historyFor({ sessionId })
+          const stored = await history.read(invocationId)
+          const payload = { compactionId: record.compactionId,
+            // A completed backfill is also a candidate Hosted transcript snapshot. Keep
+            // post-compaction turns so cutover does not mistake them for an untrusted tail.
+            messages: nextSurface.map((message) => ({ ...message })), backfillSnapshotVersion: 2,
+            sessionLedger: { location: { workDir, sessionId, createdAt: session.createdAt }, start, summary },
+            surfaceReplay: { windowId, inputFingerprint: start.inputSurfaceFingerprint,
+              outputFingerprint: summary.outputSurfaceFingerprint,
+              checkpointReplayIdentity: (summary.candidate as { checkpointReplayIdentity?: unknown } | undefined)?.checkpointReplayIdentity } }
+          const completedEvent = { invocationId, turnId: invocationId, sequence: 2, schemaVersion: 1,
+            eventId: completedEventId, idempotencyKey: completedEventId, kind: 'invocation-completed' as const,
+            payload: { status: 'completed', completedAt: Date.now() } }
+          if (stored.version > 0) {
+            const existing = stored.events.find(({ kind }) => kind === 'transcript-compacted')
+            const existingPayload = existing?.payload as typeof payload | undefined
+            const existingMessages = existingPayload && Array.isArray(existingPayload.messages) ? existingPayload.messages : undefined
+            const expectedMessages = payload.messages
+            let expectedIndex = 0
+            const storedMessagesAreKnown = existingMessages?.every((message) => {
+              const messageId = message && typeof message === 'object' ? (message as { id?: unknown }).id : undefined
+              if (typeof messageId !== 'string') return false
+              const expectedIndexForStoredMessage = expectedMessages.findIndex((candidate, index) => index >= expectedIndex &&
+                (candidate as { id?: unknown }).id === messageId && stableJson(candidate) === stableJson(message))
+              if (expectedIndexForStoredMessage < 0) return false
+              expectedIndex = expectedIndexForStoredMessage + 1
+              return true
+            })
+            const metadataMatches = existingPayload && stableJson({ ...existingPayload, messages: undefined, backfillSnapshotVersion: undefined }) ===
+              stableJson({ ...payload, messages: undefined, backfillSnapshotVersion: undefined })
+            if (!existing || !existingMessages || !storedMessagesAreKnown || !metadataMatches) {
+              throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+            }
+            if (stableJson(existingMessages) !== stableJson(expectedMessages) || existingPayload?.backfillSnapshotVersion !== 2) {
+              // Do not publish an intermediate snapshot here: a later canonical manual
+              // compaction in this same replay chain may supersede this surface.
+              needsSessionSnapshot.push(record.compactionId)
+            }
+            const terminal = stored.events.at(-1)
+            if (stored.version === 1 && terminal?.kind === 'transcript-compacted') {
+              await history.appendBatch([completedEvent], stored.version)
+            } else if (stored.version !== 2 || terminal?.kind !== 'invocation-completed' ||
+              (terminal.payload as { status?: unknown }).status !== 'completed') {
+              throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+            }
+          } else {
+            await history.appendBatch([{ invocationId, turnId: invocationId, sequence: 1, schemaVersion: 1,
+              eventId, idempotencyKey: eventId, kind: 'transcript-compacted', payload }, completedEvent], 0)
+          }
+          surface = nextSurface
+        }
+        if (needsSessionSnapshot.length > 0) {
+          const sourceCompactionIds = [...new Set(needsSessionSnapshot)].sort()
+          const transcriptVersion = createHash('sha256').update(stableJson({ sourceCompactionIds, messages: surface })).digest('hex').slice(0, 24)
+          const snapshotInvocationId = `${backfillPrefix}session-transcript-snapshot:${transcriptVersion}`
+          const snapshotEventId = `${snapshotInvocationId}:transcript-compacted`
+          const snapshotCompletedEventId = `${snapshotInvocationId}:completed`
+          const snapshotPayload = { messages: surface.map((message) => ({ ...message })), backfillSnapshotVersion: 2, sourceCompactionIds }
+          const existingSnapshot = await execution.historyFor({ sessionId }).read(snapshotInvocationId)
+          if (existingSnapshot.version === 0) {
+            await execution.historyFor({ sessionId }).appendBatch([
+              { invocationId: snapshotInvocationId, turnId: snapshotInvocationId, sequence: 1, schemaVersion: 1,
+                eventId: snapshotEventId, idempotencyKey: snapshotEventId, kind: 'transcript-compacted', payload: snapshotPayload },
+              { invocationId: snapshotInvocationId, turnId: snapshotInvocationId, sequence: 2, schemaVersion: 1,
+                eventId: snapshotCompletedEventId, idempotencyKey: snapshotCompletedEventId, kind: 'invocation-completed',
+                payload: { status: 'completed', completedAt: Date.now() } }
+            ], 0)
+          } else {
+            const snapshot = existingSnapshot.events.find(({ kind }) => kind === 'transcript-compacted')
+            if (!snapshot || stableJson(snapshot.payload) !== stableJson(snapshotPayload)) throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+            const terminal = existingSnapshot.events.at(-1)
+            if (existingSnapshot.version === 1 && terminal?.kind === 'transcript-compacted') {
+              await execution.historyFor({ sessionId }).appendBatch([{ invocationId: snapshotInvocationId, turnId: snapshotInvocationId,
+                sequence: 2, schemaVersion: 1, eventId: snapshotCompletedEventId, idempotencyKey: snapshotCompletedEventId,
+                kind: 'invocation-completed', payload: { status: 'completed', completedAt: Date.now() } }], existingSnapshot.version)
+            } else if (existingSnapshot.version !== 2 || terminal?.kind !== 'invocation-completed' ||
+              (terminal.payload as { status?: unknown }).status !== 'completed') throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+          }
+        }
+      }
+    }
+    const refreshedCanonicalReplay = queries.readCanonicalCompactionReplay(sessionId) ?? canonicalReplay
+    const refreshedCanonicalIds = new Set(refreshedCanonicalReplay.committed.map(({ compactionId }) => compactionId))
+    const stillHasLegacyOnlyCompaction = fileReplay.committed.some(({ compactionId }) => !refreshedCanonicalIds.has(compactionId) && !rejectedIds.has(compactionId))
     // Keep the file replay as the ordered compatibility source while it contains pre-canonical facts.
     // Once every file fact has a canonical owner, History supplies the replay without a JSONL dependency.
-    return { replay: hasLegacyOnlyCompaction ? fileReplay : canonicalReplay, sink, canPersist: true }
+    const replay = stillHasLegacyOnlyCompaction ? fileReplay : refreshedCanonicalReplay
+    const replayCommittedIds = new Set(replay.committed.map(({ compactionId }) => compactionId))
+    const rejectedByIdentity = new Map<string, CompactionReplay['rejected'][number]>()
+    for (const rejected of [...refreshedCanonicalReplay.rejected, ...(fileReplay.rejected ?? [])]) {
+      if (rejected.compactionId && replayCommittedIds.has(rejected.compactionId)) throw new Error('CANONICAL_COMPACTION_REPLAY_INVALID')
+      rejectedByIdentity.set(`${rejected.compactionId ?? ''}\u0000${rejected.reason}`, rejected)
+    }
+    return { replay: { ...replay, rejected: [...rejectedByIdentity.values()] }, sink, canPersist: true }
   }
   const readContextMeterEventsForLocation = async (sessionId: string, workDir: string): Promise<readonly CanonicalContextMeterEvent[]> => {
     const session = queries.readSession(sessionId)
     if (!session) throw new Error('SESSION_NOT_FOUND')
-    if (options.ensureSessionLedgerReady && !(await options.ensureSessionLedgerReady({ session, workDir }))) throw new Error('SESSION_LEDGER_BLOCKED')
+    if (options.ensureSessionLedgerReady) {
+      try {
+        if (!(await options.ensureSessionLedgerReady({ session, workDir }))) {
+          return queries.readCanonicalContextMeterEvents(sessionId) ?? []
+        }
+      } catch {
+        return queries.readCanonicalContextMeterEvents(sessionId) ?? []
+      }
+    }
     const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
     const fileEvents = (await readSessionEvents(sink.eventsPath)).filter(({ type }) =>
       type === 'request_header' || type === 'request_context' || type === 'request_usage' || type === 'request_retry')
@@ -383,7 +579,8 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
         content: Object.freeze({ state: 'unavailable' as const, reason: 'session-missing' as const,
           source: Object.freeze({ sessionGeneration: '', messageRevision: 0, authority: 'unknown' }) }),
         execution: Object.freeze({ state: 'blocked' as const, source: Object.freeze({ sessionId, transcriptVersion: 0 }) }),
-        ledger: Object.freeze({ state: 'unknown', reason: 'readiness-missing' as const, source: Object.freeze({ sessionId }) }),
+        ledger: Object.freeze({ state: 'degraded' as const, readinessState: 'unknown' as const, reasonCode: 'readiness-missing' as const,
+          reason: 'readiness-missing' as const, source: Object.freeze({ sessionId }) }),
         maintenance: Object.freeze({ state: maintenanceState, tasks: Object.freeze(maintenanceTasks), source: maintenanceSource })
       })
       const conn = getDbConnection(db)
@@ -403,12 +600,14 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       else if (execution.hasActiveTurn(sessionId)) executionState = 'busy'
       else executionState = 'ready'
       const workDir = options.getWorkDirForSession?.(sessionId)
-      let ledger: { state: 'uninitialized' | 'initializing' | 'unknown' | 'checking' | 'ready' | 'dirty' | 'blocked'; reason?: 'location-unavailable' | 'readiness-missing'; source: { sessionId: string; locationKey?: string; ledgerGeneration?: number; canonicalWatermark?: string | null; failureClass?: string | null } }
-      if (!workDir) ledger = { state: 'unknown', reason: 'location-unavailable', source: { sessionId } }
+      let ledger: { state: 'ready' | 'degraded'; readinessState: 'uninitialized' | 'initializing' | 'unknown' | 'checking' | 'ready' | 'dirty' | 'blocked'; reasonCode?: 'location-unavailable' | 'readiness-missing' | 'ledger-uninitialized' | 'ledger-initializing' | 'ledger-unknown' | 'ledger-checking' | 'ledger-dirty' | 'ledger-blocked'; reason?: 'location-unavailable' | 'readiness-missing'; source: { sessionId: string; locationKey?: string; ledgerGeneration?: number; canonicalWatermark?: string | null; failureClass?: string | null } }
+      if (!workDir) ledger = { state: 'degraded', readinessState: 'unknown', reason: 'location-unavailable', reasonCode: 'location-unavailable', source: { sessionId } }
       else {
         const location = { workDir, sessionId, createdAt: session.createdAt }
         const readiness = readSessionLedgerAvailability(conn, location)
-        ledger = { state: readiness.state, ...(readiness.reason ? { reason: readiness.reason } : {}), source: { sessionId, locationKey: readiness.locationKey,
+        const reasonCode = readiness.state === 'ready' ? undefined : readiness.reason ?? `ledger-${readiness.state}` as NonNullable<typeof ledger['reasonCode']>
+        ledger = { state: readiness.state === 'ready' ? 'ready' : 'degraded', readinessState: readiness.state,
+          ...(reasonCode ? { reasonCode } : {}), ...(readiness.reason ? { reason: readiness.reason } : {}), source: { sessionId, locationKey: readiness.locationKey,
           ...(readiness.ledgerGeneration !== undefined ? { ledgerGeneration: readiness.ledgerGeneration } : {}),
           ...(readiness.canonicalWatermark !== undefined ? { canonicalWatermark: readiness.canonicalWatermark } : {}),
           ...(readiness.failureClass !== undefined ? { failureClass: readiness.failureClass } : {}) } }

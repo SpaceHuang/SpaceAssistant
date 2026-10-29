@@ -124,6 +124,9 @@
     "menuCompact": "Compact context",
     "menuCompactNotReady": "This action is not available yet",
     "compactionCommitted": "Context compaction completed",
+    "compactionRepairReplayCommitted": "An earlier context summary was regenerated using its original window",
+    "compactionRepairResplitCommitted": "Earlier context was re-split and compacted from the current history",
+    "compactionRepairFullExpand": "Earlier context could not be re-compacted. The full history is retained; check its length before continuing.",
     "compactionNoop": "The current context does not need compaction",
     "compactionUncompressible": "The current context cannot be safely compacted",
     "compactionBusy": "The session is running. Try again when it finishes.",
@@ -361,6 +364,8 @@
     "title": "Automatic compaction",
     "running": "Compacting context…",
     "succeeded": "Compacted, usage {{before}}% → {{after}}%",
+    "repairOriginalSucceeded": "An earlier summary was regenerated using its original window",
+    "repairNewSplitSucceeded": "Earlier context was re-split using the current history",
     "failed": "Compaction failed",
     "skippedNoGain": "Not compacted (no savings)",
     "skippedUncompressible": "Not compacted (no savings possible)",
@@ -371,6 +376,7 @@
     "reasonTimeout": "The summary request timed out. The current request will continue if it fits the remaining context budget.",
     "reasonInvalid": "The summary format was invalid. The current request will continue if it fits the remaining context budget.",
     "reasonUnavailable": "The summary model or credentials are unavailable. The current request will continue if it fits the remaining context budget.",
-    "reasonFailed": "The summary could not be completed. The current request will continue if it fits the remaining context budget."
+    "reasonFailed": "The summary could not be completed. The current request will continue if it fits the remaining context budget.",
+    "repairFallbackFullExpand": "Re-compaction did not succeed. The full history was retained, and the current request will try to continue with it."
   }
 }
