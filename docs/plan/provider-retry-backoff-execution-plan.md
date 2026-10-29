@@ -84,17 +84,17 @@
 
 ### 阶段 3：回合等待预算
 
-- [～] **T4｜实现回合余额与边界**。范围：`packages/agent-sdk/src/turn.ts`、`invocation.ts`、相关宿主恢复端口及 `packages/agent-sdk/test/turn.test.ts`、`electron/runtime/agentSdkProviderRecovery.test.ts`。覆盖跨 modelTurn 共享、单调时钟实耗扣减、取消、实测超支、恰好耗尽、零余额与零/正候选、各专用恢复；按 G0 明确的顺序断言返回码、是否派发、审计与计数。加入随机操作序列及状态不变量，并固定随机种子以便复现。
+- [x] **T4｜实现回合余额与边界**。范围：`packages/agent-sdk/src/turn.ts`、`invocation.ts`、相关宿主恢复端口及 `packages/agent-sdk/test/turn.test.ts`、`electron/runtime/agentSdkProviderRecovery.test.ts`。覆盖跨 modelTurn 共享、单调时钟实耗扣减、取消、实测超支、恰好耗尽、零余额与零/正候选、各专用恢复；按 G0 明确的顺序断言返回码、是否派发、审计与计数。加入随机操作序列及状态不变量，并固定随机种子以便复现。
   - 产物 / 完成判据：`AC-7`、`AC-13`、`AC-14`、`AC-15`、`AC-17` 的超余额部分及完整 `AC-27`；实现零余额拒绝的 `not-dispatched` 记录，断言不增加物理及分类计数。命令：`npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/runtime/agentSdkProviderRecovery.test.ts`；`npm run typecheck:agent-sdk`。
-  - 证据：待填写。
-- [ ] **G3｜阶段 3 关闭**。证据来自 T4 的 AC-7、AC-13、AC-14、AC-15、AC-17 超余额部分及完整 AC-27；执行定向测试、`npm run build:electron:incremental`、`npm test`。在隔离工作树回退阶段 3，验证阶段 2 单次上限与阶段 1 记录仍有效；提交阶段 3。
-  - 证据：待填写。
+  - 证据：RED：新增跨 modelTurn 40s + 30s、零余额 0ms、计划恰好耗尽、专用 idle-timeout 零等待及种子随机预算状态序列；实现前余额始终被传为 `Infinity`，跨回合超额等待仍派发并成功。GREEN：`npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/runtime/agentSdkProviderRecovery.test.ts` 2 files / 185 tests passed；覆盖跨 modelTurn 保持 20s 余额、超过余额不派发并写 attempt 2 的 `not-dispatched`、provider 正常耗时不扣预算、等额等待仍执行、等待实测超支 1s 写 `waitBudgetOverrunMs`、零预算拒绝与专用零等待例外；`npm run typecheck:agent-sdk`、`npm run check:agent-sdk` 通过。随机不变量测试以固定种子验证 1000 次扣减后余额范围、单调性和公式。
+- [x] **G3｜阶段 3 关闭**。证据来自 T4 的 AC-7、AC-13、AC-14、AC-15、AC-17 超余额部分及完整 AC-27；执行定向测试、`npm run build:electron:incremental`、`npm test`。在隔离工作树回退阶段 3，验证阶段 2 单次上限与阶段 1 记录仍有效；提交阶段 3。
+  - 证据：`npm run build:electron:incremental` 通过；`npm test` 通过，1228 files passed / 1 skipped，11850 tests passed / 140 skipped，约 26m30s，Node `MaxListenersExceededWarning` 不影响退出码。阶段 3 代码提交 `17ba6087ab9711523cfa2aff4ede8e558a78790a`；事件字段补充文档提交 `d725bc6c8baae061963ee3e5cb3668dfb380493c`。隔离回退：临时 worktree revert 阶段 3 提交后运行五组测试（providerRecovery、sqliteAgentHistory、sessionLedgerOutbox、turn、history），5 files / 439 tests passed，阶段 2 单次上限与阶段 1 记录仍有效；临时 worktree/分支已删除。`git diff --check` 通过，评审未发现阶段阻断项。
 
 ### 阶段 4：事件时序与界面
 
 - [ ] **G4a｜定位或准备本地卡片容器**。范围：只读压缩方案及 `src/renderer/components/Chat/`、`src/renderer/services/`、共享显示类型。记录可复用容器、重建入口与测试；不存在时登记 T6 本地实现最小可复用容器的具体文件范围，保持方案附录 E 已批准的入口、状态和折叠交互。此核查不要求压缩方案落地；只有发现必须改变已批准界面语义时，才停止依赖该变更的部分并按项目规则处理。完成判据：有可执行的本地实现路径及测试文件清单。
   - 证据：待填写。
-- [ ] **T5｜接通安排、等待和终结时序**。范围：`packages/agent-sdk/src/turn.ts`、`history.ts`，`electron/runtime/agentSdkDesktopObserver.ts`、`sqliteAgentHistory.ts`、相关账本投影及对应测试。验证先追加安排再等待、追加失败不派发、等待取消、未派发终结、结果追加失败、重启/旧账本恢复及同请求关联；保持模型 transcript 不含重试事件。
+- [～] **T5｜接通安排、等待和终结时序**。范围：`packages/agent-sdk/src/turn.ts`、`history.ts`，`electron/runtime/agentSdkDesktopObserver.ts`、`sqliteAgentHistory.ts`、相关账本投影及对应测试。验证先追加安排再等待、追加失败不派发、等待取消、未派发终结、结果追加失败、重启/旧账本恢复及同请求关联；保持模型 transcript 不含重试事件。
   - 产物 / 完成判据：`AC-18`–`AC-20`、`AC-22`、`AC-24`、`AC-26` 的后端时序及记录部分；界面部分留给 T6。命令：`npm exec vitest run packages/agent-sdk/test/turn.test.ts packages/agent-sdk/test/history.test.ts electron/runtime/sqliteAgentHistory.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/sessionLedgerOutbox.test.ts`。
   - 证据：待填写。
 - [ ] **T6｜接通重试卡片与历史重建**。范围：G4a 确认的 `src/renderer/components/Chat/` 卡片容器、`src/renderer/services/turnProjectionService.ts` 及重建链路、所需 `src/shared/` 显示类型、`src/renderer/i18n/resources/{zh-CN,en-US}/`、生成的 i18n 类型及对应测试。复用已有容器；若缺失则在已批准界面范围内创建最小可复用容器；覆盖等待可见、连续重试原地更新、成功折叠、失败、取消、崩溃重建、旧账本及不泄露服务端原文。
