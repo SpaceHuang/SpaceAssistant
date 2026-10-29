@@ -530,7 +530,12 @@ app.whenReady().then(async () => {
   })
   const getRecoveryWorkDirs = () => [...new Set([
     ...getConfiguredRecoveryWorkDirs(),
-    ...listManagedButlerSessionLedgerRoots(userDataDir)
+    ...listManagedButlerSessionLedgerRoots(userDataDir, ({ path: scanPath, operation, error }) => {
+      logAgentEvent('warn', 'session.history.recovery', {
+        kind: 'butler-ledger-root-scan-failed', operation, path: scanPath,
+        reasonCode: error instanceof Error ? error.name : 'unknown'
+      })
+    })
   ])]
   const isAuthorizedLedgerRoot = (workDir: string, sessionId: string): boolean => {
     return isSessionLedgerRecoveryRootAllowed({ userDataDir, workDir, sessionId,
@@ -881,7 +886,9 @@ app.whenReady().then(async () => {
       const activeProfileId = getConfigValue(db, 'config.activeWorkDirProfileId')
       const result = await measureStartupPhase('canonical-history.recovery', () => startupHistory.recoverInterruptedInvocationsWithLedger({
         ledgerRecovery,
-        allowedRoots: recoveryWorkDirs,
+        // Refresh the optional Butler roots at the point of recovery: a transient
+        // enumeration error must not suppress retry for the lifetime of this app.
+        allowedRoots: getRecoveryWorkDirs(),
         configuredWorkDir: recoveryWorkDir,
         activeProfileId,
         profilesJson,

@@ -758,7 +758,7 @@ describe('SQLite session storage public queries', () => {
       const candidate = { kind: 'summary', checkpointMessage, checkpointReplayIdentity: checkpointMessage.id,
         shadowedRanges: [{ start: messages[0]!.id, end: messages[1]!.id }] }
       const start = { compactionId: 'legacy-backfill-compaction', windowId: session.id,
-        inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', sourceSurface), surfaceBoundaryId: messages.at(-1)!.id, targetTokens: 100 }
+        inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', sourceSurface), surfaceBoundaryId: sourceIdentities.at(-1)!, targetTokens: 100 }
       const outputSurface = projectReplaySurfaceWithSources([checkpointMessage, ...sourceSurface.slice(2)],
         { mergeAdjacentUsers: (left, right) => left.id === checkpointMessage.id || right.id === checkpointMessage.id }).messages
       const summary = { compactionId: start.compactionId, windowId: session.id,
@@ -791,6 +791,11 @@ describe('SQLite session storage public queries', () => {
         .get(session.id) as { count: number }
       expect(firstCount.count).toBe(1)
 
+      // A second normal turn may arrive after the process stopped halfway through backfill.
+      appendMessagesAtomically(db, [
+        { id: 'legacy-backfill-u4', sessionId: session.id, role: 'user', content: 'another later question', timestamp: 7, status: 'sent' },
+        { id: 'legacy-backfill-a4', sessionId: session.id, role: 'assistant', content: 'another later answer', timestamp: 8, status: 'completed' }
+      ])
       db.close()
       db = openDatabase(temp.dbPath)
       const reopenedStorage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',

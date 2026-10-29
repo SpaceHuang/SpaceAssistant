@@ -2,18 +2,32 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 /** Lists existing Butler task roots after rejecting symlinked or escaped directories. */
-export function listManagedButlerSessionLedgerRoots(userDataDir: string): readonly string[] {
+export function listManagedButlerSessionLedgerRoots(
+  userDataDir: string,
+  onScanError?: (input: { path: string; operation: 'lstat' | 'realpath' | 'readdir'; error: unknown }) => void
+): readonly string[] {
   const automationRoot = path.resolve(userDataDir, 'automation-sessions')
-  const automationStat = fs.lstatSync(automationRoot, { throwIfNoEntry: false })
+  let automationStat: fs.Stats | undefined
+  try { automationStat = fs.lstatSync(automationRoot, { throwIfNoEntry: false }) }
+  catch (error) { onScanError?.({ path: automationRoot, operation: 'lstat', error }); return [] }
   if (!automationStat?.isDirectory() || automationStat.isSymbolicLink()) return []
-  const realAutomationRoot = fs.realpathSync(automationRoot)
+  let realAutomationRoot: string
+  try { realAutomationRoot = fs.realpathSync(automationRoot) }
+  catch (error) { onScanError?.({ path: automationRoot, operation: 'realpath', error }); return [] }
+  let entries: fs.Dirent[]
+  try { entries = fs.readdirSync(realAutomationRoot, { withFileTypes: true }) }
+  catch (error) { onScanError?.({ path: realAutomationRoot, operation: 'readdir', error }); return [] }
   const roots: string[] = []
-  for (const entry of fs.readdirSync(realAutomationRoot, { withFileTypes: true })) {
+  for (const entry of entries) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue
     const candidate = path.join(realAutomationRoot, entry.name)
-    const stat = fs.lstatSync(candidate, { throwIfNoEntry: false })
+    let stat: fs.Stats | undefined
+    try { stat = fs.lstatSync(candidate, { throwIfNoEntry: false }) }
+    catch (error) { onScanError?.({ path: candidate, operation: 'lstat', error }); continue }
     if (!stat?.isDirectory() || stat.isSymbolicLink()) continue
-    const realCandidate = fs.realpathSync(candidate)
+    let realCandidate: string
+    try { realCandidate = fs.realpathSync(candidate) }
+    catch (error) { onScanError?.({ path: candidate, operation: 'realpath', error }); continue }
     if (path.dirname(realCandidate) === realAutomationRoot) roots.push(realCandidate)
   }
   return Object.freeze(roots)

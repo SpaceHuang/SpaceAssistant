@@ -355,6 +355,26 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(ensureSessionLedgerReady).toHaveBeenCalledOnce()
   })
 
+  it('persists Butler session ownership while the run is active and retains it after failure', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
+    setConfigValue(db, 'config.models', JSON.stringify([model]))
+    const task = createAutomationTask(db, { name: 'ledger ownership timing', schedule: { kind: 'interval', intervalMinutes: 30 },
+      prompt: 'report', deliveryPref: 'none', workDirs: [testWorkDir], modelId, modelServiceId: 'svc-ledger-ownership', modelOverride: model.name })
+    let activeLink: unknown
+    let createdSessionId = ''
+
+    const result = await runButlerTask(makeDeps({ onSessionCreated: (session: { id: string }) => {
+      createdSessionId = session.id
+      activeLink = getDbConnection(db).prepare('SELECT status,session_id FROM automation_task_runs WHERE task_id=? ORDER BY created_at DESC LIMIT 1').get(task.id)
+      throw new Error('injected failure after session creation')
+    } }), task.id, { trigger: 'manual', requestId: 'req-butler-session-link-failure' })
+
+    expect(result.ok).toBe(false)
+    expect(activeLink).toEqual({ status: 'running', session_id: createdSessionId })
+    expect(getLatestRunForTask(db, task.id)).toMatchObject({ status: 'failed', sessionId: createdSessionId })
+  })
+
   it('uses the receipt-bound Shell working directory even when another authorized root sorts first', async () => {
     const firstRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-shell-cwd-first-'))
     const shellRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-shell-cwd-selected-'))

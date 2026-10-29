@@ -368,6 +368,9 @@ export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId
     visibility: 'section'
     })
     const sessionId = session.id
+    // Persist task/run/session ownership as soon as the session exists. Recovery may
+    // observe this run while the provider is still executing or after a failed turn.
+    updateAutomationTaskRun(db, runId, { sessionId })
     if (effectiveEffort !== effort) logAgentEvent('info', 'agent.profile.reasoning_degraded', {
       requestId, sessionId, modelId, model: providerModelName, from: effort, to: 'off', reason: 'model-not-support-thinking'
     })

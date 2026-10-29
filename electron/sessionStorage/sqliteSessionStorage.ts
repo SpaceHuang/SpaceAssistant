@@ -51,7 +51,7 @@ import { readPreparedChatBodiesInWorker, searchPreparedChatBodiesInWorker } from
 import { readProjectionSourceChatBodiesInWorker } from './infrastructure/sqlite/projectionSourceChatBodyWorkerClient'
 import { readLegacyProjectionMessages } from './infrastructure/sqlite/sessionLegacyQueryAdapter'
 import { buildToolChatMessagesFromSource } from '../chatMessageBuild'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurfaceWithSources, surfaceItemIdentitiesForProjectionSubset } from '../../src/shared/surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurfaceWithSources, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset } from '../../src/shared/surfaceReplay'
 
 export { createSessionBodySourceBackfillTask }
 import { createSqliteStartupHistoryRecoveryBindings } from './infrastructure/sqlite/sessionHistoryRecoveryHost'
@@ -149,7 +149,8 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
           const nextSurface = applyCommittedSurfaceShadow(surface, { committed: [record], rejected: [] }, [latestUser.id], windowId,
             (items) => computeReplaySurfaceFingerprint('', items))
           const boundaryId = typeof record.start.payload.surfaceBoundaryId === 'string' ? record.start.payload.surfaceBoundaryId : undefined
-          const boundaryIndex = boundaryId ? surface.findIndex(({ id }) => id === boundaryId) : -1
+          const currentIdentities = surfaceItemIdentities(surface)
+          const boundaryIndex = boundaryId ? surface.findIndex(({ id }, index) => id === boundaryId || currentIdentities[index] === boundaryId) : -1
           const historicalIds = boundaryIndex >= 0 ? new Set(surface.slice(0, boundaryIndex + 1).map(({ id }) => id)) : undefined
           const candidate = record.summary.payload.candidate
           const checkpoint = candidate && typeof candidate === 'object'
@@ -177,7 +178,9 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
           const history = execution.historyFor({ sessionId })
           const stored = await history.read(invocationId)
           const payload = { compactionId: record.compactionId,
-            messages: nextSurface.map((message) => ({ ...message })),
+            // Persist only the verified output through this compaction's source boundary.
+            // Later conversation turns are a replay suffix, not part of this immutable backfill.
+            messages: historicalOutput.map((message) => ({ ...message })),
             sessionLedger: { location: { workDir, sessionId, createdAt: session.createdAt }, start, summary },
             surfaceReplay: { windowId, inputFingerprint: start.inputSurfaceFingerprint,
               outputFingerprint: summary.outputSurfaceFingerprint,
@@ -187,7 +190,20 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
             payload: { status: 'completed', completedAt: Date.now() } }
           if (stored.version > 0) {
             const existing = stored.events.find(({ kind }) => kind === 'transcript-compacted')
-            if (!existing || stableJson(existing.payload) !== stableJson(payload)) throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+            const existingPayload = existing?.payload as typeof payload | undefined
+            const existingMessages = existingPayload && Array.isArray(existingPayload.messages) ? existingPayload.messages : undefined
+            const historicalMessageIds = historicalIds ?? new Set(surface.map(({ id }) => id))
+            const suffixMessageIds = new Set(boundaryIndex >= 0 ? surface.slice(boundaryIndex + 1).map(({ id }) => id) : [])
+            const historicalOutputMessageIds = new Set([...historicalMessageIds, ...(checkpointId ? [checkpointId] : [])])
+            const knownMessageIds = new Set([...historicalOutputMessageIds, ...suffixMessageIds])
+            const storedMessagesAreKnown = existingMessages?.every((message) => message && typeof message === 'object' &&
+              typeof (message as { id?: unknown }).id === 'string' && knownMessageIds.has((message as { id: string }).id))
+            const storedHistoricalMessages = existingMessages?.filter((message) => message && typeof message === 'object' &&
+              typeof (message as { id?: unknown }).id === 'string' && historicalOutputMessageIds.has((message as { id: string }).id))
+            const metadataMatches = existingPayload && stableJson({ ...existingPayload, messages: undefined }) === stableJson({ ...payload, messages: undefined })
+            if (!existing || !existingMessages || !storedMessagesAreKnown || !metadataMatches || stableJson(storedHistoricalMessages) !== stableJson(payload.messages)) {
+              throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+            }
             const terminal = stored.events.at(-1)
             if (stored.version === 1 && terminal?.kind === 'transcript-compacted') {
               await history.appendBatch([completedEvent], stored.version)
