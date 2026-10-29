@@ -66,7 +66,7 @@ export function createAgentSdkProviderRecovery(input: {
         ...(serverAskedMs !== undefined ? { serverAskedMs, retryAt: now + serverAskedMs } : {})
       }
       return { kind: 'retry', reasonCode: transient.reasonCode, messages: request.messages, retryEvent: { attempt: request.attempt, code: transient.code }, recordTranscriptCompaction: false,
-        maxAttempts: 5, plannedWaitMs, recoveryKind: 'transient', ...(serverAskedMs !== undefined ? { retryAfterMs: serverAskedMs } : {}) }
+        maxAttempts: 5, plannedWaitMs, recoveryKind: 'transient', ...(serverAskedMs !== undefined ? { retryAfterMs: serverAskedMs, serverAskedMs, retryAt: now + serverAskedMs } : {}) }
     }
     const recoveryCounts = request.recoveryCounts
     if ((recoveryCounts?.effort ?? (request.attempt > 1 ? 1 : 0)) < 1 && request.request?.thinking?.effort && isOutputConfigRejectedError(request.error)) {
