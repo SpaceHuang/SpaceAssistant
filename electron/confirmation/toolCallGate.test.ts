@@ -294,6 +294,76 @@ function auditSink(): { record: (e: SecurityAuditEvent) => void; events: Securit
 }
 
 describe('IM standard policy override is final at the gate', () => {
+  it.each(['wechat', 'feishu'] as const)('%s isolated v3 routes bounded git status/log to Agent and leaves other shell calls denied', async (lane) => {
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'shell-review-')))
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const run = (command: string, version = 'im-standard-v3') => {
+      const imPolicySnapshot = { ...snapshot, policyBehaviorVersion: version }
+      const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: version, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+      return evaluateToolCallGate(base({ lane, workDir, userDataDir: path.join(workDir, '.userdata'), toolName: 'run_shell', toolInput: { command }, effectiveRules: rules, imPolicySnapshot }))
+    }
+    try {
+      for (const command of ['git status', 'git log']) {
+        const result = await run(command)
+        expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'im-shell-review-candidate' }))
+        expect(result.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'unknown' })
+        expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-shell-review', answerer: 'agent' })
+      }
+      for (const command of ['git push', 'git -c core.fsmonitor=helper status', 'git status && touch marker', 'git status | cat']) {
+        const result = await run(command)
+        expect(result.facts.signals).not.toContainEqual(expect.objectContaining({ kind: 'im-shell-review-candidate' }))
+        expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'remote-shell-disabled' })
+      }
+      expect((await run('git status', 'im-v1.6')).decision).toMatchObject({ type: 'deny', ruleId: 'remote-shell-disabled' })
+    } finally { await fs.rm(workDir, { recursive: true, force: true }) }
+  })
+
+  it.each(['wechat', 'feishu'] as const)('%s isolated v3 write candidate reviews only ordinary outside new/edit targets', async (lane) => {
+    const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-candidate-')))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const existing = path.join(outside, 'existing.txt')
+    await fs.writeFile(existing, 'before')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const created = await evaluateToolCallGate(base({ lane, workDir, toolName: 'write_file', toolInput: { path: path.join(outside, 'new.txt'), content: 'approved new content' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const edited = await evaluateToolCallGate(base({ lane, workDir, toolName: 'edit_file', toolInput: { path: existing, old_string: 'before', new_string: 'approved edit' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const unknownScope = await evaluateToolCallGate(base({ lane, workDir, toolName: 'write_file', toolInput: { path: path.join(outside, 'missing-parent', 'new.txt'), content: 'should stay denied' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const unsupported = await evaluateToolCallGate(base({ lane, workDir, toolName: 'write_file', toolInput: { path: outside, content: 'not a file' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const hardlink = path.join(outside, 'hardlink.txt')
+      await fs.link(existing, hardlink)
+      const hardlinkWrite = await evaluateToolCallGate(base({ lane, workDir, toolName: 'edit_file', toolInput: { path: hardlink, old_string: 'before', new_string: 'bad' }, effectiveRules, imPolicySnapshot: snapshot }))
+      let symlinkWrite: Awaited<ReturnType<typeof evaluateToolCallGate>> | undefined
+      if (canCreateSymlinks()) {
+        const symlink = path.join(outside, 'symlink.txt')
+        await fs.symlink(existing, symlink)
+        symlinkWrite = await evaluateToolCallGate(base({ lane, workDir, toolName: 'edit_file', toolInput: { path: symlink, old_string: 'before', new_string: 'bad' }, effectiveRules, imPolicySnapshot: snapshot }))
+      }
+      expect(created.facts.signals).toContainEqual({ kind: 'write-target-new' })
+      expect(created.facts.signals).toContainEqual({ kind: 'write-target-scope', scope: 'outside-workdir' })
+      expect(created.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-outside-write-new-review' })
+      expect(edited.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-outside-write-edit-review' })
+      expect(created.writePathFact).toMatchObject({ zone: 'outside-workdir', targetKind: 'missing' })
+      expect(edited.writePathFact).toMatchObject({ zone: 'outside-workdir', targetKind: 'file' })
+      expect(edited.writePathFact?.identity).toBeDefined()
+      expect(unknownScope.decision).toMatchObject({ type: 'deny', ruleId: 'write-parent-directory-missing' })
+      expect(unsupported.decision.type).toBe('deny')
+      expect(unsupported.facts.signals).toContainEqual({ kind: 'write-target-unsupported' })
+      expect(hardlinkWrite.writePathFact?.targetKind).toBe('hardlink')
+      expect(hardlinkWrite.decision.type).toBe('deny')
+      expect(hardlinkWrite.facts.signals).toContainEqual({ kind: 'write-target-unsupported' })
+      if (symlinkWrite) {
+        expect(symlinkWrite.writePathFact?.targetKind).toBe('symlink')
+        expect(symlinkWrite.decision.type).toBe('deny')
+        expect(symlinkWrite.facts.signals).toContainEqual({ kind: 'write-target-unsupported' })
+      }
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
   it('keeps a persisted user ask override as user confirmation instead of remapping it to Agent review', async () => {
     const db = openDb()
     commitImPolicySnapshot(getDbConnection(db), {
@@ -320,6 +390,59 @@ describe('IM standard policy override is final at the gate', () => {
 })
 
 describe('evaluateToolCallGate 诊断契约（R2）', () => {
+  it.each(['wechat', 'feishu'] as const)('%s isolated v3 read candidate reviews file and direct listing only', async (lane) => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-candidate-root-')))
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-candidate-outside-')))
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const file = path.join(outside, 'note.txt')
+      await fs.writeFile(file, 'needle')
+      const single = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: file }, effectiveRules, imPolicySnapshot: snapshot }))
+      const listing = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'list_directory', toolInput: { path: outside }, effectiveRules, imPolicySnapshot: snapshot }))
+      const recursive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'grep', toolInput: { path: outside, pattern: 'needle' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const sensitive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: '/etc/hosts' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const special = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: outside }, effectiveRules, imPolicySnapshot: snapshot }))
+      const unknown = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: path.join(outside, '**', '*.txt') }, effectiveRules, imPolicySnapshot: snapshot }))
+
+      expect(single.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-outside-read-review' })
+      expect(single.readPathFact).toMatchObject({ zone: 'outside-workdir', targetKind: 'file' })
+      expect(single.readExecutionPermit).toBeUndefined()
+      expect(listing.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-outside-list-review' })
+      expect(listing.readPathFact).toMatchObject({ zone: 'outside-workdir', targetKind: 'directory', scope: 'direct-entries-snapshot' })
+      expect(recursive.facts.signals).toContainEqual({ kind: 'read-target-scope', scope: 'subtree' })
+      expect(recursive.decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-read-deny' })
+      expect(recursive.readExecutionPermit).toBeUndefined()
+      expect(sensitive.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'path-system-dir-ask' })
+      expect(special.decision.type).toBe('deny')
+      expect(special.readExecutionPermit).toBeUndefined()
+      expect(unknown.decision.type).toBe('deny')
+      expect(unknown.readExecutionPermit).toBeUndefined()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('extracts a stable read scope token so an isolated candidate can exclude recursive directory grep', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-scope-token-')))
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-scope-outside-')))
+    try {
+      const file = path.join(outside, 'note.txt')
+      await fs.writeFile(file, 'needle')
+      const single = await evaluateToolCallGate(base({ lane: 'wechat', workDir: root, toolName: 'grep', toolInput: { path: file, pattern: 'needle' } }))
+      const listing = await evaluateToolCallGate(base({ lane: 'wechat', workDir: root, toolName: 'list_directory', toolInput: { path: outside } }))
+      const recursive = await evaluateToolCallGate(base({ lane: 'wechat', workDir: root, toolName: 'grep', toolInput: { path: outside, pattern: 'needle' } }))
+
+      expect(single.facts.signals).toContainEqual({ kind: 'read-target-scope', scope: 'single-target' })
+      expect(listing.facts.signals).toContainEqual({ kind: 'read-target-scope', scope: 'direct-entries' })
+      expect(recursive.facts.signals).toContainEqual({ kind: 'read-target-scope', scope: 'subtree' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
   it('policy dependency fingerprint ignores unmatched rules and changes for a newly matching deny rule', async () => {
     const unrelated = await evaluateToolCallGate(base({ effectiveRules: [
       ...DEFAULT_POLICY_RULES,
@@ -2569,6 +2692,37 @@ describe('evaluateToolCallGate', () => {
       })
     )
     expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'remote-deny-lark-write-outbound' })
+  })
+
+  it('T07：敏感出站人审与 remoteDenyOutbound 同时命中时 deny 优先且不产生候选许可', async () => {
+    const r = await evaluateToolCallGate(base({
+      lane: 'feishu',
+      toolName: 'run_lark_cli',
+      toolInput: { args: ['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other', '--text', 'password=secret-value'] },
+      remoteContext: remoteContext({ source: 'feishu', authOwner: 'ou_owner' }),
+      effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v3', pkg: 'standard', rules: DEFAULT_POLICY_RULES }),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard', remoteDenyOutbound: true } }
+    }))
+    expect(r.facts.signals).toContainEqual(expect.objectContaining({ kind: 'outbound-content', evidenceKinds: ['credential-like-pattern'] }))
+    expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'remote-deny-lark-write-outbound' })
+    expect(r.writeExecutionPermit).toBeUndefined()
+    expect(r.decision.type).not.toBe('require-confirm')
+  })
+
+  it('T07：敏感文件真人底线与显式 deny 同时命中时拒绝，候选规则不能降级 deny', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'im-review-deny-priority-')))
+    const target = path.join(root, 'credential.txt')
+    await fs.writeFile(target, 'sensitive')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    rules.push({ id: 'test-explicit-sensitive-deny', when: 'invocation', match: { lane: 'wechat', toolName: 'read_file', signals: ['path-target:sensitive-file'] }, action: 'deny', reason: 'explicit test deny' })
+    try {
+      const r = await evaluateToolCallGate(base({ lane: 'wechat', workDir: path.dirname(root), userDataDir: path.join(root, '.userdata'),
+        toolName: 'read_file', toolInput: { path: target }, shellConfig: { ...DEFAULT_SHELL_CONFIG, customSensitivePrefixes: [root] }, effectiveRules: rules, imPolicySnapshot: snapshot }))
+      expect(r.readPathFact?.zone).toBe('sensitive-file')
+      expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'test-explicit-sensitive-deny' })
+      expect(r.readExecutionPermit).toBeUndefined()
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
   it('IM standard compares Feishu message targets to the authenticated actor and splits policy outcomes', async () => {

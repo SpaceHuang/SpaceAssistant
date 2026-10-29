@@ -225,6 +225,21 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
       .toMatchObject({ type: 'deny', ruleId: 'independent-deny' })
   })
 
+  it('T07：敏感路径人审、显式用户 deny 与 Agent 候选同时命中时 deny 仍先行', () => {
+    const facts = mkFacts('read_file', 'read', [
+      { kind: 'path-target', path: '/private/credential.txt', zone: 'sensitive-file' },
+      { kind: 'read-target-scope', scope: 'single-target' },
+      { kind: 'read-target-kind', targetKind: 'file' },
+      { kind: 'im-shell-review-candidate', command: 'git-status' }
+    ], 'high')
+    const rules = [
+      { id: 'sensitive-human-review', when: 'invocation' as const, action: 'ask' as const, answerer: 'user' as const, reason: 'human floor' },
+      { id: 'im-candidate-review', when: 'invocation' as const, action: 'ask' as const, answerer: 'agent' as const, reason: 'candidate' },
+      { id: 'explicit-user-deny', when: 'invocation' as const, match: { signals: ['path-target:sensitive-file'] }, action: 'deny' as const, reason: 'explicit deny' }
+    ]
+    expect(decide(facts, mkContext('wechat'), rules, deps())).toMatchObject({ type: 'deny', ruleId: 'explicit-user-deny' })
+  })
+
   it('explicit allow override cannot bypass the deniedTools policy boundary', () => {
     const allowOverride = { id: 'custom-allow', when: 'invocation' as const, action: 'allow' as const, userOverride: true as const, reason: 'custom allow' }
     expect(decide(mkFacts('write_file', 'write', [], 'high'), mkContext('desktop'), [allowOverride],

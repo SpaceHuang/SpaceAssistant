@@ -59,6 +59,26 @@ import { DEFAULT_POLICY_RULES } from './defaultRules'
 /** 底线集默认取内置默认规则的 locked 条目。 */
 export const DEFAULT_FLOOR: readonly PolicyRule[] = DEFAULT_POLICY_RULES
 
+/** Frozen floor for an isolated candidate behavior; production loaders do not activate this version yet. */
+export function resolveImPolicyFloorForVersion(version: unknown): readonly PolicyRule[] {
+  if (version === 'im-standard-v3') {
+    const unverifiedTargetFloors: PolicyRule[] = (['missing', 'symlink', 'special', 'unknown'] as const).map((targetKind) => ({
+      id: `remote-outside-read-${targetKind}-deny`, when: 'invocation',
+      match: { lane: ['wechat', 'feishu'], toolName: ['read_file', 'grep', 'list_directory'], actionClass: 'read',
+        signals: ['path-target:outside-workdir', `read-target-kind:${targetKind}`] },
+      action: 'deny', locked: true, denyClass: 'forbidden', reason: 'Unverified external read targets remain denied'
+    }))
+    return [...DEFAULT_FLOOR.map((rule) => rule.id === 'remote-shell-disabled'
+      ? { ...rule, match: { ...rule.match!, excludeSignals: ['im-shell-review-candidate:git-status', 'im-shell-review-candidate:git-log'] } }
+      : rule.id === 'remote-outside-read-deny'
+      ? { ...rule, match: { ...rule.match!, signals: ['path-target:outside-workdir', 'read-target-scope:subtree'] } }
+      : rule.id === 'remote-outside-write-deny'
+        ? { ...rule, match: { ...rule.match!, signals: ['write-target-scope:outside-workdir', 'write-target-unsupported'] } }
+        : rule), ...unverifiedTargetFloors]
+  }
+  return DEFAULT_FLOOR
+}
+
 /**
  * 嵌套交集：内层规则相对父调用规则取交集（放行集合只收窄）。
  * 同 id 条目动作取更严者；floor 特有条目（含 locked 保护）并入结果，防止内层缺失保护。

@@ -6,6 +6,7 @@ import { extractScriptSignals } from './scriptAnalysisExtractor'
 import { extractBrowserSignals } from './browserDomainExtractor'
 import { extractOutboundTarget, extractLarkSubcommand } from './outboundExtractors'
 import { runExtractors } from './runExtractors'
+import { classifyShellCommandEffect } from './shellEffectFacts'
 
 const env: EnvFacts = {
   os: 'win32',
@@ -18,6 +19,12 @@ function signalKinds(signals: { kind: string }[]): string[] {
 }
 
 describe('commandSequenceExtractor', () => {
+  it('does not classify Git config-selected helpers as pure reads', () => {
+    const complete = { verdict: 'allow', facts: { analysisCompleteness: 'complete', operations: [{ verb: 'git', args: ['-c', 'core.fsmonitor=helper', 'status'] }], unresolved: [], connectors: [], redirects: [] } } as never
+    expect(classifyShellCommandEffect('git -c core.fsmonitor=helper status', complete)).toBe('unknown')
+    const repositoryHelper = { verdict: 'allow', facts: { analysisCompleteness: 'complete', operations: [{ verb: 'git', args: ['status'] }], unresolved: [], connectors: [], redirects: [] } } as never
+    expect(classifyShellCommandEffect('git status', repositoryHelper)).toBe('unknown')
+  })
   it('emits command effect and analysis completeness as observations only', () => {
     const read = extractCommandSignals('cat report.txt', { os: 'darwin', workDir: '/workspace', sensitivePaths: [] })
     expect(read.signals).toEqual(expect.arrayContaining([
