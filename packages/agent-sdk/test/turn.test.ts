@@ -2164,6 +2164,68 @@ describe('runAgentTurn', () => {
     expect(calls).toBe(1)
   })
 
+  it('uses the full 45-second Retry-After delay without a hidden 30-second cap', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      calls += 1
+      return (async function* () { throw Object.assign(new Error('rate limited'), { status: 429 }) })()
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv-retry-exact-wait', [])
+    const permits = new InMemorySafetyPermitStore()
+    const controller = new AbortController()
+    const originalSetTimeout = globalThis.setTimeout
+    const scheduledDelays: number[] = []
+    const recoverProviderAttempt = vi.fn(async ({ messages }: { messages: readonly CanonicalModelMessage[] }) => ({
+      kind: 'retry' as const, reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 5, plannedWaitMs: 45_000,
+      retryAfterMs: 45_000, recoveryKind: 'transient' as const,
+      retryEvent: { attempt: 1, code: 'provider_rate_limit' }
+    }))
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === 45_000) {
+        scheduledDelays.push(timeout)
+        queueMicrotask(() => controller.abort())
+      }
+      return originalSetTimeout(handler, timeout, ...args)
+    }) as typeof setTimeout)
+    try {
+      await expect(runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'inv-retry-exact-wait', history,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10, signal: controller.signal }, maxModelTurns: 1,
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+        prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' }))), recoverProviderAttempt
+      })).rejects.toThrow()
+      expect(scheduledDelays).toEqual([45_000])
+      expect(calls).toBe(1)
+    } finally {
+      timeoutSpy.mockRestore()
+    }
+  })
+
+  it('surfaces single-cap retry metadata and does not dispatch another provider attempt', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      calls += 1
+      return (async function* () { throw Object.assign(new Error('rate limited'), { status: 429 }) })()
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv-retry-single-cap', [])
+    const permits = new InMemorySafetyPermitStore()
+    const now = Date.parse('2026-10-30T00:00:00.000Z')
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'inv-retry-single-cap', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' }))),
+      recoverProviderAttempt: async ({ messages }) => ({ kind: 'reject' as const, reasonCode: 'PROVIDER_RETRY_AFTER_EXCEEDS_SINGLE_CAP', serverAskedMs: 120_000, retryAt: now + 120_000, messages })
+    })).rejects.toMatchObject({ code: 'MODEL_ATTEMPT_RECOVERY_REJECTED', reasonCode: 'PROVIDER_RETRY_AFTER_EXCEEDS_SINGLE_CAP', details: { serverAskedMs: 120_000, retryAt: now + 120_000 } })
+    expect(calls).toBe(1)
+  })
+
   it('rechecks the host recovery gate inside the final dispatch lease before recording start', async () => {
     const registry = new ModelProviderRegistry()
     let providerCalls = 0

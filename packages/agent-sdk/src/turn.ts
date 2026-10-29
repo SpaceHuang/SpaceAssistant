@@ -24,7 +24,7 @@ export type AgentTurnPorts = Readonly<{
   /** Persist actual provider usage once, including complete responses discarded during recovery. */
   recordProviderAttemptUsage?(input: Record<string, unknown>): void | Promise<void>
   /** Recover one provider attempt that failed before an assistant response was accepted. */
-  recoverProviderAttempt?(input: Readonly<{ error?: unknown; response?: Readonly<{ finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; hasOutputContent: boolean }>; attempt: number; attemptInRequest: number; recoveryCounts: Readonly<{ transient: number; idleTimeout: number; overflow: number; effort: number }>; waitBudgetRemainingMs: number; modelTurn: number; routeId: string; request: PreparedModelCall['request']; messages: readonly CanonicalTurnMessage[]; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalTurnMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; maxAttempts?: number; retryAfterMs?: number; plannedWaitMs?: number; recoveryKind?: 'transient' | 'idle-timeout' | 'overflow' | 'effort'; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string }> | undefined>
+  recoverProviderAttempt?(input: Readonly<{ error?: unknown; response?: Readonly<{ finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; hasOutputContent: boolean }>; attempt: number; attemptInRequest: number; recoveryCounts: Readonly<{ transient: number; idleTimeout: number; overflow: number; effort: number }>; waitBudgetRemainingMs: number; modelTurn: number; routeId: string; request: PreparedModelCall['request']; messages: readonly CanonicalTurnMessage[]; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalTurnMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; maxAttempts?: number; retryAfterMs?: number; plannedWaitMs?: number; recoveryKind?: 'transient' | 'idle-timeout' | 'overflow' | 'effort'; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string; serverAskedMs?: number; retryAt?: number }> | undefined>
   /** Convert an accepted max-output-limit response into a bounded runtime continuation message. */
   recoverOutputLimit?(input: Readonly<{ invocationId: string; modelTurn: number; attempt: number; hadVisibleText: boolean; toolCalls: readonly CanonicalToolExecutionCall[] }>): Promise<Readonly<{ continuation?: CanonicalModelMessage; toolCallErrorContent?: string; retryLocation?: unknown; retryTurnId?: string; retryStepId?: string }> | undefined>
   confirmation?: ConfirmationPort
@@ -377,7 +377,7 @@ class AgentTurnBoundaryProjectionError extends Error {
 
 export class ModelAttemptRecoveryRejectedError extends Error {
   readonly code = 'MODEL_ATTEMPT_RECOVERY_REJECTED'
-  constructor(readonly reasonCode: string) { super(`model attempt recovery rejected: ${reasonCode}`); this.name = 'ModelAttemptRecoveryRejectedError' }
+  constructor(readonly reasonCode: string, readonly details: Readonly<{ serverAskedMs?: number; retryAt?: number }> = {}) { super(`model attempt recovery rejected: ${reasonCode}`); this.name = 'ModelAttemptRecoveryRejectedError' }
 }
 
 function providerErrorClass(error: unknown): string {
@@ -407,7 +407,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
   throwIfAborted(signal)
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve() }, Math.min(30_000, Math.max(0, delayMs)))
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve() }, Math.max(0, delayMs))
     const onAbort = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(abortErrorForSignal(signal)) }
     signal?.addEventListener('abort', onAbort, { once: true })
   })
@@ -1189,7 +1189,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           payload: { modelTurn: modelTurns, attempt: providerAttempt, reasonCode: recovery.reasonCode, finishReason: details.response.finishReason, usage: details.response.usage, ...(sessionLedger ? { sessionLedger } : {}) }
         }])
         throwIfAborted(input.request.signal)
-        throw new ModelAttemptRecoveryRejectedError(recovery.reasonCode)
+        throw new ModelAttemptRecoveryRejectedError(recovery.reasonCode, { ...(recovery.serverAskedMs !== undefined ? { serverAskedMs: recovery.serverAskedMs } : {}), ...(recovery.retryAt !== undefined ? { retryAt: recovery.retryAt } : {}) })
       }
       throwIfAborted(input.request.signal)
       providerAttemptBudget = Math.max(2, Math.min(5, Number.isInteger(recovery.maxAttempts) ? recovery.maxAttempts! : 2))

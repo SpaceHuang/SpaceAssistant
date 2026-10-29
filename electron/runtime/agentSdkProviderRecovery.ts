@@ -25,7 +25,7 @@ function retryAfterMs(error: unknown, now = Date.now()): number | undefined {
   if (typeof value !== 'string' && typeof value !== 'number') return undefined
   const seconds = Number(value)
   const delay = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : Date.parse(String(value)) - now
-  return Number.isFinite(delay) && delay >= 0 ? Math.min(30_000, delay) : undefined
+  return Number.isFinite(delay) && delay >= 0 ? delay : undefined
 }
 
 function transientProviderError(error: unknown): { reasonCode: string; code: string } | undefined {
@@ -47,7 +47,7 @@ export function createAgentSdkProviderRecovery(input: {
   onEffortUnsupported?(error: unknown): void | Promise<void>
   random?: () => number
   now?: () => number
-}): (request: RecoveryInput) => Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalModelMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; maxAttempts?: number; retryAfterMs?: number; plannedWaitMs?: number; recoveryKind?: 'transient' | 'idle-timeout' | 'overflow' | 'effort'; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string }> | undefined> {
+}): (request: RecoveryInput) => Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalModelMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; maxAttempts?: number; retryAfterMs?: number; plannedWaitMs?: number; recoveryKind?: 'transient' | 'idle-timeout' | 'overflow' | 'effort'; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string; serverAskedMs?: number; retryAt?: number }> | undefined> {
   return async (request) => {
     const transient = request.error ? transientProviderError(request.error) : undefined
     if (transient) {
@@ -57,10 +57,16 @@ export function createAgentSdkProviderRecovery(input: {
       const localBackoff = Math.min(8_000, 500 * (2 ** recoveryCount))
       const randomValue = Math.min(1, Math.max(0, (input.random ?? Math.random)()))
       const jitterMs = Math.floor(localBackoff * randomValue)
-      const serverWaitMs = retryAfterMs(request.error, (input.now ?? Date.now)()) ?? 0
+      const now = (input.now ?? Date.now)()
+      const serverAskedMs = retryAfterMs(request.error, now)
+      const serverWaitMs = serverAskedMs ?? 0
       const plannedWaitMs = Math.max(jitterMs, serverWaitMs)
+      if (plannedWaitMs > 60_000) return {
+        kind: 'reject', reasonCode: 'PROVIDER_RETRY_AFTER_EXCEEDS_SINGLE_CAP',
+        ...(serverAskedMs !== undefined ? { serverAskedMs, retryAt: now + serverAskedMs } : {})
+      }
       return { kind: 'retry', reasonCode: transient.reasonCode, messages: request.messages, retryEvent: { attempt: request.attempt, code: transient.code }, recordTranscriptCompaction: false,
-        maxAttempts: 5, plannedWaitMs, recoveryKind: 'transient', ...(serverWaitMs > 0 ? { retryAfterMs: serverWaitMs } : {}) }
+        maxAttempts: 5, plannedWaitMs, recoveryKind: 'transient', ...(serverAskedMs !== undefined ? { retryAfterMs: serverAskedMs } : {}) }
     }
     const recoveryCounts = request.recoveryCounts
     if ((recoveryCounts?.effort ?? (request.attempt > 1 ? 1 : 0)) < 1 && request.request?.thinking?.effort && isOutputConfigRejectedError(request.error)) {
