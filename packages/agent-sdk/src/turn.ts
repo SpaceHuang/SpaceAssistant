@@ -1,4 +1,4 @@
-import { collectModelAttempt, InvalidModelStreamError, ModelRouteChangedError, snapshotPreparedModelCall, type CanonicalContentBlock, type CanonicalModelMessage, type CanonicalToolCall, type CollectedModelStream, type ModelProvider, type ModelProviderRegistry, type PreparedModelCall, type StreamChunk } from './model'
+import { collectModelAttempt, InvalidModelStreamError, ModelRouteChangedError, ModelStreamIdleTimeoutError, snapshotPreparedModelCall, type CanonicalContentBlock, type CanonicalModelMessage, type CanonicalToolCall, type CollectedModelStream, type ModelProvider, type ModelProviderRegistry, type PreparedModelCall, type StreamChunk } from './model'
 import type { PermitBinding } from './safetyPermit'
 import { type SafetyDenyReason, type SafetyGatePort } from './safetyGate'
 import { ToolExecutionAfterDispatchError, ToolExecutionRejectedError, type PermitBoundToolExecutionPort } from './toolExecutionPort'
@@ -24,7 +24,7 @@ export type AgentTurnPorts = Readonly<{
   /** Persist actual provider usage once, including complete responses discarded during recovery. */
   recordProviderAttemptUsage?(input: Record<string, unknown>): void | Promise<void>
   /** Recover one provider attempt that failed before an assistant response was accepted. */
-  recoverProviderAttempt?(input: Readonly<{ error?: unknown; response?: Readonly<{ finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; hasOutputContent: boolean }>; attempt: number; modelTurn: number; routeId: string; request: PreparedModelCall['request']; messages: readonly CanonicalTurnMessage[]; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalTurnMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; maxAttempts?: number; retryAfterMs?: number; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string }> | undefined>
+  recoverProviderAttempt?(input: Readonly<{ error?: unknown; response?: Readonly<{ finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; hasOutputContent: boolean }>; attempt: number; attemptInRequest: number; recoveryCounts: Readonly<{ transient: number; idleTimeout: number; overflow: number; effort: number }>; waitBudgetRemainingMs: number; modelTurn: number; routeId: string; request: PreparedModelCall['request']; messages: readonly CanonicalTurnMessage[]; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalTurnMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; maxAttempts?: number; retryAfterMs?: number; plannedWaitMs?: number; recoveryKind?: 'transient' | 'idle-timeout' | 'overflow' | 'effort'; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string }> | undefined>
   /** Convert an accepted max-output-limit response into a bounded runtime continuation message. */
   recoverOutputLimit?(input: Readonly<{ invocationId: string; modelTurn: number; attempt: number; hadVisibleText: boolean; toolCalls: readonly CanonicalToolExecutionCall[] }>): Promise<Readonly<{ continuation?: CanonicalModelMessage; toolCallErrorContent?: string; retryLocation?: unknown; retryTurnId?: string; retryStepId?: string }> | undefined>
   confirmation?: ConfirmationPort
@@ -378,6 +378,26 @@ class AgentTurnBoundaryProjectionError extends Error {
 export class ModelAttemptRecoveryRejectedError extends Error {
   readonly code = 'MODEL_ATTEMPT_RECOVERY_REJECTED'
   constructor(readonly reasonCode: string) { super(`model attempt recovery rejected: ${reasonCode}`); this.name = 'ModelAttemptRecoveryRejectedError' }
+}
+
+function providerErrorClass(error: unknown): string {
+  if (error instanceof ModelStreamIdleTimeoutError) return 'PROVIDER_STREAM_IDLE_TIMEOUT'
+  if (error && typeof error === 'object' && (error as { type?: unknown }).type === 'context_length_exceeded') return 'PROVIDER_CONTEXT_OVERFLOW'
+  if (error && typeof error === 'object') {
+    const status = (error as { status?: unknown }).status
+    if (status === 429) return 'PROVIDER_RATE_LIMIT'
+    if (typeof status === 'number' && status >= 500 && status <= 599) return 'PROVIDER_SERVER_ERROR'
+    const code = (error as { code?: unknown }).code
+    if (typeof code === 'string' && ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENETUNREACH', 'ECONNABORTED'].includes(code)) return 'PROVIDER_NETWORK_ERROR'
+  }
+  return 'PROVIDER_REQUEST_FAILED'
+}
+
+function inferRecoveryKind(reasonCode: string): 'transient' | 'idle-timeout' | 'overflow' | 'effort' {
+  if (reasonCode.includes('IDLE_TIMEOUT')) return 'idle-timeout'
+  if (reasonCode.includes('OVERFLOW') || reasonCode.includes('CONTEXT')) return 'overflow'
+  if (reasonCode.includes('EFFORT')) return 'effort'
+  return 'transient'
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -1078,30 +1098,71 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     let retryCameFromCompleteResponse = false
     let providerAttempt = 1
     let providerAttemptBudget = 2
+    const recoveryCounts = { transient: 0, idleTimeout: 0, overflow: 0, effort: 0 }
+    const accumulatedAttemptUsageKeys = new Set<number>()
+    let attemptSource: { kind: 'initial' } | { kind: 'recovery'; recoveryKind: 'transient' | 'idle-timeout' | 'overflow' | 'effort' } = { kind: 'initial' }
+    const recordProviderAttemptResult = async (details: {
+      outcome: 'succeeded' | 'failed' | 'discarded' | 'not-dispatched'
+      errorClass?: string
+      usage?: Extract<StreamChunk, { type: 'usage' }>
+      sessionLedger?: Record<string, unknown>
+    }): Promise<void> => {
+      const usage = details.usage
+      if (usage && !accumulatedAttemptUsageKeys.has(providerAttempt)) {
+        accumulatedAttemptUsageKeys.add(providerAttempt)
+        inputTokens += usage.inputTokens
+        outputTokens += usage.outputTokens
+        cacheReadInputTokens += usage.cacheReadInputTokens ?? 0
+        cacheCreationInputTokens += usage.cacheCreationInputTokens ?? 0
+      }
+      if (!input.history) return
+      await appendHistory([{
+        kind: 'provider-attempt-result',
+        payload: {
+          requestId: `${invocationId}:round:${modelTurns}`,
+          modelTurn: modelTurns,
+          attempt: providerAttempt,
+          physical: details.outcome !== 'not-dispatched',
+          attemptSource: structuredClone(attemptSource),
+          outcome: details.outcome,
+          ...(details.errorClass ? { errorClass: details.errorClass } : {}),
+          ...(details.sessionLedger && Object.keys(details.sessionLedger).length ? { sessionLedger: structuredClone(details.sessionLedger) } : {}),
+          usage: details.outcome === 'not-dispatched'
+            ? { status: 'none' }
+            : usage ? {
+                status: 'reported', inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+                ...(usage.cacheReadInputTokens !== undefined ? { cacheReadInputTokens: usage.cacheReadInputTokens } : {}),
+                ...(usage.cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens: usage.cacheCreationInputTokens } : {})
+              } : { status: 'unreported' }
+        }
+      }])
+    }
     const recover = async (details: {
       error?: unknown
       response?: Readonly<{ finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; hasOutputContent: boolean }>
     }): Promise<CollectedModelStream | undefined> => {
-      if (!input.recoverProviderAttempt) return undefined
       // Preserve legacy one-retry behavior unless the host explicitly raised the attempt budget.
-      if (details.error && providerAttempt >= providerAttemptBudget && providerAttemptBudget === 2) throw details.error
-      const recovery = await input.recoverProviderAttempt({
+      if (details.error && providerAttempt >= providerAttemptBudget && providerAttemptBudget === 2) {
+        await recordProviderAttemptResult({ outcome: 'failed', errorClass: providerErrorClass(details.error) })
+        throw details.error
+      }
+      if (details.error) await recordProviderAttemptResult({ outcome: 'failed', errorClass: providerErrorClass(details.error) })
+      const recovery = input.recoverProviderAttempt ? await input.recoverProviderAttempt({
         ...details,
         attempt: providerAttempt,
+        attemptInRequest: providerAttempt,
+        recoveryCounts: { ...recoveryCounts },
+        waitBudgetRemainingMs: Number.POSITIVE_INFINITY,
         modelTurn: modelTurns,
         routeId: input.routeId,
         request: { ...requestTemplate, messages: structuredClone(messages) },
         messages: structuredClone(messages),
         ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}),
         ...(input.requiredUserMessage ? { requiredUserMessage: structuredClone(input.requiredUserMessage) } : {})
-      })
+      }) : undefined
       if (!recovery) return undefined
       if (!/^[A-Z0-9_]{1,64}$/.test(recovery.reasonCode)) throw new Error('provider recovery reasonCode must be a stable uppercase code')
       const recordDiscardedUsage = async (response: NonNullable<typeof details.response>, attempt: number): Promise<Record<string, unknown> | undefined> => {
-        inputTokens += response.usage.inputTokens
-        outputTokens += response.usage.outputTokens
-        cacheReadInputTokens += response.usage.cacheReadInputTokens ?? 0
-        cacheCreationInputTokens += response.usage.cacheCreationInputTokens ?? 0
         const requestForAttempt = { ...requestTemplate, messages: structuredClone(messages) }
         const attributionInput = input.observer?.prepareUsageAttribution?.({ modelTurn: modelTurns, request: requestForAttempt })
         const attemptUsage = {
@@ -1118,11 +1179,14 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         await projectModelAttemptUsage(input, attemptUsage)
         return input.sessionLedgerForAttemptUsage ? await input.sessionLedgerForAttemptUsage(attemptUsage) : undefined
       }
+      const sessionLedger = details.response ? await recordDiscardedUsage(details.response, providerAttempt) : undefined
+      if (details.response) await recordProviderAttemptResult({
+        outcome: 'discarded', errorClass: recovery.reasonCode, usage: details.response.usage, sessionLedger
+      })
       if (recovery.kind === 'reject') {
-        const sessionLedger = details.response ? await recordDiscardedUsage(details.response, recoveredAttempt ? 2 : 1) : undefined
         if (details.response && input.history) await appendHistory([{
           kind: 'model-attempt-discarded',
-          payload: { modelTurn: modelTurns, attempt: recoveredAttempt ? 2 : 1, reasonCode: recovery.reasonCode, finishReason: details.response.finishReason, usage: details.response.usage, ...(sessionLedger ? { sessionLedger } : {}) }
+          payload: { modelTurn: modelTurns, attempt: providerAttempt, reasonCode: recovery.reasonCode, finishReason: details.response.finishReason, usage: details.response.usage, ...(sessionLedger ? { sessionLedger } : {}) }
         }])
         throwIfAborted(input.request.signal)
         throw new ModelAttemptRecoveryRejectedError(recovery.reasonCode)
@@ -1131,23 +1195,23 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       providerAttemptBudget = Math.max(2, Math.min(5, Number.isInteger(recovery.maxAttempts) ? recovery.maxAttempts! : 2))
       if (providerAttempt >= providerAttemptBudget) throw new ModelAttemptRecoveryRejectedError('RETRY_LIMIT_EXCEEDED')
       retryCameFromCompleteResponse = Boolean(details.response)
-      if (recovery.retryAfterMs && recovery.retryAfterMs > 0) await waitForRetry(recovery.retryAfterMs, input.request.signal)
+      const plannedWaitMs = recovery.plannedWaitMs ?? recovery.retryAfterMs ?? 0
+      if (plannedWaitMs > 0) await waitForRetry(plannedWaitMs, input.request.signal)
       const recoveredMessages = structuredClone([...recovery.messages])
       if (input.currentUserMessageId && input.requiredUserMessage &&
         !recoveredMessages.some((message) => message.role === 'user' && JSON.stringify(message) === JSON.stringify(input.requiredUserMessage!.message))) {
         throw new InvalidTurnBoundaryError(`provider recovery omitted required user message: ${input.currentUserMessageId}`)
       }
-      const sessionLedger = details.response ? await recordDiscardedUsage(details.response, recoveredAttempt ? 2 : 1) : undefined
       if (input.history && recovery.recordTranscriptCompaction === false && recovery.requestPatch) await appendHistory([{
         kind: 'model-attempt-discarded',
-        payload: { modelTurn: modelTurns, attempt: recoveredAttempt ? 2 : 1, reasonCode: recovery.reasonCode, requestPatch: recovery.requestPatch, ...(sessionLedger ? { sessionLedger } : {}) }
+        payload: { modelTurn: modelTurns, attempt: providerAttempt, reasonCode: recovery.reasonCode, requestPatch: recovery.requestPatch, ...(sessionLedger ? { sessionLedger } : {}) }
       }])
       if (input.history && recovery.recordTranscriptCompaction !== false) {
         const discarded = details.response ? [{
           kind: 'model-attempt-discarded' as const,
           payload: {
             modelTurn: modelTurns,
-            attempt: recoveredAttempt ? 2 : 1,
+            attempt: providerAttempt,
             reasonCode: recovery.reasonCode,
             finishReason: details.response.finishReason,
             usage: details.response.usage,
@@ -1224,6 +1288,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       baseRequestTemplate = { ...baseRequestTemplate, ...(recovery.requestPatch ?? {}) }
         recoveredAttempt = true
         providerAttempt += 1
+        const recoveryKind = recovery.recoveryKind ?? inferRecoveryKind(recovery.reasonCode)
+        attemptSource = { kind: 'recovery', recoveryKind }
         const retryBaseCall = prepareRequest()
         let retryRequestObservation = { modelTurn: modelTurns, attempt: providerAttempt, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: retryBaseCall.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
         const retryProjection = await input.observer?.prepareModelRequest?.(retryRequestObservation)
@@ -1249,6 +1315,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       await input.beforeModelRequest?.()
       throwIfAborted(input.request.signal)
       try {
+        if (recoveryKind) recoveryCounts[recoveryKind === 'idle-timeout' ? 'idleTimeout' : recoveryKind] += 1
         return await collectProviderAttempt(retryProvider.stream(retryCall), modelTurns, providerAttempt)
       } catch (error) {
         throwIfAborted(input.request.signal)
@@ -1259,6 +1326,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     }
     const settleCancelledAttempt = async (cancelled: CollectedModelStream): Promise<never> => {
       if (cancelled.finish.reason !== 'cancelled') throw new Error('cancel settlement requires a cancelled provider attempt')
+      await recordProviderAttemptResult({ outcome: 'failed', errorClass: 'TURN_CANCELLED', ...(cancelled.usage ? { usage: cancelled.usage } : {}) })
       if (cancelled.usage) {
         const cancelledAttemptUsage = {
           invocationId,
@@ -1341,10 +1409,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       ? { ...chunk, input: normalizeRunShellJustification(chunk.input) }
       : chunk)
     const toolCalls = acceptedChunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'tool-call' }> => chunk.type === 'tool-call')
-    inputTokens += collected.usage.inputTokens
-    outputTokens += collected.usage.outputTokens
-    cacheReadInputTokens += collected.usage.cacheReadInputTokens ?? 0
-    cacheCreationInputTokens += collected.usage.cacheCreationInputTokens ?? 0
     const textDelta = acceptedChunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'text-delta' }> => chunk.type === 'text-delta').map((chunk) => chunk.text).join('')
     const assistantContent: CanonicalContentBlock[] = []
     for (const chunk of acceptedChunks) {
@@ -1449,6 +1513,9 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     let committedInitialResponseStepId: string | undefined
     if (initialResponse) {
       const committedResponse = await assertHostCommittedResponse(input.history, input.invocationId, initialResponse)
+      const committedLedger = committedResponse.sessionLedger && typeof committedResponse.sessionLedger === 'object' && !Array.isArray(committedResponse.sessionLedger)
+        ? committedResponse.sessionLedger as Record<string, unknown> : undefined
+      await recordProviderAttemptResult({ outcome: 'succeeded', usage: collected.usage, sessionLedger: committedLedger })
       committedInitialResponseStepId = committedResponse.sessionLedgerStepId
       // Seed read-only host projections from the canonical committed response. Do not append
       // another model-response event or replay any already committed side effects.
@@ -1456,7 +1523,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         await input.sessionLedgerForModelResponse(committedResponse.message, modelTurns, 1, committedResponse.sessionLedger)
       }
     }
-    const acceptedAttemptNumber = recoveredAttempt ? 2 : 1
+    const acceptedAttemptNumber = providerAttempt
     let attemptUsageLedger: Record<string, unknown> | undefined
     if (!initialResponse) {
       const attributionInput = input.observer?.prepareUsageAttribution?.({ modelTurn: modelTurns, request: call.request })
@@ -1473,6 +1540,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       }
       await projectModelAttemptUsage(input, acceptedAttemptUsage)
       attemptUsageLedger = input.sessionLedgerForAttemptUsage ? await input.sessionLedgerForAttemptUsage(acceptedAttemptUsage) : undefined
+      await recordProviderAttemptResult({ outcome: 'succeeded', usage: collected.usage, sessionLedger: attemptUsageLedger })
     }
     const responseProjection = !initialResponse ? await input.observer?.prepareContextBoundaryEvidence?.({
       message: assistantMessage,

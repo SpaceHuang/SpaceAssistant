@@ -3079,13 +3079,14 @@ describe('SqliteAgentHistory', () => {
     })
     await history.appendBatch([
       {
-        ...event('discarded-attempt', 1), kind: 'model-attempt-discarded',
-        payload: { modelTurn: 1, attempt: 1, reasonCode: 'SILENT_CONTEXT_OVERFLOW', sessionLedger: { location, requestUsage: {
+        ...event('attempt-result', 1), kind: 'provider-attempt-result',
+        payload: { requestId: 'inv-1:round:1', modelTurn: 1, attempt: 1, physical: true, attemptSource: { kind: 'initial' }, outcome: 'discarded', usage: { status: 'reported', inputTokens: 20, outputTokens: 2 }, sessionLedger: { location, requestUsage: {
           schemaVersion: 1, requestId: 'inv-1:round:1', turnId: 'turn-1', usage: { input_tokens: 20, output_tokens: 2 }, source: 'api', resultDisposition: 'discarded_overflow'
         } } }
       },
+      { ...event('discarded-attempt', 2), kind: 'model-attempt-discarded', payload: { modelTurn: 1, attempt: 1, reasonCode: 'SILENT_CONTEXT_OVERFLOW' } },
       {
-        ...event('model-response', 2), kind: 'model-response-committed',
+        ...event('model-response', 3), kind: 'model-response-committed',
         payload: {
           modelTurn: 1,
           attempt: 2,
@@ -3112,6 +3113,31 @@ describe('SqliteAgentHistory', () => {
     await sink.close()
     await fs.rm(root, { recursive: true, force: true })
     conn.close()
+  })
+
+  it('uses provider-attempt-result as the canonical reported-usage source and deduplicates legacy mirrors', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'provider result usage' })
+    const conn = getDbConnection(db)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, session.id)
+    const location = { workDir: '/tmp/provider-result-usage', sessionId: session.id, createdAt: session.createdAt }
+    const requestUsage = { schemaVersion: 1, requestId: 'usage-inv:round:1', turnId: 'usage-turn', usage: { input_tokens: 9, output_tokens: 2 }, source: 'api' }
+    await history.appendBatch([
+      {
+        ...event('provider-attempt-result-usage', 1), invocationId: 'usage-inv', turnId: 'usage-turn', kind: 'provider-attempt-result',
+        payload: { requestId: 'usage-inv:round:1', modelTurn: 1, attempt: 1, physical: true, attemptSource: { kind: 'initial' }, outcome: 'succeeded', usage: { status: 'reported', inputTokens: 9, outputTokens: 2 }, sessionLedger: { location, requestUsage } }
+      },
+      {
+        ...event('model-response-usage-mirror', 2), invocationId: 'usage-inv', turnId: 'usage-turn', kind: 'model-response-committed',
+        payload: { modelTurn: 1, attempt: 1, message: { role: 'assistant', content: 'ok' }, sessionLedger: { location, requestUsage } }
+      }
+    ], 0)
+
+    await history.recoverInterruptedInvocations({ repairUsageLedger: vi.fn(async () => undefined) })
+    const usageEvents = history.readCanonicalContextMeterEvents(session.id)?.filter((item) => item.type === 'request_usage') ?? []
+    expect(usageEvents).toHaveLength(1)
+    expect(usageEvents[0]).toMatchObject({ type: 'request_usage', payload: requestUsage })
+    db.close()
   })
 
   it('rejects a request_usage sidecar bound to another invocation before session projection', async () => {

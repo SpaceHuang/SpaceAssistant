@@ -306,6 +306,15 @@ describe('createAgentSdkDesktopObserver', () => {
       expect(systems.map((system) => system.match(/<project_instructions /g)?.length ?? 0)).toEqual([1, 1, 1])
       const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
       expect(requestEvents.every((event) => !('agentsMdSnapshot' in (event.payload as { requestMetadata: Record<string, unknown> }).requestMetadata))).toBe(true)
+      const attemptResults = (await history.read(invocationId)).events.filter((event) => event.kind === 'provider-attempt-result')
+      expect(attemptResults.map((event) => {
+        const payload = event.payload as { requestId: string; attempt: number; attemptSource: unknown; outcome: string }
+        return { requestId: payload.requestId, attempt: payload.attempt, attemptSource: payload.attemptSource, outcome: payload.outcome }
+      })).toEqual([
+        { requestId: `${invocationId}:round:1`, attempt: 1, attemptSource: { kind: 'initial' }, outcome: 'failed' },
+        { requestId: `${invocationId}:round:1`, attempt: 2, attemptSource: { kind: 'recovery', recoveryKind: 'transient' }, outcome: 'succeeded' },
+        { requestId: `${invocationId}:round:2`, attempt: 1, attemptSource: { kind: 'initial' }, outcome: 'succeeded' }
+      ])
     } finally {
       await rm(workDir, { recursive: true, force: true })
     }

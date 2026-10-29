@@ -267,7 +267,7 @@ export function buildCanonicalToolResultProjectionTargets(conn: DatabaseSync, ev
         }
       }
     }
-    if (event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') {
+    if (event.kind === 'provider-attempt-result' || event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') {
       const usage = sidecar.requestUsage
       if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
         const value = usage as Record<string, unknown>
