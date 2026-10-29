@@ -933,6 +933,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   let outputTokens = 0
   let cacheReadInputTokens = 0
   let cacheCreationInputTokens = 0
+  let observedAttemptUsages = new Map<number, Extract<StreamChunk, { type: 'usage' }>>()
   let outputRecoveryAttempts = 0
   let dispatchedToolRounds = 0
   let baseRequestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...input.request }
@@ -973,6 +974,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   let waitBudgetRemainingMs = 60_000
 
   for (let modelTurns = 1; modelTurns <= input.maxModelTurns; modelTurns += 1) {
+    observedAttemptUsages = new Map<number, Extract<StreamChunk, { type: 'usage' }>>()
     // Request-local patches (for example, workdir instructions) persist across provider retries,
     // but must not leak into the next logical model request.
     let requestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...baseRequestTemplate }
@@ -1110,6 +1112,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     let providerAttemptBudget = 2
     const recoveryCounts = { transient: 0, idleTimeout: 0, overflow: 0, effort: 0 }
     const accumulatedAttemptUsageKeys = new Set<number>()
+    let providerAttemptDispatched = false
     let attemptSource: { kind: 'initial' } | { kind: 'recovery'; recoveryKind: 'transient' | 'idle-timeout' | 'overflow' | 'effort' } = { kind: 'initial' }
     let pendingWaitBudgetOverrunMs = 0
     const recordProviderAttemptResult = async (details: {
@@ -1155,16 +1158,34 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       }])
       pendingWaitBudgetOverrunMs = 0
     }
+    const recordFailedProviderAttempt = async (errorClass: string): Promise<void> => {
+      const usage = observedAttemptUsages.get(providerAttempt)
+      const sessionLedger = usage && input.sessionLedgerForAttemptUsage
+        ? await input.sessionLedgerForAttemptUsage({
+            invocationId, modelTurn: modelTurns, attempt: providerAttempt, routeId: input.routeId,
+            usage, disposition: 'failed', reasonCode: errorClass
+          })
+        : undefined
+      await recordProviderAttemptResult({ outcome: 'failed', errorClass, ...(usage ? { usage } : {}), ...(sessionLedger ? { sessionLedger } : {}) })
+    }
+    const settleAbortedProviderAttempt = async (): Promise<boolean> => {
+      const signal = input.request.signal
+      if (!signal?.aborted) return false
+      if (providerAttemptDispatched) {
+        await recordFailedProviderAttempt(isTurnTimeoutSignal(signal) ? 'TURN_TIMED_OUT' : 'TURN_CANCELLED')
+      }
+      return true
+    }
     const recover = async (details: {
       error?: unknown
       response?: Readonly<{ finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; hasOutputContent: boolean }>
     }): Promise<CollectedModelStream | undefined> => {
       // Preserve legacy one-retry behavior unless the host explicitly raised the attempt budget.
       if (details.error && providerAttempt >= providerAttemptBudget && providerAttemptBudget === 2) {
-        await recordProviderAttemptResult({ outcome: 'failed', errorClass: providerErrorClass(details.error) })
+        await recordFailedProviderAttempt(providerErrorClass(details.error))
         throw details.error
       }
-      if (details.error) await recordProviderAttemptResult({ outcome: 'failed', errorClass: providerErrorClass(details.error) })
+      if (details.error) await recordFailedProviderAttempt(providerErrorClass(details.error))
       const recovery = input.recoverProviderAttempt ? await input.recoverProviderAttempt({
         ...details,
         attempt: providerAttempt,
@@ -1360,6 +1381,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       baseRequestTemplate = { ...baseRequestTemplate, ...(recovery.requestPatch ?? {}) }
         recoveredAttempt = true
         providerAttempt += 1
+        providerAttemptDispatched = false
         attemptSource = { kind: 'recovery', recoveryKind }
         const retryBaseCall = prepareRequest()
         let retryRequestObservation = { modelTurn: modelTurns, attempt: providerAttempt, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: retryBaseCall.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
@@ -1387,9 +1409,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       throwIfAborted(input.request.signal)
       try {
         if (recoveryKind) recoveryCounts[recoveryKind === 'idle-timeout' ? 'idleTimeout' : recoveryKind] += 1
+        providerAttemptDispatched = true
         return await collectProviderAttempt(retryProvider.stream(retryCall), modelTurns, providerAttempt)
       } catch (error) {
-        throwIfAborted(input.request.signal)
+        if (await settleAbortedProviderAttempt()) throwIfAborted(input.request.signal)
         const anotherRetry = await recover({ error })
         if (!anotherRetry) throw error
         return anotherRetry
@@ -1434,9 +1457,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       try {
         await input.beforeModelRequest?.()
         throwIfAborted(input.request.signal)
+        providerAttemptDispatched = true
         collected = await collectProviderAttempt(provider.stream(call), modelTurns, recoveredAttempt ? 2 : 1)
       } catch (error) {
-        throwIfAborted(input.request.signal)
+        if (await settleAbortedProviderAttempt()) throwIfAborted(input.request.signal)
         const retry = await recover({ error })
         if (!retry) throw error
         collected = retry
@@ -2543,6 +2567,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       onChunk: (chunk) => observe(input.observer, 'model-chunk', () => input.observer?.onModelChunk?.(chunk)),
       onStreamError: async ({ usage }) => {
         if (!usage) return
+        observedAttemptUsages.set(attempt, usage)
         await projectModelAttemptUsage(input, {
           invocationId, modelTurn, attempt, routeId: input.routeId,
           usage, disposition: 'failed', reasonCode: 'PROVIDER_STREAM_FAILED'
