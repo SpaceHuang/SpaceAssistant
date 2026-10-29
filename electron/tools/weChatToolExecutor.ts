@@ -121,12 +121,30 @@ export async function inspectWeChatTaskReplyAttachment(workDir: string, imagePat
   if (requestedPath && !media.buffer && path.isAbsolute(requestedPath) && !imagePath) {
     try {
       const resolved = await fs.realpath(requestedPath)
-      const stat = await fs.lstat(requestedPath)
-      if (stat.isFile() && !stat.isSymbolicLink()) {
-        const bytes = await fs.readFile(resolved)
+      const link = await fs.lstat(requestedPath)
+      if (!link.isFile() || link.isSymbolicLink()) return deniedAttachment(requestedPath)
+      const extension = path.extname(resolved).toLowerCase()
+      const image = IMAGE_EXT.has(extension)
+      const reviewableText = ['.txt', '.md'].includes(extension)
+      const humanReviewBinary = image || extension === '.pdf'
+      if (!reviewableText && !humanReviewBinary) return deniedAttachment(requestedPath)
+      const maxBytes = reviewableText ? 20_000 : image ? IMAGE_MAX : FILE_MAX
+      const handle = await fs.open(resolved, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+      try {
+        const before = await handle.stat()
+        if (!before.isFile() || before.size > maxBytes) return deniedAttachment(requestedPath)
+        // Read at most the review limit plus one byte; this also bounds memory if the file grows.
+        const buffer = Buffer.alloc(Math.min(maxBytes + 1, before.size + 1))
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+        if (bytesRead > maxBytes) return deniedAttachment(requestedPath)
+        const after = await handle.stat()
+        if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || bytesRead !== after.size) {
+          return deniedAttachment(requestedPath)
+        }
+        const bytes = buffer.subarray(0, bytesRead)
         media = { buffer: bytes, fileName: path.basename(resolved), contentVersion: createHash('sha256').update(bytes).digest('hex'), resolvedPath: resolved }
         external = true
-      }
+      } finally { await handle.close() }
     } catch { /* Outside targets without a complete regular-file observation remain unreviewable. */ }
   }
   const denied = { attachmentAuthorized: false, ...(requestedPath ? { attachmentPath: requestedPath } : {}) }
@@ -158,6 +176,10 @@ export async function inspectWeChatTaskReplyAttachment(workDir: string, imagePat
     externalAttachmentReview: { path: media.resolvedPath!, sha256: media.contentVersion!, answerer: 'agent' } }
   return { attachmentAuthorized: true, attachmentPath: media.resolvedPath, checkedAttachmentPath: media.resolvedPath,
     attachmentContentVersion: media.contentVersion, checkedAttachmentContentVersion: media.contentVersion }
+}
+
+function deniedAttachment(requestedPath: string) {
+  return { attachmentAuthorized: false, attachmentPath: requestedPath } as const
 }
 
 export async function executeWeChatSend(

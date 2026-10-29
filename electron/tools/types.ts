@@ -109,6 +109,8 @@ export interface ToolExecutionContext {
   toolsConfig: ToolsConfig
   /** run_script only: immutable filtered environment captured during permit planning. */
   scriptEnvironment?: NodeJS.ProcessEnv
+  /** Host-prepared static network candidate; enables isolated Python module search. */
+  scriptNetworkReviewCandidate?: boolean
   /** Digest of the environment facts accepted by the initial policy gate. */
   expectedScriptEnvironmentDigest?: string
   /** Digest of interpreter and execution settings accepted by the initial policy gate. */

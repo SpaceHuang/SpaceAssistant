@@ -113,4 +113,14 @@ describe('processOutputEncoding', () => {
     expect(desktop.no_proxy).toBe(source.no_proxy)
   })
 
+  it('static network candidate environment strips Python import path overrides', () => {
+    const source = { PATH: '/bin', PYTHONPATH: '/unreviewed/modules', PYTHONHOME: '/unreviewed/python' }
+    const candidate = buildScriptExecutionEnv(source, 'desktop', true)
+    const ordinary = buildScriptExecutionEnv(source, 'desktop')
+    expect(candidate.PYTHONPATH).toBeUndefined()
+    expect(candidate.PYTHONHOME).toBeUndefined()
+    expect(ordinary.PYTHONPATH).toBe(source.PYTHONPATH)
+    expect(ordinary.PYTHONHOME).toBe(source.PYTHONHOME)
+  })
+
 })
