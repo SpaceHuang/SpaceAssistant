@@ -294,6 +294,29 @@ function auditSink(): { record: (e: SecurityAuditEvent) => void; events: Securit
 }
 
 describe('IM standard policy override is final at the gate', () => {
+  it.each(['wechat', 'feishu'] as const)('%s isolated standard v3 sends only a complete static HTTPS request to Agent review', async (lane) => {
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const evaluate = (code: string, version = 'im-standard-v3') => {
+      const policySnapshot = { ...snapshot, policyBehaviorVersion: version }
+      const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: version, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+      return evaluateToolCallGate(base({ lane, toolName: 'run_script', toolInput: { language: 'python', code }, effectiveRules: rules, imPolicySnapshot: policySnapshot }))
+    }
+    const candidate = await evaluate("import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)")
+    expect(candidate.facts.signals).toContainEqual({ kind: 'im-script-network-review-candidate', status: 'complete', host: 'docs.example.com', method: 'GET', url: 'https://docs.example.com/' })
+    expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-environment')).toMatchObject({ kind: 'script-execution-environment', status: 'complete', digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-settings')).toMatchObject({ kind: 'script-execution-settings', status: 'complete', interpreter: expect.any(String), digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(candidate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-script-network-review', answerer: 'agent' })
+    for (const code of [
+      "import requests\nrequests.get(url, timeout=5, allow_redirects=False)",
+      "import requests\nrequests.get('https://docs.example.com/', timeout=5)",
+      "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)\nprint('extra')"
+    ]) expect((await evaluate(code)).decision).toMatchObject({ type: 'deny', ruleId: 'script-network-deny-remote' })
+    expect((await evaluate("import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)", 'im-v1.6')).decision)
+      .toMatchObject({ type: 'deny', ruleId: 'script-network-deny-remote' })
+    expect(effectiveRules.find((rule) => rule.id === 'im-script-network-review')?.action).toBe('ask')
+  })
+
   it.each(['wechat', 'feishu'] as const)('%s isolated v3 routes bounded git status/log to Agent and leaves other shell calls denied', async (lane) => {
     const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'shell-review-')))
     const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }

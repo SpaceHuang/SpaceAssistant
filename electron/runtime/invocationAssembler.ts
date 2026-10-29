@@ -898,9 +898,15 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         onInitialGateResult: async (binding, result, args) => {
           await permitHandoff.onInitialGateResult?.(binding, result, args)
           const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput } as const
+          const scriptEnvironmentFact = result.facts.signals.find((signal) => signal.kind === 'script-execution-environment')
+          const scriptSettingsFact = result.facts.signals.find((signal) => signal.kind === 'script-execution-settings')
+          const scriptNetworkReviewCandidate = result.facts.signals.some((signal) => signal.kind === 'im-script-network-review-candidate' && signal.status === 'complete')
           const metadata: Record<string, unknown> = {
             decisionRuleId: result.decision.ruleId,
             policyFactsHash: createHash('sha256').update(JSON.stringify(result.facts)).digest('hex'),
+            ...(scriptEnvironmentFact?.kind === 'script-execution-environment' ? { expectedScriptEnvironmentDigest: scriptEnvironmentFact.digest } : {}),
+            ...(scriptSettingsFact?.kind === 'script-execution-settings' ? { expectedScriptSettingsDigest: scriptSettingsFact.digest } : {}),
+            ...(scriptNetworkReviewCandidate ? { expectedScriptNetworkReviewCandidate: true } : {}),
             fileAutoApproved: result.fileAutoApproved === true,
             ...(result.fileAutoApproved === true && (args.toolName === 'write_file' || args.toolName === 'edit_file')
               ? { autoApprovedWrite: { path: typeof args.toolInput.path === 'string' ? args.toolInput.path : '', stats: 'pending' } }

@@ -10,6 +10,7 @@ import { McpConcurrencyGate } from '../mcp/mcpToolExecutor'
 import { createRunScriptRegisteredTool, RunScriptExecutionUncertainError } from './runScriptRegisteredTool'
 import { executeRegisteredTool } from './toolInvocationCoordinator'
 import { createPermitBoundCoordinatorDispatch } from './permitBoundCoordinatorDispatch'
+import { buildScriptExecutionEnv, stableScriptMaterialDigest } from '../processOutputEncoding'
 import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 
 
@@ -210,7 +211,7 @@ describe('run_script language dispatch', () => {
   it('interpreter settings changed after preparation reject before dispatch and executor', async () => {
     const execution = vi.fn(async () => ({ success: true }))
     const tool = createRunScriptRegisteredTool({ name: 'run_script', execute: execution } as never)
-    const runtime = ctx() as { workDir: string; userDataDir: string; toolsConfig: { scriptTimeout: number; pythonPath: string } }
+    const runtime = { ...ctx(), lane: 'wechat' } as { workDir: string; userDataDir: string; toolsConfig: { scriptTimeout: number; pythonPath: string }; expectedScriptEnvironmentDigest?: string; expectedScriptSettingsDigest?: string; expectedScriptNetworkReviewCandidate?: boolean }
     let dispatchEntered = false
     await expect(executeRegisteredTool(tool, { language: 'python', code: 'print(1)' }, {
       requestId: 'script-prepared', toolUseId: 'call-1', signal: new AbortController().signal,
@@ -227,6 +228,83 @@ describe('run_script language dispatch', () => {
     })).rejects.toThrow('RUN_SCRIPT_PREPARED_SETTINGS_CHANGED')
     expect(dispatchEntered).toBe(false)
     expect(execution).not.toHaveBeenCalled()
+  })
+
+  it('script child environment changed after preparation rejects before dispatch and executor', async () => {
+    const execution = vi.fn(async () => ({ success: true }))
+    const tool = createRunScriptRegisteredTool({ name: 'run_script', execute: execution } as never)
+    const runtime = { ...ctx(), lane: 'wechat' } as { workDir: string; userDataDir: string; toolsConfig: { scriptTimeout: number; pythonPath: string }; expectedScriptEnvironmentDigest?: string; expectedScriptSettingsDigest?: string; expectedScriptNetworkReviewCandidate?: boolean }
+    const oldValue = process.env.SPACEASSISTANT_SCRIPT_BINDING_TEST
+    process.env.SPACEASSISTANT_SCRIPT_BINDING_TEST = 'before-review'
+    let dispatchEntered = false
+    try {
+      await expect(executeRegisteredTool(tool, { language: 'python', code: "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)" }, {
+        requestId: 'script-env-prepared', toolUseId: 'call-env', signal: new AbortController().signal,
+        executionContext: runtime as never
+      }, {
+        confirm: async (handle) => {
+          const facts = tool.getPreparedFacts?.(handle.prepared) as { settingsDigest?: string; environmentDigest?: string } | undefined
+          runtime.expectedScriptSettingsDigest = facts?.settingsDigest
+          runtime.expectedScriptEnvironmentDigest = facts?.environmentDigest
+          runtime.expectedScriptNetworkReviewCandidate = true
+          process.env.SPACEASSISTANT_SCRIPT_BINDING_TEST = 'changed-after-review'
+          return true
+        },
+        dispatch: async (_handle, _context, execute) => {
+          dispatchEntered = true
+          return execute(new AbortController().signal)
+        }
+      })).rejects.toThrow('RUN_SCRIPT_PREPARED_ENVIRONMENT_CHANGED')
+      expect(dispatchEntered).toBe(false)
+      expect(execution).not.toHaveBeenCalled()
+    } finally {
+      if (oldValue === undefined) delete process.env.SPACEASSISTANT_SCRIPT_BINDING_TEST
+      else process.env.SPACEASSISTANT_SCRIPT_BINDING_TEST = oldValue
+    }
+  })
+
+  it('remote script planning requires an exact environment digest from the policy gate', async () => {
+    const executor = vi.fn(async () => ({ success: true }))
+    const tool = createRunScriptRegisteredTool({ name: 'run_script', execute: executor } as never)
+    const runtime = { ...ctx(), lane: 'wechat' } as { expectedScriptEnvironmentDigest?: string; expectedScriptSettingsDigest?: string; expectedScriptNetworkReviewCandidate?: boolean }
+    const handle = await tool.begin({ language: 'python', code: "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)" }, {
+      requestId: 'script-gate-env-mismatch', toolUseId: 'call-gate-env', signal: new AbortController().signal,
+      executionContext: runtime
+    })
+    try {
+      handle.awaitConfirmation()
+      handle.confirm()
+      handle.beginValidation()
+      runtime.expectedScriptSettingsDigest = (tool.getPreparedFacts?.(handle.prepared) as { settingsDigest: string }).settingsDigest
+      runtime.expectedScriptNetworkReviewCandidate = true
+      runtime.expectedScriptEnvironmentDigest = 'a'.repeat(64)
+      await expect(handle.validatePrepared({ signal: new AbortController().signal, runtimeContext: runtime } as never))
+        .rejects.toThrow('RUN_SCRIPT_GATE_ENVIRONMENT_MISMATCH')
+      expect(executor).not.toHaveBeenCalled()
+    } finally { handle.release() }
+  })
+
+  it('remote script plan accepts and exposes the exact gate environment digest without exposing values', async () => {
+    const expected = stableScriptMaterialDigest(buildScriptExecutionEnv(process.env, 'wechat', true))
+    const runtime = { ...ctx(), lane: 'wechat' } as { expectedScriptEnvironmentDigest?: string; expectedScriptSettingsDigest?: string; expectedScriptNetworkReviewCandidate?: boolean }
+    const tool = createRunScriptRegisteredTool({ name: 'run_script', execute: vi.fn(async () => ({ success: true })) } as never)
+    const handle = await tool.begin({ language: 'python', code: "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)" }, {
+      requestId: 'script-gate-env-match', toolUseId: 'call-gate-env-match', signal: new AbortController().signal,
+      executionContext: runtime
+    })
+    try {
+      handle.awaitConfirmation()
+      handle.confirm()
+      handle.beginValidation()
+      runtime.expectedScriptSettingsDigest = (tool.getPreparedFacts?.(handle.prepared) as { settingsDigest: string }).settingsDigest
+      runtime.expectedScriptNetworkReviewCandidate = true
+      runtime.expectedScriptEnvironmentDigest = expected
+      await expect(handle.validatePrepared({ signal: new AbortController().signal, runtimeContext: runtime } as never)).resolves.toBeUndefined()
+      const facts = tool.getPreparedFacts?.(handle.prepared) as { environmentDigest?: string }
+      expect(facts.environmentDigest).toBe(expected)
+      expect(JSON.stringify(facts)).not.toContain('PATH')
+      expect(JSON.stringify(facts)).not.toContain(process.env.PATH)
+    } finally { handle.release() }
   })
 
   it('executes JavaScript and TypeScript with Node after gate-level language selection', async () => {

@@ -39,10 +39,19 @@ export function resolveImPolicyRulesForVersion(input: ResolveImPolicyRulesForVer
           if (rule.id === 'remote-outside-write-deny') return { ...rule, action, match: { ...rule.match!, signals: ['write-target-scope:outside-workdir', 'write-target-unsupported'] } }
           if (rule.id === 'remote-wechat-media-outside-deny') return { ...rule, action,
             match: { ...rule.match!, toolName: 'wechat_send', signals: ['wechat-media-target:outside-workdir', 'policy-tier:standard'] } }
+          if (rule.id === 'script-network-deny-remote') return { ...rule, match: { ...rule.match!, excludeSignals: ['im-script-network-review-candidate:complete'] } }
+          if (rule.id === 'script-uncertified-ask-remote') return { ...rule, match: { ...rule.match!, excludeSignals: ['im-script-network-review-candidate:complete'] } }
           if (rule.id === 'outbound-mode-standard-review') return { ...rule,
             match: { ...rule.match!, excludeSignals: [...(rule.match?.excludeSignals ?? []), 'wechat-media-review-materials:complete'] } }
           return { ...rule, action }
         })
+        const scriptNetworkReviewRule: PolicyRule | undefined = input.pkg === 'standard' ? {
+          id: 'im-script-network-review', when: 'invocation',
+          match: { lane: ['wechat', 'feishu'], toolName: 'run_script',
+            signals: ['script-network', 'im-script-network-review-candidate:complete', 'script-execution-environment:complete', 'script-execution-settings:complete'],
+            excludeSignals: ['dangerous', 'extraction-failed'] },
+          action: 'ask', answerer: 'agent', reason: 'Complete static HTTPS request target and execution environment are reviewed by the IM safety agent'
+        } : undefined
         resolved.push(
           { id: 'im-outside-read-review', when: 'invocation', match: { lane: ['wechat', 'feishu'], toolName: ['read_file', 'grep'], actionClass: 'read', signals: ['path-target:outside-workdir', 'read-target-scope:single-target', 'read-target-kind:file'] }, action: 'ask', answerer: 'agent', reason: 'IM directory-external single-file read review' },
           { id: 'im-outside-list-review', when: 'invocation', match: { lane: ['wechat', 'feishu'], toolName: 'list_directory', actionClass: 'read', signals: ['path-target:outside-workdir', 'read-target-scope:direct-entries', 'read-target-kind:directory'] }, action: 'ask', answerer: 'agent', reason: 'IM directory-external direct listing review' },
@@ -52,6 +61,7 @@ export function resolveImPolicyRulesForVersion(input: ResolveImPolicyRulesForVer
           { id: 'im-wechat-media-outside-review', when: 'invocation', match: { lane: ['wechat'], toolName: 'wechat_reply', actionClass: 'outbound', signals: ['wechat-media-target:outside-workdir', 'wechat-media-target-kind:file', 'wechat-media-content-assessment:complete', 'wechat-media-review-binding:complete', 'policy-tier:standard'], excludeSignals: ['policy-tier:strict', 'policy-tier:loose', 'policy-tier:custom'] }, action: 'ask', answerer: 'agent', reason: 'IM directory-external WeChat attachment review' },
           { id: 'remote-wechat-media-outside-reply-deny', when: 'invocation', match: { lane: ['wechat'], toolName: 'wechat_reply', signals: ['wechat-media-target:outside-workdir', 'policy-tier:standard'], excludeSignals: ['wechat-media-review-materials:complete'] }, action: 'deny', locked: true, denyClass: 'forbidden', reason: 'Incomplete external attachment reviews remain denied' },
           { id: 'remote-wechat-media-outside-nonstandard-deny', when: 'invocation', match: { lane: ['wechat'], toolName: ['wechat_send', 'wechat_reply'], signals: ['wechat-media-target:outside-workdir'], excludeSignals: ['policy-tier:standard'] }, action: 'deny', locked: true, denyClass: 'forbidden', reason: 'Only complete standard attachment candidates can be reviewed' },
+          ...(scriptNetworkReviewRule ? [scriptNetworkReviewRule] : []),
           ...unverifiedTargetDenies
         )
         return resolved

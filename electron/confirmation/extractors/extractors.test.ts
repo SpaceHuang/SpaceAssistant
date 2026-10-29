@@ -164,6 +164,25 @@ describe('scriptAnalysisExtractor', () => {
     expect(signalKinds(r.signals)).toContain('script-network')
   })
 
+  it('仅将无副作用、单一静态 HTTPS GET/HEAD 目标标为 IM 网络审核候选', () => {
+    const candidate = extractScriptSignals(
+      "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)", env
+    )
+    expect(candidate.signals).toContainEqual({
+      kind: 'im-script-network-review-candidate', status: 'complete',
+      host: 'docs.example.com', method: 'GET', url: 'https://docs.example.com/'
+    })
+    for (const code of [
+      "import requests\nrequests.get(url, timeout=5, allow_redirects=False)",
+      "import requests\nrequests.get('https://docs.example.com/', timeout=5)",
+      "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)\nprint('extra')",
+      "import requests\nrequests.get('http://127.0.0.1/', timeout=5, allow_redirects=False)",
+      "import requests\nrequests.get('https://docs.example.com/private?token=x', timeout=5, allow_redirects=False)"
+    ]) {
+      expect(extractScriptSignals(code, env).signals).not.toContainEqual(expect.objectContaining({ kind: 'im-script-network-review-candidate' }))
+    }
+  })
+
   it('危险脚本产 script-analysis=dangerous', () => {
     const r = extractScriptSignals("import ctypes\nctypes.CDLL('libc.so')", env)
     const sa = r.signals.find((s) => s.kind === 'script-analysis')

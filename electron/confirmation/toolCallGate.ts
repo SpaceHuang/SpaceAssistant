@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { buildScriptExecutionEnv, stableScriptMaterialDigest } from '../processOutputEncoding'
 import fsPromises from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import path from 'node:path'
@@ -6,6 +7,9 @@ import { decide, ruleMatchesInvocation } from '../../src/shared/policy/policyEng
 import { createImAttachmentFacts } from '../../src/shared/confirmation/imAttachmentFacts'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { resolveImPolicyFloorForVersion, validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
+import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
+import { analyzeScriptContent, parsePythonModule, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
+import type { IrModule } from '../shell/scriptIr/types'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import type {
   AutoApproveFallback,
@@ -84,9 +88,6 @@ function isWikiRawSignalTarget(args: { workDir: string; userDataDir: string; wik
     : resolveWikiRelPath(args.workDir, wikiConfig, rawPath)
   return classifyWikiPath(args.workDir, wikiConfig, vocabulary) === 'raw'
 }
-import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
-import { analyzeScriptContent, parsePythonModule, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
-import type { IrModule } from '../shell/scriptIr/types'
 import { precheckRunShellTool } from '../shell/shellToolLoopHelpers'
 import { analyzeShellCommand } from '../shell/analyzeShellCommand'
 import { classifyShellCommandEffect } from './extractors/shellEffectFacts'
@@ -666,6 +667,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     const signals: FactSignal[] = pythonLanguage
       ? pythonSignals!.signals
       : [{ kind: 'script-language-analysis' as const, language: language === 'python' ? 'unknown' as const : language, status: 'unverified' as const }]
+    const networkReviewCandidate = signals.some((signal) => signal.kind === 'im-script-network-review-candidate' && signal.status === 'complete')
+    let scriptEnvironmentDigest: string | undefined
+    if (networkReviewCandidate) {
+      scriptEnvironmentDigest = stableScriptMaterialDigest(buildScriptExecutionEnv(process.env, lane, true))
+      signals.push({ kind: 'script-execution-environment', status: 'complete', digest: scriptEnvironmentDigest })
+      const scriptSettings = {
+        workDir: args.workDir, userDataDir: args.userDataDir, scriptTimeout: args.toolsConfig.scriptTimeout,
+        ...(args.toolsConfig.pythonPath !== undefined ? { pythonPath: args.toolsConfig.pythonPath } : {}),
+        ...(args.toolsConfig.scriptInterpreterPaths ? { scriptInterpreterPaths: args.toolsConfig.scriptInterpreterPaths } : {})
+      }
+      signals.push({ kind: 'script-execution-settings', status: 'complete', digest: stableScriptMaterialDigest(scriptSettings), interpreter: args.toolsConfig.pythonPath?.trim() || 'python' })
+    }
     let summary = pythonLanguage
       ? pythonSignals!.summary
       : { text: `run_script ${language} 路径事实已提取；内容安全分析未认证` }
@@ -679,7 +692,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       contentDigest: createHash('sha256').update(code, 'utf8').digest('hex'),
       workdirDigest: createHash('sha256').update(path.resolve(args.workDir), 'utf8').digest('hex'),
       parametersDigest: createHash('sha256').update(JSON.stringify({ ...args.toolInput, code }), 'utf8').digest('hex'),
-      environmentDigest: createHash('sha256').update(JSON.stringify({ workDir: path.resolve(args.workDir), userDataDir: path.resolve(args.userDataDir), lane }), 'utf8').digest('hex'),
+      environmentDigest: stableScriptMaterialDigest({ workDir: path.resolve(args.workDir), userDataDir: path.resolve(args.userDataDir), lane, scriptEnvironmentDigest }),
       authenticationVersion: 'script-certifier-v1'
     })
     let scriptPathHint: string | undefined

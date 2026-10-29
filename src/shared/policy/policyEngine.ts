@@ -141,6 +141,18 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         if (signal.unknownReason) tokens.add(`script-path-extraction:${signal.unknownReason}`)
         else if (signal.completeness === 'unknown') tokens.add('script-path-extraction:unclassified')
         break
+      case 'im-script-network-review-candidate':
+        tokens.add(signal.kind)
+        tokens.add(`im-script-network-review-candidate:${signal.status}`)
+        break
+      case 'script-execution-environment':
+        tokens.add(signal.kind)
+        tokens.add(`script-execution-environment:${signal.status}`)
+        break
+      case 'script-execution-settings':
+        tokens.add(signal.kind)
+        tokens.add(`script-execution-settings:${signal.status}`)
+        break
       case 'script-path-declaration':
         tokens.add(signal.kind)
         tokens.add(`script-path-declaration:${signal.scope}`)
