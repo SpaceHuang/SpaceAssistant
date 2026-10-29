@@ -28,8 +28,13 @@ export function projectOutboundDeliveryPolicyFacts(value: unknown): import('../.
   if (!value || typeof value !== 'object') return []
   const facts = value as ImOutboundFacts
   const content = facts.contentFacts
-  if (!content) return facts.contentCompleteness === 'complete' ? [] : [{ kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: [] }]
-  return [{ kind: 'outbound-content', inspectionCoverage: content.inspectionCoverage, evidenceKinds: content.evidenceKinds }]
+  return [
+    ...(content ? [{ kind: 'outbound-content' as const, inspectionCoverage: content.inspectionCoverage, evidenceKinds: content.evidenceKinds }] :
+      facts.contentCompleteness === 'complete' ? [] : [{ kind: 'outbound-content' as const, inspectionCoverage: 'unavailable' as const, evidenceKinds: [] as const }]),
+    ...(facts.externalAttachmentReview ? [{ kind: 'wechat-media-content-assessment' as const, factId: 'registered-outbound-attachment',
+      contentDigest: facts.externalAttachmentReview.sha256, extractorVersion: 'host-im-attachment-v1',
+      inspectionCoverage: facts.attachmentApprovalRequired ? 'complete' as const : 'unavailable' as const, evidenceKinds: [] as const }] : [])
+  ]
 }
 
 function runtimeContext(context: ToolExecutionContext): RuntimeExecutionContext {
@@ -141,6 +146,8 @@ function registerOutbound(name: 'wechat_send' | 'wechat_reply', executor: ToolEx
     },
     execute: async (prepared, execution) => {
       const runtime = runtimeContext(execution)
+      const latest = { ...snapshot(runtime), outboundDeliveryFacts: prepared.outboundDeliveryFacts }
+      if (fingerprint(latest) !== fingerprint(preparedSnapshot(prepared))) throw new Error('WECHAT_OUTBOUND_PREPARED_BINDING_CHANGED')
       const remoteContext = runtime.remoteContext && prepared.remoteBinding
         ? { ...runtime.remoteContext, ...prepared.remoteBinding } as RemoteContext
         : runtime.remoteContext
@@ -152,10 +159,17 @@ function registerOutbound(name: 'wechat_send' | 'wechat_reply', executor: ToolEx
           outboundDeliveryFacts.attachmentContentVersion &&
           outboundDeliveryFacts.attachmentContentVersion === outboundDeliveryFacts.checkedAttachmentContentVersion
         const deferredBinding = remoteContext?.deferredAttachmentApproval
-        if (!receipt || execution.userConfirmationAnswerer !== 'user' || !exactPreparedAttachment || (deferredBinding &&
+        // permit/dispatch binding: an Agent receipt may promote only the exact prepared
+        // ordinary-text directory-external reply; binary media retains its human receipt path.
+        const externalAgentReview = outboundDeliveryFacts.externalAttachmentReview?.answerer === 'agent' &&
+          execution.userConfirmationAnswerer === 'agent' && Boolean(receipt) &&
+          outboundDeliveryFacts.attachmentPath === outboundDeliveryFacts.externalAttachmentReview.path &&
+          outboundDeliveryFacts.attachmentContentVersion === outboundDeliveryFacts.externalAttachmentReview.sha256
+        if ((!receipt || execution.userConfirmationAnswerer !== 'user') && !externalAgentReview || !exactPreparedAttachment || (deferredBinding &&
           (deferredBinding.path !== outboundDeliveryFacts.attachmentPath || deferredBinding.sha256 !== outboundDeliveryFacts.attachmentContentVersion))) {
           throw new Error('WECHAT_ATTACHMENT_HUMAN_APPROVAL_BINDING_REQUIRED')
         }
+        if (outboundDeliveryFacts.externalAttachmentReview && !externalAgentReview) throw new Error('WECHAT_ATTACHMENT_AGENT_APPROVAL_BINDING_REQUIRED')
         outboundDeliveryFacts.attachmentAuthorized = true
       }
       return executor.execute(prepared.input, {

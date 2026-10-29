@@ -31,6 +31,8 @@ export interface ImOutboundFacts {
   checkedAttachmentContentVersion?: string
   attachmentPath?: string
   checkedAttachmentPath?: string
+  /** Host-prepared, exact ordinary-text attachment candidate outside workDir; promoted only after Agent approval. */
+  externalAttachmentReview?: Readonly<{ path: string; sha256: string; answerer: 'agent' }>
   userConfirmationReceipt?: string
   destinationId?: string
 }

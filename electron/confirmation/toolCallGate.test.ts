@@ -2917,6 +2917,128 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
+  it('T10：隔离 v3 为普通目录外微信附件提取完整审核事实并交 Agent', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-review-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'ordinary report content')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const remote = remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remote, workDir, userDataDir: path.join(parent, '.userdata'),
+        toolName: 'wechat_reply', toolInput: { text: 'report', filePath: attachment }, effectiveRules, imPolicySnapshot: snapshot,
+        factsProvider: () => [{ kind: 'wechat-media-content-assessment', factId: 'prepared-attachment',
+          contentDigest: createHash('sha256').update('ordinary report content').digest('hex'), extractorVersion: 'host-im-attachment-v1',
+          inspectionCoverage: 'complete', evidenceKinds: [] }] }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-target', boundary: 'outside-workdir', targetKind: 'file' }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-content', byteSize: 23, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-identity', dev: expect.any(Number), ino: expect.any(Number), size: 23 }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-content', displayPath: 'report.txt' }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-content-assessment', inspectionCoverage: 'complete', evidenceKinds: [] }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-review-binding', status: 'complete', recipient: 'owner', ownerId: 'owner', authorizationGeneration: 7 }))
+      expect(gate.facts.signals).toContainEqual({ kind: 'wechat-media-review-materials', status: 'complete' })
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-wechat-media-outside-review' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：附件授权代次或接收者缺失时目录外文件不产生审核候选', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-incomplete-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'ordinary report content')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', authOwner: 'owner' }), workDir,
+        userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_reply', toolInput: { text: 'report', filePath: attachment }, effectiveRules, imPolicySnapshot: snapshot }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-review-binding', status: 'incomplete' }))
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-outside-reply-deny' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：执行器准备附件摘要与审核实际读取摘要不一致时拒绝候选', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-digest-mismatch-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'ordinary report content')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 }),
+        workDir, userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_reply', toolInput: { text: 'report', filePath: attachment }, effectiveRules,
+        imPolicySnapshot: snapshot, factsProvider: () => [{ kind: 'wechat-media-content-assessment', factId: 'prepared-attachment',
+          contentDigest: 'a'.repeat(64), extractorVersion: 'host-im-attachment-v1', inspectionCoverage: 'complete', evidenceKinds: [] }] }))
+      expect(gate.facts.signals).toContainEqual({ kind: 'wechat-media-review-materials', status: 'incomplete' })
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-outside-reply-deny' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：目录外附件命中凭证内容底线时必须真人确认', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-sensitive-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'password=secret-value')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 }),
+        workDir, userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_reply', toolInput: { text: 'report', filePath: attachment },
+        effectiveRules, imPolicySnapshot: snapshot }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-content-assessment', evidenceKinds: ['credential-like-pattern'] }))
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'outbound-sensitive-standard-human' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：标准模式外的附件即使事实完整也保持拒绝', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-nonstandard-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'ordinary report content')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'strict' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'strict', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 }),
+        workDir, userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_send', toolInput: { userId: 'recipient-1', text: 'report', filePath: attachment },
+        effectiveRules, imPolicySnapshot: snapshot, lanePackage: 'strict' }))
+      expect(gate.facts.signals).toContainEqual({ kind: 'wechat-media-review-materials', status: 'complete' })
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-outside-nonstandard-deny' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：目录外附件仍不能绕过微信主动发送拒绝', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-active-send-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'ordinary report content')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 }),
+        workDir, userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_send',
+        toolInput: { userId: 'recipient-1', text: 'report', filePath: attachment }, effectiveRules, imPolicySnapshot: snapshot }))
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-outside-deny' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
   it('微信附件敏感内容证据触发真人 outbound 规则且不保存附件正文', async () => {
     const workDir = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-content-facts-'))
     const attachmentPath = path.join(workDir, 'report.txt')
