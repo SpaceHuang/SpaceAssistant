@@ -13,7 +13,8 @@ import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../s
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import type { RemoteContext } from '../tools/types'
-import { buildApprovalTaskEvidence, buildApprovalTaskIdentity } from '../../src/shared/approvalTaskDigest'
+import { buildApprovalConversationContext, buildApprovalTaskEvidence, buildApprovalTaskIdentity,
+  isApprovalConversationContextTruncated } from '../../src/shared/approvalTaskDigest'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { readAppLocale } from '../appIpc'
 import { resolveLlmCredentialsForPair } from '../llmServiceResolver'
@@ -500,8 +501,13 @@ export async function runImRemoteAgent(args: {
       ...(currentUserMessage?.content ? (() => {
         const evidence = buildApprovalTaskEvidence(currentUserMessage.content)
         const taskIdentity = buildApprovalTaskIdentity(rawMessages, currentUserMessage.id)
+        const conversationContext = buildApprovalConversationContext(rawMessages, currentUserMessage.id)
+        const evidenceComplete = Boolean(evidence.digest.trim() && !evidence.truncated &&
+          !isApprovalConversationContextTruncated(rawMessages, currentUserMessage.id))
         return { approvalTaskDigest: evidence.digest, approvalTaskDigestTruncated: evidence.truncated,
-          ...(taskIdentity ? { approvalReviewScopeTaskIdentity: taskIdentity } : {}) }
+          ...(taskIdentity ? { approvalReviewScopeTaskIdentity: taskIdentity } : {}),
+          ...(conversationContext ? { approvalConversationContext: conversationContext } : {}),
+          ...(evidenceComplete ? { approvalReviewScopeEvidenceComplete: true } : {}) }
       })() : {}),
       ...(args.remoteContext.source === 'feishu' || args.remoteContext.source === 'wechat'
         ? { imOrchestrationToolRegistry: createImOrchestrationToolRegistry(args.db, args.taskControlSafetyPort ?? createDeferredTodoTaskControlSafetyPort({

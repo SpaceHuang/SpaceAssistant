@@ -82,7 +82,7 @@ describe('review scope cache gate integration', () => {
       const cache = new ReviewScopeCache()
       const taskConstraint = 'Update note.txt for the requested release.'
       const args = base({ toolName: 'edit_file', toolInput: { path: 'note.txt', old_string: 'before', new_string: 'after' }, workDir: dir,
-        sessionId: 'review-session', userDataDir: '/profile', taskDigest: taskConstraint, reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note.txt for the requested release.', context: [] }), reviewScopeCache: cache,
+        sessionId: 'review-session', userDataDir: '/profile', taskDigest: taskConstraint, reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note.txt for the requested release.', context: [] }), reviewScopeEvidenceComplete: true, reviewScopeCache: cache,
         policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-policy-v1', revision: 0, epoch: 0 } })
       const result = await evaluateToolCallGate(args)
       expect(result.reviewScopeCandidate).toMatchObject({ toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target }] })
@@ -117,7 +117,7 @@ describe('review scope cache gate integration', () => {
       await fs.writeFile(path.join(dir, 'note.txt'), 'HEADER\necho safe')
       const result = await evaluateToolCallGate(base({ toolName: 'edit_file',
         toolInput: { path: 'note.txt', old_string: 'HEADER', new_string: '#!/bin/sh' }, workDir: dir,
-        sessionId: 'review-session', userDataDir: '/profile', taskDigest: 'Update note header.', reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note header.', context: [] }), reviewScopeCache: new ReviewScopeCache(),
+        sessionId: 'review-session', userDataDir: '/profile', taskDigest: 'Update note header.', reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note header.', context: [] }), reviewScopeEvidenceComplete: true, reviewScopeCache: new ReviewScopeCache(),
         policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-policy-v1', revision: 0, epoch: 0 } }))
       expect(result.reviewScopeCandidate).toBeUndefined()
     } finally { await fs.rm(dir, { recursive: true, force: true }) }
@@ -130,12 +130,13 @@ describe('review scope cache gate integration', () => {
     try {
       await fs.writeFile(path.join(dir, 'note.txt'), 'before')
       const args = base({ toolName: 'edit_file', toolInput: { path: 'note.txt', old_string: 'before', new_string: 'after' }, workDir: dir,
-        sessionId: 'review-session', userDataDir: '/profile', taskDigest: 'Update note.txt for release.', reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note.txt for release.', context: [] }), reviewScopeCache: new ReviewScopeCache(),
+        sessionId: 'review-session', userDataDir: '/profile', taskDigest: 'Update note.txt for release.', reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note.txt for release.', context: [] }), reviewScopeEvidenceComplete: true, reviewScopeCache: new ReviewScopeCache(),
         policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-policy-v1', revision: 0, epoch: 0 } })
       const result = await evaluateToolCallGate(args)
       expect(result.reviewScopeCandidate).toMatchObject({ toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: path.join(dir, 'note.txt') }] })
       expect(result.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
-      expect((await evaluateToolCallGate({ ...args, taskDigestTruncated: true })).reviewScopeCandidateDigest).toBe(result.reviewScopeCandidateDigest)
+      expect((await evaluateToolCallGate({ ...args, taskDigestTruncated: true })).reviewScopeCandidate).toBeUndefined()
+      expect((await evaluateToolCallGate({ ...args, reviewScopeEvidenceComplete: false })).reviewScopeCandidate).toBeUndefined()
       expect((await evaluateToolCallGate({ ...args, reviewScopeTaskIdentity: undefined })).reviewScopeCandidate).toBeUndefined()
     } finally { await fs.rm(dir, { recursive: true, force: true }) }
   })
@@ -149,7 +150,7 @@ describe('review scope receipt final-check', () => {
       await fs.writeFile(target, 'before')
       const cache = new ReviewScopeCache()
       const args = base({ toolName: 'edit_file', toolInput: { path: 'note.txt', old_string: 'before', new_string: 'after' }, workDir: dir,
-        sessionId: 'receipt-session', userDataDir: '/profile', taskDigest: 'Update note.txt.', reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note.txt.', context: [] }), reviewScopeCache: cache,
+        sessionId: 'receipt-session', userDataDir: '/profile', taskDigest: 'Update note.txt.', reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note.txt.', context: [] }), reviewScopeEvidenceComplete: true, reviewScopeCache: cache,
         policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-policy-v1', revision: 0, epoch: 0 } })
       const candidate = await evaluateToolCallGate(args)
       const scope = candidate.reviewScopeCandidateScope!

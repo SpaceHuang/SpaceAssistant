@@ -139,6 +139,10 @@ export class AgentChannel implements ConfirmationChannel {
       /** 已声明的任务（D，可信证据）：装配方从外层任务上下文透传；缺省 = 无任务上下文。 */
       taskDigest?: string
       taskDigestTruncated?: boolean
+      /** Exact host task/context identity. Used only as a host completeness prerequisite, never shown as authority. */
+      reviewScopeTaskIdentity?: string
+      /** Positive host attestation that the task and selected reference excerpt reached the reviewer intact. */
+      reviewScopeEvidenceComplete?: boolean
       /** 前序对话只解析当前任务指代；审批器必须视为不可信材料。 */
       conversationContext?: string
       /** Confirmed permission receipt frozen by the host in this automation run snapshot. */
@@ -321,7 +325,11 @@ export class AgentChannel implements ConfirmationChannel {
             answererKind: 'agent',
             cause: 'agent-approved',
             reason: result.verdict.reason,
-            ...(result.verdict.reuseApproved === true && result.verdict.scopeCandidateDigest &&
+            ...(this.deps.reviewScopeEvidenceComplete === true && typeof this.deps.taskDigest === 'string' && this.deps.taskDigest.trim().length > 0 &&
+              typeof this.deps.reviewScopeTaskIdentity === 'string' && this.deps.reviewScopeTaskIdentity.length > 0 &&
+              Buffer.byteLength(this.deps.reviewScopeTaskIdentity, 'utf8') <= 64 * 1024 &&
+              this.deps.taskDigestTruncated !== true &&
+              result.verdict.reuseApproved === true && result.verdict.scopeCandidateDigest &&
               result.verdict.scopeCandidateDigest === clue.reviewScopeCandidate?.scopeCandidateDigest
               ? { reviewScopeGrant: { source: 'agent' as const, scopeCandidateDigest: result.verdict.scopeCandidateDigest } }
               : {})

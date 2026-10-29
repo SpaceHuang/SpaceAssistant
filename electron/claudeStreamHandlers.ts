@@ -14,7 +14,8 @@ import { runToolChatSession, DESKTOP_TOOL_LOOP_MAX_ROUNDS } from './toolChatLoop
 import { assembleInvocation } from './runtime/invocationAssembler'
 import { createAgentSdkSessionEventProjector } from './runtime/agentSdkSessionEventProjection'
 import { isAppLocale } from '../src/shared/locale'
-import { buildApprovalConversationContext, buildApprovalTaskEvidence, buildApprovalTaskIdentity } from '../src/shared/approvalTaskDigest'
+import { buildApprovalConversationContext, buildApprovalTaskEvidence, buildApprovalTaskIdentity,
+  isApprovalConversationContextTruncated } from '../src/shared/approvalTaskDigest'
 import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
 import { MAX_CHAT_API_CONTENT_BLOCKS, MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
 import { trimClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
@@ -525,6 +526,9 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         // facts/context boundary: prior visible user/assistant text only helps resolve follow-up references;
         // approvalAgent renders it inside the untrusted evidence fence and never treats it as authorization.
         const approvalConversationContext = buildApprovalConversationContext(authoritative.messages, authoritative.currentUserMessageId)
+        const approvalReviewScopeEvidenceComplete = Boolean(currentApprovalTaskMessage && approvalTaskEvidence.digest.trim() &&
+          !approvalTaskEvidence.truncated && !isApprovalConversationContextTruncated(authoritative.messages,
+            authoritative.currentUserMessageId))
 
         const { invocation: turnInvocation, ports: turnPorts, agentSdk } = assembleInvocation({
           requestId,
@@ -582,6 +586,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             const taskIdentity = buildApprovalTaskIdentity(authoritative.messages, authoritative.currentUserMessageId)
             return taskIdentity ? { approvalReviewScopeTaskIdentity: taskIdentity } : {}
           })() : {}),
+          ...(approvalReviewScopeEvidenceComplete ? { approvalReviewScopeEvidenceComplete: true } : {}),
           ...(approvalConversationContext ? { approvalConversationContext } : {}),
           workDir: sessionWorkDir,
           ...(deps.getWorkDirManager ? { workDirManager: deps.getWorkDirManager() } : {}),

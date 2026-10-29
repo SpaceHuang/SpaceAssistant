@@ -176,6 +176,8 @@ export interface ToolCallGateArgs {
   taskDigestTruncated?: boolean
   /** Exact task plus complete serialized authoritative context; oversized or missing evidence cannot cache. */
   reviewScopeTaskIdentity?: string
+  /** Positive host attestation that task and selected reference evidence reached the reviewer without clipping. */
+  reviewScopeEvidenceComplete?: boolean
   reviewScopeCache?: ReviewScopeCache
   /** Host-resolved provenance for the MCP query/data scope; never read from model arguments. */
   mcpQuerySource?: 'public' | 'local-sensitive' | 'unknown'
@@ -1473,7 +1475,8 @@ async function buildReviewScopeCandidate(
   writePathFact: WritePathFact | undefined,
   readPathFact: import('./extractors/readPathFacts').ReadPathFact | undefined
 ): Promise<ReviewScopeCandidate | undefined> {
-  if (!args.reviewScopeCache || typeof args.reviewScopeTaskIdentity !== 'string' || !args.reviewScopeTaskIdentity ||
+  if (!args.reviewScopeCache || args.taskDigestTruncated || args.reviewScopeEvidenceComplete !== true ||
+    typeof args.reviewScopeTaskIdentity !== 'string' || !args.reviewScopeTaskIdentity ||
     Buffer.byteLength(args.reviewScopeTaskIdentity, 'utf8') > 64 * 1024 || !args.policyBinding || args.policyBinding.domain === 'automation') return undefined
   if (lane === 'desktop' && args.toolName === 'grep' && readPathFact) {
     return {

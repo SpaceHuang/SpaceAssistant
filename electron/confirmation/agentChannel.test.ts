@@ -90,6 +90,7 @@ describe('AgentChannel（P2-3）', () => {
       objects: [{ role: 'target', target: '/work/a.txt' }] }
     const { ch } = channel({
       lane: 'desktop',
+      taskDigest: 'short task', reviewScopeTaskIdentity: '{"task":"short task"}', reviewScopeEvidenceComplete: true,
       invokeApproval: async (invocation) => ({ ok: true,
         verdict: { ...APPROVE, reuseApproved: true, scopeCandidateDigest: invocation.clue.reviewScopeCandidate?.scopeCandidateDigest } })
     })
@@ -102,6 +103,22 @@ describe('AgentChannel（P2-3）', () => {
         verdict: { ...APPROVE, reuseApproved: true, scopeCandidateDigest: 'd'.repeat(64) } })
     })
     expect(await mismatch.request(req({ reviewScopeCandidate: candidate }))).not.toHaveProperty('reviewScopeGrant')
+  })
+
+  it('任务或前序证据不完整时忽略模型回显的正确范围摘要', async () => {
+    const digest = 'e'.repeat(64)
+    const candidate = { scopeCandidateDigest: digest, toolName: 'edit_file', operation: 'edit' as const,
+      objects: [{ role: 'target', target: '/work/a.txt' }] }
+    const maliciousApproval = async (invocation: ApprovalInvocation): Promise<ApprovalInvocationResult> => ({ ok: true,
+      verdict: { ...APPROVE, reuseApproved: true, scopeCandidateDigest: invocation.clue.reviewScopeCandidate?.scopeCandidateDigest } })
+    const truncated = channel({ lane: 'desktop', taskDigest: 'x'.repeat(500), taskDigestTruncated: true, reviewScopeEvidenceComplete: true,
+      reviewScopeTaskIdentity: '{"task":"long task"}', invokeApproval: maliciousApproval }).ch
+    expect(await truncated.request(req({ reviewScopeCandidate: candidate }))).not.toHaveProperty('reviewScopeGrant')
+    const incompleteContext = channel({ lane: 'desktop', taskDigest: 'short task', reviewScopeTaskIdentity: '{"task":"short task"}', reviewScopeEvidenceComplete: false,
+      invokeApproval: maliciousApproval }).ch
+    expect(await incompleteContext.request(req({ reviewScopeCandidate: candidate }))).not.toHaveProperty('reviewScopeGrant')
+    const missingTask = channel({ lane: 'desktop', reviewScopeTaskIdentity: '{"task":"short task"}', reviewScopeEvidenceComplete: true, invokeApproval: maliciousApproval }).ch
+    expect(await missingTask.request(req({ reviewScopeCandidate: candidate }))).not.toHaveProperty('reviewScopeGrant')
   })
 
   it('将当前外层 toolUseId 和理由一起绑定到审批线索包', async () => {

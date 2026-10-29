@@ -21,7 +21,7 @@ import { sessionLedgerLocationIdentity, type SessionLedgerLocationInput } from '
 import { readSessionLedgerReadiness, type SessionLedgerReadyProof } from '../sessionLedgerReadiness'
 import { drainCanonicalLedgerProjectionOutbox } from '../sessionLedgerOutbox'
 import { projectCanonicalSessionLedgerTarget, resolveCanonicalSessionLedgerProjectionTarget } from './sessionLedgerOutboxProjector'
-import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { readCommittedCanonicalHistoryEvent } from './agentContinuation'
 
 function canonicalWatermark(conn: DatabaseSync, location: SessionLedgerLocationInput): string {
   const row = conn.prepare(`SELECT events.event_id,events.session_seq FROM agent_history_events events
@@ -42,12 +42,11 @@ export async function readSessionLedgerReadyProof(conn: DatabaseSync, location: 
 }
 
 function readCanonicalSessionHistory(conn: DatabaseSync, sessionId: string): HistoryEvent[] {
-  const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
   return conn.prepare(`SELECT events.event_id,events.session_seq
     FROM agent_history_events events JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
     WHERE streams.session_id=? ORDER BY events.session_seq,events.commit_order`).all(sessionId).map((raw) => {
       const row = raw as { event_id: string; session_seq: number }
-      const event = history.readCommittedSessionEventSync({ sessionId, eventId: row.event_id, sessionSequence: row.session_seq })
+      const event = readCommittedCanonicalHistoryEvent(conn, { sessionId, eventId: row.event_id, sessionSequence: row.session_seq })
       if (!event) throw new Error('SESSION_LEDGER_CANONICAL_HISTORY_EVENT_MISSING')
       return event
     })

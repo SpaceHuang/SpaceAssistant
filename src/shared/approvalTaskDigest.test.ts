@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildApprovalConversationContext, buildApprovalTaskIdentity } from './approvalTaskDigest'
+import { buildApprovalConversationContext, buildApprovalTaskIdentity, isApprovalConversationContextTruncated } from './approvalTaskDigest'
 
 describe('buildApprovalConversationContext', () => {
   it('keeps the prior user request and assistant option that a short follow-up refers to', () => {
@@ -50,5 +50,15 @@ describe('buildApprovalConversationContext', () => {
     expect(base).not.toBe(buildApprovalTaskIdentity(makeMessages('Update the release notes.', 'con\ntinue'), 'current'))
     expect(base).toContain('Update the release notes.')
     expect(buildApprovalTaskIdentity([{ id: 'prior', role: 'user', content: 'task' }], 'missing')).toBeUndefined()
+  })
+
+  it('marks reference evidence incomplete whenever an approval excerpt would be clipped', () => {
+    expect(isApprovalConversationContextTruncated([
+      { id: 'prior', role: 'user', content: 'x'.repeat(1201) },
+      { id: 'current', role: 'user', content: 'continue' }
+    ], 'current')).toBe(true)
+    expect(isApprovalConversationContextTruncated([
+      { id: 'current', role: 'user', content: 'short task' }
+    ], 'current')).toBe(false)
   })
 })

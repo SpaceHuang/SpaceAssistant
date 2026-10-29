@@ -49,6 +49,14 @@ export function buildApprovalTaskIdentity(
   return JSON.stringify({ version: 1, currentUserMessageId, task: current.content, context: selected })
 }
 
+/** True when a selected reference message would be clipped in the approval clue. */
+export function isApprovalConversationContextTruncated(
+  messages: readonly ApprovalConversationMessage[], currentUserMessageId: string, maxMessageChars = 1200
+): boolean {
+  const selected = selectApprovalConversationMessages(messages, currentUserMessageId)
+  return selected === undefined || selected.some(message => Array.from(message.content).length > maxMessageChars)
+}
+
 /**
  * 前序对话只作为不可信的指代解析材料传给审批器，不构成额外授权。
  * 保留最近一条助手回复及其前一条用户请求，覆盖“移除该页”→“标记为废弃吧”一类选择，避免拼入更早任务。
