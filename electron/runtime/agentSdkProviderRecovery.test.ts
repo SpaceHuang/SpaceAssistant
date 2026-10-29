@@ -127,6 +127,28 @@ describe('createAgentSdkProviderRecovery', () => {
     expect(result).toMatchObject({ kind: 'retry', recoveryKind: 'transient', plannedWaitMs: 1000, retryAfterMs: 1000 })
   })
 
+  it('保留 45 秒 Retry-After 原值并计划精确等待', async () => {
+    const now = Date.parse('2026-10-30T00:00:00.000Z')
+    const recover = createAgentSdkProviderRecovery({ now: () => now, random: () => 0 })
+    const result = await recover({
+      error: Object.assign(new Error('busy'), { status: 429, headers: { 'retry-after': '45' } }),
+      attempt: 1, attemptInRequest: 1, recoveryCounts: { transient: 0, idleTimeout: 0, overflow: 0, effort: 0 },
+      waitBudgetRemainingMs: 60_000, modelTurn: 1, routeId: 'r', messages
+    })
+    expect(result).toMatchObject({ kind: 'retry', retryAfterMs: 45_000, plannedWaitMs: 45_000 })
+  })
+
+  it('拒绝超过 60 秒单次上限并回传原始服务端等待和 retryAt', async () => {
+    const now = Date.parse('2026-10-30T00:00:00.000Z')
+    const recover = createAgentSdkProviderRecovery({ now: () => now, random: () => 0 })
+    const result = await recover({
+      error: Object.assign(new Error('busy'), { status: 429, headers: { 'retry-after': '120' } }),
+      attempt: 1, attemptInRequest: 1, recoveryCounts: { transient: 0, idleTimeout: 0, overflow: 0, effort: 0 },
+      waitBudgetRemainingMs: 60_000, modelTurn: 1, routeId: 'r', messages
+    })
+    expect(result).toEqual({ kind: 'reject', reasonCode: 'PROVIDER_RETRY_AFTER_EXCEEDS_SINGLE_CAP', serverAskedMs: 120_000, retryAt: now + 120_000 })
+  })
+
   it('为 effort、空闲超时与溢出分别计数，同时受共享物理尝试上限约束', async () => {
     const recover = createAgentSdkProviderRecovery({ contextWindow: 100, contextWindowTrusted: true })
     const afterTransient = { transient: 1, idleTimeout: 0, overflow: 0, effort: 0 }
