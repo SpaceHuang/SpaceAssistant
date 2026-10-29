@@ -96,7 +96,10 @@ export interface ConfirmSummary {
 export type FactSignal =
   | { kind: 'command-sequence'; commands: CommandFact[]; persistable?: boolean }
   | { kind: 'path-target'; path: string; zone: PathZone }
+  | { kind: 'read-target-scope'; scope: 'single-target' | 'direct-entries' | 'subtree' }
+  | { kind: 'read-target-kind'; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown' }
   | { kind: 'command-effect'; effect: 'read-only' | 'mutating' | 'unknown' }
+  | { kind: 'im-shell-review-candidate'; command: 'git-status' | 'git-log' }
   | { kind: 'path-outside-heuristic'; reason: string }
   | {
       kind: 'script-path-extraction'

@@ -1,6 +1,6 @@
 import type { ShellAnalysisResult } from '../../shell/shellTypes'
 
-const READ_COMMANDS = new Set(['ls', 'cat', 'head', 'tail', 'wc', 'grep', 'rg', 'find', 'fd', 'sed', 'date', 'pwd', 'whoami', 'which', 'file', 'stat', 'du', 'df', 'echo', 'printf', 'sort', 'uniq', 'comm', 'diff', 'tree', 'get-childitem', 'gci', 'dir'])
+const READ_COMMANDS = new Set(['ls', 'cat', 'head', 'tail', 'wc', 'grep', 'rg', 'find', 'fd', 'sed', 'date', 'pwd', 'whoami', 'which', 'file', 'stat', 'du', 'df', 'echo', 'printf', 'sort', 'uniq', 'comm', 'diff', 'tree', 'get-childitem', 'gci', 'dir', 'git'])
 
 /** 保守地把单次 Shell Analyzer 结果映射为命令效果；证据不完整时永不产生 read-only。 */
 export function classifyShellCommandEffect(_command: string, analysis: ShellAnalysisResult): 'read-only' | 'mutating' | 'unknown' {
@@ -14,9 +14,13 @@ export function classifyShellCommandEffect(_command: string, analysis: ShellAnal
     const verb = operation.verb.toLowerCase().split(/[\\/]/).pop() ?? operation.verb.toLowerCase()
     const args = operation.args.map((arg) => arg.replace(/^['"]|['"]$/g, ''))
     if (verb === 'git') {
+      // Configuration overrides can select pagers and external helpers; do not call them pure reads.
+      if (args.some((arg) => arg === '-c' || arg.startsWith('-c') || arg === '--config-env' || arg.startsWith('--config-env='))) return 'unknown'
       const subcommand = args.find((arg) => !arg.startsWith('-'))?.toLowerCase()
       if (!subcommand) return 'unknown'
-      if (!['log', 'status', 'diff', 'show', 'ls-files'].includes(subcommand)) sawMutation = true
+      // Repository config may run fsmonitor, pager or other helpers even for status/log.
+      if (['log', 'status'].includes(subcommand)) return 'unknown'
+      if (!['diff', 'show', 'ls-files'].includes(subcommand)) sawMutation = true
       if (args.some((arg) => arg === '-o' || arg === '--output' || arg.startsWith('--output='))) return 'unknown'
       continue
     }

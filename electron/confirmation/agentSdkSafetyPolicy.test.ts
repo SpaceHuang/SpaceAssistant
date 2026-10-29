@@ -10,6 +10,7 @@ import { evaluateToolCallGate, type ToolCallGateArgs, type ToolCallGateResult } 
 import { ReadConfirmationRegistry } from './readConfirmationRegistry'
 import { finalizeReadConfirmation } from './readConfirmationFlow'
 import { readInputDigest } from './readExecutionPermit'
+import { validateWriteExecutionPermit } from './writeExecutionPermit'
 import { createAgentSdkRecheckPort, createAgentSdkSafetyPolicy, createAgentSdkStructuralPermitHandoff, createSafetyPolicyFromRecheck, markAgentSdkSafetyDecisionConfirmed } from './agentSdkSafetyPolicy'
 import { createWeChatOutboundRegisteredTools } from '../tools/wechatOutboundRegisteredTools'
 import { createRegisteredAgentTurnTools } from '../tools/registeredAgentTurnTools'
@@ -725,6 +726,58 @@ describe('createAgentSdkSafetyPolicy', () => {
     expect(contexts.get(JSON.stringify([binding.invocationId, binding.toolCallId]))?.writeExecutionPermit).toMatchObject({
       requestId: binding.requestId, toolUseId: binding.toolCallId, toolName: 'write_file', decisionRuleId: 'write-rule', approval: 'confirmed'
     })
+  })
+
+  it('hands an Agent-approved outside read permit to only the confirmed Hosted call', () => {
+    const contexts = new Map<string, Record<string, unknown>>()
+    const handoff = createAgentSdkStructuralPermitHandoff({
+      updateExecutionContext: (call, update) => {
+        const key = JSON.stringify([call.invocationId, call.toolCallId])
+        const context = contexts.get(key) ?? {}
+        update(context)
+        contexts.set(key, context)
+      }
+    })
+    const args = { ...baseArgs, toolName: 'read_file', toolInput: { path: '/tmp/approved.txt' }, requestId: binding.requestId, toolUseId: binding.toolCallId } as ToolCallGateArgs
+    const gateResult = {
+      ...result({ type: 'require-confirm', ruleId: 'im-outside-read-review', reason: 'review', answerer: 'agent', disposition: 'auto-eligible' }),
+      lane: 'wechat',
+      readPathFact: { rawPath: '/tmp/approved.txt', normalizedPath: '/tmp/approved.txt', zone: 'outside-workdir', targetKind: 'file', identity: { dev: 1, ino: 2, mode: 33188, size: 4, mtimeMs: 1 } },
+      readTargetMapping: [{ factId: 'fact-/tmp/approved.txt', decisionRuleId: 'im-outside-read-review' }],
+      policyDecision: { decisionId: 'decision-1', dependencyFingerprint: 'sha256:policy-1' }
+    } as unknown as ToolCallGateResult
+    handoff.onConfirmed?.(binding, gateResult, args, 'agent')
+    expect(contexts.get(JSON.stringify([binding.invocationId, binding.toolCallId]))?.readExecutionPermit).toMatchObject({
+      requestId: binding.requestId, toolUseId: binding.toolCallId, toolName: 'read_file', decisionId: 'decision-1',
+      policyDependencyFingerprint: 'sha256:policy-1', targets: [{ normalizedPath: '/tmp/approved.txt', decisionRuleId: 'im-outside-read-review' }]
+    })
+    expect(contexts.get(JSON.stringify(['other-invocation', binding.toolCallId]))?.readExecutionPermit).toBeUndefined()
+  })
+
+  it('Agent-approved outside write permit binds exact content and target for reapproval', () => {
+    const contexts = new Map<string, Record<string, unknown>>()
+    const handoff = createAgentSdkStructuralPermitHandoff({
+      updateExecutionContext: (call, update) => {
+        const key = JSON.stringify([call.invocationId, call.toolCallId])
+        const context = contexts.get(key) ?? {}
+        update(context)
+        contexts.set(key, context)
+      }
+    })
+    const input = { path: '/tmp/outside/new.txt', content: 'approved content' }
+    const args = { ...baseArgs, toolName: 'write_file', toolInput: input, requestId: binding.requestId, toolUseId: binding.toolCallId } as ToolCallGateArgs
+    const gateResult = {
+      ...result({ type: 'require-confirm', ruleId: 'im-outside-write-new-review', reason: 'review', answerer: 'agent', disposition: 'auto-eligible' }),
+      lane: 'wechat',
+      writePathFact: { rawPath: input.path, normalizedPath: input.path, zone: 'outside-workdir', targetKind: 'missing', parentReal: '/tmp/outside', parentIdentity: { dev: 1, ino: 2, mode: 16877, size: 0, mtimeMs: 1, nlink: 2 } }
+    } as unknown as ToolCallGateResult
+    handoff.onConfirmed?.(binding, gateResult, args, 'agent')
+    const permit = contexts.get(JSON.stringify([binding.invocationId, binding.toolCallId]))?.writeExecutionPermit as NonNullable<ToolCallGateResult['writeExecutionPermit']>
+    expect(permit).toMatchObject({ requestId: binding.requestId, toolUseId: binding.toolCallId, toolName: 'write_file',
+      decisionRuleId: 'im-outside-write-new-review', approval: 'confirmed', lane: 'wechat', target: { normalizedPath: input.path, zone: 'outside-workdir' } })
+    expect(validateWriteExecutionPermit(permit, { requestId: binding.requestId, toolUseId: binding.toolCallId, toolName: 'write_file', input })).toEqual({ ok: true })
+    expect(validateWriteExecutionPermit(permit, { requestId: binding.requestId, toolUseId: binding.toolCallId, toolName: 'write_file', input: { ...input, content: 'changed after approval' } }))
+      .toEqual({ ok: false, caseId: 'write-input-digest-mismatch' })
   })
 
   it('把自动化输出 binding 放进签名 permit，并标记为策略自动放行', () => {

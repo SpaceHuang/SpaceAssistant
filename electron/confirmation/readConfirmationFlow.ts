@@ -1,7 +1,8 @@
-import { buildUserConfirmedReadExecutionPermit, readInputDigest, type ReadExecutionPermit } from './readExecutionPermit'
+import { buildReadExecutionPermit, buildUserConfirmedReadExecutionPermit, readInputDigest, type ReadExecutionPermit } from './readExecutionPermit'
 import { readConfirmationRegistry, type ReadConfirmationRegistry } from './readConfirmationRegistry'
 import type { ReadPathFact } from './extractors/readPathFacts'
 import type { FeishuMediaTargetFact } from './extractors/feishuMediaFacts'
+import { extractPathField } from '../toolPathField'
 
 export function settleReadConfirmation(input: { toolName: string; requestId: string; toolUseId: string; outcome: string }, registry: ReadConfirmationRegistry = readConfirmationRegistry): void {
   if (input.toolName !== 'read_file' && input.toolName !== 'grep' && input.toolName !== 'list_directory' && input.toolName !== 'read_feishu_attachment') return
@@ -30,4 +31,28 @@ export function finalizeReadConfirmation(input: { toolName: string; toolInput: R
   const target = { ...mapping[0], normalizedPath: fact.normalizedPath, zone: fact.zone, targetKind: input.toolName === 'list_directory' || (input.toolName === 'grep' && isResolvedDirectory) ? 'directory' as const : fact.targetKind, ...(input.toolName === 'list_directory' ? { scope: 'direct-entries' as const } : {}), ...(input.toolName === 'grep' && isResolvedDirectory ? { scope: 'subtree' as const } : {}), ...(fact.identity ? { identity: fact.identity } : {}) }
   if (!registry.approve({ requestId: input.requestId, toolUseId: input.toolUseId, inputDigest: readInputDigest(input.toolInput), approvedFactIds: [target.factId], ruleId: target.decisionRuleId })) return undefined
   try { return buildUserConfirmedReadExecutionPermit({ requestId: input.requestId, toolUseId: input.toolUseId, toolName: input.toolName, input: input.toolInput, facts: [target] }, registry) } catch { return undefined }
+}
+
+/** Create a call-bound permit only after the safety Agent approved a complete ordinary read fact. */
+export function finalizeAgentReadReview(input: { toolName: string; toolInput: Record<string, unknown>; requestId: string; toolUseId: string; outcome: string; answerer: string; readPathFact?: ReadPathFact; approvedTargets?: Array<{ factId: string; decisionRuleId: string }>; decisionId?: string; policyDependencyFingerprint?: string }): ReadExecutionPermit | undefined {
+  if (input.answerer !== 'agent' || input.outcome !== 'approved' || !input.readPathFact) return undefined
+  const fact = input.readPathFact
+  if (fact.zone !== 'outside-workdir' || !fact.identity || !['read_file', 'grep', 'list_directory'].includes(input.toolName)) return undefined
+  const requestedPath = extractPathField(input.toolInput) ?? (input.toolName === 'grep' || input.toolName === 'list_directory' ? '.' : undefined)
+  if (requestedPath !== fact.rawPath) return undefined
+  const isDirectory = fact.targetKind === 'directory' && fact.resolvedKind !== 'special'
+  const isSingleFile = fact.targetKind === 'file' && (input.toolName === 'read_file' || input.toolName === 'grep')
+  const isDirectListing = input.toolName === 'list_directory' && isDirectory && fact.scope === 'direct-entries-snapshot'
+  if (!isSingleFile && !isDirectListing) return undefined
+  const mapping = input.approvedTargets
+  if (!mapping || mapping.length !== 1 || mapping[0]?.factId !== `fact-${fact.normalizedPath}` || !mapping[0]?.decisionRuleId) return undefined
+  return buildReadExecutionPermit({
+    requestId: input.requestId,
+    toolUseId: input.toolUseId,
+    toolName: input.toolName as 'read_file' | 'grep' | 'list_directory',
+    input: input.toolInput,
+    decisionId: input.decisionId,
+    policyDependencyFingerprint: input.policyDependencyFingerprint,
+    facts: [{ ...mapping[0], normalizedPath: fact.normalizedPath, zone: fact.zone, targetKind: isDirectListing ? 'directory' : 'file', ...(isDirectListing ? { scope: 'direct-entries' as const } : {}), identity: fact.identity }]
+  })
 }

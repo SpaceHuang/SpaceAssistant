@@ -4,7 +4,7 @@ import path from 'node:path'
 import { decide, ruleMatchesInvocation } from '../../src/shared/policy/policyEngine'
 import { createImAttachmentFacts } from '../../src/shared/confirmation/imAttachmentFacts'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
-import { validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
+import { resolveImPolicyFloorForVersion, validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import type {
   AutoApproveFallback,
@@ -358,7 +358,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   if (lane === 'wechat' || lane === 'feishu') {
     const snapshot = args.imPolicySnapshot
     const supported = snapshot?.domain === 'im' &&
-      ['im-v1.6', 'im-standard-v2'].includes(snapshot.policyBehaviorVersion) &&
+      ['im-v1.6', 'im-standard-v2', 'im-standard-v3'].includes(snapshot.policyBehaviorVersion) &&
       Number.isSafeInteger(snapshot.revision) && snapshot.revision >= 0 &&
       !!snapshot.snapshot && typeof snapshot.snapshot === 'object' && !Array.isArray(snapshot.snapshot)
     if (!supported) {
@@ -374,7 +374,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
 
   // ===== P3 底线校验（§7.1 判据 2）：传入规则集相对 locked 底线可收紧不可放宽 =====
   // 违规 → 拒绝本次工具调用 + cause=rules-violated 审计（与正常拒绝、缺料失败互斥不混计）
-  const floorCheck = validatePolicyRulesFloor(args.effectiveRules)
+  const floor = lane === 'wechat' || lane === 'feishu'
+    ? resolveImPolicyFloorForVersion(args.imPolicySnapshot?.policyBehaviorVersion)
+    : undefined
+  const floorCheck = validatePolicyRulesFloor(args.effectiveRules, floor)
   if (!floorCheck.ok) {
     result.decision = {
       type: 'deny',
@@ -440,6 +443,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
     if (shellAnalysis.shellSecurityHints.outsideWorkDirRisk) shellPathSignals.push({ kind: 'path-outside-heuristic', reason: 'command-may-touch-outside-workdir' })
     shellPathSignals.push({ kind: 'command-effect', effect: classifyShellCommandEffect(command, shellAnalysis) })
+    const onlyGitQuery = shellFacts?.analysisCompleteness === 'complete' && shellFacts.operations.length === 1 &&
+      shellFacts.unresolved.length === 0 && (shellFacts.connectors?.length ?? 0) === 0 && (shellFacts.redirects?.length ?? 0) === 0 &&
+      shellFacts.operations[0]?.verb.toLowerCase().split(/[\\/]/).pop() === 'git'
+    if (onlyGitQuery) {
+      const gitArgs = shellFacts!.operations[0]!.args
+      const subcommandIndex = gitArgs.findIndex((arg) => !arg.startsWith('-'))
+      const subcommand = gitArgs[subcommandIndex]?.toLowerCase()
+      const options = gitArgs.filter((_, index) => index !== subcommandIndex)
+      if ((subcommand === 'status' || subcommand === 'log') && options.every((arg) => ['--short', '--oneline', '--decorate', '--no-color'].includes(arg))) {
+        shellPathSignals.push({ kind: 'im-shell-review-candidate', command: subcommand === 'status' ? 'git-status' : 'git-log' })
+      }
+    }
     if (shellPathProbeFailed) shellPathSignals.push({ kind: 'extraction-failed', reason: 'shell-path-facts-incomplete' })
     const precheck = await (args.runShellPrecheck ?? precheckRunShellTool)({
       command,
@@ -767,12 +782,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           summary: { text: `${args.toolName} 写入目标已检查` }
         }
         if (automationOutputBinding || automationOutputScope) facts.signals.push({ kind: 'automation-output-binding', status: 'matched' })
-        if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2'
-          && args.toolName === 'write_file' && writePathFact.targetKind === 'missing' && writePathFact.zone === 'workdir-normal'
-          && writeScope === 'inside-workdir') facts.signals.push({ kind: 'write-target-new' })
-        if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2'
-          && args.toolName === 'edit_file' && writePathFact.targetKind === 'file' && writePathFact.zone === 'workdir-normal'
-          && writeScope === 'inside-workdir') facts.signals.push({ kind: 'write-target-existing' })
+        if ((args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2' || args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v3')
+          && args.toolName === 'write_file' && writePathFact.targetKind === 'missing') facts.signals.push({ kind: 'write-target-new' })
+        if ((args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2' || args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v3')
+          && args.toolName === 'edit_file' && writePathFact.targetKind === 'file') facts.signals.push({ kind: 'write-target-existing' })
         if (writePathFact.targetKind !== 'file' && writePathFact.targetKind !== 'missing') facts.signals.push({ kind: 'write-target-unsupported' })
         if (isWikiRawSignalTarget(args, rawPath)) {
           facts.signals.push({ kind: 'wiki-raw-target' })
@@ -818,6 +831,13 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           })
           facts = readResult.facts
           readPathFact = readResult.readPathFact
+          const readScope = args.toolName === 'list_directory'
+            ? 'direct-entries' as const
+            : args.toolName === 'grep' && (readPathFact.targetKind === 'directory' || readPathFact.resolvedKind === 'directory')
+              ? 'subtree' as const
+              : 'single-target' as const
+          facts.signals.push({ kind: 'read-target-scope', scope: readScope })
+          facts.signals.push({ kind: 'read-target-kind', targetKind: readPathFact.targetKind })
         } catch (error) {
           if (!(error instanceof ReadPathProbeError)) throw error
           readPathProbeFailure = error
@@ -1212,7 +1232,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   // 目录目标可签发 permit 的工具：list_directory（direct-entries）与 grep（subtree）——§7.4 改动 4
   const directoryPermittable = isListDirectoryTool || args.toolName === 'grep'
 
-  if (readPathFact && isPermitReadTool && (decision.type === 'auto-allow' || (decision.type === 'require-confirm' && decision.answerer === 'user')) && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
+  if (readPathFact && isPermitReadTool && (decision.type === 'auto-allow' || (decision.type === 'require-confirm' && (decision.answerer === 'user' || decision.answerer === 'agent'))) && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const readTarget = { factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId }
     result.readTargetMapping = [readTarget]
     if (decision.type === 'auto-allow') result.approvedFactIds = [readTarget]

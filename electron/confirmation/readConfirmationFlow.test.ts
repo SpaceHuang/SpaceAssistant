@@ -1,11 +1,64 @@
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { readConfirmationRegistry, ReadConfirmationRegistry } from './readConfirmationRegistry'
 import { readInputDigest } from './readExecutionPermit'
-import { finalizeReadConfirmation, settleReadConfirmation } from './readConfirmationFlow'
+import { finalizeAgentReadReview, finalizeReadConfirmation, settleReadConfirmation } from './readConfirmationFlow'
+import { resolveReadPermitTarget } from './readPermitExecutor'
 
 const fact = { rawPath: '/tmp/a', normalizedPath: '/tmp/a', zone: 'sensitive-file' as const, targetKind: 'file' as const, identity: { dev: 1, ino: 2, mode: 33188, size: 1, mtimeMs: 1 }, scope: 'single-target' as const }
 
 describe('read confirmation production flow', () => {
+  it('agent approval yields only a call-bound permit for an outside ordinary single file', () => {
+    const outsideFact = { ...fact, zone: 'outside-workdir' as const }
+    const permit = finalizeAgentReadReview({
+      toolName: 'read_file', toolInput: { path: '/tmp/a' }, requestId: 'agent-r', toolUseId: 'agent-t',
+      outcome: 'approved', answerer: 'agent', readPathFact: outsideFact,
+      approvedTargets: [{ factId: 'fact-/tmp/a', decisionRuleId: 'im-outside-read-review' }],
+      decisionId: 'decision-1', policyDependencyFingerprint: 'sha256:policy-1'
+    })
+    expect(permit).toMatchObject({ requestId: 'agent-r', toolUseId: 'agent-t', toolName: 'read_file', decisionId: 'decision-1',
+      policyDependencyFingerprint: 'sha256:policy-1', targets: [{ normalizedPath: '/tmp/a', zone: 'outside-workdir', identity: outsideFact.identity }] })
+    expect(finalizeAgentReadReview({
+      toolName: 'read_file', toolInput: { path: '/tmp/b' }, requestId: 'agent-r', toolUseId: 'agent-t',
+      outcome: 'approved', answerer: 'agent', readPathFact: outsideFact,
+      approvedTargets: [{ factId: 'fact-/tmp/a', decisionRuleId: 'im-outside-read-review' }]
+    })).toBeUndefined()
+    expect(finalizeAgentReadReview({
+      toolName: 'grep', toolInput: { path: '/tmp/a', pattern: 'x' }, requestId: 'agent-r', toolUseId: 'agent-t',
+      outcome: 'approved', answerer: 'agent', readPathFact: { ...outsideFact, targetKind: 'directory', resolvedKind: 'directory' },
+      approvedTargets: [{ factId: 'fact-/tmp/a', decisionRuleId: 'im-outside-read-review' }]
+    })).toBeUndefined()
+  })
+
+  it('agent-reviewed permit reads only the bound file and rejects a changed invocation input', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agent-read-permit-')))
+    const target = path.join(root, 'note.txt')
+    const alternate = path.join(root, 'other.txt')
+    await fs.writeFile(target, 'approved bytes')
+    await fs.writeFile(alternate, 'other bytes')
+    try {
+      const normalizedPath = await fs.realpath(target)
+      const stat = await fs.stat(normalizedPath)
+      const input = { path: target }
+      const permit = finalizeAgentReadReview({
+        toolName: 'read_file', toolInput: input, requestId: 'agent-r', toolUseId: 'agent-t',
+        outcome: 'approved', answerer: 'agent',
+        readPathFact: { rawPath: target, normalizedPath, zone: 'outside-workdir', targetKind: 'file', identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs } },
+        approvedTargets: [{ factId: `fact-${normalizedPath}`, decisionRuleId: 'im-outside-read-review' }]
+      })!
+      const result = await resolveReadPermitTarget('read_file', input, { requestId: 'agent-r', toolUseId: 'agent-t', lane: 'wechat', readExecutionPermit: permit } as never)
+      expect(result).toMatchObject({ ok: true, path: normalizedPath })
+      if (result.ok && 'fileHandle' in result) {
+        expect(await result.fileHandle.readFile('utf8')).toBe('approved bytes')
+        await result.fileHandle.close()
+      }
+      await expect(resolveReadPermitTarget('read_file', { path: alternate }, { requestId: 'agent-r', toolUseId: 'agent-t', lane: 'wechat', readExecutionPermit: permit } as never))
+        .resolves.toMatchObject({ ok: false, caseId: 'input-digest-mismatch' })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
   it('只在 gate pending 登记后真人批准时生成一次性 permit', () => {
     const registry = new ReadConfirmationRegistry({ now: () => 10 })
     const input = { path: '/tmp/a' }

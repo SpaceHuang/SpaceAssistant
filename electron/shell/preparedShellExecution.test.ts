@@ -85,6 +85,17 @@ describe('PreparedShellExecution', () => {
     expect(stdio.reasons).toContain('spawnStdio')
   })
 
+  it('审核绑定命令、cwd、环境和计划摘要；任一材料变化都会使回执过期', () => {
+    const input = makeInput()
+    const prepared = prepareShellExecution(input)
+    expect(prepared.planDigest).toMatch(/^[a-f0-9]{64}$/)
+    expect(validatePreparedShellExecution(prepared, { ...input, cwd: '/tmp/other' }).reasons).toContain('cwd')
+    expect(validatePreparedShellExecution(prepared, { ...input, environment: { ...input.environment, PATH: '/tmp' } }).reasons).toContain('environment')
+    expect(validatePreparedShellExecution(prepared, { ...input, policyRevision: 'policy-after' }).reasons).toContain('policyRevision')
+    const changedCommand = prepareShellExecution({ ...input, command: 'echo changed' })
+    expect(changedCommand.planDigest).not.toBe(prepared.planDigest)
+  })
+
   it('captures realpath and falls back for missing paths', async () => {
     // 用真实存在的临时目录代替硬编码 /tmp：Windows 上 /tmp 会解析到当前盘根目录，语义不确定。
     const existing = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-path-snapshot-'))

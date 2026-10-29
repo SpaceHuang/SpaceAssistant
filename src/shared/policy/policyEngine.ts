@@ -38,6 +38,14 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`path-target:${signal.zone}`)
         break
+      case 'read-target-scope':
+        tokens.add(signal.kind)
+        tokens.add(`read-target-scope:${signal.scope}`)
+        break
+      case 'read-target-kind':
+        tokens.add(signal.kind)
+        tokens.add(`read-target-kind:${signal.targetKind}`)
+        break
       case 'write-target-scope':
         tokens.add(signal.kind)
         tokens.add(`write-target-scope:${signal.scope}`)
@@ -88,6 +96,10 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
       case 'command-effect':
         tokens.add(signal.kind)
         tokens.add(`command-effect:${signal.effect}`)
+        break
+      case 'im-shell-review-candidate':
+        tokens.add(signal.kind)
+        tokens.add(`im-shell-review-candidate:${signal.command}`)
         break
       case 'path-outside-heuristic':
         tokens.add(signal.kind)
