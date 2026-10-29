@@ -1,4 +1,5 @@
 import fs from 'fs/promises'
+import { constants as fsConstants } from 'node:fs'
 import path from 'path'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import type { SessionQueries } from '../sessionStorage/public/ports'
@@ -29,7 +30,8 @@ export { verifyDeferredWeChatAttachment } from './weChatAttachmentBinding'
 async function readMedia(
   workDir: string,
   imagePath?: string,
-  filePath?: string
+  filePath?: string,
+  externalApproval?: Readonly<{ path: string; sha256: string }>
 ): Promise<{
   buffer?: Buffer
   fileName?: string
@@ -41,7 +43,16 @@ async function readMedia(
   const rel = imagePath ?? filePath
   if (!rel) return {}
   try {
-    const abs = await resolveSafeWorkDirPath(workDir, rel)
+    let abs: string
+    if (externalApproval && path.isAbsolute(rel)) {
+      const real = await fs.realpath(rel)
+      if (real !== externalApproval.path) throw new Error('external attachment path changed')
+      const link = await fs.lstat(rel)
+      if (!link.isFile() || link.isSymbolicLink()) throw new Error('external attachment is not a regular file')
+      abs = real
+    } else {
+      abs = await resolveSafeWorkDirPath(workDir, rel)
+    }
     const stat = await fs.stat(abs)
     const ext = path.extname(abs).toLowerCase()
     const isImage = imagePath != null || IMAGE_EXT.has(ext)
@@ -49,10 +60,29 @@ async function readMedia(
     if (stat.size > max) {
       return { error: `文件大小超过限制（最大 ${Math.round(max / 1024 / 1024)}MB）` }
     }
-    const buffer = await fs.readFile(abs)
+    let buffer: Buffer
+    if (externalApproval) {
+      const handle = await fs.open(abs, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+      try {
+        const opened = await handle.stat()
+        if (!opened.isFile()) throw new Error('external attachment is not a regular file')
+        buffer = await handle.readFile()
+        const after = await handle.stat()
+        const digest = createHash('sha256').update(buffer).digest('hex')
+        if (opened.dev !== after.dev || opened.ino !== after.ino || opened.mode !== after.mode || opened.size !== after.size ||
+          opened.mtimeMs !== after.mtimeMs || buffer.byteLength !== after.size || digest !== externalApproval.sha256) {
+          throw new Error('external attachment approval changed')
+        }
+      } finally { await handle.close() }
+    } else {
+      buffer = await fs.readFile(abs)
+    }
     return { buffer, fileName: path.basename(abs), contentVersion: createHash('sha256').update(buffer).digest('hex'), resolvedPath: abs }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    if (msg.includes('external attachment')) {
+      return { error: '附件审批材料已变化', diagnostic: { caseId: 'wechat-media-approved-material-changed', retryable: false, category: 'mechanism' } }
+    }
     if (msg.includes('工作目录') || msg.includes('workDir')) {
       return {
         error: '文件路径不在工作目录范围内',
@@ -84,9 +114,21 @@ async function attachmentHasSensitiveMaterial(media: Awaited<ReturnType<typeof r
 
 /** Host inspection for the prepared reply path; binary and non-reviewable attachments stay unapproved. */
 export async function inspectWeChatTaskReplyAttachment(workDir: string, imagePath?: string, filePath?: string): Promise<Pick<ImOutboundFacts,
-  'attachmentAuthorized' | 'attachmentApprovalRequired' | 'attachmentPath' | 'checkedAttachmentPath' | 'attachmentContentVersion' | 'checkedAttachmentContentVersion'>> {
+  'attachmentAuthorized' | 'attachmentApprovalRequired' | 'attachmentPath' | 'checkedAttachmentPath' | 'attachmentContentVersion' | 'checkedAttachmentContentVersion' | 'externalAttachmentReview'>> {
   const requestedPath = imagePath ?? filePath
-  const media = await readMedia(workDir, imagePath, filePath)
+  let media = await readMedia(workDir, imagePath, filePath)
+  let external = false
+  if (requestedPath && !media.buffer && path.isAbsolute(requestedPath) && !imagePath) {
+    try {
+      const resolved = await fs.realpath(requestedPath)
+      const stat = await fs.lstat(requestedPath)
+      if (stat.isFile() && !stat.isSymbolicLink()) {
+        const bytes = await fs.readFile(resolved)
+        media = { buffer: bytes, fileName: path.basename(resolved), contentVersion: createHash('sha256').update(bytes).digest('hex'), resolvedPath: resolved }
+        external = true
+      }
+    } catch { /* Outside targets without a complete regular-file observation remain unreviewable. */ }
+  }
   const denied = { attachmentAuthorized: false, ...(requestedPath ? { attachmentPath: requestedPath } : {}) }
   if (!requestedPath || media.error || !media.buffer || !media.fileName || !media.resolvedPath || !media.contentVersion) return denied
   const extension = path.extname(media.fileName).toLowerCase()
@@ -104,9 +146,16 @@ export async function inspectWeChatTaskReplyAttachment(workDir: string, imagePat
   let content: string
   try { content = new TextDecoder('utf-8', { fatal: true }).decode(media.buffer) }
   catch { return denied }
-  const sensitive = await attachmentHasSensitiveMaterial(media, workDir)
+  const sensitive = external
+    ? (await createImAttachmentFacts({ fileName: media.fileName, relativePath: media.fileName, content,
+      contentDigest: media.contentVersion, inspectionCoverage: 'complete' })).evidenceKinds.length > 0
+    : await attachmentHasSensitiveMaterial(media, workDir)
   const classification = assessImOutboundContent(content)
   if (sensitive || classification !== 'ordinary') return denied
+  if (external) return { attachmentAuthorized: false, attachmentApprovalRequired: true,
+    attachmentPath: media.resolvedPath, checkedAttachmentPath: media.resolvedPath,
+    attachmentContentVersion: media.contentVersion, checkedAttachmentContentVersion: media.contentVersion,
+    externalAttachmentReview: { path: media.resolvedPath!, sha256: media.contentVersion!, answerer: 'agent' } }
   return { attachmentAuthorized: true, attachmentPath: media.resolvedPath, checkedAttachmentPath: media.resolvedPath,
     attachmentContentVersion: media.contentVersion, checkedAttachmentContentVersion: media.contentVersion }
 }
@@ -129,6 +178,7 @@ export async function executeWeChatSend(
   const bot = ctx.botService.getRawBot()
   if (!bot) return { success: false, error: '微信 Bot 未就绪' }
 
+  // Active-send retains its explicit deny; external attachment approval exists only for a bound task reply.
   const media = await readMedia(ctx.workDir, input.imagePath, input.filePath)
   if (media.error) return { success: false, error: media.error, ...(media.diagnostic ? { diagnostic: media.diagnostic } : {}) }
   if (ctx.signal?.aborted) return { success: false, error: '微信发送已取消' }
@@ -203,7 +253,17 @@ export async function executeWeChatReply(
     }
   }
 
-  const media = await readMedia(ctx.workDir, input.imagePath, input.filePath)
+  // final-check: external bytes are reachable only through the call-private, Agent-approved
+  // prepared reply binding; readMedia rechecks regular-file identity and SHA-256 on the opened handle.
+  const externalFacts = ctx.outboundDeliveryFacts
+  const externalApproval = externalFacts?.purpose === 'task-reply' && externalFacts.chatType === 'p2p' &&
+    Boolean(externalFacts.trustedRecipient && externalFacts.recipient === externalFacts.trustedRecipient &&
+      externalFacts.ownerId === externalFacts.trustedRecipient && externalFacts.userConfirmationReceipt?.trim()) &&
+    externalFacts.attachmentAuthorized && externalFacts.externalAttachmentReview &&
+    externalFacts.attachmentPath === externalFacts.externalAttachmentReview.path &&
+    externalFacts.attachmentContentVersion === externalFacts.externalAttachmentReview.sha256
+    ? externalFacts.externalAttachmentReview : undefined
+  const media = await readMedia(ctx.workDir, input.imagePath, input.filePath, externalApproval)
   if (media.error) return { success: false, error: media.error, ...(media.diagnostic ? { diagnostic: media.diagnostic } : {}) }
   if (ctx.signal?.aborted) return { success: false, error: '微信回复已取消' }
 

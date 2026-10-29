@@ -1,4 +1,5 @@
 import fs from 'fs/promises'
+import { createHash } from 'node:crypto'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
@@ -475,6 +476,152 @@ describe('executeWeChatSend', () => {
     expect(mockBot.reply).toHaveBeenCalledWith(inbound, expect.objectContaining({
       file: expect.any(Buffer), fileName, caption: expect.stringContaining('Here is the requested report.')
     }))
+  })
+
+  it('T11：Agent 批准目录外普通附件后，实际上传字节与审批摘要一致', async () => {
+    mockBot.reply.mockResolvedValue(undefined)
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-approved-outside-'))
+    const fileName = path.join(outside, 'approved.txt')
+    const bytes = Buffer.from('ordinary external report')
+    await fs.writeFile(fileName, bytes)
+    const inbound = { userId: 'wx-owner', timestamp: new Date(1_000), raw: { client_id: 'inbound-task-message' } }
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => inbound } })
+    const runtime = { workDir, sessionId: 'session-current', lane: 'wechat', remoteContext: {
+      source: 'wechat' as const, messageId: 'inbound-task-message', userId: 'wx-owner', authOwner: 'wx-owner', authorizationGeneration: 7,
+      originSessionId: 'session-current', currentUserMessageId: 'current-user-message',
+      taskBinding: { workflowId: 'task-workflow', taskId: 'current-task', stepId: 'deliver-report', planRevision: 1, revision: 1 }
+    } }
+    const [, replyTool] = createWeChatOutboundRegisteredTools({ send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: async (input, context) => executeWeChatReply({ text: String(input.text), filePath: String(input.filePath) }, {
+        workDir: context.workDir, botService: { getRawBot: () => mockBot } as never,
+        sessionQueries: { readSession: vi.fn() } as never, sessionId: context.sessionId,
+        expectedMessageId: context.remoteContext?.messageId, outboundDeliveryFacts: context.outboundDeliveryFacts
+      }) } as never })
+    try {
+      const result = await executeRegisteredTool(replyTool!, { text: 'Approved report', filePath: fileName }, {
+        requestId: 'outside-attachment-approved', toolUseId: 'outside-attachment-call', signal: new AbortController().signal,
+        userConfirmationReceipt: 'agent:approved', userConfirmationAnswerer: 'agent', executionContext: runtime as never
+      } as never, { confirm: async () => true, dispatch: async (_handle, _context, execute) => execute(new AbortController().signal) })
+      expect(result.success, JSON.stringify(result)).toBe(true)
+      expect(mockBot.reply).toHaveBeenCalledOnce()
+      expect((mockBot.reply.mock.calls[0]?.[1] as { file?: Buffer }).file).toEqual(bytes)
+    } finally { await fs.rm(outside, { recursive: true, force: true }) }
+  })
+
+  it('T11：审批后附件被替换时上传前拒绝', async () => {
+    mockBot.reply.mockResolvedValue(undefined)
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-replaced-outside-'))
+    const fileName = path.join(outside, 'approved.txt')
+    await fs.writeFile(fileName, 'ordinary external report')
+    const inbound = { userId: 'wx-owner', timestamp: new Date(1_000), raw: { client_id: 'inbound-task-message' } }
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => inbound } })
+    const runtime = { workDir, sessionId: 'session-current', lane: 'wechat', remoteContext: {
+      source: 'wechat' as const, messageId: 'inbound-task-message', userId: 'wx-owner', authOwner: 'wx-owner', authorizationGeneration: 7,
+      originSessionId: 'session-current', currentUserMessageId: 'current-user-message',
+      taskBinding: { workflowId: 'task-workflow', taskId: 'current-task', stepId: 'deliver-report', planRevision: 1, revision: 1 }
+    } }
+    const [, replyTool] = createWeChatOutboundRegisteredTools({ send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: async (input, context) => executeWeChatReply({ text: String(input.text), filePath: String(input.filePath) }, {
+        workDir: context.workDir, botService: { getRawBot: () => mockBot } as never,
+        sessionQueries: { readSession: vi.fn() } as never, sessionId: context.sessionId,
+        expectedMessageId: context.remoteContext?.messageId, outboundDeliveryFacts: context.outboundDeliveryFacts
+      }) } as never })
+    try {
+      await expect(executeRegisteredTool(replyTool!, { text: 'Approved report', filePath: fileName }, {
+        requestId: 'outside-attachment-replaced', toolUseId: 'outside-attachment-replaced-call', signal: new AbortController().signal,
+        userConfirmationReceipt: 'agent:approved', userConfirmationAnswerer: 'agent', executionContext: runtime as never
+      } as never, { confirm: async () => { await fs.writeFile(fileName, 'changed after review'); return true },
+        dispatch: async (_handle, _context, execute) => execute(new AbortController().signal) })).rejects.toThrow()
+      expect(mockBot.reply).not.toHaveBeenCalled()
+    } finally { await fs.rm(outside, { recursive: true, force: true }) }
+  })
+
+  it.each(['授权代次撤销', '接收者变化'] as const)('T11：%s使目录外附件许可失效且不上传', async (change) => {
+    mockBot.reply.mockResolvedValue(undefined)
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-revoked-outside-'))
+    const fileName = path.join(outside, 'approved.txt')
+    await fs.writeFile(fileName, 'ordinary external report')
+    const inbound = { userId: 'wx-owner', timestamp: new Date(1_000), raw: { client_id: 'inbound-task-message' } }
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => inbound } })
+    const runtime = { workDir, sessionId: 'session-current', lane: 'wechat', remoteContext: {
+      source: 'wechat' as const, messageId: 'inbound-task-message', userId: 'wx-owner', authOwner: 'wx-owner', authorizationGeneration: 7,
+      originSessionId: 'session-current', currentUserMessageId: 'current-user-message',
+      taskBinding: { workflowId: 'task-workflow', taskId: 'current-task', stepId: 'deliver-report', planRevision: 1, revision: 1 }
+    } }
+    const [, replyTool] = createWeChatOutboundRegisteredTools({ send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: vi.fn() } as never })
+    try {
+      await expect(executeRegisteredTool(replyTool!, { text: 'Approved report', filePath: fileName }, {
+        requestId: `outside-attachment-${change}`, toolUseId: `outside-attachment-${change}-call`, signal: new AbortController().signal,
+        userConfirmationReceipt: 'agent:approved', userConfirmationAnswerer: 'agent', executionContext: runtime as never
+      } as never, { confirm: async () => true,
+        dispatch: async (_handle, _context, execute) => {
+          if (change === '授权代次撤销') runtime.remoteContext.authorizationGeneration++
+          else runtime.remoteContext.userId = 'other-owner'
+          return execute(new AbortController().signal)
+        } })).rejects.toThrow('WECHAT_OUTBOUND_PREPARED_BINDING_CHANGED')
+      expect(mockBot.reply).not.toHaveBeenCalled()
+    } finally { await fs.rm(outside, { recursive: true, force: true }) }
+  })
+
+  it('T11：缺少外部附件执行许可时直接调用执行器仍拒绝上传', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-incomplete-permit-'))
+    const fileName = path.join(outside, 'unapproved.txt')
+    await fs.writeFile(fileName, 'ordinary external report')
+    const inbound = { userId: 'wx-user', timestamp: new Date(1_000), raw: { client_id: 'message-current' } }
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => inbound } })
+    try {
+      const result = await executeWeChatReply({ text: 'reply', filePath: fileName }, {
+        workDir, botService: { getRawBot: () => mockBot } as never,
+        sessionQueries: { readSession: vi.fn() } as never, sessionId: 'session-current', expectedMessageId: 'message-current',
+        outboundDeliveryFacts: confirmedReplyFacts('reply')
+      })
+      expect(result.success).toBe(false)
+      expect(mockBot.reply).not.toHaveBeenCalled()
+    } finally { await fs.rm(outside, { recursive: true, force: true }) }
+  })
+
+  it('T11：最终读取的上传字节偏离获批 SHA-256 时返回稳定拒绝分类', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-final-material-check-'))
+    const fileName = path.join(outside, 'approved.txt')
+    const original = Buffer.from('ordinary external report')
+    await fs.writeFile(fileName, original)
+    const digest = createHash('sha256').update(original).digest('hex')
+    const realPath = await fs.realpath(fileName)
+    await fs.writeFile(fileName, 'changed after final approval')
+    const inbound = { userId: 'wx-user', timestamp: new Date(1_000), raw: { client_id: 'message-current' } }
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => inbound } })
+    try {
+      const result = await executeWeChatReply({ text: 'reply', filePath: realPath }, {
+        workDir, botService: { getRawBot: () => mockBot } as never,
+        sessionQueries: { readSession: vi.fn() } as never, sessionId: 'session-current', expectedMessageId: 'message-current',
+        outboundDeliveryFacts: { ...confirmedReplyFacts('reply'), userConfirmationReceipt: 'agent:approved', hasAttachment: true, attachmentAuthorized: true,
+          attachmentPath: realPath, checkedAttachmentPath: realPath, attachmentContentVersion: digest, checkedAttachmentContentVersion: digest,
+          externalAttachmentReview: { path: realPath, sha256: digest, answerer: 'agent' } }
+      })
+      expect(result).toMatchObject({ success: false, diagnostic: { caseId: 'wechat-media-approved-material-changed', retryable: false } })
+      expect(mockBot.reply).not.toHaveBeenCalled()
+    } finally { await fs.rm(outside, { recursive: true, force: true }) }
+  })
+
+  it('T11：task-reply 附件许可不能转用于微信主动发送', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-active-send-external-'))
+    const fileName = path.join(outside, 'approved.txt')
+    const bytes = Buffer.from('ordinary external report')
+    await fs.writeFile(fileName, bytes)
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    const realPath = await fs.realpath(fileName)
+    try {
+      const result = await executeWeChatSend({ userId: 'wx-user', text: 'send', filePath: realPath }, {
+        workDir, botService: { getRawBot: () => mockBot } as never,
+        getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true }), sessionId: 'session-current',
+        outboundDeliveryFacts: { ...confirmedReplyFacts('send'), userConfirmationReceipt: 'agent:approved', hasAttachment: true, attachmentAuthorized: true,
+          attachmentPath: realPath, checkedAttachmentPath: realPath, attachmentContentVersion: digest, checkedAttachmentContentVersion: digest,
+          externalAttachmentReview: { path: realPath, sha256: digest, answerer: 'agent' } }
+      })
+      expect(result).toMatchObject({ success: false, diagnostic: { caseId: 'wechat-media-target-outside-workdir' } })
+      expect(mockBot.send).not.toHaveBeenCalled()
+    } finally { await fs.rm(outside, { recursive: true, force: true }) }
   })
 
   it.each([

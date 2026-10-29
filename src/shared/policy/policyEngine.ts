@@ -83,10 +83,27 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         for (const evidence of signal.evidenceKinds) tokens.add(`outbound-evidence:${evidence}`)
         break
       case 'wechat-media-content-assessment':
+        tokens.add(signal.kind)
+        tokens.add(`wechat-media-content-assessment:${signal.inspectionCoverage}`)
+        tokens.add(`wechat-media-content-digest:${signal.contentDigest}`)
         tokens.add(`outbound-inspection:${signal.inspectionCoverage}`)
         if (signal.inspectionCoverage !== 'complete') tokens.add('outbound-inspection-incomplete')
         if (signal.evidenceKinds.length > 0) tokens.add('outbound-evidence-present')
         for (const evidence of signal.evidenceKinds) tokens.add(`outbound-evidence:${evidence}`)
+        break
+      case 'wechat-media-content':
+        tokens.add(signal.kind)
+        break
+      case 'wechat-media-identity':
+        tokens.add(signal.kind)
+        break
+      case 'wechat-media-review-binding':
+        tokens.add(signal.kind)
+        tokens.add(`wechat-media-review-binding:${signal.status}`)
+        break
+      case 'wechat-media-review-materials':
+        tokens.add(signal.kind)
+        tokens.add(`wechat-media-review-materials:${signal.status}`)
         break
       case 'write-target-new':
       case 'write-target-existing':
@@ -111,6 +128,7 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
       case 'wechat-media-target':
         tokens.add(signal.kind)
         tokens.add(`wechat-media-target:${signal.boundary}`)
+        tokens.add(`wechat-media-target-kind:${signal.targetKind}`)
         break
       case 'workdir-profile-target':
         tokens.add(signal.kind)

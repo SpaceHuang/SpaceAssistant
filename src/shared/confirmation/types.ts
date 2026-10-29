@@ -125,6 +125,7 @@ export type FactSignal =
   | { kind: 'wechat-media-target'; boundary: 'inside-workdir' | 'outside-workdir' | 'unknown'; zone?: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown' }
   /** Host-measured exact attachment version, included in confirmation and deferred-approval facts. */
   | { kind: 'wechat-media-content'; sha256: string; byteSize: number; fileName: string; displayPath: string }
+  | { kind: 'wechat-media-identity'; dev: number; ino: number; mode: number; size: number; mtimeMs: number }
   /** Content/path observations for IM attachments; never includes attachment bytes or a policy verdict. */
   | {
       kind: 'wechat-media-content-assessment'
@@ -134,6 +135,8 @@ export type FactSignal =
       inspectionCoverage: 'complete' | 'partial' | 'unavailable'
       evidenceKinds: readonly ('credential-like-pattern' | 'personal-data-pattern' | 'sensitive-path-name')[]
     }
+  | { kind: 'wechat-media-review-binding'; status: 'complete' | 'incomplete'; recipient?: string; ownerId?: string; authorizationGeneration?: number; messageId?: string; requestId?: string; toolUseId?: string }
+  | { kind: 'wechat-media-review-materials'; status: 'complete' | 'incomplete' }
   | { kind: 'workdir-profile-target'; status: 'normal' | 'sensitive' | 'unknown' }
   | { kind: 'write-target-unsupported' }
   | { kind: 'write-target-new' }

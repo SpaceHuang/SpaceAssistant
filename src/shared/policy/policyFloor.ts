@@ -68,13 +68,25 @@ export function resolveImPolicyFloorForVersion(version: unknown): readonly Polic
         signals: ['path-target:outside-workdir', `read-target-kind:${targetKind}`] },
       action: 'deny', locked: true, denyClass: 'forbidden', reason: 'Unverified external read targets remain denied'
     }))
+    const nonstandardWechatMediaDeny: PolicyRule = {
+      id: 'remote-wechat-media-outside-nonstandard-deny', when: 'invocation',
+      match: { lane: ['wechat'], toolName: ['wechat_send', 'wechat_reply'], signals: ['wechat-media-target:outside-workdir'], excludeSignals: ['policy-tier:standard'] },
+      action: 'deny', locked: true, denyClass: 'forbidden', reason: 'Only complete standard attachment candidates can be reviewed'
+    }
+    const incompleteWechatReplyMediaDeny: PolicyRule = {
+      id: 'remote-wechat-media-outside-reply-deny', when: 'invocation',
+      match: { lane: ['wechat'], toolName: 'wechat_reply', signals: ['wechat-media-target:outside-workdir', 'policy-tier:standard'], excludeSignals: ['wechat-media-review-materials:complete'] },
+      action: 'deny', locked: true, denyClass: 'forbidden', reason: 'Incomplete external attachment reviews remain denied'
+    }
     return [...DEFAULT_FLOOR.map((rule) => rule.id === 'remote-shell-disabled'
       ? { ...rule, match: { ...rule.match!, excludeSignals: ['im-shell-review-candidate:git-status', 'im-shell-review-candidate:git-log'] } }
       : rule.id === 'remote-outside-read-deny'
       ? { ...rule, match: { ...rule.match!, signals: ['path-target:outside-workdir', 'read-target-scope:subtree'] } }
       : rule.id === 'remote-outside-write-deny'
         ? { ...rule, match: { ...rule.match!, signals: ['write-target-scope:outside-workdir', 'write-target-unsupported'] } }
-        : rule), ...unverifiedTargetFloors]
+      : rule.id === 'remote-wechat-media-outside-deny'
+        ? { ...rule, match: { ...rule.match!, toolName: 'wechat_send', signals: ['wechat-media-target:outside-workdir', 'policy-tier:standard'] } }
+        : rule), ...unverifiedTargetFloors, nonstandardWechatMediaDeny, incompleteWechatReplyMediaDeny]
   }
   return DEFAULT_FLOOR
 }

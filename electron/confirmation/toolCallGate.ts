@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import fsPromises from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
 import path from 'node:path'
 import { decide, ruleMatchesInvocation } from '../../src/shared/policy/policyEngine'
 import { createImAttachmentFacts } from '../../src/shared/confirmation/imAttachmentFacts'
@@ -897,29 +898,53 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
               ? 'unknown'
               : workdirScope === 'inside-workdir' ? 'inside-workdir' : 'outside-workdir'
             facts.signals.push({ kind: 'wechat-media-target', boundary, zone: wechatMediaPathFact.zone, targetKind: wechatMediaPathFact.targetKind })
-            if (boundary === 'inside-workdir' && wechatMediaPathFact.targetKind === 'file') {
-              const resolvedMediaPath = await resolveSafeWorkDirPath(args.workDir, mediaPath)
-              const mediaStat = await fsPromises.stat(resolvedMediaPath)
+            if (wechatMediaPathFact.targetKind === 'file' && wechatMediaPathFact.identity) {
+              facts.signals.push({ kind: 'wechat-media-identity', ...wechatMediaPathFact.identity })
+            }
+            if ((boundary === 'inside-workdir' || boundary === 'outside-workdir') && wechatMediaPathFact.targetKind === 'file' && wechatMediaPathFact.identity) {
+              const resolvedMediaPath = boundary === 'inside-workdir'
+                ? await resolveSafeWorkDirPath(args.workDir, mediaPath)
+                : wechatMediaPathFact.normalizedPath
               const extension = path.extname(resolvedMediaPath).toLowerCase()
               const imageRequest = typeof args.toolInput.imagePath === 'string'
               // Hashing is needed to bind human approval to the exact attachment. This is
               // not the transport limit; avoid silently treating an unbound file as approved.
               const maxBytes = imageRequest || ['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)
                 ? 10 * 1024 * 1024 : 512 * 1024 * 1024
-              if (mediaStat.isFile() && mediaStat.size <= maxBytes) {
-                const mediaBytes = await fsPromises.readFile(resolvedMediaPath)
+              let mediaBytes: Buffer | undefined
+              try {
+                const linkStat = await fsPromises.lstat(resolvedMediaPath)
+                if (!linkStat.isSymbolicLink() && linkStat.isFile()) {
+                  const handle = await fsPromises.open(resolvedMediaPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+                  try {
+                    const openedStat = await handle.stat()
+                    const expected = wechatMediaPathFact.identity
+                    const matches = (stat: typeof openedStat) => stat.isFile() && stat.dev === expected.dev && stat.ino === expected.ino &&
+                      stat.mode === expected.mode && stat.size === expected.size && stat.mtimeMs === expected.mtimeMs
+                    if (matches(openedStat) && openedStat.size <= maxBytes) {
+                      const bytes = await handle.readFile()
+                      const afterReadStat = await handle.stat()
+                      if (matches(afterReadStat) && bytes.byteLength === afterReadStat.size) mediaBytes = bytes
+                    }
+                  } finally { await handle.close() }
+                }
+              } catch { /* Missing, replaced, linked or unreadable files stay outside the complete candidate set. */ }
+              if (mediaBytes) {
                 const contentDigest = createHash('sha256').update(mediaBytes).digest('hex')
+                const displayPath = boundary === 'inside-workdir'
+                  ? path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/')
+                  : path.basename(resolvedMediaPath)
                 facts.signals.push({ kind: 'wechat-media-content',
                   sha256: contentDigest, byteSize: mediaBytes.length,
                   fileName: path.basename(resolvedMediaPath),
-                  displayPath: path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/') })
+                  displayPath })
                 let inspectedText = ''
                 let inspectionCoverage: 'complete' | 'partial' = 'complete'
                 try { inspectedText = new TextDecoder('utf-8', { fatal: true }).decode(mediaBytes) }
                 catch { inspectionCoverage = 'partial' }
                 const attachmentFacts = await createImAttachmentFacts({
                   fileName: path.basename(resolvedMediaPath),
-                  relativePath: path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/'),
+                  relativePath: displayPath,
                   content: inspectedText,
                   contentDigest,
                   inspectionCoverage
@@ -927,6 +952,21 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
                 facts.signals.push({ kind: 'wechat-media-content-assessment', ...attachmentFacts })
               }
             }
+            const recipient = typeof args.toolInput.userId === 'string' && args.toolInput.userId.length > 0
+              ? args.toolInput.userId
+              : args.toolName === 'wechat_reply' && args.remoteContext?.source === 'wechat' ? args.remoteContext.userId : undefined
+            const ownerId = args.remoteContext?.source === 'wechat' ? args.remoteContext.authOwner : undefined
+            const authorizationGeneration = args.remoteContext?.source === 'wechat' ? args.remoteContext.authorizationGeneration : undefined
+            const bindingComplete = Boolean(recipient && ownerId && Number.isInteger(authorizationGeneration) &&
+              args.remoteContext?.source === 'wechat' && args.remoteContext.messageId && args.requestId && args.toolUseId)
+            facts.signals.push({ kind: 'wechat-media-review-binding', status: bindingComplete ? 'complete' : 'incomplete',
+              ...(recipient ? { recipient } : {}), ...(ownerId ? { ownerId } : {}), ...(authorizationGeneration !== undefined ? { authorizationGeneration } : {}),
+              ...(args.remoteContext?.source === 'wechat' ? { messageId: args.remoteContext.messageId } : {}),
+              ...(args.requestId ? { requestId: args.requestId } : {}), ...(args.toolUseId ? { toolUseId: args.toolUseId } : {}) })
+            const contentCoverage = facts.signals.find((signal) => signal.kind === 'wechat-media-content-assessment')
+            facts.signals.push({ kind: 'wechat-media-review-materials',
+              status: boundary === 'outside-workdir' && wechatMediaPathFact.targetKind === 'file' && contentCoverage?.inspectionCoverage === 'complete' && bindingComplete
+                ? 'complete' : 'incomplete' })
           } catch (error) {
             if (!(error instanceof ReadPathProbeError)) throw error
             facts.signals.push({ kind: 'wechat-media-target', boundary: 'unknown', targetKind: 'unknown' })
@@ -1125,6 +1165,21 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     if (!(signal.kind in factSources)) factSources[signal.kind] = 'host-environment'
   }
   facts.signals = [...facts.signals, ...(providerSignals ?? [])]
+  const wechatMediaTarget = facts.signals.find((signal) => signal.kind === 'wechat-media-target' && signal.boundary === 'outside-workdir')
+  // facts phase: a directory-external standard reply is reviewable only when the
+  // gate's host read is the same immutable material the registered executor prepared.
+  if (lane === 'wechat' && wechatMediaTarget) {
+    const hostAttachment = facts.signals.find((signal) => signal.kind === 'wechat-media-content-assessment')
+    const preparedAttachments = (providerSignals ?? []).filter((signal) => signal.kind === 'wechat-media-content-assessment')
+    const preparedDigest = preparedAttachments.length === 1 ? preparedAttachments[0]!.contentDigest : undefined
+    const materials = facts.signals.find((signal) => signal.kind === 'wechat-media-review-materials')
+    const standardReplyCandidate = args.toolName === 'wechat_reply' && lanePackage === 'standard'
+    const hasSensitiveEvidence = hostAttachment?.evidenceKinds.length
+    if (standardReplyCandidate && !hasSensitiveEvidence && materials?.kind === 'wechat-media-review-materials' &&
+      (!hostAttachment || preparedDigest !== hostAttachment.contentDigest)) {
+      materials.status = 'incomplete'
+    }
+  }
   facts.signals.push({ kind: 'policy-tier', tier: lanePackage })
   facts.factSources = factSources
   facts.factsProviderDeclared = args.factsProvider !== undefined
