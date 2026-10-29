@@ -617,7 +617,7 @@ async function runButlerModelTurn(
   let res: Awaited<ReturnType<typeof runToolChatSession>> | undefined
   try {
     res = await runToolChatSession(invocation, ports, {
-      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: hostedTurnId, turnId: hostedTurnId, acceptedTurn: args.acceptedTurn, sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds })
+      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: hostedTurnId, turnId: hostedTurnId, acceptedTurn: args.acceptedTurn, sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt })
     })
     reason = res.ok ? 'completed' : res.cancelled ? 'cancelled' : 'failed'
   } catch (error) {
