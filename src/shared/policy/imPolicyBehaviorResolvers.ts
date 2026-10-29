@@ -32,13 +32,13 @@ export function resolveImPolicyRulesForVersion(input: ResolveImPolicyRulesForVer
             signals: ['path-target:outside-workdir', `read-target-kind:${targetKind}`] },
           action: 'deny', locked: true, denyClass: 'forbidden', reason: 'Unverified external read targets remain denied'
         }))
-        const resolved = rules.map((rule) => rule.id === 'remote-shell-disabled'
-          ? { ...rule, match: { ...rule.match!, excludeSignals: ['im-shell-review-candidate:git-status', 'im-shell-review-candidate:git-log'] } }
-          : rule.id === 'remote-outside-read-deny'
-          ? { ...rule, match: { ...rule.match!, signals: ['path-target:outside-workdir', 'read-target-scope:subtree'] } }
-          : rule.id === 'remote-outside-write-deny'
-            ? { ...rule, match: { ...rule.match!, signals: ['write-target-scope:outside-workdir', 'write-target-unsupported'] } }
-          : { ...rule })
+        const resolved = rules.map((rule) => {
+          const action = imEffectiveActionFor('im', input.pkg, rule)
+          if (rule.id === 'remote-shell-disabled') return { ...rule, action, match: { ...rule.match!, excludeSignals: ['im-shell-review-candidate:git-status', 'im-shell-review-candidate:git-log'] } }
+          if (rule.id === 'remote-outside-read-deny') return { ...rule, action, match: { ...rule.match!, signals: ['path-target:outside-workdir', 'read-target-scope:subtree'] } }
+          if (rule.id === 'remote-outside-write-deny') return { ...rule, action, match: { ...rule.match!, signals: ['write-target-scope:outside-workdir', 'write-target-unsupported'] } }
+          return { ...rule, action }
+        })
         resolved.push(
           { id: 'im-outside-read-review', when: 'invocation', match: { lane: ['wechat', 'feishu'], toolName: ['read_file', 'grep'], actionClass: 'read', signals: ['path-target:outside-workdir', 'read-target-scope:single-target', 'read-target-kind:file'] }, action: 'ask', answerer: 'agent', reason: 'IM directory-external single-file read review' },
           { id: 'im-outside-list-review', when: 'invocation', match: { lane: ['wechat', 'feishu'], toolName: 'list_directory', actionClass: 'read', signals: ['path-target:outside-workdir', 'read-target-scope:direct-entries', 'read-target-kind:directory'] }, action: 'ask', answerer: 'agent', reason: 'IM directory-external direct listing review' },
