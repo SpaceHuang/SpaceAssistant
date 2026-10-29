@@ -3,7 +3,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { getSession } from '../database/operations'
 import { createSpillStoreForDatabase } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict, type SpillDescriptor } from '../storage/spillProtocol'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { SessionStorage, SessionStorageHost, SessionStorageStartupCoordination } from './host/ports'
 import { createSessionCommands } from './commands'
 import { createSessionQueries } from './queries'
@@ -122,8 +122,30 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
       WHERE streams.session_id=? AND streams.version=1 AND substr(streams.invocation_id,1,length(?))=?
         AND events.kind='transcript-compacted' LIMIT 1`).get(sessionId, backfillPrefix, backfillPrefix))
+    const backfillEvents = getDbConnection(db).prepare(`SELECT streams.invocation_id,events.payload_json
+      FROM agent_history_streams streams
+      JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
+      WHERE streams.session_id=? AND events.kind='transcript-compacted' AND substr(streams.invocation_id,1,length(?))=?`)
+      .all(sessionId, backfillPrefix, backfillPrefix) as Array<{ invocation_id: string; payload_json: string }>
+    const versionedBackfills = new Set<string>()
+    for (const row of backfillEvents) {
+      try {
+        const payload = JSON.parse(row.payload_json) as { backfillSnapshotVersion?: unknown }
+        if (payload.backfillSnapshotVersion !== 2) continue
+        versionedBackfills.add(row.invocation_id)
+      } catch { /* Invalid snapshots are handled by canonical History validation when read. */ }
+    }
+    const hasBackfillWithoutCurrentSnapshot = canonicalReplay.committed.some(({ compactionId }) => {
+      if (!canonicalIds.has(compactionId)) return false
+      const invocationId = `${backfillPrefix}${compactionId}`
+      if (!backfillEvents.some((row) => row.invocation_id === invocationId)) return false
+      return !versionedBackfills.has(invocationId) && !backfillEvents.some((row) =>
+        row.invocation_id.startsWith(`${invocationId}:transcript-snapshot:`) && versionedBackfills.has(row.invocation_id))
+    })
+    const backfillRecords = [...fileReplay.committed, ...canonicalReplay.committed.filter(({ compactionId }) =>
+      !fileReplay.committed.some((record) => record.compactionId === compactionId))]
     if (collidesWithRejectedCanonical) throw new Error('CANONICAL_COMPACTION_REPLAY_INVALID')
-    if (hasLegacyOnlyCompaction || hasPartialCanonicalBackfill) {
+    if (hasLegacyOnlyCompaction || hasPartialCanonicalBackfill || hasBackfillWithoutCurrentSnapshot) {
       const sessionMessages = readLegacyProjectionMessages(db, sessionId)
       const latestUser = [...sessionMessages].reverse().find((message) => message.role === 'user')
       if (latestUser) {
@@ -136,7 +158,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
           : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
             .map(([key, item]) => [key, canonicalizeJson(item)])) : value
         const stableJson = (value: unknown): string => JSON.stringify(canonicalizeJson(value))
-        for (const record of fileReplay.committed) {
+        for (const record of backfillRecords) {
           const canonicalRecord = canonicalReplay.committed.find(({ compactionId }) => compactionId === record.compactionId)
           if (canonicalRecord) {
             if (stableJson(canonicalRecord.start.payload) !== stableJson(record.start.payload) ||
@@ -145,13 +167,17 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
             }
           }
           if (rejectedIds.has(record.compactionId)) continue
-          const windowId = typeof record.start.payload.windowId === 'string' ? record.start.payload.windowId : `session:${sessionId}`
+          const windowId = [record.summary, record.end].map((event) => event.payload.outputWindowId)
+            .find((value): value is string => typeof value === 'string') ??
+            [record.end, record.summary, record.start].map((event) => event.payload.windowId)
+              .find((value): value is string => typeof value === 'string') ?? `session:${sessionId}`
+          const inputSurface = surface
           const nextSurface = applyCommittedSurfaceShadow(surface, { committed: [record], rejected: [] }, [latestUser.id], windowId,
             (items) => computeReplaySurfaceFingerprint('', items))
           const boundaryId = typeof record.start.payload.surfaceBoundaryId === 'string' ? record.start.payload.surfaceBoundaryId : undefined
-          const currentIdentities = surfaceItemIdentities(surface)
-          const boundaryIndex = boundaryId ? surface.findIndex(({ id }, index) => id === boundaryId || currentIdentities[index] === boundaryId) : -1
-          const historicalIds = boundaryIndex >= 0 ? new Set(surface.slice(0, boundaryIndex + 1).map(({ id }) => id)) : undefined
+          const currentIdentities = surfaceItemIdentities(inputSurface)
+          const boundaryIndex = boundaryId ? inputSurface.findIndex(({ id }, index) => id === boundaryId || currentIdentities[index] === boundaryId) : -1
+          const historicalIds = boundaryIndex >= 0 ? new Set(inputSurface.slice(0, boundaryIndex + 1).map(({ id }) => id)) : undefined
           const candidate = record.summary.payload.candidate
           const checkpoint = candidate && typeof candidate === 'object'
             ? (candidate as { checkpointMessage?: unknown }).checkpointMessage : undefined
@@ -178,9 +204,9 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
           const history = execution.historyFor({ sessionId })
           const stored = await history.read(invocationId)
           const payload = { compactionId: record.compactionId,
-            // Persist only the verified output through this compaction's source boundary.
-            // Later conversation turns are a replay suffix, not part of this immutable backfill.
-            messages: historicalOutput.map((message) => ({ ...message })),
+            // A completed backfill is also a candidate Hosted transcript snapshot. Keep
+            // post-compaction turns so cutover does not mistake them for an untrusted tail.
+            messages: nextSurface.map((message) => ({ ...message })), backfillSnapshotVersion: 2,
             sessionLedger: { location: { workDir, sessionId, createdAt: session.createdAt }, start, summary },
             surfaceReplay: { windowId, inputFingerprint: start.inputSurfaceFingerprint,
               outputFingerprint: summary.outputSurfaceFingerprint,
@@ -192,17 +218,54 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
             const existing = stored.events.find(({ kind }) => kind === 'transcript-compacted')
             const existingPayload = existing?.payload as typeof payload | undefined
             const existingMessages = existingPayload && Array.isArray(existingPayload.messages) ? existingPayload.messages : undefined
-            const historicalMessageIds = historicalIds ?? new Set(surface.map(({ id }) => id))
-            const suffixMessageIds = new Set(boundaryIndex >= 0 ? surface.slice(boundaryIndex + 1).map(({ id }) => id) : [])
-            const historicalOutputMessageIds = new Set([...historicalMessageIds, ...(checkpointId ? [checkpointId] : [])])
-            const knownMessageIds = new Set([...historicalOutputMessageIds, ...suffixMessageIds])
-            const storedMessagesAreKnown = existingMessages?.every((message) => message && typeof message === 'object' &&
-              typeof (message as { id?: unknown }).id === 'string' && knownMessageIds.has((message as { id: string }).id))
-            const storedHistoricalMessages = existingMessages?.filter((message) => message && typeof message === 'object' &&
-              typeof (message as { id?: unknown }).id === 'string' && historicalOutputMessageIds.has((message as { id: string }).id))
-            const metadataMatches = existingPayload && stableJson({ ...existingPayload, messages: undefined }) === stableJson({ ...payload, messages: undefined })
-            if (!existing || !existingMessages || !storedMessagesAreKnown || !metadataMatches || stableJson(storedHistoricalMessages) !== stableJson(payload.messages)) {
+            const expectedMessages = payload.messages
+            let expectedIndex = 0
+            const storedMessagesAreKnown = existingMessages?.every((message) => {
+              const messageId = message && typeof message === 'object' ? (message as { id?: unknown }).id : undefined
+              if (typeof messageId !== 'string') return false
+              const expectedIndexForStoredMessage = expectedMessages.findIndex((candidate, index) => index >= expectedIndex &&
+                (candidate as { id?: unknown }).id === messageId && stableJson(candidate) === stableJson(message))
+              if (expectedIndexForStoredMessage < 0) return false
+              expectedIndex = expectedIndexForStoredMessage + 1
+              return true
+            })
+            const metadataMatches = existingPayload && stableJson({ ...existingPayload, messages: undefined, backfillSnapshotVersion: undefined }) ===
+              stableJson({ ...payload, messages: undefined, backfillSnapshotVersion: undefined })
+            if (!existing || !existingMessages || !storedMessagesAreKnown || !metadataMatches) {
               throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+            }
+            if (stableJson(existingMessages) !== stableJson(expectedMessages) || existingPayload?.backfillSnapshotVersion !== 2) {
+              // Older partial backfills captured a shorter transcript. Publish the current
+              // source-backed suffix as a newer snapshot before closing the immutable stream.
+              const transcriptVersion = createHash('sha256').update(stableJson(expectedMessages)).digest('hex').slice(0, 24)
+              const snapshotInvocationId = `${invocationId}:transcript-snapshot:${transcriptVersion}`
+              const snapshotEventId = `${snapshotInvocationId}:transcript-compacted`
+              const snapshotCompletedEventId = `${snapshotInvocationId}:completed`
+              const existingSnapshot = await history.read(snapshotInvocationId)
+              const snapshotPayload = { compactionId: record.compactionId, messages: expectedMessages, backfillSnapshotVersion: 2 }
+              if (existingSnapshot.version === 0) {
+                await history.appendBatch([
+                  { invocationId: snapshotInvocationId, turnId: snapshotInvocationId, sequence: 1, schemaVersion: 1,
+                    eventId: snapshotEventId, idempotencyKey: snapshotEventId, kind: 'transcript-compacted', payload: snapshotPayload },
+                  { invocationId: snapshotInvocationId, turnId: snapshotInvocationId, sequence: 2, schemaVersion: 1,
+                    eventId: snapshotCompletedEventId, idempotencyKey: snapshotCompletedEventId, kind: 'invocation-completed',
+                    payload: { status: 'completed', completedAt: Date.now() } }
+                ], 0)
+              } else {
+                const snapshot = existingSnapshot.events.find(({ kind }) => kind === 'transcript-compacted')
+                if (!snapshot || stableJson(snapshot.payload) !== stableJson(snapshotPayload)) {
+                  throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+                }
+                const snapshotTerminal = existingSnapshot.events.at(-1)
+                if (existingSnapshot.version === 1 && snapshotTerminal?.kind === 'transcript-compacted') {
+                  await history.appendBatch([{ invocationId: snapshotInvocationId, turnId: snapshotInvocationId, sequence: 2,
+                    schemaVersion: 1, eventId: snapshotCompletedEventId, idempotencyKey: snapshotCompletedEventId,
+                    kind: 'invocation-completed', payload: { status: 'completed', completedAt: Date.now() } }], existingSnapshot.version)
+                } else if (existingSnapshot.version !== 2 || snapshotTerminal?.kind !== 'invocation-completed' ||
+                  (snapshotTerminal.payload as { status?: unknown }).status !== 'completed') {
+                  throw new Error('LEGACY_COMPACTION_BACKFILL_IDEMPOTENCY_CONFLICT')
+                }
+              }
             }
             const terminal = stored.events.at(-1)
             if (stored.version === 1 && terminal?.kind === 'transcript-compacted') {

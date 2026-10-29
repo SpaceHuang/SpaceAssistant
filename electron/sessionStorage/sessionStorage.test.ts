@@ -23,6 +23,8 @@ import { createProductionSessionLedgerLifecycleDependencies } from '../runtime/s
 import { projectCanonicalSessionLedgerTarget } from '../runtime/sessionLedgerOutboxProjector'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { compactSessionContext } from '../sessionContextCompaction'
+import { resolveCanonicalRequestCutover } from '../runtime/sessionHistoryCutover'
+import { toCanonicalModelMessages } from '../runtime/canonicalHistory'
 
 describe('SQLite session storage public queries', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
@@ -777,7 +779,9 @@ describe('SQLite session storage public queries', () => {
         ensureSessionLedgerReady: async () => true })
       const appendBatch = SqliteAgentHistory.prototype.appendBatch
       const appendSpy = vi.spyOn(SqliteAgentHistory.prototype, 'appendBatch').mockImplementationOnce(async function (events, expectedVersion, transcriptCommit) {
-        await appendBatch.call(this, events.slice(0, 1), expectedVersion, transcriptCommit)
+        const first = events[0]!
+        // Previous releases stored the complete output surface, including the then-current suffix.
+        await appendBatch.call(this, [first], expectedVersion, transcriptCommit)
         throw new Error('simulated process loss after canonical backfill commit')
       })
       await expect(storage.readCompactionReplay({ sessionId: session.id, workDir })).rejects.toThrow('simulated process loss')
@@ -786,6 +790,8 @@ describe('SQLite session storage public queries', () => {
       const backfillHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
       const backfillInvocationId = `legacy-compaction-backfill:${session.id}:legacy-backfill-compaction`
       expect(backfillHistory.readSync(backfillInvocationId).events.map(({ kind }) => kind)).toEqual(['transcript-compacted'])
+      expect((backfillHistory.readSync(backfillInvocationId).events[0]!.payload as { messages: Array<{ id?: string }> }).messages
+        .map(({ id }) => id)).toContain('legacy-backfill-a3')
       expect(await backfillHistory.readLatestInvocationForSession(session.id)).toMatchObject({ kind: 'unavailable' })
       const firstCount = getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=? AND kind='transcript-compacted'")
         .get(session.id) as { count: number }
@@ -806,16 +812,161 @@ describe('SQLite session storage public queries', () => {
       expect(reopenedHistory.readSync(backfillInvocationId).events.map(({ kind }) => kind))
         .toEqual(['transcript-compacted', 'invocation-completed'])
       expect(await reopenedHistory.readLatestInvocationForSession(session.id)).toMatchObject({ kind: 'completed' })
+      const latest = await reopenedHistory.readLatestInvocationForSession(session.id)
+      if (latest.kind !== 'completed') throw new Error('backfill snapshot is not complete')
+      const latestMessages = latest.snapshot.events.find(({ kind }) => kind === 'transcript-compacted')?.payload as { messages?: Array<{ id?: string }> } | undefined
+      expect(latestMessages?.messages?.map(({ id }) => id)).toEqual(expect.arrayContaining([
+        'legacy-backfill-u3', 'legacy-backfill-a3', 'legacy-backfill-u4', 'legacy-backfill-a4'
+      ]))
+      const requestMessages = toCanonicalModelMessages([
+        checkpointMessage, ...sourceSurface.slice(2),
+        { id: 'legacy-backfill-u3', role: 'user' as const, content: 'later question', timestamp: 5 },
+        { id: 'legacy-backfill-a3', role: 'assistant' as const, content: 'later answer', timestamp: 6 },
+        { id: 'legacy-backfill-u4', role: 'user' as const, content: 'another later question', timestamp: 7 },
+        { id: 'legacy-backfill-a4', role: 'assistant' as const, content: 'another later answer', timestamp: 8 },
+        { role: 'user' as const, content: 'next hosted request' }
+      ])
+      const cutover = resolveCanonicalRequestCutover({ snapshot: latest.snapshot, requestMessages, requiredUserMessage: requestMessages.at(-1)! })
+      expect(cutover.kind).toBe('matched')
+      if (cutover.kind === 'matched') expect(cutover.messages).toEqual(requestMessages)
       const secondCount = getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=? AND kind='transcript-compacted'")
         .get(session.id) as { count: number }
-      expect(secondCount.count).toBe(firstCount.count)
+      // The compatibility backfill and the full Hosted transcript catch-up are separate snapshots.
+      expect(secondCount.count).toBe(firstCount.count + 1)
       await fs.promises.rm(resolveSessionEventPaths(workDir, session.id, session.createdAt).eventsPath)
       const replayAfterLedgerRemoval = await reopenedStorage.readCompactionReplay({ sessionId: session.id, workDir })
       expect(replayAfterLedgerRemoval.committed).toHaveLength(1)
+      expect((getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=? AND kind='transcript-compacted' ").get(session.id) as { count: number }).count)
+        .toBe(secondCount.count)
     } finally {
       db?.close()
       db = undefined
       fs.rmSync(path.dirname(temp.dbPath), { recursive: true, force: true })
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('backfills reset compactions against their output window', async () => {
+    const temp = createTempDatabase('session-context-reset-compaction-backfill-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'session-context-reset-compaction-backfill')
+    fs.mkdirSync(workDir, { recursive: true })
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'legacy reset compaction backfill' })
+      const messages = [
+        { id: 'reset-backfill-u1', sessionId: session.id, role: 'user' as const, content: 'older question '.repeat(80), timestamp: 1, status: 'sent' as const },
+        { id: 'reset-backfill-a1', sessionId: session.id, role: 'assistant' as const, content: 'older answer '.repeat(80), timestamp: 2, status: 'completed' as const },
+        { id: 'reset-backfill-u2', sessionId: session.id, role: 'user' as const, content: 'current question '.repeat(80), timestamp: 3, status: 'sent' as const },
+        { id: 'reset-backfill-a2', sessionId: session.id, role: 'assistant' as const, content: 'current answer '.repeat(80), timestamp: 4, status: 'completed' as const }
+      ]
+      appendMessagesAtomically(db, messages)
+      const built = await buildToolChatMessagesFromSource({ userDataDir: '/tmp', workDir, sourceMessages: messages,
+        currentUserMessageId: messages[2]!.id, sessionId: session.id })
+      const projection = projectReplaySurfaceWithSources(built)
+      const identities = surfaceItemIdentitiesForProjectionSubset(projection, projection)
+      const sourceSurface = projection.messages.map((message, index) => ({ ...message, id: message.id ?? identities[index]! }))
+      const checkpointMessage = { id: 'reset-backfill-checkpoint', role: 'user' as const,
+        content: JSON.stringify({ kind: 'context_checkpoint', task: 'continue', completed: 'reviewed', decisions: 'keep', constraints: 'preserve', pending: 'continue', blockers: 'none', nextStep: 'proceed' }) }
+      const candidate = { kind: 'reset' as const, checkpointMessage, checkpointReplayIdentity: checkpointMessage.id,
+        shadowedRanges: [{ start: messages[0]!.id, end: messages[1]!.id }] }
+      const start = { compactionId: 'legacy-reset-backfill', windowId: session.id,
+        inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', sourceSurface), surfaceBoundaryId: identities.at(-1)!, targetTokens: 100 }
+      const outputSurface = projectReplaySurfaceWithSources([checkpointMessage, ...sourceSurface.slice(2)], {
+        mergeAdjacentUsers: (left, right) => left.id === checkpointMessage.id || right.id === checkpointMessage.id
+      }).messages
+      const outputWindowId = `${session.id}:reset:legacy-reset-backfill`
+      const summary = { compactionId: start.compactionId, windowId: session.id, inputWindowId: session.id, outputWindowId,
+        outputSurfaceFingerprint: computeReplaySurfaceFingerprint('', outputSurface), summaryHash: computeCompactionSummaryHash(candidate),
+        shadowedRanges: candidate.shadowedRanges, candidate }
+      const sink = getSessionEventSink(workDir, session.id, session.createdAt)
+      await appendCompactionTransaction(sink, start, summary)
+      await sink.close()
+
+      const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
+        ensureSessionLedgerReady: async () => true })
+      expect((await storage.readCompactionReplay({ sessionId: session.id, workDir })).committed).toHaveLength(1)
+      expect(storage.queries.readCanonicalCompactionReplay(session.id)?.committed).toHaveLength(1)
+      await fs.promises.rm(resolveSessionEventPaths(workDir, session.id, session.createdAt).eventsPath)
+      expect((await storage.readCompactionReplay({ sessionId: session.id, workDir })).committed).toHaveLength(1)
+    } finally {
+      db?.close()
+      db = undefined
+      temp.cleanup()
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('upgrades a previously completed shortened backfill before Hosted consumes it', async () => {
+    const temp = createTempDatabase('session-context-short-backfill-upgrade-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'session-context-short-backfill-upgrade')
+    fs.mkdirSync(workDir, { recursive: true })
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'completed short backfill upgrade' })
+      const messages = [
+        { id: 'short-backfill-u1', sessionId: session.id, role: 'user' as const, content: 'older question '.repeat(80), timestamp: 1, status: 'sent' as const },
+        { id: 'short-backfill-a1', sessionId: session.id, role: 'assistant' as const, content: 'older answer '.repeat(80), timestamp: 2, status: 'completed' as const },
+        { id: 'short-backfill-u2', sessionId: session.id, role: 'user' as const, content: 'current question '.repeat(80), timestamp: 3, status: 'sent' as const },
+        { id: 'short-backfill-a2', sessionId: session.id, role: 'assistant' as const, content: 'current answer '.repeat(80), timestamp: 4, status: 'completed' as const }
+      ]
+      appendMessagesAtomically(db, messages)
+      const built = await buildToolChatMessagesFromSource({ userDataDir: '/tmp', workDir, sourceMessages: messages,
+        currentUserMessageId: messages[2]!.id, sessionId: session.id })
+      const projection = projectReplaySurfaceWithSources(built)
+      const identities = surfaceItemIdentitiesForProjectionSubset(projection, projection)
+      const sourceSurface = projection.messages.map((message, index) => ({ ...message, id: message.id ?? identities[index]! }))
+      const checkpointMessage = { id: 'short-backfill-checkpoint', role: 'user' as const,
+        content: JSON.stringify({ kind: 'context_checkpoint', task: 'continue', completed: 'reviewed', decisions: 'keep', constraints: 'preserve', pending: 'continue', blockers: 'none', nextStep: 'proceed' }) }
+      const candidate = { kind: 'summary' as const, checkpointMessage, checkpointReplayIdentity: checkpointMessage.id,
+        shadowedRanges: [{ start: messages[0]!.id, end: messages[1]!.id }] }
+      const start = { compactionId: 'legacy-short-backfill', windowId: session.id,
+        inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', sourceSurface), surfaceBoundaryId: identities.at(-1)!, targetTokens: 100 }
+      const outputSurface = projectReplaySurfaceWithSources([checkpointMessage, ...sourceSurface.slice(2)], {
+        mergeAdjacentUsers: (left, right) => left.id === checkpointMessage.id || right.id === checkpointMessage.id
+      }).messages
+      const summary = { compactionId: start.compactionId, windowId: session.id,
+        outputSurfaceFingerprint: computeReplaySurfaceFingerprint('', outputSurface), summaryHash: computeCompactionSummaryHash(candidate),
+        shadowedRanges: candidate.shadowedRanges, candidate }
+      const sink = getSessionEventSink(workDir, session.id, session.createdAt)
+      await appendCompactionTransaction(sink, start, summary)
+      await sink.close()
+      appendMessagesAtomically(db, [
+        { id: 'short-backfill-u3', sessionId: session.id, role: 'user', content: 'later question', timestamp: 5, status: 'sent' },
+        { id: 'short-backfill-a3', sessionId: session.id, role: 'assistant', content: 'later answer', timestamp: 6, status: 'completed' }
+      ])
+      const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
+        ensureSessionLedgerReady: async () => true })
+      await storage.readCompactionReplay({ sessionId: session.id, workDir })
+
+      // Model the completed version-1 shortened snapshot written by the prior release.
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+      const backfillId = `legacy-compaction-backfill:${session.id}:${start.compactionId}`
+      const completedOldBackfill = history.readSync(backfillId)
+      const compactedEvent = completedOldBackfill.events.find(({ kind }) => kind === 'transcript-compacted')!
+      const oldPayload = compactedEvent.payload as { messages: Array<{ id?: string }>; backfillSnapshotVersion?: number }
+      const shortenedPayload = { ...oldPayload, messages: oldPayload.messages.filter(({ id }) => id !== 'short-backfill-u3' && id !== 'short-backfill-a3') }
+      delete shortenedPayload.backfillSnapshotVersion
+      getDbConnection(db).prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?')
+        .run(JSON.stringify(shortenedPayload), compactedEvent.eventId)
+
+      await storage.readCompactionReplay({ sessionId: session.id, workDir })
+      const latest = await history.readLatestInvocationForSession(session.id)
+      if (latest.kind !== 'completed') throw new Error('upgraded Hosted transcript snapshot is not complete')
+      const latestPayload = latest.snapshot.events.find(({ kind }) => kind === 'transcript-compacted')?.payload as { messages?: Array<{ id?: string }> } | undefined
+      expect(latestPayload?.messages?.map(({ id }) => id)).toEqual(expect.arrayContaining(['short-backfill-u3', 'short-backfill-a3']))
+      const requestMessages = toCanonicalModelMessages([
+        checkpointMessage, ...sourceSurface.slice(2),
+        { id: 'short-backfill-u3', role: 'user' as const, content: 'later question', timestamp: 5 },
+        { id: 'short-backfill-a3', role: 'assistant' as const, content: 'later answer', timestamp: 6 },
+        { role: 'user' as const, content: 'next hosted request' }
+      ])
+      const cutover = resolveCanonicalRequestCutover({ snapshot: latest.snapshot, requestMessages, requiredUserMessage: requestMessages.at(-1)! })
+      expect(cutover.kind).toBe('matched')
+      if (cutover.kind === 'matched') expect(cutover.messages).toEqual(requestMessages)
+    } finally {
+      db?.close()
+      db = undefined
+      temp.cleanup()
       fs.rmSync(workDir, { recursive: true, force: true })
     }
   })
