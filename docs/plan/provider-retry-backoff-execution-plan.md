@@ -92,8 +92,8 @@
 
 ### 阶段 4：事件时序与界面
 
-- [ ] **G4a｜定位或准备本地卡片容器**。范围：只读压缩方案及 `src/renderer/components/Chat/`、`src/renderer/services/`、共享显示类型。记录可复用容器、重建入口与测试；不存在时登记 T6 本地实现最小可复用容器的具体文件范围，保持方案附录 E 已批准的入口、状态和折叠交互。此核查不要求压缩方案落地；只有发现必须改变已批准界面语义时，才停止依赖该变更的部分并按项目规则处理。完成判据：有可执行的本地实现路径及测试文件清单。
-  - 证据：待填写。
+- [x] **G4a｜定位或准备本地卡片容器**。范围：只读压缩方案及 `src/renderer/components/Chat/`、`src/renderer/services/`、共享显示类型。记录可复用容器、重建入口与测试；不存在时登记 T6 本地实现最小可复用容器的具体文件范围，保持方案附录 E 已批准的入口、状态和折叠交互。此核查不要求压缩方案落地；只有发现必须改变已批准界面语义时，才停止依赖该变更的部分并按项目规则处理。完成判据：有可执行的本地实现路径及测试文件清单。
+  - 证据：复用 `src/renderer/components/Chat/SystemOperationRow.tsx` 与 `ChatBubble.tsx` 中的 activity timeline 容器；`Message.systemOperations` 已由共享类型、assistant activity timeline 与 turn display protocol 投影。T6 只扩展 `SystemOperationRecord` 联合类型、行内容和现有容器，不新建消息布局。现有测试基点：`SystemOperationRow.test.tsx`、`src/shared/assistantActivityTimeline.test.ts`、`turnProjectionService.test.ts`、`turnDisplayReconciliation.test.ts`；T6 增加 retry 操作渲染与恢复测试。
 - [～] **T5｜接通安排、等待和终结时序**。范围：`packages/agent-sdk/src/turn.ts`、`history.ts`，`electron/runtime/agentSdkDesktopObserver.ts`、`sqliteAgentHistory.ts`、相关账本投影及对应测试。验证先追加安排再等待、追加失败不派发、等待取消、未派发终结、结果追加失败、重启/旧账本恢复及同请求关联；保持模型 transcript 不含重试事件。
   - 产物 / 完成判据：`AC-18`–`AC-20`、`AC-22`、`AC-24`、`AC-26` 的后端时序及记录部分；界面部分留给 T6。命令：`npm exec vitest run packages/agent-sdk/test/turn.test.ts packages/agent-sdk/test/history.test.ts electron/runtime/sqliteAgentHistory.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/sessionLedgerOutbox.test.ts`。
   - 证据：待填写。
