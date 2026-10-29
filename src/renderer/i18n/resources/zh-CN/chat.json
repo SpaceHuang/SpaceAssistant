@@ -362,6 +362,12 @@
   },
   "systemOperation": {
     "title": "自动压缩",
+    "providerRetryRunning": "正在重试（第 {{attempt}}/{{maxAttempts}} 次，约 {{seconds}} 秒后）",
+    "providerRetrySucceeded": "已恢复",
+    "providerRetryFailed": "重试失败",
+    "providerRetryCancelled": "重试已取消",
+    "providerRetryInterrupted": "重试已中断",
+    "providerRetryUnknown": "重试结果未知",
     "running": "正在自动压缩…",
     "succeeded": "已压缩，占用 {{before}}% → {{after}}%",
     "repairOriginalSucceeded": "早期摘要已按原窗口重新生成",

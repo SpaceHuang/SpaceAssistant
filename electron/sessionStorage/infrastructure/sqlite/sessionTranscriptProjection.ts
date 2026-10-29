@@ -21,6 +21,53 @@ export type SessionTranscriptProjectionRead =
   | Readonly<{ source: 'canonical:L2'; messages: readonly Message[]; replayedEvents: number }>
   | Readonly<{ source: 'legacy'; messages: readonly Message[]; reason: string }>
 
+type RetryHistoryRow = { assistantMessageId: string; kind: string; payloadJson: string; createdAt: number }
+
+export function reconstructProviderRetryOperations(rows: readonly RetryHistoryRow[]): Map<string, import('../../../../src/shared/domainTypes').SystemOperationRecord[]> {
+  const result = new Map<string, import('../../../../src/shared/domainTypes').SystemOperationRecord[]>()
+  for (const row of rows) {
+    let payload: Record<string, unknown>
+    try { payload = JSON.parse(row.payloadJson) as Record<string, unknown> } catch { continue }
+    const operations = result.get(row.assistantMessageId) ?? []
+    if (row.kind === 'provider-retry-scheduled' && typeof payload.requestId === 'string') {
+      const id = `${payload.requestId}:provider-retry`
+      const index = operations.findIndex((operation) => operation.id === id)
+      const previous = index >= 0 ? operations[index] : undefined
+      const operation: import('../../../../src/shared/domainTypes').SystemOperationRecord = {
+        id, kind: 'provider-retry', status: 'running', startedAt: previous?.startedAt ?? row.createdAt,
+        ...(Number.isInteger(payload.attemptInRequest) ? { attemptInRequest: payload.attemptInRequest as number } : {}),
+        ...(Number.isInteger(payload.maxAttempts) ? { maxAttempts: payload.maxAttempts as number } : {}),
+        ...(Number.isFinite(payload.plannedWaitMs) ? { plannedWaitMs: payload.plannedWaitMs as number } : {}),
+        ...(Number.isFinite(payload.retryAt) ? { retryAt: payload.retryAt as number } : {})
+      }
+      if (index >= 0) operations[index] = operation
+      else operations.push(operation)
+    } else if (row.kind === 'provider-attempt-result' && typeof payload.requestId === 'string') {
+      const id = `${payload.requestId}:provider-retry`
+      let index = operations.findIndex((operation) => operation.id === id)
+      if (index < 0 && payload.physical === false && payload.attemptSource && typeof payload.attemptSource === 'object') {
+        operations.push({ id, kind: 'provider-retry', status: 'failed', startedAt: row.createdAt })
+        index = operations.length - 1
+      }
+      if (index >= 0 && payload.outcome !== 'discarded') {
+        const cancelled = payload.errorClass === 'TURN_CANCELLED' || payload.errorClass === 'TURN_TIMED_OUT'
+        const status = payload.outcome === 'succeeded' ? 'succeeded' : cancelled ? 'cancelled' : 'failed'
+        operations[index] = { ...operations[index]!, status, completedAt: row.createdAt, ...(status === 'failed' ? { reason: 'PROVIDER_RETRY_FAILED' } : {}) }
+      }
+    } else if (row.kind === 'invocation-interrupted' || row.kind === 'invocation-failed') {
+      const resultUnknown = row.kind === 'invocation-failed' || payload.reason === 'unknown-after-dispatch'
+      for (let index = 0; index < operations.length; index += 1) {
+        if (operations[index]?.status === 'running') operations[index] = {
+          ...operations[index]!, status: resultUnknown ? 'failed' : 'cancelled', completedAt: row.createdAt,
+          reason: resultUnknown ? 'PROVIDER_RETRY_RESULT_UNKNOWN' : 'PROVIDER_RETRY_INTERRUPTED'
+        }
+      }
+    }
+    result.set(row.assistantMessageId, operations)
+  }
+  return result
+}
+
 function sqliteLikeContainsLiteral(value: string, query: string): boolean {
   if (query.length === 0) return true
   const foldAscii = (code: number): number => code >= 65 && code <= 90 ? code + 32 : code
@@ -507,23 +554,37 @@ export function getProjectedChatMessagePage(
   const page = readLegacyChatMessagePage(db, sessionId, beforeSequence, limit)
   if (page.entries.length === 0) return page
   const conn = getDbConnection(db)
+  const pageIds = page.entries.map(({ message }) => message.id)
+  const retryRows = conn.prepare(`SELECT t.assistant_message_id AS assistantMessageId,e.kind,e.payload_json AS payloadJson,e.created_at AS createdAt
+    FROM turns t JOIN agent_history_events e ON e.turn_id=t.turn_id
+    WHERE t.session_id=? AND t.assistant_message_id IN (${pageIds.map(() => '?').join(',')})
+      AND e.kind IN ('provider-retry-scheduled','provider-attempt-result','invocation-interrupted','invocation-failed')
+    ORDER BY e.created_at,e.sequence`).all(sessionId, ...pageIds) as RetryHistoryRow[]
+  const retryOperations = reconstructProviderRetryOperations(retryRows)
+  const attachRetryOperations = (message: Message): Message => {
+    const recovered = retryOperations.get(message.id)
+    if (!recovered?.length) return message
+    const merged = new Map((message.systemOperations ?? []).map((operation) => [operation.id, operation]))
+    for (const operation of recovered) merged.set(operation.id, operation)
+    return { ...message, systemOperations: [...merged.values()] }
+  }
+  const retryPage: ChatMessagePage = { ...page, entries: page.entries.map((entry) => ({ ...entry, message: attachRetryOperations(entry.message) })) }
   const writeMode = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
     .get(sessionId) as { write_mode: string } | undefined
   if (writeMode?.write_mode !== 'canonical' && hasCurrentProjectionEligibility(db, sessionId)) {
-    const pageIds = page.entries.map(({ message }) => message.id)
     const states = conn.prepare(`SELECT id,content_storage_state FROM messages WHERE session_id=? AND id IN (${pageIds.map(() => '?').join(',')})`)
       .all(sessionId, ...pageIds) as Array<{ id: string; content_storage_state: string }>
-    if (states.length === pageIds.length && states.every(({ content_storage_state }) => content_storage_state === 'legacy')) return page
+    if (states.length === pageIds.length && states.every(({ content_storage_state }) => content_storage_state === 'legacy')) return retryPage
   }
   // Page-local cache hits cannot prove the body source for every requested ID. The transcript
   // reader validates the legacy cache against the complete legacy view, or replays History for
   // canonical-backed bodies, before we apply this page's cursor selection.
   const transcript = readSessionTranscriptProjection(db, sessionId)
-  if (transcript.source === 'legacy') return page
+  if (transcript.source === 'legacy') return retryPage
   const canonicalById = new Map(transcript.messages.map((message) => [message.id, message]))
-  const entries = page.entries.map((entry) => {
+  const entries = retryPage.entries.map((entry) => {
     const canonical = canonicalById.get(entry.message.id)
-    return canonical ? { ...entry, message: canonical } : entry
+    return canonical ? { ...entry, message: attachRetryOperations(canonical) } : entry
   })
   return { ...page, entries }
 }

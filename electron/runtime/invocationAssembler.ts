@@ -1787,7 +1787,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           stepId: materials.requestId,
           requestId: retry.requestId,
           attempt: retry.attempt,
-          backoffMs: 0,
+          backoffMs: retry.plannedWaitMs,
           code: retry.code
         }
       }),

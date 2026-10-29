@@ -6,7 +6,17 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 export function SystemOperationRow({ operation }: { operation: SystemOperationRecord }) {
   const { t } = useTypedTranslation('chat')
   const [expanded, setExpanded] = useState(false)
-  const label = operation.status === 'running'
+  const retryWait = Math.max(0, Math.ceil((operation.plannedWaitMs ?? 0) / 1000))
+  const label = operation.kind === 'provider-retry'
+    ? operation.status === 'running'
+      ? t('systemOperation.providerRetryRunning', { attempt: operation.attemptInRequest ?? 2, maxAttempts: operation.maxAttempts ?? 2, seconds: retryWait })
+      : operation.status === 'succeeded'
+        ? t('systemOperation.providerRetrySucceeded')
+        : operation.status === 'cancelled'
+          ? operation.reason === 'PROVIDER_RETRY_INTERRUPTED' ? t('systemOperation.providerRetryInterrupted') : t('systemOperation.providerRetryCancelled')
+            : operation.reason === 'PROVIDER_RETRY_RESULT_UNKNOWN' ? t('systemOperation.providerRetryUnknown')
+          : t('systemOperation.providerRetryFailed')
+    : operation.status === 'running'
     ? t('systemOperation.running')
     : operation.status === 'succeeded'
       ? operation.reason === 'REPAIR_ORIGINAL_WINDOW'

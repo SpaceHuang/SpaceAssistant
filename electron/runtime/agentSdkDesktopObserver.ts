@@ -36,7 +36,7 @@ export function createAgentSdkDesktopObserver(input: {
   onRemoteTextActivity?(text: string): void
   assistantMessageId?: string
   onContextReplacementSettled?: NonNullable<AgentTurnObserver['onContextReplacementSettled']>
-  onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
+  onProviderRetry?(retry: Parameters<NonNullable<AgentTurnObserver['onProviderRetry']>>[0]): void | Promise<void>
   emitSessionEvent?(event: SessionEventInput): void | Promise<void>
   emitFactEvent?(event: AssistantFactEvent): void
   notify?(event: AgentNotifyEvent): void
@@ -57,6 +57,7 @@ export function createAgentSdkDesktopObserver(input: {
   let streamedThinking = ''
   let hasPreview = false
   let recoveredOutput = false
+  let providerRetryOperation: import('../../src/shared/domainTypes').SystemOperationRecord | undefined
   const turnToolDimension: TurnToolDimension = emptyTurnToolDimension()
   const proposedToolCallIds = new Set<string>()
   const enteredToolCallIds = new Set<string>()
@@ -386,12 +387,22 @@ export function createAgentSdkDesktopObserver(input: {
           stepId: input.requestId,
           requestId: retry.requestId,
           attempt: retry.attempt,
-          backoffMs: 0,
+          backoffMs: retry.plannedWaitMs,
           code: retry.code
         }
       } : undefined
     },
-    async onProviderRetry(retry) { await input.onProviderRetry?.(retry) },
+    async onProviderRetry(retry) {
+      const operationId = `${retry.requestId}:provider-retry`
+      providerRetryOperation = {
+        id: operationId, kind: 'provider-retry', status: 'running',
+        startedAt: providerRetryOperation?.id === operationId ? providerRetryOperation.startedAt : Date.now(),
+        attemptInRequest: retry.attemptInRequest, maxAttempts: retry.maxAttempts,
+        plannedWaitMs: retry.plannedWaitMs, ...(retry.retryAt !== undefined ? { retryAt: retry.retryAt } : {})
+      }
+      emitFact({ type: 'system-operation-updated', operation: providerRetryOperation })
+      await input.onProviderRetry?.(retry)
+    },
     async onModelAttemptDiscarded() {
       if (hasPreview) emitFact({ type: 'preview-rollback' })
       for (const chunk of pendingChunks) if (chunk.type === 'tool-call') toolCallActivityTimestamps.delete(chunk.toolCallId)
@@ -468,6 +479,11 @@ export function createAgentSdkDesktopObserver(input: {
       }
     },
     async onModelResponseCommitted(response) {
+      if (providerRetryOperation) {
+        providerRetryOperation = { ...providerRetryOperation, status: 'succeeded', completedAt: Date.now() }
+        emitFact({ type: 'system-operation-updated', operation: providerRetryOperation })
+        providerRetryOperation = undefined
+      }
       if (!response.alreadyProjected && response.message.role === 'assistant' && response.message.toolCalls?.length) {
         const request = requestContexts.get(response.modelTurn)
         if (!request) throw new Error(`missing request projection for model turn ${response.modelTurn}`)
@@ -639,12 +655,39 @@ export function createAgentSdkDesktopObserver(input: {
       if (input.stageAssistantContentUntilTurnFinished || recoveredOutput) emitFact({ type: 'content-reconciled', text: result.text })
     },
     async onTurnFinished() {
+      if (providerRetryOperation) {
+        providerRetryOperation = { ...providerRetryOperation, status: 'succeeded', completedAt: Date.now() }
+        emitFact({ type: 'system-operation-updated', operation: providerRetryOperation })
+        providerRetryOperation = undefined
+      }
       input.onTurnToolAttribution?.(structuredClone(turnToolDimension))
       await emitToolExecutionSummary()
       recoveredOutput = false
       hasPreview = false
     },
-    async onTurnFailed() {
+    async onTurnFailed(failure) {
+      if (providerRetryOperation) {
+        const errorRecord = failure.error && typeof failure.error === 'object' ? failure.error as { name?: unknown; kinds?: unknown } : undefined
+        const retryResultUnknown = errorRecord?.name === 'AgentTurnHistoryAppendError' && Array.isArray(errorRecord.kinds) && errorRecord.kinds.includes('provider-attempt-result')
+        const status = retryResultUnknown ? 'failed' : failure.status === 'cancelled' || failure.status === 'interrupted' ? 'cancelled' : 'failed'
+        providerRetryOperation = {
+          ...providerRetryOperation, status, completedAt: Date.now(),
+          ...(retryResultUnknown ? { reason: 'PROVIDER_RETRY_RESULT_UNKNOWN' as const } : failure.status === 'interrupted' ? { reason: 'PROVIDER_RETRY_INTERRUPTED' as const } : {})
+        }
+        emitFact({ type: 'system-operation-updated', operation: providerRetryOperation })
+        providerRetryOperation = undefined
+      } else {
+        const error = failure.error && typeof failure.error === 'object' ? failure.error as { reasonCode?: unknown; name?: unknown; kinds?: unknown } : undefined
+        const retryRejected = typeof error?.reasonCode === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.reasonCode)
+        const retryResultUnknown = error?.name === 'AgentTurnHistoryAppendError' && Array.isArray(error.kinds) && error.kinds.includes('provider-attempt-result')
+        if (retryRejected || retryResultUnknown) {
+          const id = `${input.requestId}:round:${activeModelTurn}:provider-retry`
+          emitFact({ type: 'system-operation-updated', operation: {
+            id, kind: 'provider-retry', status: 'failed', startedAt: Date.now(), completedAt: Date.now(),
+            reason: retryResultUnknown ? 'PROVIDER_RETRY_RESULT_UNKNOWN' : 'PROVIDER_RETRY_FAILED'
+          } })
+        }
+      }
       await emitToolExecutionSummary()
       if (hasPreview) emitFact({ type: 'preview-rollback' })
       recoveredOutput = false

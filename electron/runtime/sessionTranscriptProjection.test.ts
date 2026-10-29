@@ -18,9 +18,58 @@ import { createStorageLifecycleControl } from '../sessionStorage/lifecycle'
 import { readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import { publishTranscriptParityProof } from '../sessionStorage/sqliteRuntimeBindings'
 import * as agentLogger from '../agentLogger/agentLogger'
-import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, hasSessionProjectionEligibility, readSessionTranscriptProjection, refreshSessionTranscriptParityProof, resolveProjectedRetryContext, searchProjectedMessages } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
+import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, hasSessionProjectionEligibility, readSessionTranscriptProjection, reconstructProviderRetryOperations, refreshSessionTranscriptParityProof, resolveProjectedRetryContext, searchProjectedMessages } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 
 const runStoragePerf = process.env.SPACEASSISTANT_RUN_STORAGE_PERF === '1'
+
+describe('provider retry card history reconstruction', () => {
+  const row = (kind: string, payload: Record<string, unknown>, createdAt: number) => ({ assistantMessageId: 'assistant', kind, payloadJson: JSON.stringify(payload), createdAt })
+
+  it('updates one scheduled operation and settles it from attempt results', () => {
+    const operations = reconstructProviderRetryOperations([
+      row('provider-retry-scheduled', { requestId: 'inv:round:1', attemptInRequest: 2, maxAttempts: 5, plannedWaitMs: 2900, retryAt: 12345 }, 10),
+      row('provider-retry-scheduled', { requestId: 'inv:round:1', attemptInRequest: 3, maxAttempts: 5, plannedWaitMs: 4000 }, 20),
+      row('provider-attempt-result', { requestId: 'inv:round:1', attempt: 3, physical: true, outcome: 'succeeded' }, 30)
+    ]).get('assistant')
+    expect(operations).toEqual([expect.objectContaining({ id: 'inv:round:1:provider-retry', kind: 'provider-retry', status: 'succeeded', attemptInRequest: 3, maxAttempts: 5, plannedWaitMs: 4000, completedAt: 30 })])
+  })
+
+  it('keeps schedule-only legacy records as known and resolves restart and rejection outcomes', () => {
+    const scheduled = reconstructProviderRetryOperations([row('provider-retry-scheduled', { requestId: 'legacy:round:1' }, 10)]).get('assistant')
+    expect(scheduled?.[0]).toMatchObject({ status: 'running', kind: 'provider-retry' })
+    const interrupted = reconstructProviderRetryOperations([
+      row('provider-retry-scheduled', { requestId: 'restart:round:1' }, 10),
+      row('invocation-interrupted', {}, 20)
+    ]).get('assistant')
+    expect(interrupted?.[0]).toMatchObject({ status: 'cancelled', reason: 'PROVIDER_RETRY_INTERRUPTED' })
+    const unknown = reconstructProviderRetryOperations([
+      row('provider-retry-scheduled', { requestId: 'unknown:round:1' }, 10),
+      row('invocation-interrupted', { reason: 'unknown-after-dispatch' }, 20)
+    ]).get('assistant')
+    expect(unknown?.[0]).toMatchObject({ status: 'failed', reason: 'PROVIDER_RETRY_RESULT_UNKNOWN' })
+    const rejected = reconstructProviderRetryOperations([
+      row('provider-attempt-result', { requestId: 'reject:round:1', attempt: 2, physical: false, outcome: 'not-dispatched', errorClass: 'PROVIDER_RETRY_BUDGET_EXHAUSTED', attemptSource: { kind: 'recovery', recoveryKind: 'transient' } }, 30)
+    ]).get('assistant')
+    expect(rejected?.[0]).toMatchObject({ status: 'failed', kind: 'provider-retry' })
+  })
+
+  it('attaches recovered retry status to the assistant message page after restart', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'retry projection', model: 'test' })
+    appendMessage(db, { id: 'retry-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'retry-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'failed' })
+    createPersistedTurn(db, { turnId: 'retry-turn', requestId: 'retry-invocation', sessionId: session.id, userMessageId: 'retry-user', assistantMessageId: 'retry-assistant', state: 'terminal', outcome: 'interrupted' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 50, session.id)
+    await history.appendBatch([
+      { invocationId: 'retry-invocation', turnId: 'retry-turn', sequence: 1, schemaVersion: 1, eventId: 'retry-scheduled', idempotencyKey: 'retry-scheduled', kind: 'provider-retry-scheduled', payload: { requestId: 'retry-invocation:round:1', attemptInRequest: 2, maxAttempts: 5, plannedWaitMs: 2500 } },
+      { invocationId: 'retry-invocation', turnId: 'retry-turn', sequence: 2, schemaVersion: 1, eventId: 'retry-interrupted', idempotencyKey: 'retry-interrupted', kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } }
+    ], 0)
+
+    expect(getProjectedChatMessagePage(db, session.id, null, 20).entries.find(({ message }) => message.id === 'retry-assistant')?.message.systemOperations)
+      .toEqual([expect.objectContaining({ id: 'retry-invocation:round:1:provider-retry', kind: 'provider-retry', status: 'cancelled', reason: 'PROVIDER_RETRY_INTERRUPTED', attemptInRequest: 2, plannedWaitMs: 2500 })])
+    db.close()
+  })
+})
 
 describe('session transcript projection P2 read path', () => {
   it('reads canonical-only bodies from History when the legacy cache value is forged', async () => {

@@ -362,6 +362,12 @@
   },
   "systemOperation": {
     "title": "Automatic compaction",
+    "providerRetryRunning": "Retrying (attempt {{attempt}} of {{maxAttempts}}, in about {{seconds}}s)",
+    "providerRetrySucceeded": "Recovered",
+    "providerRetryFailed": "Retry failed",
+    "providerRetryCancelled": "Retry cancelled",
+    "providerRetryInterrupted": "Retry interrupted",
+    "providerRetryUnknown": "Retry outcome unknown",
     "running": "Compacting context…",
     "succeeded": "Compacted, usage {{before}}% → {{after}}%",
     "repairOriginalSucceeded": "An earlier summary was regenerated using its original window",
