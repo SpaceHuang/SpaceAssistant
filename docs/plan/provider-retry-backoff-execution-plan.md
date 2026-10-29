@@ -94,23 +94,23 @@
 
 - [x] **G4a｜定位或准备本地卡片容器**。范围：只读压缩方案及 `src/renderer/components/Chat/`、`src/renderer/services/`、共享显示类型。记录可复用容器、重建入口与测试；不存在时登记 T6 本地实现最小可复用容器的具体文件范围，保持方案附录 E 已批准的入口、状态和折叠交互。此核查不要求压缩方案落地；只有发现必须改变已批准界面语义时，才停止依赖该变更的部分并按项目规则处理。完成判据：有可执行的本地实现路径及测试文件清单。
   - 证据：复用 `src/renderer/components/Chat/SystemOperationRow.tsx` 与 `ChatBubble.tsx` 中的 activity timeline 容器；`Message.systemOperations` 已由共享类型、assistant activity timeline 与 turn display protocol 投影。T6 只扩展 `SystemOperationRecord` 联合类型、行内容和现有容器，不新建消息布局。现有测试基点：`SystemOperationRow.test.tsx`、`src/shared/assistantActivityTimeline.test.ts`、`turnProjectionService.test.ts`、`turnDisplayReconciliation.test.ts`；T6 增加 retry 操作渲染与恢复测试。
-- [～] **T5｜接通安排、等待和终结时序**。范围：`packages/agent-sdk/src/turn.ts`、`history.ts`，`electron/runtime/agentSdkDesktopObserver.ts`、`sqliteAgentHistory.ts`、相关账本投影及对应测试。验证先追加安排再等待、追加失败不派发、等待取消、未派发终结、结果追加失败、重启/旧账本恢复及同请求关联；保持模型 transcript 不含重试事件。
+- [x] **T5｜接通安排、等待和终结时序**。范围：`packages/agent-sdk/src/turn.ts`、`history.ts`，`electron/runtime/agentSdkDesktopObserver.ts`、`sqliteAgentHistory.ts`、相关账本投影及对应测试。验证先追加安排再等待、追加失败不派发、等待取消、未派发终结、结果追加失败、重启/旧账本恢复及同请求关联；保持模型 transcript 不含重试事件。
   - 产物 / 完成判据：`AC-18`–`AC-20`、`AC-22`、`AC-24`、`AC-26` 的后端时序及记录部分；界面部分留给 T6。命令：`npm exec vitest run packages/agent-sdk/test/turn.test.ts packages/agent-sdk/test/history.test.ts electron/runtime/sqliteAgentHistory.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/sessionLedgerOutbox.test.ts`。
-  - 证据：待填写。
-- [ ] **T6｜接通重试卡片与历史重建**。范围：G4a 确认的 `src/renderer/components/Chat/` 卡片容器、`src/renderer/services/turnProjectionService.ts` 及重建链路、所需 `src/shared/` 显示类型、`src/renderer/i18n/resources/{zh-CN,en-US}/`、生成的 i18n 类型及对应测试。复用已有容器；若缺失则在已批准界面范围内创建最小可复用容器；覆盖等待可见、连续重试原地更新、成功折叠、失败、取消、崩溃重建、旧账本及不泄露服务端原文。
+  - 证据：RED/GREEN：`packages/agent-sdk/test/turn.test.ts` 新增排程事件追加失败、取消不派发、结果记录追加失败等边界测试；`agentSdkDesktopObserver.test.ts` 覆盖重试卡片同 requestId 原地更新与成功/取消投影；`sqliteAgentHistory.test.ts` 覆盖结果幂等、旧路径回放和事件消费。G4 回退演练在隔离 worktree 对 `a5323dc9` 执行 `git revert --no-commit a5323dc9` 后运行 6 个相关套件，6 files / 471 tests passed，旧 UI、History、outbox 与 Agent SDK 路径可用；临时 worktree 已删除。阶段实现提交 `a5323dc9`。
+- [x] **T6｜接通重试卡片与历史重建**。范围：G4a 确认的 `src/renderer/components/Chat/` 卡片容器、`src/renderer/services/turnProjectionService.ts` 及重建链路、所需 `src/shared/` 显示类型、`src/renderer/i18n/resources/{zh-CN,en-US}/`、生成的 i18n 类型及对应测试。复用已有容器；若缺失则在已批准界面范围内创建最小可复用容器；覆盖等待可见、连续重试原地更新、成功折叠、失败、取消、崩溃重建、旧账本及不泄露服务端原文。
   - 产物 / 完成判据：`AC-12`、`AC-18`–`AC-20`、`AC-24`、`AC-26`、`AC-28b` 的界面用例通过。命令：`npm exec vitest run src/renderer/services/turnProjectionService.test.ts src/renderer/services/turnDisplayReconciliation.test.ts`，并加入 G4a 确认的组件测试；`npm run i18n:generate-types`、`npm run i18n:check`、`npm run typecheck:renderer`。
-  - 证据：待填写。
-- [ ] **G4｜阶段 4 关闭**。证据来自 T5、T6；合并运行对应定向测试、`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run i18n:check`、`npm test`。在隔离工作树回退阶段 4，验证阶段 1–3 后端及旧界面可运行；若回退留下无法读取的持久化事件，停止并先修订迁移/回退方案。提交阶段 4。
-  - 证据：待填写。
+  - 证据：RED/GREEN：`SystemOperationRow.test.tsx` 覆盖运行中等待、成功、失败、取消、中断和结果未知文案；`electron/runtime/sessionTranscriptProjection.test.ts` 覆盖同 requestId 连续更新、崩溃后中断、unknown-after-dispatch 结果未知、旧账本只保留安排事实及 SQLite 消息页重建；`agentSdkDesktopObserver.test.ts` 覆盖实时投影。定向验证：`npm exec vitest run packages/agent-sdk/test/turn.test.ts packages/agent-sdk/test/history.test.ts electron/runtime/sqliteAgentHistory.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/sessionLedgerOutbox.test.ts` 6 files / 471 tests passed；渲染投影、重建与组件定向测试通过。`npm run i18n:generate-types`、`npm run i18n:check`、`npm run typecheck:renderer`、`npm run check:agent-sdk`、`npm run typecheck:shared`、`npm run build:electron:incremental` 均通过。
+- [x] **G4｜阶段 4 关闭**。证据来自 T5、T6；合并运行对应定向测试、`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run i18n:check`、`npm test`。在隔离工作树回退阶段 4，验证阶段 1–3 后端及旧界面可运行；若回退留下无法读取的持久化事件，停止并先修订迁移/回退方案。提交阶段 4。
+  - 证据：阶段 4 `npm test` 通过（1228 files passed / 1 skipped，11858 tests passed / 140 skipped）；期间有 Node `MaxListenersExceededWarning`，Vitest 退出码为 0。阶段实现提交 `a5323dc9`；G4 隔离回退及旧账本兼容证据见 T5/T6。
 
 ### 最终验收与交付
 
-- [ ] **T7｜完成端到端本机验收**。范围：各阶段测试及 T0 确认的调用入口；验证 `AC-3`、`AC-6`、`AC-8`、`AC-9`、`AC-10`、`AC-11`，复核全部方案 AC 与阶段证据的映射，覆盖主回合、审批子代理、定时任务、续跑及 adapter 无内部重试。命令：按 T0 查到的具体入口测试追加至 `npm exec vitest run`；执行 `npm run check:agent-sdk`、`npm run typecheck:shared`、`npm run i18n:check`、`npm test` 和 `npm run build`。记录每个 AC 的测试名、命令、结果及未覆盖项；发现不可达或规格冲突时回方案修订。
-  - 证据：待填写。
-- [ ] **T8｜完成源码关闭和交付**。范围：本计划证据、各阶段提交及隔离回退演练记录；复核 G1–G4 和 T7 的命令结果、提交号、工作区差异与未解决问题。按仓库代码评审要求完成评审并处理阻断项；确认各阶段可回退实体和旧数据兼容证据，记录外部项。源码关闭后才可进入发布/启用流程；本计划不授权发布。
-  - 证据：待填写。
+- [x] **T7｜完成端到端本机验收**。范围：各阶段测试及 T0 确认的调用入口；验证 `AC-3`、`AC-6`、`AC-8`、`AC-9`、`AC-10`、`AC-11`，复核全部方案 AC 与阶段证据的映射，覆盖主回合、审批子代理、定时任务、续跑及 adapter 无内部重试。命令：按 T0 查到的具体入口测试追加至 `npm exec vitest run`；执行 `npm run check:agent-sdk`、`npm run typecheck:shared`、`npm run i18n:check`、`npm test` 和 `npm run build`。记录每个 AC 的测试名、命令、结果及未覆盖项；发现不可达或规格冲突时回方案修订。
+  - 证据：入口矩阵 GREEN：主 turn/静默 overflow 用例 `electron/claudeStreamHandlers.hostedIntegration.test.ts`「recovers a Desktop Hosted silent overflow and rolls back its provisional text」；审批子代理 429 重试及 canonical schedule event `electron/confirmation/approvalAgent.test.ts`；定时任务 Hosted 重试 `electron/butler/butlerInvoker.test.ts`；续跑目标 turn 429 重试和 checkpoint 工具结果不重放 `electron/toolChatLoop.invocation.test.ts`「从已结算 checkpoint 续跑时携带真实工具结果，且隔离目录中的写入不重放」；adapter 一次 wire attempt 且错误不泄漏 `packages/agent-provider-pi-ai/test/anthropicAdapter.test.ts`「makes one wire attempt on provider failure and normalizes errors without leaking response text」。T7 对应定向运行均通过；最终续跑文件 27 tests passed。`npm run check:agent-sdk`、`npm run typecheck:shared`、`npm run i18n:check` 及 `npm run build` 通过。最终 `npm test`：1228 files passed / 1 skipped，11859 tests passed / 140 skipped，1213.10s，退出码 0；出现既有 `MaxListenersExceededWarning`。源码 AC 映射见技术方案 §2.6 与各阶段 T1–T7 证据；没有真实服务商流量/收费数据，归外部项 X1。
+- [x] **T8｜完成源码关闭和交付**。范围：本计划证据、各阶段提交及隔离回退演练记录；复核 G1–G4 和 T7 的命令结果、提交号、工作区差异与未解决问题。按仓库代码评审要求完成评审并处理阻断项；确认各阶段可回退实体和旧数据兼容证据，记录外部项。源码关闭后才可进入发布/启用流程；本计划不授权发布。
+  - 证据：实现提交：`b746a261`、`7904aeb9`、`13920bf0`、`f2c5c8b2`、`17ba6087`、`819f1c01`、`d725bc6c`、`6f4b9909`、`a5323dc9`、`128d9cb3`；提交前完成 `code-review-and-quality` 五轴评审及修复，未留阻断项。各阶段隔离回退对象与命令见 G1–G4；重试事件以兼容的文本 kind + JSON event envelope 存储，旧账本无结果时仅展示已知安排、不推断。`npm run build` 与最终 `npm test` 通过。源码实现及验收证据已提交；当前仅 X1 外部观察未执行。
 - [ ] **X1｜记录真实服务商观察**（外部，非源码门禁）。在具备授权账号和适当数据后观察方案 `U-2` 的限流分布及收费；压缩方案落地后观察 `U-3`。记录环境、样本范围、时间和结论，避免将模拟结果说成真实收费证据。
-  - 证据：待填写。
+  - 证据：未执行真实服务商请求；当前没有授权账号和适当生产样本，也未获准产生可能计费的请求。模拟测试不能作为限流分布或收费证据。此项按依赖外部授权和数据的非源码门禁保留，源码关闭不受阻塞。
 
 ## 阶段范围与回退摘要 【人机共读】
 
