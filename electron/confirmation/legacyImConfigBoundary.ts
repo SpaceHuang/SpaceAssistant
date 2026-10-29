@@ -2,14 +2,15 @@ import { randomUUID } from 'node:crypto'
 import type { AppDatabase } from '../database'
 import { getConfigValue, getDbConnection, setConfigValue } from '../database'
 import { runInTransaction } from '../database/transaction'
-import { commitDesktopPolicySnapshot, commitImPolicySnapshot, readImPolicySnapshot, readPolicyBehaviorSnapshot } from './imPolicyStore'
+import { commitDesktopPolicySnapshot, commitImPolicySnapshot, commitImPolicySnapshotFromStartupMigration, readImPolicySnapshot, readPolicyBehaviorSnapshot,
+  type ImStandardV3ReleaseGate } from './imPolicyStore'
 import { LEGACY_IM_POLICY_MIGRATION_VERSION, planLegacyImPolicyMigration } from '../../src/shared/policy/legacyPolicyMigration'
 import { PolicyRuleStore } from './policyRuleStore'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { readDisabledPolicyRuleIds, readPolicyPackages, DISABLED_POLICY_RULE_IDS_CONFIG_KEY } from './policyRulesRuntime'
 import { isPolicyPackage, validateRuleOverride } from '../../src/shared/policy/policyPackages'
 
-const SUPPORTED_IM_POLICY_VERSIONS = ['im-v1.6', 'im-standard-v2'] as const
+const SUPPORTED_IM_POLICY_VERSIONS = ['im-v1.6', 'im-standard-v2', 'im-standard-v3'] as const
 const CHANNEL_POLICY_KEYS = [
   'remoteConfirmPolicy', 'remoteAllowLocalWrite', 'remoteDenyOutbound',
   'remoteBrowserRequiresConfirm', 'remoteBrowserNavigateRequiresConfirm', 'remoteBrowserActRequiresConfirm',
@@ -31,7 +32,7 @@ function readRawChannelConfig(db: AppDatabase, key: string): Record<string, unkn
 }
 
 /** Ensure legacy IM authorization settings are represented by the frozen snapshot before runtime dispatch starts. */
-export function ensureImPolicySnapshotAtStartup(db: AppDatabase): void {
+export function ensureImPolicySnapshotAtStartup(db: AppDatabase, releaseGate?: ImStandardV3ReleaseGate): void {
   const conn = getDbConnection(db)
   runInTransaction(conn, () => {
     // Capture the legacy shared source once. Keep it until both desktop and IM snapshots
@@ -40,7 +41,49 @@ export function ensureImPolicySnapshotAtStartup(db: AppDatabase): void {
     migrateLegacyDesktopDisabledRules(db, legacyDisabledRuleIds)
     migrateLegacyImConfigBeforeChannelWrite(db, legacyDisabledRuleIds)
     if (legacyDisabledRuleIds.length > 0) setConfigValue(db, DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify([]))
+    migrateImStandardV3IfReleaseReady(db, releaseGate)
   })
+}
+
+function migrateImStandardV3IfReleaseReady(db: AppDatabase, releaseGate?: ImStandardV3ReleaseGate): void {
+  const gate = releaseGate
+  if (gate?.publishedV3Ready !== true || gate.fixedRuleSetVerified !== true || gate.restrictionMappingVerified !== true) return
+  const conn = getDbConnection(db)
+  const existing = conn.prepare("SELECT 1 FROM policy_behavior_snapshots WHERE domain='im'").get()
+  if (!existing) {
+    if (readRawChannelConfig(db, 'config.wechat') || readRawChannelConfig(db, 'config.feishu')) return
+    const result = commitImPolicySnapshotFromStartupMigration(conn, {
+      expectedRevision: 0,
+      policyBehaviorVersion: 'im-standard-v3',
+      snapshot: { selectedPackage: 'standard', migrationSourceVersion: 'new-install' },
+      updatedAt: Date.now(), eventId: randomUUID(), eventKind: 'legacy-policy-migrated', actor: 'migration',
+      auditMetadata: { migration: 'im-standard-v3-new-install', fixedRuleSetVerified: true, restrictionMappingVerified: true }
+    }, gate)
+    if (result.status === 'conflict') throw new Error('IM new-install policy revision conflict')
+    return
+  }
+
+  const current = readImPolicySnapshot(conn, { supportedBehaviorVersions: [...SUPPORTED_IM_POLICY_VERSIONS, 'im-standard-v3'] })
+  if (current.policyBehaviorVersion === 'im-standard-v3') return
+  const suppressed = Array.isArray(current.snapshot.automaticMigrationSuppressedVersions)
+    ? current.snapshot.automaticMigrationSuppressedVersions as string[] : []
+  if (suppressed.includes('im-standard-v3')) return
+  const legacyPackages = current.snapshot.legacySelectedPackages && typeof current.snapshot.legacySelectedPackages === 'object' &&
+    !Array.isArray(current.snapshot.legacySelectedPackages)
+    ? current.snapshot.legacySelectedPackages as Record<string, unknown> : {}
+  const selectedPackage = isPolicyPackage(current.snapshot.selectedPackage) ? current.snapshot.selectedPackage
+    : isPolicyPackage(legacyPackages.wechat) ? legacyPackages.wechat : readPolicyPackages(db).wechat
+  if (selectedPackage !== 'standard') return
+
+  const result = commitImPolicySnapshotFromStartupMigration(conn, {
+    expectedRevision: current.revision,
+    policyBehaviorVersion: 'im-standard-v3',
+    snapshot: { ...current.snapshot, selectedPackage: 'standard', migrationSourceVersion: current.policyBehaviorVersion },
+    updatedAt: Date.now(), eventId: randomUUID(), eventKind: 'legacy-policy-migrated', actor: 'migration',
+    auditMetadata: { migration: 'im-standard-v3-startup-migration', sourceBehaviorVersion: current.policyBehaviorVersion,
+      fixedRuleSetVerified: true, restrictionMappingVerified: true }
+  }, gate)
+  if (result.status === 'conflict') throw new Error('IM standard v3 migration revision conflict')
 }
 
 /**

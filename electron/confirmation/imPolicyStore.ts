@@ -10,7 +10,7 @@ export interface CommitImPolicySnapshotInput {
   eventId: string
   beforeAudit?: () => void
   beforeSnapshot?: () => void
-  eventKind?: 'policy-snapshot-updated' | 'policy-snapshot-restored' | 'legacy-policy-migrated' | 'policy-behavior-version-switched'
+  eventKind?: 'policy-snapshot-updated' | 'policy-snapshot-restored' | 'legacy-policy-migrated' | 'policy-behavior-version-switched' | 'policy-behavior-version-rolled-back' | 'policy-behavior-version-reenabled'
   actor?: 'user' | 'system' | 'migration'
   auditMetadata?: Record<string, unknown>
   onCommitted?: (domain: 'desktop' | 'im', revision: number) => void
@@ -41,6 +41,16 @@ export interface PolicyBehaviorSnapshot {
   snapshot: Record<string, unknown>
 }
 
+export interface ImStandardV3ReleaseGate {
+  publishedV3Ready: boolean
+  fixedRuleSetVerified: boolean
+  restrictionMappingVerified: boolean
+}
+
+function isCompleteImStandardV3ReleaseGate(gate: ImStandardV3ReleaseGate | undefined): gate is ImStandardV3ReleaseGate {
+  return gate?.publishedV3Ready === true && gate.fixedRuleSetVerified === true && gate.restrictionMappingVerified === true
+}
+
 export function readPolicyBehaviorSnapshot(
   db: DatabaseSync,
   domain: unknown,
@@ -63,8 +73,25 @@ export function readPolicyBehaviorSnapshot(
     throw new Error('Invalid IM policy snapshot JSON')
   }
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) throw new Error('Invalid IM policy snapshot data')
+  if (domain === 'im') validateAutomaticMigrationSuppression(snapshot as Record<string, unknown>)
   return { domain, policyBehaviorVersion: row.policy_behavior_version, revision: row.revision, snapshot: snapshot as Record<string, unknown> }
 }
+
+const VALID_IM_BEHAVIOR_VERSION_IDS = new Set(['im-v1.6', 'im-standard-v2', 'im-standard-v3'])
+const IM_STANDARD_V3_BEHAVIOR_VERSION = 'im-standard-v3'
+const IM_MIGRATION_SUPPRESSION_FIELD = 'automaticMigrationSuppressedVersions'
+
+function validateAutomaticMigrationSuppression(snapshot: Record<string, unknown>): string[] | undefined {
+  if (!Object.hasOwn(snapshot, IM_MIGRATION_SUPPRESSION_FIELD)) return undefined
+  const value = snapshot[IM_MIGRATION_SUPPRESSION_FIELD]
+  if (!Array.isArray(value) || value.some((version) => typeof version !== 'string' || !VALID_IM_BEHAVIOR_VERSION_IDS.has(version))) {
+    throw new Error('Invalid IM automatic migration suppression field')
+  }
+  if (new Set(value).size !== value.length) throw new Error('Invalid IM automatic migration suppression field')
+  return value as string[]
+}
+
+interface ImSuppressionMutation { operation: 'add' | 'remove'; behaviorVersion: string }
 
 export function readImPolicySnapshot(db: DatabaseSync, options: ReadImPolicySnapshotOptions): ImPolicySnapshot {
   return readPolicyBehaviorSnapshot(db, 'im', options) as ImPolicySnapshot
@@ -105,13 +132,36 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
 }
 
 export function commitImPolicySnapshot(db: DatabaseSync, input: CommitImPolicySnapshotInput): CommitImPolicySnapshotResult {
+  if (input.policyBehaviorVersion === IM_STANDARD_V3_BEHAVIOR_VERSION) {
+    throw new Error('IM standard v3 can only be written by a release-gated startup migration or explicit re-enable')
+  }
+  return commitImPolicySnapshotInternal(db, input)
+}
+
+export function commitImPolicySnapshotFromStartupMigration(db: DatabaseSync, input: CommitImPolicySnapshotInput,
+  releaseGate: ImStandardV3ReleaseGate): CommitImPolicySnapshotResult {
+  if (input.policyBehaviorVersion !== IM_STANDARD_V3_BEHAVIOR_VERSION || !isCompleteImStandardV3ReleaseGate(releaseGate)) {
+    throw new Error('IM standard v3 startup migration requires the complete release gate')
+  }
+  return commitImPolicySnapshotInternal(db, input)
+}
+
+function commitImPolicySnapshotInternal(db: DatabaseSync, input: CommitImPolicySnapshotInput, suppressionMutation?: ImSuppressionMutation): CommitImPolicySnapshotResult {
   if (!input.policyBehaviorVersion.trim()) throw new Error('policyBehaviorVersion is required')
   if (!Number.isSafeInteger(input.updatedAt) || input.updatedAt < 0) throw new Error('updatedAt must be a non-negative integer')
   const result = runInTransaction(db, () => {
-    const current = db.prepare("SELECT revision FROM policy_behavior_snapshots WHERE domain='im'").get() as { revision: number } | undefined
+    const current = db.prepare("SELECT revision,snapshot_json FROM policy_behavior_snapshots WHERE domain='im'").get() as { revision: number; snapshot_json: string } | undefined
     const currentRevision = current?.revision ?? 0
     if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) {
       return { status: 'conflict', currentRevision } as const
+    }
+    let currentSnapshot: Record<string, unknown> = {}
+    if (current) {
+      let parsed: unknown
+      try { parsed = JSON.parse(current.snapshot_json) } catch { throw new Error('Invalid IM policy snapshot JSON') }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid IM policy snapshot data')
+      currentSnapshot = parsed as Record<string, unknown>
+      validateAutomaticMigrationSuppression(currentSnapshot)
     }
     input.beforeSnapshot?.()
     const nextRevision = currentRevision + 1
@@ -123,13 +173,29 @@ export function commitImPolicySnapshot(db: DatabaseSync, input: CommitImPolicySn
       db.prepare(`INSERT OR IGNORE INTO policy_behavior_snapshot_history(history_id,domain,policy_behavior_version,snapshot_json,archived_at)
         VALUES(?,?,?,?,?)`).run(`im:${currentRevision}`, 'im', previous.policy_behavior_version, previous.snapshot_json, previous.updated_at)
     }
+    if (!input.snapshot || typeof input.snapshot !== 'object' || Array.isArray(input.snapshot)) {
+      throw new Error('Invalid IM policy snapshot data')
+    }
+    const snapshotToWrite: Record<string, unknown> = { ...input.snapshot }
+    const currentSuppression = validateAutomaticMigrationSuppression(currentSnapshot)
+    if (suppressionMutation) {
+      if (!VALID_IM_BEHAVIOR_VERSION_IDS.has(suppressionMutation.behaviorVersion)) throw new Error('Invalid IM behavior version for migration suppression')
+      const nextSuppression = new Set(currentSuppression ?? [])
+      if (suppressionMutation.operation === 'add') nextSuppression.add(suppressionMutation.behaviorVersion)
+      else nextSuppression.delete(suppressionMutation.behaviorVersion)
+      snapshotToWrite[IM_MIGRATION_SUPPRESSION_FIELD] = [...nextSuppression]
+    } else if (currentSuppression !== undefined) {
+      snapshotToWrite[IM_MIGRATION_SUPPRESSION_FIELD] = currentSuppression
+    } else {
+      delete snapshotToWrite[IM_MIGRATION_SUPPRESSION_FIELD]
+    }
     db.prepare(`INSERT INTO policy_behavior_snapshots(domain,policy_behavior_version,revision,snapshot_json,updated_at)
       VALUES('im',?,?,?,?)
       ON CONFLICT(domain) DO UPDATE SET
         policy_behavior_version=excluded.policy_behavior_version,
         revision=excluded.revision,
         snapshot_json=excluded.snapshot_json,
-        updated_at=excluded.updated_at`).run(input.policyBehaviorVersion, nextRevision, JSON.stringify(input.snapshot), input.updatedAt)
+        updated_at=excluded.updated_at`).run(input.policyBehaviorVersion, nextRevision, JSON.stringify(snapshotToWrite), input.updatedAt)
     db.prepare(`INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('im',1)
       ON CONFLICT(domain) DO UPDATE SET epoch=policy_authorization_epochs.epoch+1`).run()
     db.prepare("UPDATE policy_deferred_todos SET status='invalidated' WHERE domain='im' AND status='active'").run()
@@ -162,6 +228,62 @@ export function commitImPolicySnapshot(db: DatabaseSync, input: CommitImPolicySn
   })
   if (result.status === 'committed') input.onCommitted?.('im', result.revision)
   return result
+}
+
+export interface RollbackImPolicyToVersionInput {
+  expectedRevision: number
+  policyBehaviorVersion: string
+  supportedBehaviorVersions: readonly string[]
+  updatedAt: number
+  eventId: string
+  beforeAudit?: () => void
+}
+
+/** Internal transaction contract; deliberately not exposed through IPC/UI. */
+export function rollbackImPolicyToVersion(db: DatabaseSync, input: RollbackImPolicyToVersionInput): CommitImPolicySnapshotResult {
+  if (!VALID_IM_BEHAVIOR_VERSION_IDS.has(input.policyBehaviorVersion) ||
+      !input.supportedBehaviorVersions.includes(input.policyBehaviorVersion) || input.policyBehaviorVersion === IM_STANDARD_V3_BEHAVIOR_VERSION) {
+    throw new Error('IM rollback target behavior version is unsupported')
+  }
+  const current = readImPolicySnapshot(db, { supportedBehaviorVersions: [...input.supportedBehaviorVersions, IM_STANDARD_V3_BEHAVIOR_VERSION] })
+  return commitImPolicySnapshotInternal(db, {
+    expectedRevision: input.expectedRevision,
+    policyBehaviorVersion: input.policyBehaviorVersion,
+    snapshot: current.snapshot,
+    updatedAt: input.updatedAt,
+    eventId: input.eventId,
+    eventKind: 'policy-behavior-version-rolled-back',
+    actor: 'user',
+    auditMetadata: { suppressedBehaviorVersion: IM_STANDARD_V3_BEHAVIOR_VERSION },
+    beforeAudit: input.beforeAudit
+  }, { operation: 'add', behaviorVersion: IM_STANDARD_V3_BEHAVIOR_VERSION })
+}
+
+export interface ReenableImStandardV3Input {
+  expectedRevision: number
+  releaseGate: ImStandardV3ReleaseGate
+  updatedAt: number
+  eventId: string
+  beforeAudit?: () => void
+}
+
+/** Internal transaction contract; UI/IPC and production release wiring remain out of scope. */
+export function reenableImStandardV3(db: DatabaseSync, input: ReenableImStandardV3Input): CommitImPolicySnapshotResult {
+  if (!isCompleteImStandardV3ReleaseGate(input.releaseGate)) throw new Error('IM standard v3 release gate is not satisfied')
+  const current = readImPolicySnapshot(db, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
+  const suppressed = validateAutomaticMigrationSuppression(current.snapshot) ?? []
+  if (!suppressed.includes(IM_STANDARD_V3_BEHAVIOR_VERSION)) throw new Error('IM standard v3 is not migration-suppressed')
+  return commitImPolicySnapshotInternal(db, {
+    expectedRevision: input.expectedRevision,
+    policyBehaviorVersion: IM_STANDARD_V3_BEHAVIOR_VERSION,
+    snapshot: { ...current.snapshot, selectedPackage: 'standard' },
+    updatedAt: input.updatedAt,
+    eventId: input.eventId,
+    eventKind: 'policy-behavior-version-reenabled',
+    actor: 'user',
+    auditMetadata: { removedSuppression: IM_STANDARD_V3_BEHAVIOR_VERSION },
+    beforeAudit: input.beforeAudit
+  }, { operation: 'remove', behaviorVersion: IM_STANDARD_V3_BEHAVIOR_VERSION })
 }
 
 export interface MigrateLegacyImPolicySnapshotInput {

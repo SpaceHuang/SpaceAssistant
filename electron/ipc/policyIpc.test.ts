@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection, setConfigValue } from '../database'
 import { registerPolicyIpc } from './policyIpc'
-import { commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { commitImPolicySnapshot, readImPolicySnapshot, rollbackImPolicyToVersion } from '../confirmation/imPolicyStore'
+import { ensureImPolicySnapshotAtStartup } from '../confirmation/legacyImConfigBoundary'
 import { resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
 import { decide } from '../../src/shared/policy/policyEngine'
 import { deferredPolicyChangeRegistry } from '../remote/deferredPolicyChangeRegistry'
@@ -14,6 +15,34 @@ function registeredHandlers(db = createMemoryAppDb('policy-ipc-contract')) {
 }
 
 describe('policy domain read IPC contract', () => {
+  it('preserves rollback suppression across ordinary policy IPC writes and ignores caller attempts to clear it', async () => {
+    const { db, handlers } = registeredHandlers()
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: 1, eventId: 'rollback-ipc-v2-seed' })
+    ensureImPolicySnapshotAtStartup(db, { publishedV3Ready: true, fixedRuleSetVerified: true, restrictionMappingVerified: true })
+    rollbackImPolicyToVersion(conn, { expectedRevision: 2, policyBehaviorVersion: 'im-standard-v2',
+      supportedBehaviorVersions: ['im-standard-v2'], updatedAt: 2, eventId: 'rollback-ipc-action' })
+    const write = handlers.get('policy:write')!
+    await write({}, { lane: 'wechat', expectedRevision: 3,
+      change: { kind: 'package', package: 'strict', automaticMigrationSuppressedVersions: [] } })
+    expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-standard-v2', revision: 4,
+        snapshot: { selectedPackage: 'strict', automaticMigrationSuppressedVersions: ['im-standard-v3'] } })
+    db.close()
+  })
+
+  it('keeps v3 unreachable from production policy IPC until the published runtime whitelist is updated', async () => {
+    const { db, handlers } = registeredHandlers()
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: 1, eventId: 'unpublished-ipc-seed' })
+    ensureImPolicySnapshotAtStartup(db, { publishedV3Ready: true, fixedRuleSetVerified: true, restrictionMappingVerified: true })
+    await expect(handlers.get('policy:read-for-lane')!({}, { lane: 'wechat' }))
+      .rejects.toThrow('Unknown policy behavior version: im-standard-v3')
+    db.close()
+  })
+
   it('publishes committed IM revisions to durable deferred recheck listeners on both shared lanes', async () => {
     const { db, handlers } = registeredHandlers()
     commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
