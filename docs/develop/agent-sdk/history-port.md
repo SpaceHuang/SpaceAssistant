@@ -27,8 +27,12 @@ type SessionTranscriptCommitIntent = Readonly<{
   outcome: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
   messages: readonly Readonly<Record<string, unknown>>[]
   /** 本轮拥有桌面消息骨架时，同事务镜像该消息的终态。 */
-  messageMirror?: Readonly<{ messageId: string; status: 'completed' | 'failed' | 'cancelled'; content?: string }>
+  messageMirror?: Readonly<{ messageId: string; status: 'completed' | 'failed' | 'cancelled'; content?: string; thinking?: unknown }>
+  /** 终态提交必须证明 live 执行 owner 时（宿主续跑交接）由宿主填充，SDK 侧只透传。 */
+  executionLease?: SessionExecutionLease
 }>
+
+type SessionExecutionLease = Readonly<{ sessionId: string; turnId: string; ownerId: string; generation: number }>
 
 interface HistoryPort {
   appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult>
@@ -36,11 +40,11 @@ interface HistoryPort {
 }
 ```
 
-`transcriptCommit` 只在终态追加时传入：宿主适配器必须把「History 终态事件」与「会话 transcript 提交」放进**同一事务**（失败即整体回滚）；SDK 侧只负责表达意图，不关心其落库实现。`messageMirror` 用于同事务镜像桌面消息骨架的终态（`status` 取值 `completed` / `failed` / `cancelled`）。
+`transcriptCommit` 只在终态追加时传入：宿主适配器必须把「History 终态事件」与「会话 transcript 提交」放进**同一事务**（失败即整体回滚）；SDK 侧只负责表达意图，不关心其落库实现。`messageMirror` 用于同事务镜像桌面消息骨架的终态（`status` 取值 `completed` / `failed` / `cancelled`；turn 侧在消息含 thinking 块时附 `thinking`）。`executionLease` 目前仅由宿主续跑交接层填充（`electron/runtime/hostedTurnHandoff.ts` → `electron/database/sessionTranscript.ts` 同事务校验），SDK 不产生该字段。
 
-`HistoryEvent['kind']` 为闭合联合（18 项，内联在 `HistoryEvent` 上，无独立类型别名）：
+`HistoryEvent['kind']` 为闭合联合（22 项，内联在 `HistoryEvent` 上，无独立类型别名）：
 
-`session-input-committed`、`invocation-context-committed`、`transcript-compacted`、`model-request-started`、`provider-retry-scheduled`、`model-attempt-discarded`、`model-response-committed`、`replay-message-committed`、`tool-call-started`、`tool-call-finished`、`tool-call-not-dispatched`、`approval-waiting`、`approval-resolved`、`approval-updated`、`invocation-parked`、`invocation-interrupted`、`invocation-completed`、`invocation-failed`。
+`session-input-committed`、`invocation-context-committed`、`transcript-compacted`、`model-request-started`、`provider-retry-scheduled`、`model-attempt-discarded`、`model-response-committed`、`replay-message-committed`、`tool-call-started`、`tool-call-finished`、`tool-call-not-dispatched`、`unknown-effect-risk-accepted`、`unknown-effect-retry-approved`、`unknown-effect-retry-consumed`、`unknown-effect-resolved`、`approval-waiting`、`approval-resolved`、`approval-updated`、`invocation-parked`、`invocation-interrupted`、`invocation-completed`、`invocation-failed`。
 
 ## InvocationHistoryWriter
 
@@ -81,7 +85,13 @@ class InvocationHistoryWriter {
 - 已出现**闭合事件**（`invocation-parked` / `invocation-interrupted` / `invocation-completed` / `invocation-failed`）后禁止追加——`invocation-parked` 自存储重构起与终态同权（park 家族下线后不再有"park 后恢复可执行"的路径，旧库中的 parked 事件仍可读）。
 - 终态 payload 与 status 匹配：`completed` 要求 `status === 'completed'`；`failed` 要求 `failed` 或 `denied`；`interrupted` 要求 `interrupted` 或 `cancelled`。
 - 工具挂起跟踪：`model-response-committed` 的 `message.toolCalls[].id` 与 `tool-call-started` 记为挂起，`tool-call-finished` / `tool-call-not-dispatched` 消解；终态（`completed` / `failed`）时不得仍有挂起工具调用或挂起审批。
-- 审批挂起跟踪：`approval-waiting` 记挂起（同一 pending id 重复 → 报错；带 `answerer` / `reasonCode` / `requestedAt` 元数据时必须完整且 `answerer` 为 `user` / `agent`），`approval-resolved` 消解（`approved` 必填布尔；`outcome` 枚举 `approved | denied | timeout | unavailable | cancelled` 且必须与 `approved` 一致；`settledAt`、`answerer`、`cause` 若出现必须合法；不得解消非挂起审批；身份与 `approval-waiting` 记录的 `approvalId` 不一致 → 报错）。
+- 审批挂起跟踪：`approval-waiting` 记挂起（同一 pending id 重复 → 报错；带 `answerer` / `reasonCode` / `requestedAt` 元数据时必须完整且 `answerer` 为 `user` / `agent`），`approval-resolved` 消解（`approved` 必填布尔；`outcome` 枚举 `approved | denied | timeout | unavailable | cancelled | invalidated` 且必须与 `approved` 一致；`settledAt`、`answerer`、`cause` 若出现必须合法；不得解消非挂起审批；身份与 `approval-waiting` 记录的 `approvalId` 不一致 → 报错）。
+- 未知副作用重试跟踪（2026-10 新增，四类事件协同）：
+  - `unknown-effect-risk-accepted`：payload 必须带非空去重的 `unresolvedEffectIds`（字符串数组）、`targetInvocationId` 等于事件自身 invocation、数字 `acceptedAt`；
+  - `unknown-effect-retry-approved`：payload 必须带 `targetInvocationId`、非空 `unknownEffectId` / `toolName`、64 位十六进制 `inputHash`、数字 `approvedAt`；按 `eventId` 登记待消费审批；
+  - `unknown-effect-retry-consumed`：payload 必须带 `targetInvocationId`、非空 `approvalEventId`、数字 `consumedAt`；其引用的审批必须已登记且未被消费过（一票一消费），消费后置**待定消费**——下一个事件必须是同 `toolName` + `inputHash` 的 `tool-call-started`，否则流非法；
+  - `unknown-effect-resolved`：payload 必须带 `trustedResolution: true`、非空 `unknownEffectId` 与 object 形态的 `evidence`；
+  - 流末尾若仍悬着一次未跟 `tool-call-started` 的消费 → `HistoryBatchError('unknown effect retry consumption is missing its tool start')`。
 - 终态事件必须是所在批次的**最后一个**事件（`invocation-parked` 同样计入"闭合"，其后不得再有事件）。
 
 ## 重启状态重建

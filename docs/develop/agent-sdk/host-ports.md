@@ -216,6 +216,10 @@ interface AgentAnswererPorts { approvalDatabase?: unknown }
 toolExecutionConcurrency?: number
 resourceLocks?: { acquire(keys: readonly string[], options?: { signal?: AbortSignal }): Promise<{ release(): void }> }
 
+/** 宿主专属的 live 曝光策略读取（2026-10 新增，实现留在宿主适配器）。 */
+resolveExposureRules?(): PolicyRule[]
+resolveExposureAuthorizationVersion?(): string
+
 invocationRuntime?: {
   acquireLease(invocationId: string): { runtimeId: string; invocationId: string; generation: number; release(): void }
   park(invocationId: string, lease: {...}, checkpoint?: unknown): { runtimeId: string; invocationId: string; generation: number; checkpoint: unknown } | undefined

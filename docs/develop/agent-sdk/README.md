@@ -2,7 +2,7 @@
 
 `packages/agent-sdk`（包名 `@spaceassistant/agent-sdk`）是 SpaceAssistant 的 **SDK 面**：契约类型 + 端口接口 + 纯 runtime 核。本目录按模块梳理它对外暴露的接口，供宿主（electron 主进程）装配方与 SDK 维护者查阅。
 
-> **基准**：本目录对齐 `main` 提交 `17236274`（2026-10-14 更新；原为 `8e3c5d12`）。核对窗口 `git log 8e3c5d12..17236274 -- packages/agent-sdk/src`。文档首版落在 `e5801089`；此后并入的第一批是 `c76c7aab`、`fa796649`（turn 超时语义（`AgentTurnTimedOutError` / `TURN_TIMED_OUT` / `REQUEST_TIMEOUT`）、审批获批后才激活应用运行槽、执行端口在派发声明之后的 abort 复检、`InvocationRuntime` 的 park 家族下线）与 `ae092513`（provider 取消结算：`CollectedModelStream` 的 cancelled 分支允许缺 `usage`、取消尝试先投影 usage 并写 `model-attempt-discarded` 再抛取消 / 超时、非 cancelled 尝试缺 usage 视为流非法）。
+> **基准**：本目录对齐 `main` 提交 `0d189776`（2026-10-30 更新；原为 `17236274`）。核对窗口 `git log 17236274..0d189776 -- packages/agent-sdk/src`（37 个提交 / 9 文件 / +543 −85）。文档首版落在 `e5801089`；此后并入的第一批是 `c76c7aab`、`fa796649`（turn 超时语义（`AgentTurnTimedOutError` / `TURN_TIMED_OUT` / `REQUEST_TIMEOUT`）、审批获批后才激活应用运行槽、执行端口在派发声明之后的 abort 复检、`InvocationRuntime` 的 park 家族下线）与 `ae092513`（provider 取消结算：`CollectedModelStream` 的 cancelled 分支允许缺 `usage`、取消尝试先投影 usage 并写 `model-attempt-discarded` 再抛取消 / 超时、非 cancelled 尝试缺 usage 视为流非法）。
 >
 > 第二批（本次核对，基准从 `4e3d44fd` 推进到 `8e3c5d12`）主要集中在**会话存储重构**及其连带修复：
 >
@@ -12,6 +12,13 @@
 > - `c4511348`、`9d878b55`、`6706bdc8`：取消时结算审批、审批等待期间保留 turn 准入名额、准入策略与 turn 生命周期对齐。
 > - `51193571`、`9a1a6e6d`：派发中止与 transcript 空洞安全（未派发槽位物化 `TURN_STOPPED_BEFORE_DISPATCH`、dispatch 诊断观察点）、终态消息段对账。
 > - `defc6379`、`17a85453`：provider 流**空闲超时护栏**（`ModelStreamIdleTimeoutError` / `PROVIDER_STREAM_IDLE_TIMEOUT`）。
+>
+> 第三批（本次核对，基准从 `17236274` 推进到 `0d189776`，37 个提交）集中在**审批复检、有界 provider 重试与未知副作用恢复**：
+>
+> - **派发前策略复检（recheck）机制**（`68950785`、`1f1d70c9`、`9a2e926f`、`6fe9f163`、`a984bfa6` 等）：`prepareTool` 复检阶段新增 `replanAfterFreshApproval` / `policyChanged` / `requestMetadata`，`planDigest` / `factsDigest` 允许随新审批更新；确认结果新增 `authorization-changed`（触发重问循环）；`safetyGate.authorize` 返回 `ask` 时在派发租约内补确认；`AUTHORIZATION_STALE` 可在派发租约内恢复（清除策略栅栏后重检）。
+> - **有界 provider 重试**（`db888ade`）：`recoverProviderAttempt` 支持 `maxAttempts`（钳制 2–5）与 `retryAfterMs`（等待封顶 30s）；宿主恢复桥对 429/5xx/网络错误按 `Retry-After` 等待重试。
+> - **未知副作用恢复**（`a9fef06b` 等）：turn 循环新增 `beforeDispatchLease` 派发租约门；`unknown-effect-*` 四类事件进入 SDK 事件流校验。
+> - 其他：`run_shell` justification 输入归一（新模块 `runShellJustification.ts`）、超时 turn 改按 `interrupted` 结算（`e9658821`）、transcript 镜像附 thinking（`f7398787`）、`AgentHostPorts` 新增曝光策略读取端口、`run_shell` 工作目录派发屏障、用户批准信任回执、`MAX_MODEL_TURNS_PER_INVOCATION = 1000` 与每 20 轮循环检查（`1358bd29`）。
 >
 > 核对方式与宿主转发层的形状差异见文末「维护」。
 
@@ -38,7 +45,7 @@
 
 `src/index.ts` 以 `export *` 转发的模块：`approval`、`capacity`、`scheduler`、`resourceLock`、`confirmationCommit`、`history`、`provider`、`lifecycle`、`model`、`safetyPermit`、`executionAdmission`、`capability`、`safetyGate`、`turn`、`toolExecutionPort`、`toolResultContract`、`invocation`（契约层由 SDK 定义，宿主 `src/shared/agent` 仅提供兼容转发）；`context` 为**逐符号 `export type`**（`JsonValue`、`ContextScope`、`ContextItem`、`ContextFrame`、`ContextFence`、`ContextSnapshot`、`ContextTransformationEvidence`、`ContextCandidate`、`ContextCommitReceipt`、`ContextCommitResult`、`ContextPort`），`ContextRegistrar` 与各适配器均为内部面；`contextIdentity` 不经包入口导出任何符号（详见 [context.md](./context.md)）。
 
-注意：`turn.ts` 中大部分投影 / 恢复失败类是模块内部类型，**不经入口导出**；装配方只能按 `error.name` 判定（见 [turn-loop.md](./turn-loop.md) 的「错误类型」）。
+注意：`turn.ts` 中大部分投影 / 恢复失败类是模块内部类型，**不经入口导出**；装配方只能按 `error.name` 判定（见 [turn-loop.md](./turn-loop.md) 的「错误类型」）。`runShellJustification` 模块同样**不经包入口导出**（`normalizeRunShellJustification` 由 `turn.ts` 内部引用，见 [turn-loop.md](./turn-loop.md)「循环阶段概览」第 7 步）。
 
 宿主另有一份转发层 `src/shared/agent/invocation.ts`（electron / renderer 直接 import），只保留调用入参面（`AgentInvocation` / `AgentMessagesSection` / `AgentEventSink` / `AgentReasoningProfile` 等），**不再定义 `AgentHostPorts`**；与 SDK 包内契约面的剩余差异（`acceptedTurn`、`trace.turnId` 语义、`AgentReasoningEffort` 是否含 `max`）见 [host-ports.md](./host-ports.md) 第 4 节。
 
@@ -48,7 +55,7 @@
 | --- | --- | --- |
 | [runtime.md](./runtime.md) | `src/runtime/*.ts` | runtime 工厂与纯组件核：审计、确认 ID、聊天取消、工具撤权、信号量 / MCP 闸 |
 | [model-provider.md](./model-provider.md) | `src/model.ts`、`src/provider.ts` | 模型流契约（`StreamChunk`）、canonical 消息、provider 路由注册表与校验 |
-| [turn-loop.md](./turn-loop.md) | `src/turn.ts` | 单回合主循环：模型轮次、工具阶段、输出上限恢复、终态结算 |
+| [turn-loop.md](./turn-loop.md) | `src/turn.ts`、`src/runShellJustification.ts` | 单回合主循环：模型轮次、工具阶段、输出上限恢复、终态结算 |
 | [safety-approval.md](./safety-approval.md) | `capability.ts`、`safetyPermit.ts`、`safetyGate.ts`、`executionAdmission.ts`、`toolExecutionPort.ts`、`approval.ts`、`confirmationCommit.ts` | 能力投影 → 策略决策 → 许可签发 → 执行准入 → 审批容量与提交状态机 |
 | [history-port.md](./history-port.md) | `src/history.ts` | 调用级事件流：追加、校验、幂等、重启状态重建 |
 | [context.md](./context.md) | `src/context.ts`、`src/contextIdentity.ts` | 会话 / 调用上下文端口：无损材料、fence / evidence 能力模型、单一 writer 提交 |
@@ -80,7 +87,7 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 
 **调用终态**（`lifecycle.ts` / `history.ts`）
 
-`completed | cancelled | failed | denied | interrupted`。`interrupted` 覆盖：结果持久化不确定、执行已越过 dispatch 但结果未知、宿主响应 / 工具投影失败、上下文替换的投影或提交不确定（`commit-uncertain`；preflight、turn boundary、provider 恢复三处统一转成 `AgentTurnBoundaryProjectionError`）。
+`completed | cancelled | failed | denied | interrupted`。`interrupted` 覆盖：超时（`TURN_TIMED_OUT`，2026-10 起不再落 `failed`）、结果持久化不确定、执行已越过 dispatch 但结果未知、宿主响应 / 工具投影失败、上下文替换的投影或提交不确定（`commit-uncertain`；preflight、turn boundary、provider 恢复三处统一转成 `AgentTurnBoundaryProjectionError`）。
 
 **错误码 / 错误类索引**
 
@@ -101,7 +108,7 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 | `AgentTurnCancelledError` (`TURN_CANCELLED`) / `AgentTurnTimedOutError` (`TURN_TIMED_OUT`) | `turn.ts` | 回合取消 / 超时 |
 | `InvalidTurnBoundaryError` (`INVALID_TURN_BOUNDARY`) | `turn.ts` | 边界投影破坏了必需消息或待派发提案 |
 | `ModelAttemptRecoveryRejectedError` (`MODEL_ATTEMPT_RECOVERY_REJECTED`) | `turn.ts` | provider 尝试恢复被拒绝 |
-| `ToolExecutionRejectedError` (`TOOL_EXECUTION_REJECTED`) | `toolExecutionPort.ts` | 执行前被拒（未进入执行器） |
+| `ToolExecutionRejectedError` (`TOOL_EXECUTION_REJECTED`) | `toolExecutionPort.ts` | 执行前被拒（未进入执行器）；`VERIFY_ONLY_*` / `RECOVERY_*` 原因码由 turn 循环物化为 is_error 工具结果回模型，不终止回合 |
 | `ToolExecutionAfterDispatchError` (`TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH`) | `toolExecutionPort.ts` | 已进入执行器，异常结果按 unknown 工具结果结算；宿主生命周期失效时仍终止 Invocation |
 | `ChatCancelledError` (`CHAT_CANCELLED`) | `runtime/components.ts` | 聊天取消 |
 | `AgentTurnHistoryAppendError`（未导出，按 name 判定） | `turn.ts` | history 追加失败；`kinds` 含 `tool-call-finished` 视为结果持久化不确定 |
@@ -143,7 +150,7 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 `in-flight/` 目录当前有 3 篇，均为本会话产出的方案（压缩 / 重试 / 暂停）：
 
 - [context-compaction-summary-quality-plan.md](./in-flight/context-compaction-summary-quality-plan.md) —— **实施中**（2026-10-29 核验）：自动压缩的摘要质量与触发时机。阶段 1（阈值可配，`4718e532`）与阶段 3（设置页，`8cf7de55`）已实现；阶段 2 主体已实现（`e15f3c5c`）但**验收待逐项核对**（见文末附录 A2）；阶段 4 按决策不做。此前自述「未实施」，已按 `docs-guide` §3.0 更正。
-- [provider-retry-backoff-plan.md](./in-flight/provider-retry-backoff-plan.md) —— **草稿（未实施）**：模型服务重试策略。决策 `D-1`～`D-6` 已全部批复，代码未改动（仍是 3 次尝试、无退避）。
+- [provider-retry-backoff-plan.md](./in-flight/provider-retry-backoff-plan.md) —— **实施中（部分，2026-10-30 核验）**：模型服务重试策略。决策 `D-1`～`D-6` 已全部批复；SDK 恢复端口已支持 `maxAttempts`（钳制 2–5）与 `retryAfterMs`，宿主恢复桥对 429/5xx/网络错误按 `Retry-After` 等待重试（`db888ade`，此前本文「代码未改动、仍是 3 次尝试」的自述已过时）；方案主体（指数退避、抖动、等待上限可配）仍未实施。
 - [turn-budget-pause-plan.md](./in-flight/turn-budget-pause-plan.md) —— **草稿（未实施）**：回合预算耗尽改为阶段暂停。决策 `D-1`～`D-5` 已批，代码未改动。
 
 > **2026-10-29 去重**：原 `in-flight/agent-long-task-stability-improvement-plan.md` 与本目录 [`agent-long-task-stability-improvement-plan.md`](./agent-long-task-stability-improvement-plan.md) 重名重复。经比对（357 行 vs 323 行，且后者缺「首批阶段实施记录」），保留本目录那份作为唯一现行版本；in-flight 旧稿已 `git mv` 至 [`../archive/agent-sdk/`](../archive/agent-sdk/agent-long-task-stability-improvement-plan.md) 并标注取代关系。
@@ -162,6 +169,7 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 ## 核验记录
 
 - [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) —— 基线 `17236274`；断言逐条带可复现命令，含「矛盾与时间线检查」「无法核验项」「抽样复核建议」。
+- [baseline-check-2026-10-30.md](./baseline-check-2026-10-30.md) —— 基线 `0d189776`（窗口 `17236274..0d189776`，37 提交）；断言逐条带可复现命令，漂移项已改写。
 
 ## 迭代历史
 

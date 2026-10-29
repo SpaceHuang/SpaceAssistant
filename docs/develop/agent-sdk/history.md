@@ -9,7 +9,7 @@
 | 2026-07-17 | `7a9b5c05` | 落地 b344321 重构：修复歧义 claim 与自动建会话 | `b344321-current-code-refactor-plan.md`（已归档） | 原判「在途」，2026-10-14 核验更正为已实现 |
 | 2026-09-11 | `91e939ef` | 上下文注入重构：新增 prompt assembly 与上下文投影 | `context-injection-refactor-plan.md`（已归档） | 新增 `src/shared/promptAssembly.ts`（`buildPromptAssembly` / `renderPrompt`） |
 | 2026-09-11 | `d96bd70b` | 从 Core 注入**有预算**的技能目录（技能正文不再全塞 system） | 同上 | `skillCatalog` 见 `promptAssembly.ts` / `llmSystemPrompt.ts` |
-| 2026-09-11 | `b5eaada1` | system prompt 改走装配器渲染 | 同上 | `llmSystemPrompt.ts:95` 调 `renderPrompt(buildPromptAssembly(...))` |
+| 2026-09-11 | `b5eaada1` | system prompt 改走装配器渲染 | 同上 | `llmSystemPrompt.ts` 调 `renderPrompt(buildPromptAssembly(...))` |
 | 2026-09-16 | `9dfc46d1` | 上下文注入重构合入 main | 同上 | WP0–WP5 门禁满足（`ContextMeter` 见 `src/shared/contextMeter.ts`，`compaction_*` 见 `electron/sessionEvents.ts`） |
 | 2026-09-19 | — | Agent Core 契约路径重构落地：Invocation 契约 + Core 端口、规则随调用传入、fact 归位 | `agent-core-contract-path-refactor-plan.md`（已归档，旧称） | 契约物理文件收敛进 SDK 包内，宿主只剩兼容转发 |
 | 2026-09-30 | `1f6e7940` | 消息事实落库归还 Core：桌面/远程统一走同一生产链路 | `message-fact-production-pipeline-refactor-plan.md`（已归档） | 渲染进程不再自持 `ToolCallRecord`；生产 owner 清理待复审 |
@@ -26,11 +26,25 @@
 | 2026-10-27 | `4718e532` | 让自动压缩的触发比例可配置：默认 80%、范围 60–90%，并消除三处字面量 | [`in-flight/context-compaction-summary-quality-plan.md`](./in-flight/context-compaction-summary-quality-plan.md) | 常量 `CONTEXT_COMPACTION_TRIGGER_RATIO` 单一定义；预算对象与决策指纹共用同一变量，钳制引用同一常量 |
 | 2026-10-28 | `8cf7de55` | 模型设置页新增自动压缩阈值项（滑块 + 范围校验 + 保存） | 同上 | 阈值从配置文件进入用户可调界面 |
 | 2026-10-28 | `e15f3c5c` | 自动压缩改用结构化摘要（七栏目 + 执行事实），并补取消、迟到丢弃与无收益跳过 | 同上 | 自动压缩不再只留 1200 字截断；系统操作卡片出现 `skipped` / `cancelled` / `failed` 与对应原因码。方案中 `AC-10`/`AC-15`/`AC-16`/`AC-17`/`AC-20`/`AC-21` 仍未核实 |
+| 2026-10-13 | `1358bd29` | 导出 `MAX_MODEL_TURNS_PER_INVOCATION`（1000 轮）并新增每 20 个模型轮次的循环检查 system 消息 | — | 宿主 `invocationAssembler` 以其兜底 `maxModelTurns`；长任务循环自查进入 SDK 循环本体 |
+| 2026-10-14 | `8cebe902` | 新增 run_shell justification 快照契约（SDK 侧输入归一） | — | 新增 `src/runShellJustification.ts`：`justification` NFC 归一 + 2000 code point 截断 + `_justificationTruncated` 标记，不经包入口导出；`e2945b3f`（10-15）补已提交截断元数据的保留 |
+| 2026-10-15 | `31b83d07`、`25c10345` | AGENTS.md 指令改在逻辑请求边界装配，指令快照持久化进 history | [`agents-md-workdir-instructions-behavior.md`](./agents-md-workdir-instructions-behavior.md)（现状） | `prepareModelRequest` 支持返回 `requestPatch` / `requestMetadata`（请求本地补丁跨 provider 重试保持）；历史兼容断言推迟到观测之后执行，动态 `tools` 豁免比对 |
+| 2026-10-15 | `e9658821` | 超时 turn 的终态结算从 `failed` 改为 `interrupted` | — | `AgentTurnTimedOutError` → `invocation-interrupted`（`reason: 'timeout'`）；[turn-loop.md](./turn-loop.md) 失败结算表同步更正 |
+| 2026-10-15 | `dec8954d`、`8c0d2a89` | 集中策略决策与审批检查入口，修复同步写许可的复审批 | — | 三段式安全策略架构的 SDK 侧收口；`0525a1e4`（10-14）先绑定 IM deferred 审批到精确动作 |
+| 2026-10-16 | `db888ade` | 扩展有界 provider 重试 | [`in-flight/provider-retry-backoff-plan.md`](./in-flight/provider-retry-backoff-plan.md) | `recoverProviderAttempt` 支持 `maxAttempts`（钳制 2–5）与 `retryAfterMs`（等待封顶 30s）；宿主恢复桥对 429/5xx/网络错误按 `Retry-After` 等待重试；方案主体（指数退避 / 抖动 / 上限可配）仍未实施 |
+| 2026-10-16 | `a9fef06b` | 持久继承未知副作用并门控恢复执行 | — | SDK 事件流新增 `unknown-effect-risk-accepted` / `-retry-approved` / `-retry-consumed` / `-resolved` 四类事件及流转校验（一票一消费、消费后必须紧跟同 `toolName`+`inputHash` 的 started）；turn 派发租约新增 `beforeDispatchLease` 宿主门 |
+| 2026-10-23 | `68950785` | 政策变更后重查审批（recheck 贯穿工具执行） | — | `1f1d70c9`、`9a2e926f`、`6fe9f163`、`a984bfa6`（10-24）补齐评审缺口：复检绑定新增 `replanAfterFreshApproval` / `policyChanged`（plan/facts 摘要允许随新审批更新）；确认结果新增 `authorization-changed` 重问循环；`safetyGate.authorize` 返回 `ask` 时在派发租约内补确认；permit/admission 新增 `clearAuthorizationInvalidation` |
+| 2026-10-23 | `248f7cb0` | 会话存储边界重构收口（SDK 侧连带调整） | — | `history.ts` 契约微调（`context.ts` 去除 `HistoryEvent` 依赖）；存储侧细节见 `storage-session` 主题 |
+| 2026-10-24 | `6554a671` | 保留 canonical turn 历史投影 | — | `tool-call-*` 事件补 `sourceRequestId` / `modelTurn` 字段 |
+| 2026-10-27 | `f7398787` | 持久化完成回复的 Thinking 内容 | — | `messageMirror` 附 `thinking`（completed 与失败路径）；`SessionTranscriptCommitIntent.messageMirror` 契约扩展 |
+| 2026-10-27 | `1812f370` | 把自动化事实投影进消息账本 | — | 自动化事实随消息链路落库；渲染侧卡片可见 |
+| 2026-10-30 | — | 按基线 `0d189776` 核对本目录 5 份现状文档并改写漂移项 | [`baseline-check-2026-10-30.md`](./baseline-check-2026-10-30.md) | 窗口 `17236274..0d189776`（37 提交）：turn-loop / history-port / safety-approval / host-ports / README 全部更新；provider 重试方案状态更正为「实施中（部分）」 |
 
 ## 存疑（文档与记录不一致）
 
 - `mcp-timeout-turn-failure-isolation-plan.md` 自述「修订版尚未复评」，实际 `a01a6d49` 已实现并合入（2026-10-14）——**状态滞后，以代码为准**。
 - `in-flight/context-compaction-summary-quality-plan.md` 曾自述「在途草稿，未实施」，但 `4718e532`、`8cf7de55`、`e15f3c5c` 已实现阶段 1、3 与阶段 2 主体（2026-10-27/28）。2026-10-29 已按 `docs-guide` §3.0 更正为「实施中」——**状态滞后，以代码为准**；阶段 2 的验收仍未逐项闭合，不得当作已完成引用。
+- `in-flight/provider-retry-backoff-plan.md` 自述「在途草稿，未实施；代码未改动（仍是 3 次尝试、无退避）」，但 `db888ade`（2026-10-16）已实现有界重试扩展（`maxAttempts` / `retryAfterMs` + 宿主 `Retry-After` 重试）。2026-10-30 按 `docs-guide` §3.0 更正为「实施中（部分）」——**状态滞后，以代码为准**；指数退避 / 抖动 / 等待上限可配仍未实施。
 
 ## 取证命令
 

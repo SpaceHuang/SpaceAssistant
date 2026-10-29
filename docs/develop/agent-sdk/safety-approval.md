@@ -33,6 +33,8 @@ type PermitBinding = Readonly<{
   capabilityId: string
   inputSnapshotHash: string; planDigest: string; factsDigest: string
   authorizationVersion: string
+  /** 标记"执行器未进入的授权失效之后的新一轮策略放行"（fresh policy pass）。 */
+  policyChanged?: true
   phase: 'initial-compat' | 'recheck'
 }>
 
@@ -46,6 +48,8 @@ interface SafetyPermitStore {
   consume(permitId: string, expected: PermitBinding): Promise<PermitConsumeResult>
   invalidateInvocation(requestId: string, reason: 'cancelled' | 'revoked' | 'expired'): void
   invalidateBinding(requestId: string, invocationId: string, reason: 'cancelled' | 'revoked' | 'authorization-changed'): void
+  /** 仅清除此前由授权变更立下的策略栅栏（AUTHORIZATION_STALE）；取消 / 撤权栅栏不受影响。 */
+  clearAuthorizationInvalidation(requestId: string, invocationId: string): void
   clearInvocation(requestId: string): void
   settle(permitId: string): void
 }
@@ -55,7 +59,8 @@ interface SafetyPermitStore {
 
 - `issue`：`expiresAt` 必须有限且在未来，否则抛错；permitId 用 `crypto.getRandomValues`（24 字节 hex），随机源缺失抛 `secure random source unavailable`。
 - `consume` 判定顺序：不存在 → `UNKNOWN`；已消费 → `CONSUMED`；已失效 → 记录原因（`CANCELLED` / `AUTHORIZATION_STALE`）；过期 → 置 `invalid` 并返回 `EXPIRED`；调用级失效命中 → 置 `invalid` 并返回；绑定级失效命中 → 置 `invalid` 并返回；`sameBinding` 不符 → `BINDING_MISMATCH`；否则置 `consumed` 并 `{ ok: true }`。
-- `sameBinding` 逐字段比较全部 10 个 `PermitBinding` 字段。
+- `sameBinding` 逐字段比较全部 11 个 `PermitBinding` 字段（2026-10 起含 `policyChanged`：策略变更后的新绑定与旧绑定不视为同一绑定）。
+- `clearAuthorizationInvalidation`：仅当绑定级失效记录是 `AUTHORIZATION_STALE` 时删除；`CANCELLED` / `REVOKED` 保持终态。执行端口在"新签许可的绑定版本与宿主当前授权版本一致"后调用它，让策略变更后的新一轮复检能继续（配合 turn 循环的 `policyChanged` 复检，见 [turn-loop.md](./turn-loop.md) 工具阶段第 5 步）。
 - `invalidateInvocation` 的 `reason` 映射：`cancelled → CANCELLED`，其余（`revoked` / `expired`）→ `AUTHORIZATION_STALE`。
 - 生产宿主只应在**单次调用生命周期**内持久化。
 
@@ -116,6 +121,8 @@ type ExecutionAdmissionCoordinator = {
   markPermitConsumed(permitId: string, binding: PermitBinding): void
   beginDispatch(permitId: string, expected: PermitBinding, validatePrepared?: () => boolean | Promise<boolean>): Promise<BeginDispatchResult>
   invalidate(binding: Pick<PermitBinding, 'requestId' | 'invocationId'>, reason: 'cancelled' | 'revoked' | 'authorization-changed'): void
+  /** 可选：仅清除 `AUTHORIZATION_STALE` 失效记录（与许可存储的同名方法配对）。 */
+  clearAuthorizationInvalidation?(binding: Pick<PermitBinding, 'requestId' | 'invocationId'>): void
   settle(permitId: string): void
 }
 ```
@@ -155,7 +162,7 @@ function createPermitBoundToolExecutionPort<TCall, TResult>(deps: {
 `execute` 的固定顺序：
 
 1. `resolveExpected(call)` 后校验 `invocationId` / `toolCallId` / `capabilityId === toolName` / `phase === (allowedPhase ?? 'recheck')`，不符 → `ToolExecutionRejectedError('BINDING_MISMATCH')`。
-2. **先订阅**撤权与授权变更（保证排队中的工作也会被失效、活动 lease 会被 abort），再 `isRevoked` 检查、授权版本比对（不一致 → 置 stale 并失效；`currentAuthorizationVersion` 返回 `undefined` 时抛 `CURRENT_AUTHORIZATION_VERSION_UNAVAILABLE`）。
+2. **先订阅**撤权与授权变更（保证排队中的工作也会被失效、活动 lease 会被 abort），再 `isRevoked` 检查、授权版本比对（不一致 → 置 stale 并失效；`currentAuthorizationVersion` 返回 `undefined` 时抛 `CURRENT_AUTHORIZATION_VERSION_UNAVAILABLE`）；此时若 stale 栅栏已立 → 抛 `ToolExecutionRejectedError('AUTHORIZATION_STALE')`，否则**仅清除策略栅栏**（`permits.clearAuthorizationInvalidation` + `admission.clearAuthorizationInvalidation?`）——新签许可的绑定版本与宿主当前版本一致才走到这里，取消 / 撤权栅栏保持终态（2026-10 新增，支撑策略变更后的复检续跑）。
 3. `call.signal` 监听：abort 时同时失效许可与准入（`cancelled`）。
 4. `permits.consume` → 失败转 `ToolExecutionRejectedError(consumed.reason)` → `admission.markPermitConsumed` → `admission.beginDispatch`。
 5. `onDispatchClaimed(cancel)`（SDK turn 循环在此写 `tool-call-started`）；该回调抛错会 `lease.close('failed')` 并原样抛出。
@@ -167,6 +174,7 @@ function createPermitBoundToolExecutionPort<TCall, TResult>(deps: {
 
 ```ts
 type ToolExecutionRejectReason = PermitConsumeResult 的失败 reason | 'REVOKED' | 'PERMIT_NOT_CONSUMED'
+  | 'VERIFY_ONLY_UNREVIEWED_CAPABILITY' | 'RECOVERY_CHECKER_UNAVAILABLE' | 'RECOVERY_HISTORY_UNAVAILABLE'
 class ToolExecutionRejectedError extends Error   // code = 'TOOL_EXECUTION_REJECTED'
 class ToolExecutionAfterDispatchError extends Error  // code = 'TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH'，持有 originalError、executorEntry='entered' 与可选 lifecycleInvalidation
 ```
