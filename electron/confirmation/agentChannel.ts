@@ -190,6 +190,7 @@ export class AgentChannel implements ConfirmationChannel {
       signals: req.facts.signals.map((s) => s.kind),
       ...(req.factsProvenance ? { factsProvenance: { ...req.factsProvenance } } : {}),
       ...deriveClueExtras(req.facts),
+      ...(req.reviewScopeCandidate ? { reviewScopeCandidate: structuredClone(req.reviewScopeCandidate) } : {}),
       ...(req.modelJustification ? { modelJustification: req.modelJustification } : {}),
       ...(req.modelJustificationTruncated ? { modelJustificationTruncated: true } : {}),
       ...(this.deps.taskDigest ? {
@@ -319,7 +320,11 @@ export class AgentChannel implements ConfirmationChannel {
             kind: 'approved',
             answererKind: 'agent',
             cause: 'agent-approved',
-            reason: result.verdict.reason
+            reason: result.verdict.reason,
+            ...(result.verdict.reuseApproved === true && result.verdict.scopeCandidateDigest &&
+              result.verdict.scopeCandidateDigest === clue.reviewScopeCandidate?.scopeCandidateDigest
+              ? { reviewScopeGrant: { source: 'agent' as const, scopeCandidateDigest: result.verdict.scopeCandidateDigest } }
+              : {})
           }
         // R5：undetermined 是有效裁决「判不了」——映射为独立 cause（缺此分支会静默退化 agent-deny）
         : result.verdict.kind === 'undetermined'
