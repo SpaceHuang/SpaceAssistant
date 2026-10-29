@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { AgentTurnCancelledError, AgentTurnLifecycleInvalidatedError, PlanRejectedError, ToolDeniedError, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
+import { AgentTurnCancelledError, AgentTurnLifecycleInvalidatedError, PlanRejectedError, ToolDeniedError, consumeProviderRetryWaitBudget, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
 import { ModelProviderRegistry, type CanonicalModelMessage, type StreamChunk } from '../src/model'
 import { CapabilityRegistry } from '../src/capability'
 import { InMemorySafetyPermitStore, type PermitBinding } from '../src/safetyPermit'
@@ -2224,6 +2224,171 @@ describe('runAgentTurn', () => {
       recoverProviderAttempt: async ({ messages }) => ({ kind: 'reject' as const, reasonCode: 'PROVIDER_RETRY_AFTER_EXCEEDS_SINGLE_CAP', serverAskedMs: 120_000, retryAt: now + 120_000, messages })
     })).rejects.toMatchObject({ code: 'MODEL_ATTEMPT_RECOVERY_REJECTED', reasonCode: 'PROVIDER_RETRY_AFTER_EXCEEDS_SINGLE_CAP', details: { serverAskedMs: 120_000, retryAt: now + 120_000 } })
     expect(calls).toBe(1)
+  })
+
+  it('shares the retry wait budget across logical model turns and records the denied attempt', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'shared-retry-budget', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1 || providerCalls === 3) throw Object.assign(new Error('rate limited'), { status: 429 })
+      if (providerCalls === 2) {
+        yield { type: 'tool-call', toolCallId: 'budget-tool', toolName: 'lookup', input: {} }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+        return
+      }
+      yield { type: 'text-delta', text: 'done' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'shared-retry-budget'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const waits: number[] = []
+    const recoveryInputs: Array<{ modelTurn: number; waitBudgetRemainingMs: number }> = []
+    let monotonicNow = 0
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      recoverProviderAttempt: async ({ error, messages, modelTurn, waitBudgetRemainingMs }) => {
+        if (!error) return undefined
+        recoveryInputs.push({ modelTurn, waitBudgetRemainingMs })
+        return { kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 5, recoveryKind: 'transient', plannedWaitMs: modelTurn === 1 ? 40_000 : 30_000 }
+      },
+      monotonicNow: () => monotonicNow,
+      waitForRetry: async (delayMs: number) => { waits.push(delayMs); monotonicNow += delayMs },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'tool done' })), maxModelTurns: 3
+    })).rejects.toMatchObject({ code: 'MODEL_ATTEMPT_RECOVERY_REJECTED', reasonCode: 'PROVIDER_RETRY_BUDGET_EXHAUSTED' })
+    expect(recoveryInputs).toEqual([{ modelTurn: 1, waitBudgetRemainingMs: 60_000 }, { modelTurn: 2, waitBudgetRemainingMs: 20_000 }])
+    expect(waits).toEqual([40_000])
+    expect(providerCalls).toBe(3)
+    const events = (await history.read(invocationId)).events
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'provider-attempt-result', payload: expect.objectContaining({ modelTurn: 2, attempt: 2, physical: false, outcome: 'not-dispatched' }) }))
+  })
+
+  it('allows a retry whose planned wait exactly equals the remaining budget', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    let monotonicNow = 0
+    registry.register(route, { providerId: 'exact-retry-budget', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) { monotonicNow += 100_000; throw Object.assign(new Error('rate limited'), { status: 429 }) }
+      yield { type: 'text-delta', text: 'completed' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'exact-retry-budget'
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, [])
+    const permits = new InMemorySafetyPermitStore()
+    const waits: number[] = []
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 16 }, maxModelTurns: 1,
+      recoverProviderAttempt: async ({ error, messages, waitBudgetRemainingMs }) => error ? ({ kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 5, recoveryKind: 'transient', plannedWaitMs: waitBudgetRemainingMs }) : undefined,
+      monotonicNow: () => monotonicNow,
+      waitForRetry: async (delayMs) => { waits.push(delayMs); monotonicNow += delayMs + 1_000 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' }))
+    })
+    expect(result.text).toBe('completed')
+    expect(waits).toEqual([60_000])
+    expect(providerCalls).toBe(2)
+    expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({ kind: 'provider-attempt-result', payload: expect.objectContaining({ attempt: 2, outcome: 'succeeded', waitBudgetOverrunMs: 1_000 }) }))
+  })
+
+  it('rejects a zero-wait transient recovery when the invocation balance is exhausted', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    let monotonicNow = 0
+    registry.register(route, { providerId: 'zero-retry-budget', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls <= 2) throw Object.assign(new Error('rate limited'), { status: 429 })
+      yield { type: 'text-delta', text: 'unexpected' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'zero-retry-budget'
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, [])
+    const permits = new InMemorySafetyPermitStore()
+    const budgets: number[] = []
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 16 }, maxModelTurns: 1,
+      recoverProviderAttempt: async ({ error, messages, waitBudgetRemainingMs }) => {
+        if (!error) return undefined
+        budgets.push(waitBudgetRemainingMs)
+        return { kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 5, recoveryKind: 'transient', plannedWaitMs: budgets.length === 1 ? 60_000 : 0 }
+      },
+      monotonicNow: () => monotonicNow,
+      waitForRetry: async (delayMs) => { monotonicNow += delayMs },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' }))
+    })).rejects.toMatchObject({ code: 'MODEL_ATTEMPT_RECOVERY_REJECTED', reasonCode: 'PROVIDER_RETRY_BUDGET_EXHAUSTED' })
+    expect(budgets).toEqual([60_000, 0])
+    expect(providerCalls).toBe(2)
+    expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({ kind: 'provider-attempt-result', payload: expect.objectContaining({ attempt: 3, physical: false, outcome: 'not-dispatched' }) }))
+  })
+
+  it('permits zero-wait dedicated recovery at zero balance without replenishing it', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'dedicated-zero-budget', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) throw Object.assign(new Error('rate limited'), { status: 429 })
+      if (providerCalls === 2) throw new Error('provider stream idle timeout')
+      yield { type: 'text-delta', text: 'completed' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'dedicated-zero-budget'
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, [])
+    const permits = new InMemorySafetyPermitStore()
+    const inputs: Array<{ waitBudgetRemainingMs: number; kind: string }> = []
+    let monotonicNow = 0
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 16 }, maxModelTurns: 1,
+      recoverProviderAttempt: async ({ error, messages, waitBudgetRemainingMs }) => {
+        if (!error) return undefined
+        const kind = (error as { status?: number }).status === 429 ? 'transient' : 'idle-timeout'
+        inputs.push({ waitBudgetRemainingMs, kind })
+        return { kind: 'retry', reasonCode: kind === 'transient' ? 'PROVIDER_RATE_LIMIT' : 'PROVIDER_STREAM_IDLE_TIMEOUT', messages, maxAttempts: 5, recoveryKind: kind, plannedWaitMs: kind === 'transient' ? 60_000 : 0 }
+      },
+      monotonicNow: () => monotonicNow,
+      waitForRetry: async (delayMs) => { monotonicNow += delayMs },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' }))
+    })
+    expect(result.text).toBe('completed')
+    expect(inputs).toEqual([{ waitBudgetRemainingMs: 60_000, kind: 'transient' }, { waitBudgetRemainingMs: 0, kind: 'idle-timeout' }])
+    expect(providerCalls).toBe(3)
+  })
+
+  it('maintains the retry budget invariant over a seeded sequence of measured waits', () => {
+    let seed = 0x5eed1234
+    const random = () => { seed = (1664525 * seed + 1013904223) >>> 0; return seed / 0x1_0000_0000 }
+    let remaining = 60_000
+    for (let operation = 0; operation < 1_000; operation += 1) {
+      const before = remaining
+      const measured = Math.floor(random() * 90_000) - 5_000
+      remaining = consumeProviderRetryWaitBudget(remaining, measured)
+      expect(remaining).toBeGreaterThanOrEqual(0)
+      expect(remaining).toBeLessThanOrEqual(before)
+      expect(remaining).toBeLessThanOrEqual(60_000)
+      expect(remaining).toBe(Math.max(0, before - Math.max(0, measured)))
+    }
   })
 
   it('rechecks the host recovery gate inside the final dispatch lease before recording start', async () => {
