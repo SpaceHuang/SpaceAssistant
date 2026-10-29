@@ -842,6 +842,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(materials.wechatConfig !== undefined ? { wechatConfig: materials.wechatConfig } : {}),
       ...(imPolicySnapshot ? { imPolicySnapshot } : {}),
       ...(currentPolicyBinding() ? { policyBinding: currentPolicyBinding() } : {}),
+      ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),
+      ...(materials.approvalTaskDigestTruncated ? { taskDigestTruncated: true } : {}),
+      reviewScopeCache: getDefaultAgentRuntime().reviewScopeCache,
       ...(currentWikiConfig !== undefined ? { wikiConfig: currentWikiConfig } : {}),
       effectiveRules: current.effectiveRules,
       disabledPolicyRuleIds: current.disabledRuleIds,
@@ -898,6 +901,13 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
               : {})
           }
           registered.updateExecutionContext(call, (context) => Object.assign(context, metadata))
+          if (result.reviewScopeCandidateScope && result.reviewScopeCandidateDigest) {
+            registered.updateExecutionContext(call, (context) => {
+              context.reviewScopeCache = getDefaultAgentRuntime().reviewScopeCache
+              context.reviewScopeCandidateScope = result.reviewScopeCandidateScope
+              context.reviewScopeCandidateDigest = result.reviewScopeCandidateDigest
+            })
+          }
         },
         onConfirmed: (binding, result, args, answerer, selectedMemory) => {
           permitHandoff.onConfirmed?.(binding, result, args, answerer)
@@ -1158,6 +1168,18 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       })
       return createAgentSdkConfirmationPort({
       ...confirmationAdapter,
+      onScopeApproved: (call, context, primaryOutcome) => {
+        if (primaryOutcome.kind !== 'approved') return
+        const grant = primaryOutcome.reviewScopeGrant
+        const candidate = context.reviewScopeCandidate as import('../../src/shared/confirmation/types').ReviewScopeApprovalCandidate | undefined
+        if (!grant || primaryOutcome.answererKind !== 'agent' || !candidate ||
+          !['desktop', 'feishu', 'wechat'].includes(materialsLane) ||
+          grant.source !== 'agent' || grant.scopeCandidateDigest !== candidate.scopeCandidateDigest ||
+          !['edit_file', 'write_file', 'grep'].includes(call.toolName)) return
+        getDefaultAgentRuntime().reviewScopeCache.grantDigest({ lane: materialsLane as 'desktop' | 'feishu' | 'wechat',
+          sessionId: materials.sessionId, source: 'agent', scopeCandidateDigest: candidate.scopeCandidateDigest,
+          firstWrite: candidate.toolName !== 'grep' })
+      },
       subscribeAuthorizationChange: confirmationAdapter.subscribeAuthorizationChange ?? ((call, listener) =>
         getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(call.invocationId, materialsLane, listener)),
       currentAuthorizationVersion: confirmationAdapter.currentAuthorizationVersion ?? (() => resolveCurrentAuthorization().authorizationVersion),

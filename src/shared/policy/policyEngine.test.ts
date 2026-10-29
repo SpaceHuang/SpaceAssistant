@@ -11,6 +11,7 @@ import { effectiveActionFor, resolvePolicyRules } from './policyPackages'
 import { imEffectiveActionFor } from './policyPackages'
 import { resolveImPolicyRulesForVersion } from './policyPackages'
 import type { PolicyAction } from '../confirmation/types'
+import { createPolicyDecision, fingerprintPolicyDependencies } from './policyDecision'
 
 function mkFacts(
   toolName: string,
@@ -120,6 +121,81 @@ describe('INV-03 unified action arbitration regression probes', () => {
     expect(decide(facts, { ...mkContext(lane), policyTier: 'custom' }, rules,
       deps({ config: { larkCliWriteRequiresConfirm: false }, migrationComplete: true })))
       .toMatchObject({ type: 'deny', ruleId: 'im-write-ask' })
+  })
+})
+
+describe('review scope cache policy boundary', () => {
+  const facts = mkFacts('edit_file', 'write', [{ kind: 'write-target-existing' }])
+  const context = mkContext('desktop')
+  const eligible: import('../confirmation/types').PolicyRule = {
+    id: 'eligible-review', when: 'invocation', match: { toolName: 'edit_file', actionClass: 'write' },
+    action: 'ask', answerer: 'agent', reviewCacheSources: ['agent'], reason: 'review'
+  }
+
+  it('consumes an active Agent scope only when every effective ask explicitly permits that source', () => {
+    expect(decide(facts, context, [eligible], deps({ reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1', cause: 'review-cache-current-task-constraint-v1' })
+    const additionalAsk = { ...eligible, id: 'unapproved-ask', reviewCacheSources: undefined }
+    expect(decide(facts, context, [eligible, additionalAsk], deps({ reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'require-confirm' })
+  })
+
+  it('does not let review scopes override user overrides, human floors, or rules that permit only another source', () => {
+    expect(decide(facts, context, [{ ...eligible, userOverride: true }], deps({ reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'require-confirm', answerer: 'user' })
+    expect(decide(facts, context, [{ ...eligible, humanRequired: true, locked: true }], deps({ reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'require-confirm', answerer: 'user' })
+    expect(decide(facts, context, [{ ...eligible, reviewCacheSources: ['user'] }], deps({ reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'require-confirm' })
+  })
+
+  it.each([
+    ['user override ask', { ...eligible, id: 'explicit-user-ask', userOverride: true }, 'user'],
+    ['locked ask', { ...eligible, id: 'locked-ask', locked: true }, 'agent']
+  ] as const)('scope grant preserves a simultaneously matched %s', (_label, extraRule, answerer) => {
+    expect(decide(facts, context, [eligible, extraRule], deps({ reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'require-confirm', answerer })
+  })
+
+  it('does not skip a simultaneously matched auto-evaluator', () => {
+    const evaluate = vi.fn(() => ({ approve: true, reason: 'approved now' }))
+    expect(decide(facts, context, [eligible, { ...eligible, id: 'independent-auto', action: 'auto-evaluator', reviewCacheSources: undefined }],
+      deps({ reviewScopeGrant: { source: 'agent' }, autoEvaluator: evaluate })))
+      .toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(evaluate).not.toHaveBeenCalled()
+  })
+
+  it('records both stable cache-policy rule IDs in the policy decision trace', () => {
+    const result = decide(facts, context, [eligible], deps({ reviewScopeGrant: { source: 'agent' } }))
+    const trace = createPolicyDecision({ decision: result, invocationId: 'review-inv', toolUseId: 'review-call',
+      factsId: 'review-facts', factsDigest: 'b'.repeat(64), extractorVersion: 'facts-v1', factsRevision: 1,
+      policyDomain: 'desktop', tier: 'standard', policyVersion: 'v1', policyRevision: 1, policyLane: 'desktop',
+      rules: [eligible], disabledRuleIds: [], policyConfig: {}, migrationComplete: false })
+    expect(trace.ruleIds).toEqual(['review-cache-scope-grant-v1', 'review-cache-current-task-constraint-v1'])
+    const before = fingerprintPolicyDependencies({ policyVersion: 'v1', policyRevision: 1, tier: 'standard', policyLane: 'desktop',
+      rules: [eligible], disabledRuleIds: [], policyConfig: {}, migrationComplete: false })
+    const after = fingerprintPolicyDependencies({ policyVersion: 'v1', policyRevision: 1, tier: 'standard', policyLane: 'desktop',
+      rules: [{ ...eligible, reviewCacheSources: ['agent', 'user'] }], disabledRuleIds: [], policyConfig: {}, migrationComplete: false })
+    expect(after).not.toBe(before)
+  })
+
+  it('allows the synthetic default cache exception only for standard ordinary workspace file writes', () => {
+    const standard = { ...context, policyTier: 'standard' as const }
+    const normalFile = mkFacts('edit_file', 'write', [
+      { kind: 'write-target-existing' },
+      { kind: 'path-target', path: '/work/a.txt', zone: 'workdir-normal' }
+    ])
+    const transform = () => 'auto-evaluator' as const
+    expect(decide(normalFile, standard, [], deps({ transform, reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+    expect(decide(normalFile, { ...standard, policyTier: 'strict' }, [], deps({ transform: () => 'ask', reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'require-confirm', answerer: 'user' })
+    const sensitiveFile = mkFacts('edit_file', 'write', [
+      { kind: 'write-target-existing' },
+      { kind: 'path-target', path: '/work/.env', zone: 'sensitive-file' }
+    ])
+    expect(decide(sensitiveFile, standard, [], deps({ transform, reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'require-confirm' })
   })
 })
 

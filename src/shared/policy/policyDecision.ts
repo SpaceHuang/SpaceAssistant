@@ -89,7 +89,8 @@ export function fingerprintPolicyDependencies(input: PolicyDependencyInput): str
     // Preserve order because matching and layered resolution depend on it.
     rules: input.rules.map((rule) => ({
       id: rule.id, when: rule.when, match: rule.match, action: rule.action, userOverride: rule.userOverride,
-      humanRequired: rule.humanRequired, answerer: rule.answerer, locked: rule.locked, denyClass: rule.denyClass, reason: rule.reason,
+      humanRequired: rule.humanRequired, answerer: rule.answerer, locked: rule.locked, denyClass: rule.denyClass,
+      reviewCacheSources: rule.reviewCacheSources, reason: rule.reason,
       askUnless: rule.askUnless, configRequires: rule.configRequires, requiresContext: rule.requiresContext
     })),
     disabledRuleIds: [...input.disabledRuleIds].sort()

@@ -2,14 +2,18 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
+import vm from 'node:vm'
 import { resolveSafeWriteTarget } from './pathSecurity'
 import {
   SAFE_WRITE_TEMP_PREFIX,
+  SafeAtomicWriteUncertainError,
   cleanupSafeWriteTemps,
   captureFileIdentity,
-  safeAtomicWrite
+  safeAtomicWrite,
+  verifyReviewFileReceipt
 } from './safeAtomicWrite'
 import * as directoryHandleWriterModule from './confirmation/directoryHandleWriter'
+import { DIRECTORY_WRITER_SOURCE } from './confirmation/directoryHandleWriter'
 
 describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
   let workDir: string
@@ -23,6 +27,100 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
   afterEach(async () => {
     await fs.rm(workDir, { recursive: true, force: true }).catch(() => {})
     await fs.rm(outside, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('returns a content and open-handle receipt only when explicitly requested', async () => {
+    const target = await resolveSafeWriteTarget(workDir, 'receipt.txt')
+    const result = await safeAtomicWrite({ targetPath: target.targetPath, parentReal: target.parentReal,
+      body: 'receipt body', expectedIdentity: null, captureReceipt: true })
+    expect(result.receipt).toMatchObject({ size: 12, nlink: 1, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    const written = await fs.stat(target.targetPath)
+    expect(result.receipt).toMatchObject({ dev: written.dev, ino: written.ino })
+    expect(await verifyReviewFileReceipt(target.targetPath, result.receipt!)).toBe(true)
+    await fs.writeFile(target.targetPath, 'changed')
+    expect(await verifyReviewFileReceipt(target.targetPath, result.receipt!)).toBe(false)
+  })
+
+  it('rejects a same-length in-place rewrite immediately after the atomic commit', async () => {
+    const target = await resolveSafeWriteTarget(workDir, 'race-receipt.txt')
+    const payload = JSON.stringify({ directory: workDir,
+      expectedDirectoryIdentity: (() => { const { dev, ino, mode, size, mtimeMs } = require('fs').statSync(workDir); return { dev, ino, mode, size, mtimeMs } })(),
+      targetName: 'race-receipt.txt', tempName: '.sa-wtmp-race', bodyBase64: Buffer.from('approved').toString('base64'),
+      expectedFileIdentity: null, mode: 0o600, captureReceipt: true })
+    const realFs = require('fs') as typeof import('fs')
+    const injectedFs = Object.create(realFs) as typeof import('fs')
+    injectedFs.readFileSync = ((file: unknown, ...args: unknown[]) => file === 0 ? payload : realFs.readFileSync(file as never, ...(args as never[]))) as typeof realFs.readFileSync
+    const localPath = (value: string) => path.isAbsolute(value) ? value : path.join(workDir, value)
+    injectedFs.statSync = ((value: string, ...args: unknown[]) => realFs.statSync(localPath(value), ...(args as never[]))) as typeof realFs.statSync
+    injectedFs.lstatSync = ((value: string, ...args: unknown[]) => realFs.lstatSync(localPath(value), ...(args as never[]))) as typeof realFs.lstatSync
+    injectedFs.openSync = ((value: string, ...args: unknown[]) => realFs.openSync(localPath(value), ...(args as never[]))) as typeof realFs.openSync
+    injectedFs.unlinkSync = ((value: string) => realFs.unlinkSync(localPath(value))) as typeof realFs.unlinkSync
+    const link = realFs.linkSync.bind(realFs)
+    injectedFs.linkSync = ((from: string, to: string) => {
+      link(localPath(from), localPath(to))
+      realFs.writeFileSync(path.join(workDir, to), 'tampered')
+    }) as typeof realFs.linkSync
+    let output = ''
+    const fakeProcess = { stdout: { write: (text: string) => { output += text } }, exit: () => { throw new Error('worker-exit') } }
+    try {
+      vm.runInNewContext(DIRECTORY_WRITER_SOURCE, { require: (name: string) => name === 'node:fs' ? injectedFs : require(name), process: fakeProcess,
+        Buffer, Atomics, Int32Array, SharedArrayBuffer, JSON, Error })
+    } catch (error) {
+      if ((error as Error).message !== 'worker-exit') throw error
+    }
+    const firstResultEnd = output.indexOf('}{') + 1
+    expect(JSON.parse(firstResultEnd > 0 ? output.slice(0, firstResultEnd) : output))
+      .toMatchObject({ ok: false, caseId: 'write-committed-receipt-invalid' })
+    expect(await fs.readFile(target.targetPath, 'utf8')).toBe('tampered')
+  })
+
+  it.each(['linkSync', 'renameSync'] as const)('preserves uncertain status when post-commit readback sees truncation after %s', async (commitMethod) => {
+    const targetPath = path.join(workDir, `truncated-${commitMethod}.txt`)
+    if (commitMethod === 'renameSync') await fs.writeFile(targetPath, 'prior')
+    const expectedFileIdentity = commitMethod === 'renameSync' ? (() => {
+      const st = require('fs').statSync(targetPath)
+      return { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, nlink: st.nlink }
+    })() : null
+    const parent = require('fs').statSync(workDir)
+    const payload = JSON.stringify({ directory: workDir,
+      expectedDirectoryIdentity: { dev: parent.dev, ino: parent.ino, mode: parent.mode, size: parent.size, mtimeMs: parent.mtimeMs },
+      targetName: path.basename(targetPath), tempName: `.sa-wtmp-truncated-${commitMethod}`, bodyBase64: Buffer.from('approved').toString('base64'),
+      expectedFileIdentity, mode: 0o600, captureReceipt: true })
+    const realFs = require('fs') as typeof import('fs')
+    const injectedFs = Object.create(realFs) as typeof import('fs')
+    const localPath = (value: string) => path.isAbsolute(value) ? value : path.join(workDir, value)
+    injectedFs.readFileSync = ((file: unknown, ...args: unknown[]) => file === 0 ? payload : realFs.readFileSync(localPath(file as string), ...(args as never[]))) as typeof realFs.readFileSync
+    injectedFs.statSync = ((value: string, ...args: unknown[]) => realFs.statSync(localPath(value), ...(args as never[]))) as typeof realFs.statSync
+    injectedFs.lstatSync = ((value: string, ...args: unknown[]) => realFs.lstatSync(localPath(value), ...(args as never[]))) as typeof realFs.lstatSync
+    injectedFs.openSync = ((value: string, ...args: unknown[]) => realFs.openSync(localPath(value), ...(args as never[]))) as typeof realFs.openSync
+    injectedFs.unlinkSync = ((value: string) => realFs.unlinkSync(localPath(value))) as typeof realFs.unlinkSync
+    const originalCommit = realFs[commitMethod].bind(realFs) as (from: string, to: string) => void
+    injectedFs[commitMethod] = ((from: string, to: string) => {
+      originalCommit(localPath(from), localPath(to))
+      realFs.truncateSync(localPath(to), 0)
+    }) as typeof realFs[typeof commitMethod]
+    let output = ''
+    const fakeProcess = { stdout: { write: (text: string) => { output += text } }, exit: () => { throw new Error('worker-exit') } }
+    try {
+      vm.runInNewContext(DIRECTORY_WRITER_SOURCE, { require: (name: string) => name === 'node:fs' ? injectedFs : require(name), process: fakeProcess,
+        Buffer, Atomics, Int32Array, SharedArrayBuffer, JSON, Error })
+    } catch (error) {
+      if ((error as Error).message !== 'worker-exit') throw error
+    }
+    const firstResultEnd = output.indexOf('}{') + 1
+    expect(JSON.parse(firstResultEnd > 0 ? output.slice(0, firstResultEnd) : output))
+      .toMatchObject({ ok: false, caseId: 'write-committed-receipt-invalid' })
+    expect(await fs.readFile(targetPath, 'utf8')).toBe('')
+  })
+
+  it('maps a committed receipt failure to SafeAtomicWriteUncertainError', async () => {
+    const worker = vi.spyOn(directoryHandleWriterModule, 'writeFileAtomicallyBoundToDirectory').mockResolvedValue({
+      ok: false, caseId: 'write-committed-receipt-invalid'
+    })
+    try {
+      await expect(safeAtomicWrite({ targetPath: path.join(workDir, 'uncertain.txt'), parentReal: workDir,
+        body: 'approved', expectedIdentity: null, captureReceipt: true })).rejects.toBeInstanceOf(SafeAtomicWriteUncertainError)
+    } finally { worker.mockRestore() }
   })
 
   it('creates a new file via link commit', async () => {

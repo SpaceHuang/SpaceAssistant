@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import fs from 'fs/promises'
 import fsc from 'fs'
 import path from 'path'
@@ -110,6 +110,8 @@ export type SafeAtomicWriteOptions = {
   /** Permit 写入时绑定的最近已存在目录 identity。 */
   expectedParentIdentity?: { dev: number; ino: number; mode: number }
   signal?: AbortSignal
+  /** Capture an open-handle identity and content receipt for the session review cache. */
+  captureReceipt?: boolean
 }
 
 export class SafeAtomicWriteUncertainError extends Error {
@@ -154,7 +156,7 @@ function throwIfAborted(signal?: AbortSignal): void {
  * - 新文件：fs.link(temp, target)；覆盖：校验 identity 后 rename
  * - 任一步失败关闭句柄并删除临时文件
  */
-export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<FileIdentity> {
+export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<FileIdentity & { receipt?: import('./confirmation/reviewScopeCache').ReviewFileReceipt }> {
   const { targetPath, parentReal, body, expectedIdentity, expectedParentIdentity, signal } = opts
   throwIfAborted(signal)
 
@@ -194,10 +196,12 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
     tempName: `${SAFE_WRITE_TEMP_PREFIX}${randomBytes(12).toString('hex')}`,
     body,
     expectedFileIdentity: expectedIdentity,
+    captureReceipt: opts.captureReceipt === true,
     signal
   })
   if (!result.ok) {
     if (result.caseId === 'write-directory-cancelled') throw new SafeAtomicWriteUncertainError()
+    if (result.caseId === 'write-committed-receipt-invalid') throw new SafeAtomicWriteUncertainError(new Error(result.caseId))
     const message = result.caseId === 'write-target-exists'
       ? '目标文件已存在，拒绝覆盖新建路径'
       : result.caseId === 'write-file-identity-changed'
@@ -214,7 +218,7 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
     // be reported as a normal write rejection because the side effect happened.
     throw new SafeAtomicWriteUncertainError(error)
   }
-  return result.identity
+  return { ...result.identity, ...(result.receipt ? { receipt: result.receipt } : {}) }
 }
 
 async function assertNoSymlinkAlong(fromReal: string, toPath: string): Promise<void> {
@@ -236,6 +240,35 @@ async function assertNoSymlinkAlong(fromReal: string, toPath: string): Promise<v
     if (!st.isDirectory()) {
       throw new Error('路径组件不是目录')
     }
+  }
+}
+
+/** Verify a review-cache receipt against a no-follow open handle and the current directory entry. */
+export async function verifyReviewFileReceipt(absPath: string, receipt: import('./confirmation/reviewScopeCache').ReviewFileReceipt): Promise<boolean> {
+  let handle: FileHandle | undefined
+  try {
+    const before = await fs.lstat(absPath)
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) return false
+    handle = await fs.open(absPath, openFlagsReadNoFollow())
+    const opened = await handle.stat()
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== receipt.dev || opened.ino !== receipt.ino || opened.mode !== receipt.mode || opened.size !== receipt.size) return false
+    const hash = createHash('sha256')
+    const buffer = Buffer.alloc(64 * 1024)
+    let position = 0
+    while (position < opened.size) {
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, opened.size - position), position)
+      if (bytesRead <= 0) return false
+      hash.update(buffer.subarray(0, bytesRead))
+      position += bytesRead
+    }
+    const after = await handle.stat()
+    const named = await fs.lstat(absPath)
+    return after.dev === opened.dev && after.ino === opened.ino && after.size === opened.size && after.mode === opened.mode && after.nlink === 1 &&
+      named.isFile() && !named.isSymbolicLink() && named.nlink === 1 && named.dev === opened.dev && named.ino === opened.ino && named.size === after.size && named.mode === after.mode && named.mtimeMs === after.mtimeMs && after.mtimeMs === opened.mtimeMs && hash.digest('hex') === receipt.sha256
+  } catch {
+    return false
+  } finally {
+    await handle?.close().catch(() => undefined)
   }
 }
 

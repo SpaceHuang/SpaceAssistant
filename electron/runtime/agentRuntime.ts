@@ -4,6 +4,8 @@ import { InMemoryExecutionAdmissionCoordinator, type ExecutionAdmissionCoordinat
 import { InMemorySafetyPermitStore, type SafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
 import { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
 import type { ConfirmCodeLease } from '../../packages/agent-sdk/src/runtime/components'
+import type { ReviewScopeCache } from '../confirmation/reviewScopeCache'
+import { ReviewScopeCache as ReviewScopeCacheImpl } from '../confirmation/reviewScopeCache'
 import { ConfirmIdSpace } from '../../packages/agent-sdk/src/runtime/components'
 
 /**
@@ -91,6 +93,7 @@ export interface InvocationLeaseLike {
 }
 
 export interface AgentRuntimeComponents {
+  reviewScopeCache?: ReviewScopeCache
   audit?: RuntimeAudit
   /** 桌面:审计惰性构造(agentLogger 目录未就绪时返回 null → NOOP);缺省 NOOP。 */
   auditFactory?: () => RuntimeAudit | null
@@ -110,6 +113,7 @@ export interface AgentRuntimeComponents {
 }
 
 export interface AgentRuntime {
+  readonly reviewScopeCache: ReviewScopeCache
   instanceId: string
   readonly audit: RuntimeAudit
   setAuditRetentionDays(days: number): void
@@ -148,6 +152,7 @@ export function createAgentRuntime(components: AgentRuntimeComponents = {}): Age
 
   return {
     instanceId: randomUUID(),
+    reviewScopeCache: components.reviewScopeCache ?? new ReviewScopeCacheImpl(),
     confirmIds: components.confirmIds ?? new ConfirmIdSpace(),
     chatCancels: components.chatCancels ?? {
       register: () => new AbortController().signal,

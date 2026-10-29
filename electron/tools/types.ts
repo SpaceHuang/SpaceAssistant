@@ -79,6 +79,10 @@ export type WeChatRemoteContext = RemoteContext & { source: 'wechat' }
 export type ToolProgressPayload = { message?: string; raw?: string; rawDelta?: string; rawEncoding?: string; seq?: number; processPid?: number; processGroupId?: number; processOwnerToken?: string }
 
 export interface ToolExecutionContext {
+  /** Session-scoped scope cache handoff; only builtin file writers consume it. */
+  reviewScopeCache?: import('../confirmation/reviewScopeCache').ReviewScopeCache
+  reviewScopeCandidateScope?: import('../confirmation/reviewScopeCache').ReviewScopeCandidate
+  reviewScopeCandidateDigest?: string
   /** 重开后的模型面可读取的、已授权会话事实快照。 */
   historyFacts?: readonly HistoryFact[]
   workDir: string

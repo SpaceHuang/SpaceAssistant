@@ -130,6 +130,14 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
     overrideability: 'none'
   },
   {
+    id: 'SYS-REVIEWCACHE-001', owner: 'electron/confirmation + electron/tools', stage: 'final-check', category: 'integrity',
+    rationale: 'A reused file review scope remains active only while the named regular single-link file matches the latest controlled-write receipt and task-bound scope.',
+    effect: 'revoke', scope: 'electron/confirmation/toolCallGate.ts:review-scope-receipt;electron/tools/builtinExecutors.ts:controlled-write-receipt',
+    audit: 'Receipt mismatch revokes the in-memory grant and returns to the existing policy decision; write receipt includes opened file identity and content SHA-256.',
+    tests: ['electron/safeAtomicWrite.test.ts', 'electron/confirmation/reviewScopeWrite.test.ts', 'electron/confirmation/toolCallGate.test.ts'],
+    overrideability: 'none'
+  },
+  {
     id: 'SYS-SESSIONLEASE-001', owner: 'electron/database/sessionTranscript.ts + electron/runtime/sqliteAgentHistory.ts',
     stage: 'final-check', category: 'integrity',
     rationale: 'A terminal History and transcript commit must prove the live session execution owner and generation before recording the result.',

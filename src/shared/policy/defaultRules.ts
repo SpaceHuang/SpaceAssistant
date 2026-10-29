@@ -726,6 +726,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['wechat', 'feishu'], toolName: 'write_file', signals: ['write-target-new'] },
     denyClass: 'insufficient-info',
     action: 'ask',
+    reviewCacheSources: ['agent'],
     reason: '普通工作区新建文件属于 IM standard 审核候选'
   },
   {
@@ -734,6 +735,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['wechat', 'feishu'], toolName: 'edit_file', signals: ['write-target-existing', 'write-target-scope:inside-workdir', 'path-target:workdir-normal'] },
     denyClass: 'insufficient-info',
     action: 'ask',
+    reviewCacheSources: ['agent'],
     reason: '普通工作区内既有文件编辑属于 IM standard 审核候选'
   },
   // 高危路径具有人审底线，独立于 IM standard 的兜底自动审核，且在任何缓存/审核器之前执行。

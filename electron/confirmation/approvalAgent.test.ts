@@ -957,6 +957,18 @@ describe('parseApprovalVerdict（Skill v2：双维裁决 + 非对称容错，对
     })
   })
 
+  it('只有 approve 明确复用并回显合法候选摘要时才携带范围批准', () => {
+    const digest = 'a'.repeat(64)
+    expect(parseApprovalVerdict(`{"kind":"approve","riskLevel":"low","reuseApproved":true,"scopeCandidateDigest":"${digest}","reason":{"summary":"范围明确"}}`))
+      .toMatchObject({ kind: 'approve', reuseApproved: true, scopeCandidateDigest: digest })
+    expect(parseApprovalVerdict('{"kind":"approve","riskLevel":"low","reuseApproved":true,"scopeCandidateDigest":"bad","reason":{"summary":"ok"}}'))
+      .toMatchObject({ kind: 'approve' })
+    expect(parseApprovalVerdict('{"kind":"deny","reuseApproved":true,"scopeCandidateDigest":"' + digest + '"}'))
+      .not.toHaveProperty('reuseApproved')
+    expect(parseApprovalVerdict('{"kind":"approve","riskLevel":"low","reuseApproved":false,"scopeCandidateDigest":"' + digest + '","reason":{"summary":"ok"}}'))
+      .not.toHaveProperty('reuseApproved')
+  })
+
   it('A 矩阵降级：approve + critical → deny（无条件拒绝格，结论与自报风险矛盾时取严）', () => {
     const v = parseApprovalVerdict(
       '{"kind":"approve","riskLevel":"critical","reason":{"summary":"任务需要"}}'
@@ -1220,5 +1232,19 @@ describe('R5 护栏：审批提示词与 Skill 三态合同一致性（防漂移
     // 与 Skill 合同的三态取值一致（kind 取值集合同源）
     const skill = getBundledSecurityApprovalSkill()
     expect(skill.content).toContain('"kind":"undetermined"')
+  })
+
+  it('范围候选只以宿主事实展示，且复用字段必须回显同一摘要', async () => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const { getBundledSecurityApprovalSkill } = await import('../skills/bundled/securityApprovalSkill')
+    const digest = 'e'.repeat(64)
+    const rendered = renderCluePackForTest(clue({ reviewScopeCandidate: {
+      scopeCandidateDigest: digest, toolName: 'edit_file', operation: 'edit',
+      objects: [{ role: 'target', target: '/work/a.txt' }]
+    } }))
+    expect(rendered).toContain('reuseApproved=true')
+    expect(rendered).toContain(digest)
+    expect(rendered).toContain('/work/a.txt')
+    expect(getBundledSecurityApprovalSkill('high').content).toContain('当前会话继续执行同一范围')
   })
 })

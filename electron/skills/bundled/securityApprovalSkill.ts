@@ -25,7 +25,7 @@ export const BUNDLED_SECURITY_APPROVAL_SKILL_MD = `---
 name: security-approval
 description: "安全审批 Agent：对未命中规则的敏感工具调用做三态裁决（approve/deny/undetermined）。"
 triggers: []
-version: "2.3.0"
+version: "2.4.0"
 author: "SpaceAssistant"
 ---
 
@@ -142,6 +142,8 @@ author: "SpaceAssistant"
 - 放行：\`{"kind":"approve","riskLevel":"<low|medium|high|critical>","authorization":"<unknown|low|medium|high>","reason":{"summary":"<一句话给模型的可读理由>"}}\`
 - 拒绝：\`{"kind":"deny","riskLevel":"<...>","authorization":"<...>","reason":{"summary":"<一句话说明拒绝原因与可改方向>"}}\`
 - 判不了：\`{"kind":"undetermined","reason":{"summary":"<缺什么证据 / 为什么判不了>"}}\`
+
+如果线索包提供了「可选会话审核范围候选」，只有在本次 approve 明确覆盖候选中的同一工具、操作和**全部**目标，且可信任务证据允许后续在当前会话继续执行同一范围时，才可在 approve JSON 中额外返回 \`"reuseApproved":true\` 与原样 \`"scopeCandidateDigest":"<候选摘要>"\`。这不会扩大本次批准。拿不准、任务证据缺失/截断、目标不全、或候选与本次操作不一致时，省略这两个字段；deny / undetermined 永远不能批准复用。没有候选时不得输出这两个字段。
 
 只有三种输出，没有第四种。riskLevel 取 low / medium / high / critical；authorization 取
 unknown / low / medium / high，{{AUTHORIZATION_CAP}}。summary 面向调用方模型，不得包含

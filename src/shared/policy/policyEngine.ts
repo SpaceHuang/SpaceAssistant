@@ -417,6 +417,20 @@ function applyDefault(
   // 变换后先走快通道（确定性预判），未裁决交审批 Agent（answerer=agent）。
   const effective = deps.transform ? deps.transform({ action: 'ask' }) : 'ask'
   if (effective === 'auto-evaluator') {
+    const defaultWriteReviewRule = {
+      id: 'default-write-execute-ask',
+      when: 'invocation' as const,
+      action: 'ask' as const,
+      reviewCacheSources: ['agent'] as readonly import('../confirmation/types').ReviewCacheSource[],
+      reason: '默认按动作类别询问'
+    }
+    const regularWorkspaceFile = context.policyTier === 'standard' &&
+      (facts.toolName === 'edit_file' || facts.toolName === 'write_file') &&
+      facts.signals.some((signal) => signal.kind === 'path-target' && signal.zone === 'workdir-normal')
+    if (regularWorkspaceFile && deps.reviewScopeGrant && defaultWriteReviewRule.reviewCacheSources.includes(deps.reviewScopeGrant.source)) {
+      return { type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1',
+        cause: 'review-cache-current-task-constraint-v1', reason: 'approved review scope matched' }
+    }
     if (deps.autoEvaluator) {
       const res = deps.autoEvaluator(facts, context)
       if (res.approve) return autoAllow('default-write-execute-ask', facts)
@@ -573,6 +587,19 @@ export function decide(
       const transformed = deps.transform ? deps.transform(mode) : mode.action
       if (transformed !== 'allow') return requireConfirm(mode, facts, context.sessionId, context.lane, constraints)
     }
+  }
+
+  // A scope grant is consumed only after deny, human-required, old memory and outbound
+  // checks. Every effective ask in the current policy chain must explicitly permit its source.
+  const effectiveReviewRules = matchedActions.filter(({ action, rule }) =>
+    (action === 'ask' || action === 'auto-evaluator' || action === 'confirm-every-time') && !askUnlessHolds(rule, deps)
+  )
+  if (deps.reviewScopeGrant && effectiveReviewRules.length > 0 && effectiveReviewRules.every(({ rule }) =>
+    !rule.humanRequired && !rule.userOverride && !rule.locked &&
+    rule.reviewCacheSources?.includes(deps.reviewScopeGrant!.source) === true
+  )) {
+    return { type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1',
+      cause: 'review-cache-current-task-constraint-v1', reason: 'approved review scope matched' }
   }
 
   if (selectedAsk && !(onlyExplicitlyCacheableAsks && cacheHit?.type === 'auto-allow')) {

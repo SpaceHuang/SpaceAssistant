@@ -84,6 +84,26 @@ describe('AgentChannel（P2-3）', () => {
     expect('memory' in outcome).toBe(false)
   })
 
+  it('仅在 Agent 批准并回显当前宿主候选摘要时回传 agent 范围批准', async () => {
+    const digest = 'c'.repeat(64)
+    const candidate = { scopeCandidateDigest: digest, toolName: 'edit_file', operation: 'edit' as const,
+      objects: [{ role: 'target', target: '/work/a.txt' }] }
+    const { ch } = channel({
+      lane: 'desktop',
+      invokeApproval: async (invocation) => ({ ok: true,
+        verdict: { ...APPROVE, reuseApproved: true, scopeCandidateDigest: invocation.clue.reviewScopeCandidate?.scopeCandidateDigest } })
+    })
+    const accepted = await ch.request(req({ reviewScopeCandidate: candidate }))
+    expect(accepted).toMatchObject({ kind: 'approved', reviewScopeGrant: { source: 'agent', scopeCandidateDigest: digest } })
+
+    const { ch: mismatch } = channel({
+      lane: 'desktop',
+      invokeApproval: async () => ({ ok: true,
+        verdict: { ...APPROVE, reuseApproved: true, scopeCandidateDigest: 'd'.repeat(64) } })
+    })
+    expect(await mismatch.request(req({ reviewScopeCandidate: candidate }))).not.toHaveProperty('reviewScopeGrant')
+  })
+
   it('将当前外层 toolUseId 和理由一起绑定到审批线索包', async () => {
     const { ch, invokeApproval } = channel({ toolName: 'run_shell', toolUseId: 'outer-shell-call-9' })
     const request = req({ modelJustification: '核对当前目录', modelJustificationTruncated: true })

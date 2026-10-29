@@ -273,6 +273,15 @@ export interface ConfirmRequest {
   /** Per-call model claim; untrusted and shown only as review context. */
   modelJustification?: string
   modelJustificationTruncated?: boolean
+  /** Host-created candidate for an optional session review-scope grant; absence means one-call approval only. */
+  reviewScopeCandidate?: ReviewScopeApprovalCandidate
+}
+
+export interface ReviewScopeApprovalCandidate {
+  readonly scopeCandidateDigest: string
+  readonly toolName: 'edit_file' | 'write_file' | 'grep'
+  readonly operation: 'edit' | 'write' | 'search'
+  readonly objects: readonly { readonly role: string; readonly target: string }[]
 }
 
 // ===== 回答者（I1：回答者与 lane 正交；I3：记忆只源于人类）=====
@@ -320,6 +329,9 @@ export type ApprovalVerdict =
       reason: ApprovalReason
       riskLevel?: ApprovalRiskDimension
       authorization?: ApprovalAuthorizationDimension
+      /** Explicit Agent choice to approve the exact host candidate for later calls in this session. */
+      reuseApproved?: true
+      scopeCandidateDigest?: string
     }
   | {
       kind: 'deny'
@@ -341,6 +353,8 @@ export interface ApprovalCluePack {
   toolName: string
   /** Host-visible identifier of the exact outer model tool call. */
   toolUseId?: string
+  /** Host-created and complete candidate range, shown as untrusted target facts to the reviewer. */
+  reviewScopeCandidate?: ReviewScopeApprovalCandidate
   actionClass: ActionClass
   riskLevel: RiskLevel
   /** ConfirmSummary 纯文本摘要。 */
@@ -426,6 +440,7 @@ export type ConfirmOutcome =
   | {
       kind: 'approved'
       memory?: CacheKey
+      reviewScopeGrant?: { readonly source: ReviewCacheSource; readonly scopeCandidateDigest: string }
       reason?: ApprovalReason
       /** 本次批准的回答者；缺省视为 user（既有桌面 / IM 路径）。非 user 不得产生任何记忆写入（I3）。 */
       answererKind?: ConfirmAnswererKind
@@ -479,6 +494,9 @@ export type CacheKey =
     }
   | { kind: 'remote-write'; sessionId: string }
   | { kind: 'script-content'; digest: string; workdirDigest: string; sessionId: string }
+
+/** Provenance of a session review-scope grant; it is never inferred from a cached allow. */
+export type ReviewCacheSource = 'agent' | 'user'
 
 export interface DecisionCacheEntry {
   id: string
@@ -653,6 +671,8 @@ export interface PolicyRule {
   userOverride?: true
   /** This ask explicitly supports its declared user memory tier (for example exact script trust). */
   cacheableAsk?: true
+  /** Explicitly permits consuming a review-scope grant from the listed approval source. */
+  reviewCacheSources?: readonly ReviewCacheSource[]
   /** 安全语义标记：即使 rule.action 被档位映射为 auto-evaluator，也必须原渠道逐次人工确认。 */
   humanRequired?: boolean
   /** Explicit reviewer for an ask rule; defaults to the lane's established reviewer. */
@@ -695,6 +715,8 @@ export interface PolicyEngineDeps {
   config: Record<string, unknown>
   /** 迁移完成位（参数化配置引用问询）。 */
   migrationComplete: boolean
+  /** Host-verified active scope grant. Scope and task constraints are checked before this reaches policy. */
+  reviewScopeGrant?: { readonly source: ReviewCacheSource }
   /** 第 3 步自动审批器（可注入，缺省不裁决）。 */
   autoEvaluator?: AutoEvaluator
   /**
