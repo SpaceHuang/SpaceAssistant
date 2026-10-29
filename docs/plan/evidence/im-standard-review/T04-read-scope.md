@@ -38,6 +38,21 @@
 - Phase B 收尾：`npm run typecheck:shared` 通过；`npm run build:electron:incremental` 通过，含 pi-ai closure 与 session-storage 边界门禁；`npm run check:system-invariant-registry` 通过（12 registrations、42 references）；`git diff --check` 通过。第二次 `npm test` 退出码 0：1228 files passed、1 skipped；11853 tests passed、140 skipped。
 - Phase B（T04–T07）完成。未启用生产 v3、未改真实用户数据库；本地迁移只使用测试库。系统 invariant registry 无新增 invariant；审查行为继续由共享策略及版本化 floor 管理。
 
+## T08 浏览器已开启路径候选核对
+
+- RED：新增 v3 两 lane gate 用例后，`navigate` 仍返回 user 确认；隔离 v3 resolver 没有沿用已有 IM package action mapping。
+- GREEN：v3 resolver 对现有规则调用 `imEffectiveActionFor` 后，standard `browser-navigate-ask-remote` 与普通低影响 act 规则路由 Agent；`im-browser-act-danger-human` 是 locked humanRequired，仍真人逐次确认。
+- 结果：没有重复改写 browser extractor、invocation assembler 或执行器；按技术方案 §5 补齐 v3 resolver mapping 与 gate 测试。普通 navigate 和低影响 act 两 lane 到 Agent，高危 payment act 到 user；browser executor 原有 remote-session 检查及确认后执行用例保持。
+- 验收命令：`npm exec vitest run electron/confirmation/toolCallGate.test.ts electron/tools/browserExecutor.test.ts src/shared/policy/policyEngine.test.ts`；3 files / 336 tests passed，退出码 0。T08 完成；T09 的实际配置漂移和导航材料失效尚待验证。
+
+## T09 浏览器回执边界
+
+- RED：Agent 已确认后 `currentPageUrl` 对应的 browser-action host 从原页面切换到重定向后 host，recheck 应拒绝沿用旧范围；新增测试先观察到实现返回新的人审请求（安全预期），固定为通过用户重新确认而非旧 Agent receipt。
+- GREEN：browser prepared registration 已冻结 BrowserConfig/session/lane/remote/confirmation 状态；新增开关从 enabled 变 disabled 的漂移测试，验证 `BROWSER_PREPARED_POLICY_CHANGED` 且 executor 未调用。新增批准后 browser navigate 输入 URL 被替换的测试，gate 前返回 `STALE_AUTHORIZATION`，gate/初始 permit handoff spy 均未调用。agent safety recheck 对不同 current-page host facts 要求新的 user decision，覆盖重定向后的页面。
+- 限制：测试验证宿主事实/材料变化后不复用回执；没有真实登录态浏览器或真实网站重定向验收，方案要求后续真机验证。
+- 验收命令：`npm exec vitest run electron/tools/browserExecutor.test.ts electron/confirmation/agentSdkSafetyPolicy.test.ts electron/confirmation/toolCallGate.test.ts`；3 files / 258 tests passed，退出码 0。T09 完成；Phase C 收尾验证记录见下。
+- Phase C 收尾：`npm run typecheck:shared`、`npm run build:electron:incremental`、`npm run check:system-invariant-registry`（12 registrations、42 test references）及 `git diff --check` 均通过。`npm test` 退出码 0：1228 files passed、1 skipped；11858 tests passed、140 skipped。
+
 ## T05 基线
 
 - 命令：`npm exec vitest run electron/confirmation/toolCallGate.test.ts electron/confirmation/writeExecutionPermit.test.ts electron/confirmation/writePermitExecutor.test.ts electron/tools/writePermitReapproval.integration.test.ts`

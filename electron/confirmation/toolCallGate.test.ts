@@ -1584,6 +1584,23 @@ describe('evaluateToolCallGate', () => {
     expect(current.decision).toMatchObject({ type: 'require-confirm', ruleId: 'browser-navigate-ask-remote', answerer: 'agent', disposition: 'auto-eligible' })
   })
 
+  it.each(['wechat', 'feishu'] as const)('%s isolated v3 routes ordinary browser navigate/act to Agent and keeps dangerous act human', async (lane) => {
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const remoteContextValue = remoteContext({ source: lane })
+    const common = { lane, remoteContext: remoteContextValue, effectiveRules, imPolicySnapshot: snapshot,
+      browserConfig: { allowRemoteSessions: true, navigateRequiresConfirm: true, actRequiresConfirm: true } as never }
+    const navigate = await evaluateToolCallGate(base({ ...common, toolName: 'browser', toolInput: { action: 'navigate', mode: 'open', url: 'https://example.com' } }))
+    const lowRiskAct = await evaluateToolCallGate(base({ ...common, toolName: 'browser', toolInput: { action: 'act', instruction: 'search public documentation' } }))
+    const dangerousAct = await evaluateToolCallGate(base({ ...common, toolName: 'browser', toolInput: { action: 'act', instruction: 'submit payment' }, dangerAssessment: {
+      dangerous: true, source: 'keyword', userReason: 'payment', consequence: 'money'
+    } }))
+    expect(navigate.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'browser-navigate-ask-remote' })
+    expect(lowRiskAct.facts.signals).toContainEqual(expect.objectContaining({ kind: 'browser-action', sideEffect: 'read', completeness: 'complete' }))
+    expect(lowRiskAct.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'browser-act-ask-remote' })
+    expect(dangerousAct.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'im-browser-act-danger-human' })
+  })
+
   it('routes only a new ordinary in-workspace IM write through the standard review candidate', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/im-low-risk-create-'))
     const candidateDb = openDb()

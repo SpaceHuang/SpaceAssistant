@@ -306,6 +306,29 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toEqual({ kind: 'allow', authorizationVersion: 'policy-v1' })
   })
 
+  it('browser Agent approval is not reused after current page host changes (including redirect)', async () => {
+    const toolInput = { action: 'act', instruction: 'search public documentation' }
+    const browserBinding = { ...binding, capabilityId: 'browser',
+      inputSnapshotHash: createHash('sha256').update(JSON.stringify(toolInput)).digest('hex'),
+      capability: { state: 'known-authorized' as const, id: 'browser' } }
+    const pageFacts = (host: string): ContentFacts => ({ ...facts, toolName: 'browser', actionClass: 'outbound',
+      signals: [{ kind: 'browser-action', action: 'act', host, sideEffect: 'read', completeness: 'complete' } as never],
+      summary: { text: `browser act on ${host}` } })
+    const gateResult = (host: string): ToolCallGateResult => {
+      const currentFacts = pageFacts(host)
+      return { decision: { type: 'require-confirm', ruleId: 'browser-act-ask-remote', answerer: 'agent', riskLevel: 'low',
+        facts: currentFacts, memoryTiers: [], timeoutMs: 1000, disposition: 'auto-eligible' }, facts: currentFacts, approvedFactIds: [] }
+    }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(gateResult('origin.example')).mockResolvedValueOnce(gateResult('redirected.example'))
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => ({ ...baseArgs, toolName: 'browser', toolInput, lane: 'feishu' } as never), evaluateGate })
+    const approved = { ...browserBinding, authorizationVersion: 'browser-policy-v1' }
+
+    await expect(policy.evaluate(approved)).resolves.toMatchObject({ kind: 'ask', answerer: 'agent' })
+    markAgentSdkSafetyDecisionConfirmed(policy, approved, 'agent')
+    await expect(policy.evaluate({ ...approved, phase: 'recheck' })).resolves.toMatchObject({ kind: 'ask', answerer: 'user' })
+    expect(evaluateGate).toHaveBeenCalledTimes(2)
+  })
+
   it('applies a newly allowing action when the policy dependency fingerprint changed', async () => {
     const initial = result({ type: 'require-confirm', ruleId: 'browser-navigate-ask-desktop', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 })
     initial.policyDecision = { dependencyFingerprint: 'policy-before', verdict: 'require-confirm', reasonCode: 'browser-navigate-ask-desktop', answerer: 'user' } as never
@@ -660,6 +683,24 @@ describe('createAgentSdkSafetyPolicy', () => {
     })
     await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'deny', reasonCode: 'STALE_AUTHORIZATION' })
     expect(evaluateGate).not.toHaveBeenCalled()
+  })
+
+  it('browser URL replacement after approval fails input binding before gate or dispatch', async () => {
+    const approvedInput = { action: 'navigate', mode: 'open', url: 'https://example.test/start' }
+    const changedInput = { ...approvedInput, url: 'https://other.test/redirect-target' }
+    const browserBinding = { ...binding, capabilityId: 'browser',
+      inputSnapshotHash: createHash('sha256').update(JSON.stringify(approvedInput)).digest('hex'),
+      capability: { state: 'known-authorized' as const, id: 'browser' } }
+    const evaluateGate = vi.fn(async () => result({ type: 'auto-allow', ruleId: 'unsafe', reason: 'must not run' }))
+    const execute = vi.fn()
+    const policy = createAgentSdkSafetyPolicy({
+      resolveGateArgs: async () => ({ ...baseArgs, toolName: 'browser', toolInput: changedInput } as never),
+      evaluateGate,
+      onInitialGateResult: execute
+    })
+    await expect(policy.evaluate(browserBinding)).resolves.toMatchObject({ kind: 'deny', reasonCode: 'STALE_AUTHORIZATION' })
+    expect(evaluateGate).not.toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
   })
 
   it('保留 require-confirm 的回答者，且不签发 allow', async () => {

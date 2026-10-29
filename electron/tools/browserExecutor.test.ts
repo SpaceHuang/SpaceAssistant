@@ -146,6 +146,29 @@ describe('browserExecutor', () => {
     handle.release()
   })
 
+  it('关闭远程浏览器开关会使已批准的预备调用失效且不执行', async () => {
+    const execute = vi.fn(async () => ({ success: true }))
+    const registered = createBrowserRegisteredTool({ name: 'browser', execute } as never)
+    const controller = new AbortController()
+    const enabled = { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true }
+    const handle = await registered.begin(
+      { action: 'navigate', mode: 'open', url: 'https://example.com' },
+      { requestId: 'browser-disable-after-review', toolUseId: 'browser-disable-after-review-call', signal: controller.signal,
+        executionContext: baseCtx({ lane: 'feishu', remoteContext: { source: 'feishu' }, browserConfig: enabled }) }
+    )
+    handle.awaitConfirmation()
+    handle.confirm()
+    handle.beginValidation()
+    await expect(handle.validatePrepared({
+      requestId: 'browser-disable-after-review', toolUseId: 'browser-disable-after-review-call', signal: controller.signal,
+      runtimeContext: baseCtx({ lane: 'feishu', remoteContext: { source: 'feishu' },
+        browserConfig: { ...enabled, allowRemoteSessions: false } })
+    })).rejects.toThrow('BROWSER_PREPARED_POLICY_CHANGED')
+    expect(execute).not.toHaveBeenCalled()
+    handle.fail()
+    handle.release()
+  })
+
   it('keeps the approved user-confirmation state when validating and executing a prepared browser action', async () => {
     const execute = vi.fn(async () => ({ success: true }))
     const registered = createBrowserRegisteredTool({ name: 'browser', execute } as never)
