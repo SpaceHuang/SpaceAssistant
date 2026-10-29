@@ -161,6 +161,10 @@ export type FactSignal =
   | { kind: 'script-analysis'; signal: 'clean' | 'suspicious' | 'dangerous'; patterns: string[] }
   /** 脚本专属的网络命中信号（与通用 network-egress 区分，见 §5.2 规则）。 */
   | { kind: 'script-network'; patterns: string[] }
+  /** Complete, static HTTP target facts for the isolated standard IM script review candidate. */
+  | { kind: 'im-script-network-review-candidate'; status: 'complete'; host: string; method: 'GET' | 'HEAD'; url: string }
+  | { kind: 'script-execution-environment'; status: 'complete'; digest: string }
+  | { kind: 'script-execution-settings'; status: 'complete'; digest: string; interpreter: string }
   /** 未通过 isScriptCertifiedRemoteSafe 认证时产出。 */
   | { kind: 'script-uncertified' }
   /**

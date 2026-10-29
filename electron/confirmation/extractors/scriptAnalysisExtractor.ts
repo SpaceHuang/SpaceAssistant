@@ -9,6 +9,34 @@ import type { IrModule } from '../../shell/scriptIr/types'
 import type { ContentFacts, EnvFacts, FactSignal, ConfirmSummary } from '../../../src/shared/confirmation/types'
 import { CONFIRMATION_LABELS } from '../../../src/shared/confirmation/labels'
 
+function staticNetworkReviewCandidate(ir: IrModule): { host: string; method: 'GET' | 'HEAD'; url: string } | undefined {
+  if (ir.body.length !== 2) return undefined
+  const [imp, expression] = ir.body
+  if (imp?.kind !== 'import' || imp.names.length !== 1 || imp.names[0]?.module !== 'requests' || imp.names[0].alias) return undefined
+  if (expression?.kind !== 'expr' || expression.value.kind !== 'call') return undefined
+  const call = expression.value
+  if (call.callee.kind !== 'attr' || call.callee.base.kind !== 'name' || call.callee.base.id !== 'requests') return undefined
+  if (call.callee.attr !== 'get' && call.callee.attr !== 'head') return undefined
+  if (call.args.length !== 1 || call.args[0]?.kind !== 'string' || call.kwargs.length !== 2) return undefined
+  const timeout = call.kwargs.find((kw) => kw.name === 'timeout')?.value
+  const redirects = call.kwargs.find((kw) => kw.name === 'allow_redirects')?.value
+  if (call.kwargs.some((kw) => kw.name !== 'timeout' && kw.name !== 'allow_redirects')) return undefined
+  if (timeout?.kind !== 'number' || !Number.isFinite(Number(timeout.value)) || Number(timeout.value) <= 0 || Number(timeout.value) > 30) return undefined
+  if (redirects?.kind !== 'bool' || redirects.value !== false) return undefined
+  const value = call.args[0].value
+  let parsed: URL
+  try { parsed = new URL(value) } catch { return undefined }
+  const host = parsed.hostname.toLowerCase()
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || parsed.pathname !== '/' || parsed.search || parsed.hash) return undefined
+  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) return undefined
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) return undefined
+  return { host, method: call.callee.attr === 'get' ? 'GET' : 'HEAD', url: parsed.toString() }
+}
+
+export function hasStaticNetworkReviewCandidate(code: string): boolean {
+  try { return Boolean(staticNetworkReviewCandidate(parsePythonModule(code))) } catch { return false }
+}
+
 /**
  * 脚本内容分析提取器（run_script / run_script 类）。
  *
@@ -72,6 +100,8 @@ export function extractScriptSignals(
     }
     if (networkPatterns.length > 0) {
       signals.push({ kind: 'script-network', patterns: networkPatterns })
+      const candidate = staticNetworkReviewCandidate(ir)
+      if (candidate) signals.push({ kind: 'im-script-network-review-candidate', status: 'complete', ...candidate })
     }
     // 远程认证态：未通过 isScriptCertifiedRemoteSafe 认证时产 script-uncertified 信号
     if (!isScriptCertifiedRemoteSafe(ir)) {

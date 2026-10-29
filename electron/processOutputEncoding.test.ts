@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildPythonScriptEnv, buildShellEnv } from './processOutputEncoding'
+import { buildPythonScriptEnv, buildScriptExecutionEnv, buildShellEnv } from './processOutputEncoding'
 describe('processOutputEncoding', () => {
   it('buildShellEnv strips API keys and keeps PATH', () => {
     const env = buildShellEnv({
@@ -101,6 +101,16 @@ describe('processOutputEncoding', () => {
     if (process.platform === 'win32') {
       expect(env.PYTHONUTF8).toBe('1')
     }
+  })
+
+  it('remote script environment strips proxy routing while desktop keeps the configured environment', () => {
+    const source = { PATH: '/bin', HTTPS_PROXY: 'http://proxy.example', no_proxy: 'localhost' }
+    const remote = buildScriptExecutionEnv(source, 'wechat', true)
+    const desktop = buildScriptExecutionEnv(source, 'desktop')
+    expect(remote.HTTPS_PROXY).toBeUndefined()
+    expect(remote.no_proxy).toBeUndefined()
+    expect(desktop.HTTPS_PROXY).toBe(source.HTTPS_PROXY)
+    expect(desktop.no_proxy).toBe(source.no_proxy)
   })
 
 })

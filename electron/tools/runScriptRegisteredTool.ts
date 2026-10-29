@@ -1,6 +1,7 @@
-import { createHash } from 'node:crypto'
 import { definePlannedTool, type RegisteredTool, type ToolExecutionContext } from './plannedToolRegistry'
 import type { ToolExecutionContext as RuntimeExecutionContext, ToolExecutor, ToolExecutorResult } from './types'
+import { buildScriptExecutionEnv, stableScriptMaterialDigest, stableScriptMaterialSerialize } from '../processOutputEncoding'
+import { hasStaticNetworkReviewCandidate } from '../confirmation/extractors/scriptAnalysisExtractor'
 
 type ScriptSettings = Readonly<{
   workDir: string
@@ -12,6 +13,9 @@ type ScriptSettings = Readonly<{
 type PreparedScript = Readonly<{
   input: Record<string, unknown>
   settings: ScriptSettings
+  environment?: NodeJS.ProcessEnv
+  environmentDigest?: string
+  networkReviewCandidate: boolean
 }>
 
 export class RunScriptExecutionUncertainError extends Error {
@@ -38,7 +42,11 @@ function scriptSettings(runtime: RuntimeExecutionContext): ScriptSettings {
 }
 
 function hash(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+  return stableScriptMaterialDigest(value)
+}
+
+function scriptEnvironment(runtime: RuntimeExecutionContext, candidate: boolean): NodeJS.ProcessEnv {
+  return buildScriptExecutionEnv(process.env, runtime.lane, candidate)
 }
 
 /** Freeze code and interpreter inputs before the permit-bound dispatch claim. */
@@ -53,11 +61,35 @@ export function createRunScriptRegisteredTool(executor: ToolExecutor): Registere
     plan: async (input, planning) => {
       const runtime = planning.executionContext as RuntimeExecutionContext | undefined
       if (!runtime) throw new Error('RUN_SCRIPT_RUNTIME_CONTEXT_REQUIRED')
-      return { input: structuredClone(input), settings: scriptSettings(runtime) }
+      const networkReviewCandidate = input.language === 'python' && typeof input.code === 'string' && hasStaticNetworkReviewCandidate(input.code)
+      const environment = networkReviewCandidate ? scriptEnvironment(runtime, true) : undefined
+      const environmentDigest = environment ? stableScriptMaterialDigest(environment) : undefined
+      return { input: structuredClone(input), settings: scriptSettings(runtime), ...(environment ? { environment } : {}), environmentDigest, networkReviewCandidate }
     },
     validate: (prepared, execution) => {
-      if (JSON.stringify(scriptSettings(runtimeContext(execution))) !== JSON.stringify(prepared.settings)) {
+      if (stableScriptMaterialSerialize(scriptSettings(runtimeContext(execution))) !== stableScriptMaterialSerialize(prepared.settings)) {
         throw new Error('RUN_SCRIPT_PREPARED_SETTINGS_CHANGED')
+      }
+      const currentRuntime = runtimeContext(execution)
+      if (prepared.networkReviewCandidate !== (currentRuntime.expectedScriptNetworkReviewCandidate === true)) {
+        throw new Error('RUN_SCRIPT_GATE_CANDIDATE_BINDING_CHANGED')
+      }
+      if (prepared.networkReviewCandidate) {
+        if ((currentRuntime.lane === 'wechat' || currentRuntime.lane === 'feishu') && !currentRuntime.expectedScriptSettingsDigest) {
+          throw new Error('RUN_SCRIPT_EXPECTED_SETTINGS_BINDING_MISSING')
+        }
+        if (currentRuntime.expectedScriptSettingsDigest && currentRuntime.expectedScriptSettingsDigest !== hash(prepared.settings)) {
+          throw new Error('RUN_SCRIPT_GATE_SETTINGS_MISMATCH')
+        }
+        if (!prepared.environment || !prepared.environmentDigest || !currentRuntime.expectedScriptEnvironmentDigest) {
+          throw new Error('RUN_SCRIPT_EXPECTED_ENVIRONMENT_BINDING_MISSING')
+        }
+        if (stableScriptMaterialDigest(scriptEnvironment(currentRuntime, true)) !== prepared.environmentDigest) {
+          throw new Error('RUN_SCRIPT_PREPARED_ENVIRONMENT_CHANGED')
+        }
+        if (currentRuntime.expectedScriptEnvironmentDigest !== prepared.environmentDigest) {
+          throw new Error('RUN_SCRIPT_GATE_ENVIRONMENT_MISMATCH')
+        }
       }
     },
     execute: async (prepared, execution) => {
@@ -73,6 +105,7 @@ export function createRunScriptRegisteredTool(executor: ToolExecutor): Registere
         workDir: prepared.settings.workDir,
         userDataDir: prepared.settings.userDataDir,
         toolsConfig,
+        ...(prepared.environment ? { scriptEnvironment: structuredClone(prepared.environment) } : {}),
         requestId: execution.requestId,
         toolUseId: execution.toolUseId,
         signal: execution.signal
@@ -89,7 +122,8 @@ export function createRunScriptRegisteredTool(executor: ToolExecutor): Registere
       inputDigest: hash(prepared.input),
       language: prepared.input.language,
       codeDigest: hash(typeof prepared.input.code === 'string' ? prepared.input.code : ''),
-      settingsDigest: hash(prepared.settings)
+      settingsDigest: hash(prepared.settings),
+      ...(prepared.environmentDigest ? { environmentDigest: prepared.environmentDigest } : {})
     }),
     display: (prepared) => ({
       language: prepared.input.language,

@@ -1,4 +1,19 @@
 import { augmentShellPathEnv, pickSafeNodeOptions } from './shell/shellSpawnEnv'
+import { createHash } from 'node:crypto'
+
+export function stableScriptMaterialSerialize(value: unknown): string {
+  const normalize = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(normalize)
+    if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, normalize(child)]))
+    return item
+  }
+  return JSON.stringify(normalize(value))
+}
+
+export function stableScriptMaterialDigest(value: unknown): string {
+  return createHash('sha256').update(stableScriptMaterialSerialize(value)).digest('hex')
+}
 
 /** 运行 shell 命令时的子进程环境：剔除 API Key 等敏感变量。 */
 export function buildShellEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -48,6 +63,15 @@ export function buildPythonScriptEnv(base: NodeJS.ProcessEnv = process.env): Nod
   env.PYTHONIOENCODING = 'utf-8'
   if (process.platform === 'win32') {
     env.PYTHONUTF8 = '1'
+  }
+  return env
+}
+
+/** Freeze the child environment for run_script; remote IM scripts cannot inherit proxy routing. */
+export function buildScriptExecutionEnv(base: NodeJS.ProcessEnv = process.env, lane?: string, networkReviewCandidate = false): NodeJS.ProcessEnv {
+  const env = buildPythonScriptEnv(base)
+  if (networkReviewCandidate && (lane === 'wechat' || lane === 'feishu')) {
+    for (const key of Object.keys(env)) if (/^(http|https|all|no)_proxy$/i.test(key)) delete env[key]
   }
   return env
 }

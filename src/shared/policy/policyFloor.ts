@@ -86,6 +86,8 @@ export function resolveImPolicyFloorForVersion(version: unknown): readonly Polic
         ? { ...rule, match: { ...rule.match!, signals: ['write-target-scope:outside-workdir', 'write-target-unsupported'] } }
       : rule.id === 'remote-wechat-media-outside-deny'
         ? { ...rule, match: { ...rule.match!, toolName: 'wechat_send', signals: ['wechat-media-target:outside-workdir', 'policy-tier:standard'] } }
+      : rule.id === 'script-network-deny-remote' || rule.id === 'script-uncertified-ask-remote'
+        ? { ...rule, match: { ...rule.match!, excludeSignals: ['im-script-network-review-candidate:complete'] } }
         : rule), ...unverifiedTargetFloors, nonstandardWechatMediaDeny, incompleteWechatReplyMediaDeny]
   }
   return DEFAULT_FLOOR

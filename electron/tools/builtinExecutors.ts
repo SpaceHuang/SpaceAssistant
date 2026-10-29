@@ -36,7 +36,7 @@ import {
   outcomeFromFileToolSignal,
   throwIfAborted
 } from './toolExecutionResource'
-import { buildPythonScriptEnv } from '../processOutputEncoding'
+import { buildScriptExecutionEnv } from '../processOutputEncoding'
 import { UTF8_CONTRACT } from '../processOutput/contracts'
 import { createChildStreamDecoder } from '../processOutput/decodeChildOutput'
 import { processTreeKiller, runCommandWithTimeout } from '../spawnUtil'
@@ -2461,7 +2461,7 @@ export const runScriptExecutor: ToolExecutor = {
       return { success: false, error: caseId, diagnostic: { caseId: caseId.toLowerCase().replace(/_/g, '-'), category: 'executor', retryable: false }, duration: Date.now() - started }
     }
     ctx.sendProgress('script', fallbackFrom ? `未找到 ${fallbackFrom}，改用 ${command} 启动 Python...` : `启动 ${interpreterName}...`)
-    const env = buildPythonScriptEnv()
+    const env = ctx.scriptEnvironment ?? buildScriptExecutionEnv(process.env, ctx.lane)
     // §7.5 / §12-#6：宿主侧已用 PYTHONUTF8=1 与 PYTHONIOENCODING=utf-8 钉死契约，这里显式登记同一契约。
     const stdoutDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })
     const stderrDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })

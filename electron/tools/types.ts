@@ -107,6 +107,14 @@ export interface ToolExecutionContext {
   signal: AbortSignal
   fileStateCache: import('../fileStateCache').FileStateCache
   toolsConfig: ToolsConfig
+  /** run_script only: immutable filtered environment captured during permit planning. */
+  scriptEnvironment?: NodeJS.ProcessEnv
+  /** Digest of the environment facts accepted by the initial policy gate. */
+  expectedScriptEnvironmentDigest?: string
+  /** Digest of interpreter and execution settings accepted by the initial policy gate. */
+  expectedScriptSettingsDigest?: string
+  /** Set only when the gate approved the narrow static-network review candidate facts. */
+  expectedScriptNetworkReviewCandidate?: boolean
   wikiConfig?: WikiConfig
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig

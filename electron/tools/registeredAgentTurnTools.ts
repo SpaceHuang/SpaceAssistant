@@ -191,7 +191,7 @@ export function createRegisteredAgentTurnTools(input: {
       if (input.refreshExecutionContext) {
         const currentContext = record.runtimeContext
         if (!isRecord(currentContext)) throw new Error('PREPARED_EXECUTION_CONTEXT_NOT_REFRESHABLE')
-        const safetyOwned = Object.fromEntries(['readExecutionPermit', 'writeExecutionPermit', 'decisionRuleId', 'autoApprovedWrite'].flatMap((key) =>
+        const safetyOwned = Object.fromEntries(['readExecutionPermit', 'writeExecutionPermit', 'decisionRuleId', 'autoApprovedWrite', 'expectedScriptEnvironmentDigest', 'expectedScriptSettingsDigest', 'expectedScriptNetworkReviewCandidate'].flatMap((key) =>
           Object.prototype.hasOwnProperty.call(currentContext, key) ? [[key, currentContext[key]]] : []
         ))
         const refreshed = await input.refreshExecutionContext(call, stage, currentContext)
