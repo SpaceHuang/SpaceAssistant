@@ -124,7 +124,7 @@ import { CONFIRMATION_LABELS } from '../../src/shared/confirmation/labels'
 import { createInvocationFactsSnapshot } from '../../src/shared/confirmation/invocationFactsSnapshot'
 import { ReviewScopeCache, type ReviewScopeCandidate } from './reviewScopeCache'
 import { verifyReviewFileReceipt } from '../safeAtomicWrite'
-import { isReviewScopeWriteEligible } from './reviewScopeEligibility'
+import { isReviewScopeWriteEligible, projectReviewScopeEditResult } from './reviewScopeEligibility'
 
 
 /** 出站写工具判定（等价现 toolChatLoop.isOutboundWriteTool：未知/非读 fail-closed 计写）。 */
@@ -1487,13 +1487,18 @@ async function buildReviewScopeCandidate(
   if (!subjectId || lane === 'automation') return undefined
   const proposedContent = args.toolName === 'write_file'
     ? typeof args.toolInput.content === 'string' ? args.toolInput.content : undefined
-    : typeof args.toolInput.newText === 'string' ? args.toolInput.newText : undefined
+    : typeof args.toolInput.old_string === 'string' && typeof args.toolInput.new_string === 'string'
+      ? await projectReviewScopeEditResult({ target: writePathFact, oldString: args.toolInput.old_string,
+          newString: args.toolInput.new_string, replaceAll: Boolean(args.toolInput.replace_all),
+          tolerateEscapeLayer: args.toolInput.tolerate_escape_layer === true })
+      : undefined
+  if (args.toolName === 'edit_file' && proposedContent === undefined) return undefined
   if (args.toolName === 'write_file' && proposedContent === undefined) return undefined
   if (!await isReviewScopeWriteEligible({ target: writePathFact, workDir: args.workDir, ...(proposedContent !== undefined ? { proposedContent } : {}) })) return undefined
   const toolName = args.toolName
   const operation = toolName === 'edit_file' ? 'edit' : 'write'
   const exactParameters = toolName === 'edit_file'
-    ? { oldText: args.toolInput.oldText, replaceAll: args.toolInput.replaceAll === true }
+    ? { replaceAll: Boolean(args.toolInput.replace_all) }
     : {}
   return {
     lane: lane as ReviewScopeCandidate['lane'], sessionId: args.sessionId, subjectId,

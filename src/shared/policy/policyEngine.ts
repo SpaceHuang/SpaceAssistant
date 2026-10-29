@@ -592,10 +592,10 @@ export function decide(
   // A scope grant is consumed only after deny, human-required, old memory and outbound
   // checks. Every effective ask in the current policy chain must explicitly permit its source.
   const effectiveReviewRules = matchedActions.filter(({ action, rule }) =>
-    (action === 'ask' || action === 'auto-evaluator' || action === 'confirm-every-time') &&
-    !rule.humanRequired && !rule.userOverride && !rule.locked && !askUnlessHolds(rule, deps)
+    (action === 'ask' || action === 'auto-evaluator' || action === 'confirm-every-time') && !askUnlessHolds(rule, deps)
   )
   if (deps.reviewScopeGrant && effectiveReviewRules.length > 0 && effectiveReviewRules.every(({ rule }) =>
+    !rule.humanRequired && !rule.userOverride && !rule.locked &&
     rule.reviewCacheSources?.includes(deps.reviewScopeGrant!.source) === true
   )) {
     return { type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1',

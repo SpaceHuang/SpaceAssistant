@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { WritePathFact } from './extractors/writePathFacts'
-import { isReviewScopeWriteEligible, REVIEW_SCOPE_SCRIPT_EXTENSIONS } from './reviewScopeEligibility'
+import { isReviewScopeWriteEligible, projectReviewScopeEditResult, REVIEW_SCOPE_SCRIPT_EXTENSIONS } from './reviewScopeEligibility'
 
 const dirs: string[] = []
 async function root(): Promise<string> {
@@ -55,5 +55,19 @@ describe('review scope target eligibility', () => {
     const stat = await fs.stat(target)
     expect(await isReviewScopeWriteEligible({ target: { ...fact(target, 'file'), identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs, nlink: stat.nlink } }, workDir })).toBe(true)
     expect(await isReviewScopeWriteEligible({ target: fact(target, 'file'), workDir })).toBe(false)
+  })
+
+  it('projects the actual replace_all result before checking executable headers', async () => {
+    const workDir = await root()
+    const target = path.join(workDir, 'normal.txt')
+    await fs.writeFile(target, 'draft\nDRAFT\n')
+    const stat = await fs.stat(target)
+    const writeFact: WritePathFact = { ...fact(target, 'file'), identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode,
+      size: stat.size, mtimeMs: stat.mtimeMs, nlink: stat.nlink } }
+    const result = await projectReviewScopeEditResult({ target: writeFact, oldString: 'draft', newString: '#!/bin/sh', replaceAll: true, tolerateEscapeLayer: false })
+    expect(result).toBe('#!/bin/sh\nDRAFT\n')
+    expect(await isReviewScopeWriteEligible({ target: writeFact, workDir, proposedContent: result })).toBe(false)
+    await expect(projectReviewScopeEditResult({ target: writeFact, oldString: 'draft', newString: 'x', replaceAll: false, tolerateEscapeLayer: true }))
+      .resolves.toBeUndefined()
   })
 })

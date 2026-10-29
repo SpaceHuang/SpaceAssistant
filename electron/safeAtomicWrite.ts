@@ -201,6 +201,7 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
   })
   if (!result.ok) {
     if (result.caseId === 'write-directory-cancelled') throw new SafeAtomicWriteUncertainError()
+    if (result.caseId === 'write-committed-receipt-invalid') throw new SafeAtomicWriteUncertainError(new Error(result.caseId))
     const message = result.caseId === 'write-target-exists'
       ? '目标文件已存在，拒绝覆盖新建路径'
       : result.caseId === 'write-file-identity-changed'

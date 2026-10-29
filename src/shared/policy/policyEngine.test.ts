@@ -149,6 +149,22 @@ describe('review scope cache policy boundary', () => {
       .toMatchObject({ type: 'require-confirm' })
   })
 
+  it.each([
+    ['user override ask', { ...eligible, id: 'explicit-user-ask', userOverride: true }, 'user'],
+    ['locked ask', { ...eligible, id: 'locked-ask', locked: true }, 'agent']
+  ] as const)('scope grant preserves a simultaneously matched %s', (_label, extraRule, answerer) => {
+    expect(decide(facts, context, [eligible, extraRule], deps({ reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'require-confirm', answerer })
+  })
+
+  it('does not skip a simultaneously matched auto-evaluator', () => {
+    const evaluate = vi.fn(() => ({ approve: true, reason: 'approved now' }))
+    expect(decide(facts, context, [eligible, { ...eligible, id: 'independent-auto', action: 'auto-evaluator', reviewCacheSources: undefined }],
+      deps({ reviewScopeGrant: { source: 'agent' }, autoEvaluator: evaluate })))
+      .toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(evaluate).not.toHaveBeenCalled()
+  })
+
   it('records both stable cache-policy rule IDs in the policy decision trace', () => {
     const result = decide(facts, context, [eligible], deps({ reviewScopeGrant: { source: 'agent' } }))
     const trace = createPolicyDecision({ decision: result, invocationId: 'review-inv', toolUseId: 'review-call',

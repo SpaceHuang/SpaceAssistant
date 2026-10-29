@@ -10,6 +10,52 @@ const MACHO_MAGICS = new Set([
   'feedface', 'feedfacf', 'cefaedfe', 'cffaedfe', 'cafebabe', 'cafebabf', 'bebafeca', 'bfbafeca'
 ])
 const HEADER_READ_LIMIT = 1024 * 1024 + 4
+const EDIT_PROJECTION_LIMIT = 4 * 1024 * 1024
+
+/** Build the exact normal edit result from the executor's schema and EOL semantics; uncertainty disables the cache candidate. */
+export async function projectReviewScopeEditResult(input: {
+  readonly target: WritePathFact
+  readonly oldString: string
+  readonly newString: string
+  readonly replaceAll: boolean
+  readonly tolerateEscapeLayer: boolean
+}): Promise<string | undefined> {
+  if (input.tolerateEscapeLayer || input.target.targetKind !== 'file' || !input.target.identity) return undefined
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    const before = await fs.lstat(input.target.normalizedPath)
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) return undefined
+    handle = await fs.open(input.target.normalizedPath, fsConstantsNoFollow())
+    const opened = await handle.stat()
+    const expected = input.target.identity
+    if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino || opened.mode !== expected.mode ||
+      opened.size !== expected.size || opened.mtimeMs !== expected.mtimeMs || opened.nlink !== 1 || opened.size > EDIT_PROJECTION_LIMIT) return undefined
+    const current = await handle.readFile({ encoding: 'utf8' })
+    const after = await handle.stat()
+    const named = await fs.lstat(input.target.normalizedPath)
+    if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs ||
+      named.dev !== opened.dev || named.ino !== opened.ino || named.size !== opened.size || named.mtimeMs !== opened.mtimeMs || named.isSymbolicLink()) return undefined
+    const fileEol = current.includes('\r\n') ? '\r\n' : '\n'
+    const normalized = current.replace(/\r\n/g, '\n')
+    const oldString = input.oldString.replace(/\r\n/g, '\n')
+    const newString = input.newString.replace(/\r\n/g, '\n')
+    let result: string
+    if (oldString === '') result = newString
+    else if (input.replaceAll) {
+      if (!normalized.includes(oldString)) return undefined
+      result = normalized.split(oldString).join(newString)
+    } else {
+      const index = normalized.indexOf(oldString)
+      if (index < 0) return undefined
+      result = normalized.slice(0, index) + newString + normalized.slice(index + oldString.length)
+    }
+    return fileEol === '\r\n' ? result.replace(/\n/g, '\r\n') : result
+  } catch {
+    return undefined
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
+}
 
 function hasExecutableMagic(bytes: Buffer): boolean {
   if (bytes.length >= 2 && bytes[0] === 0x23 && bytes[1] === 0x21) return true
