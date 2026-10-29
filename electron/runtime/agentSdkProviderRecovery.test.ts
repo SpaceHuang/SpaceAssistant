@@ -44,7 +44,7 @@ describe('createAgentSdkProviderRecovery', () => {
       requiredUserMessage: { id: 'user-current', message: messages[2]! }
     }
     const result = await recover(input)
-    expect(result).toEqual({ kind: 'retry', reasonCode: 'PROVIDER_CONTEXT_OVERFLOW', messages: [messages[2]], retryEvent: { attempt: 1, code: 'provider_context_overflow' }, recordTranscriptCompaction: true })
+    expect(result).toEqual({ kind: 'retry', reasonCode: 'PROVIDER_CONTEXT_OVERFLOW', messages: [messages[2]], retryEvent: { attempt: 1, code: 'provider_context_overflow' }, recordTranscriptCompaction: true, recoveryKind: 'overflow', plannedWaitMs: 0, maxAttempts: 5 })
   })
 
   it('从多轮工具后缀恢复时用 canonical required user 定位边界并保留后续工具对', async () => {
@@ -62,7 +62,7 @@ describe('createAgentSdkProviderRecovery', () => {
     expect(result).toEqual({
       kind: 'retry', reasonCode: 'PROVIDER_CONTEXT_OVERFLOW',
       messages: [currentUser, toolAssistant, toolResult],
-      retryEvent: { attempt: 1, code: 'provider_context_overflow' }, recordTranscriptCompaction: true
+      retryEvent: { attempt: 1, code: 'provider_context_overflow' }, recordTranscriptCompaction: true, recoveryKind: 'overflow', plannedWaitMs: 0, maxAttempts: 5
     })
   })
 
@@ -74,7 +74,7 @@ describe('createAgentSdkProviderRecovery', () => {
       currentUserMessageId: 'user-current',
       requiredUserMessage: { id: 'user-current', message: messages[2]! }
     })
-    expect(result).toEqual({ kind: 'retry', reasonCode: 'SILENT_CONTEXT_OVERFLOW', messages: [messages[2]], retryEvent: { attempt: 1, code: 'provider_context_overflow' }, recordTranscriptCompaction: true })
+    expect(result).toEqual({ kind: 'retry', reasonCode: 'SILENT_CONTEXT_OVERFLOW', messages: [messages[2]], retryEvent: { attempt: 1, code: 'provider_context_overflow' }, recordTranscriptCompaction: true, recoveryKind: 'overflow', plannedWaitMs: 0, maxAttempts: 5 })
   })
 
   it('does not infer silent overflow from an untrusted context window', async () => {
@@ -90,7 +90,7 @@ describe('createAgentSdkProviderRecovery', () => {
     const recover = createAgentSdkProviderRecovery({ contextWindow: 100, contextWindowTrusted: true })
     const rateLimit = await recover({ error: Object.assign(new Error('rate limit'), { status: 429 }), attempt: 1, modelTurn: 1, routeId: 'r', messages })
     const secondOverflow = await recover({ response: { finishReason: 'stop', usage: { inputTokens: 101, outputTokens: 0 }, hasOutputContent: true }, attempt: 2, modelTurn: 1, routeId: 'r', messages })
-    expect(rateLimit).toMatchObject({ kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', maxAttempts: 3 })
+    expect(rateLimit).toMatchObject({ kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', maxAttempts: 5 })
     expect(secondOverflow).toEqual({ kind: 'reject', reasonCode: 'SILENT_CONTEXT_OVERFLOW_RETRY_LIMIT' })
   })
 
@@ -98,12 +98,46 @@ describe('createAgentSdkProviderRecovery', () => {
     const recover = createAgentSdkProviderRecovery({ contextWindow: 100, contextWindowTrusted: true })
     const rateLimit = await recover({ error: Object.assign(new Error('busy'), { status: 429, headers: { 'retry-after': '2' } }), attempt: 1, modelTurn: 1, routeId: 'r', messages })
     const server = await recover({ error: Object.assign(new Error('unavailable'), { status: 503 }), attempt: 2, modelTurn: 1, routeId: 'r', messages })
-    const exhausted = await recover({ error: Object.assign(new Error('unavailable'), { status: 503 }), attempt: 3, modelTurn: 1, routeId: 'r', messages })
+    const exhausted = await recover({ error: Object.assign(new Error('unavailable'), { status: 503 }), attempt: 5, attemptInRequest: 5, recoveryCounts: { transient: 4, idleTimeout: 0, overflow: 0, effort: 0 }, modelTurn: 1, routeId: 'r', messages })
     const auth = await recover({ error: Object.assign(new Error('unauthorized'), { status: 401 }), attempt: 1, modelTurn: 1, routeId: 'r', messages })
-    expect(rateLimit).toMatchObject({ kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', retryAfterMs: 2000, maxAttempts: 3 })
-    expect(server).toMatchObject({ kind: 'retry', reasonCode: 'PROVIDER_SERVER_ERROR', maxAttempts: 3 })
+    expect(rateLimit).toMatchObject({ kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', retryAfterMs: 2000, maxAttempts: 5, recoveryKind: 'transient' })
+    expect(server).toMatchObject({ kind: 'retry', reasonCode: 'PROVIDER_SERVER_ERROR', maxAttempts: 5, recoveryKind: 'transient' })
     expect(exhausted).toEqual({ kind: 'reject', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' })
     expect(auth).toBeUndefined()
+  })
+
+  it('为瞬时故障返回有界全抖动等待和恢复分类，并允许最多五次物理尝试', async () => {
+    const recover = createAgentSdkProviderRecovery({ random: () => 0.5 })
+    const first = await recover({ error: Object.assign(new Error('busy'), { status: 503 }), attempt: 1, attemptInRequest: 1, recoveryCounts: { transient: 0, idleTimeout: 0, overflow: 0, effort: 0 }, waitBudgetRemainingMs: 60_000, modelTurn: 1, routeId: 'r', messages })
+    const fourth = await recover({ error: Object.assign(new Error('busy'), { status: 503 }), attempt: 4, attemptInRequest: 4, recoveryCounts: { transient: 3, idleTimeout: 0, overflow: 0, effort: 0 }, waitBudgetRemainingMs: 60_000, modelTurn: 1, routeId: 'r', messages })
+    const fifth = await recover({ error: Object.assign(new Error('busy'), { status: 503 }), attempt: 5, attemptInRequest: 5, recoveryCounts: { transient: 4, idleTimeout: 0, overflow: 0, effort: 0 }, waitBudgetRemainingMs: 60_000, modelTurn: 1, routeId: 'r', messages })
+    expect(first).toMatchObject({ kind: 'retry', maxAttempts: 5, recoveryKind: 'transient', plannedWaitMs: 250 })
+    expect(fourth).toMatchObject({ kind: 'retry', maxAttempts: 5, recoveryKind: 'transient', plannedWaitMs: 2000 })
+    expect(fifth).toEqual({ kind: 'reject', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' })
+  })
+
+  it('允许注入时钟解析 Retry-After HTTP-date，并用注入随机源固定抖动', async () => {
+    const now = Date.parse('2026-10-30T00:00:00.000Z')
+    const recover = createAgentSdkProviderRecovery({ now: () => now, random: () => 0 })
+    const result = await recover({
+      error: Object.assign(new Error('busy'), { status: 429, headers: { 'Retry-After': new Date(now + 1000).toUTCString() } }),
+      attempt: 1, attemptInRequest: 1, recoveryCounts: { transient: 0, idleTimeout: 0, overflow: 0, effort: 0 },
+      waitBudgetRemainingMs: 60_000, modelTurn: 1, routeId: 'r', messages
+    })
+    expect(result).toMatchObject({ kind: 'retry', recoveryKind: 'transient', plannedWaitMs: 1000, retryAfterMs: 1000 })
+  })
+
+  it('为 effort、空闲超时与溢出分别计数，同时受共享物理尝试上限约束', async () => {
+    const recover = createAgentSdkProviderRecovery({ contextWindow: 100, contextWindowTrusted: true })
+    const afterTransient = { transient: 1, idleTimeout: 0, overflow: 0, effort: 0 }
+    const idle = await recover({ error: new ModelStreamIdleTimeoutError(120_000), attempt: 2, attemptInRequest: 2, recoveryCounts: afterTransient, waitBudgetRemainingMs: 0, modelTurn: 1, routeId: 'r', messages })
+    const overflow = await recover({ error: Object.assign(new Error('context length exceeded'), { type: 'context_length_exceeded' }), attempt: 2, attemptInRequest: 2, recoveryCounts: { ...afterTransient, idleTimeout: 1 }, waitBudgetRemainingMs: 0, modelTurn: 1, routeId: 'r', messages })
+    const overflowUsed = await recover({ response: { finishReason: 'stop', usage: { inputTokens: 101, outputTokens: 0 }, hasOutputContent: true }, attempt: 3, attemptInRequest: 3, recoveryCounts: { ...afterTransient, idleTimeout: 1, overflow: 1 }, waitBudgetRemainingMs: 0, modelTurn: 1, routeId: 'r', messages })
+    const physicalLimit = await recover({ error: new ModelStreamIdleTimeoutError(120_000), attempt: 5, attemptInRequest: 5, recoveryCounts: afterTransient, waitBudgetRemainingMs: 0, modelTurn: 1, routeId: 'r', messages })
+    expect(idle).toMatchObject({ kind: 'retry', recoveryKind: 'idle-timeout', maxAttempts: 5, plannedWaitMs: 0 })
+    expect(overflow).toMatchObject({ kind: 'retry', recoveryKind: 'overflow', maxAttempts: 5, plannedWaitMs: 0 })
+    expect(overflowUsed).toEqual({ kind: 'reject', reasonCode: 'SILENT_CONTEXT_OVERFLOW_RETRY_LIMIT' })
+    expect(physicalLimit).toEqual({ kind: 'reject', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' })
   })
 
   it('fails closed when recovery selection drops the required user message', async () => {
@@ -129,7 +163,7 @@ describe('createAgentSdkProviderRecovery', () => {
     // 挂起的请求体本身没有问题：原样重发（工具结果已在消息里，重试幂等），不触发转录压缩
     expect(retry).toEqual({
       kind: 'retry', reasonCode: 'PROVIDER_STREAM_IDLE_TIMEOUT', messages,
-      retryEvent: { attempt: 1, code: 'provider_stream_idle_timeout' }, recordTranscriptCompaction: false
+      retryEvent: { attempt: 1, code: 'provider_stream_idle_timeout' }, recordTranscriptCompaction: false, recoveryKind: 'idle-timeout', plannedWaitMs: 0, maxAttempts: 5
     })
     const second = await recover({
       error: idleError, attempt: 2, modelTurn: 2, routeId: 'deepseek-main', messages

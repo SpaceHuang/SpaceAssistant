@@ -5,7 +5,7 @@ export type HistoryEvent = {
   turnId: string
   sequence: number
   schemaVersion: number
-  kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'tool-call-deferred' | 'unknown-effect-risk-accepted' | 'unknown-effect-retry-approved' | 'unknown-effect-retry-consumed' | 'unknown-effect-resolved' | 'approval-waiting' | 'approval-resolved' | 'approval-deferred' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'
+  kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'provider-attempt-result' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'tool-call-deferred' | 'unknown-effect-risk-accepted' | 'unknown-effect-retry-approved' | 'unknown-effect-retry-consumed' | 'unknown-effect-resolved' | 'approval-waiting' | 'approval-resolved' | 'approval-deferred' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'
   payload: unknown
 }
 
@@ -78,16 +78,33 @@ export class InvocationHistoryWriter {
       if (requiredVersion !== undefined && writerVersion !== requiredVersion) throw new HistoryVersionConflict(requiredVersion, writerVersion)
       const expectedVersion = requiredVersion ?? writerVersion
       if (snapshot.version !== expectedVersion) throw new HistoryVersionConflict(expectedVersion, snapshot.version)
+      if (events.length === 1 && events[0]?.kind === 'provider-attempt-result') {
+        const payload = events[0].payload as { requestId?: unknown; attempt?: unknown }
+        if (typeof payload.requestId === 'string' && Number.isInteger(payload.attempt)) {
+          const key = `${this.identity.invocationId}:provider-attempt:${payload.requestId}:${payload.attempt}`
+          const previous = snapshot.events.find((event) => event.idempotencyKey === key)
+          if (previous) {
+            if (previous.kind !== 'provider-attempt-result' || stable(previous.payload) !== stable(events[0].payload)) throw new HistoryIdempotencyConflict(key)
+            this.version = snapshot.version
+            return { version: snapshot.version, duplicate: true, events: [previous] }
+          }
+        }
+      }
       beforeAppend?.()
       const batch = events.map(({ kind, payload }, index): HistoryEvent => {
         const sequence = expectedVersion + index + 1
+        const attemptPayload = kind === 'provider-attempt-result' && payload && typeof payload === 'object'
+          ? payload as { requestId?: unknown; attempt?: unknown }
+          : undefined
         return {
           invocationId: this.identity.invocationId,
           turnId: this.identity.turnId,
           sequence,
           schemaVersion: this.identity.schemaVersion ?? snapshot.schemaVersion,
           eventId: `${this.identity.invocationId}:history:${sequence}`,
-          idempotencyKey: `${this.identity.invocationId}:${kind}:${sequence}`,
+          idempotencyKey: attemptPayload && typeof attemptPayload.requestId === 'string' && Number.isInteger(attemptPayload.attempt)
+            ? `${this.identity.invocationId}:provider-attempt:${attemptPayload.requestId}:${attemptPayload.attempt}`
+            : `${this.identity.invocationId}:${kind}:${sequence}`,
           kind,
           payload
         }
@@ -176,7 +193,7 @@ export function historyEventsEqual(left: HistoryEvent, right: HistoryEvent): boo
 
 const HISTORY_EVENT_KINDS = new Set<string>([
   'session-input-committed', 'invocation-context-committed', 'transcript-compacted',
-  'model-request-started', 'provider-retry-scheduled', 'model-attempt-discarded',
+  'model-request-started', 'provider-retry-scheduled', 'provider-attempt-result', 'model-attempt-discarded',
   'model-response-committed', 'replay-message-committed', 'tool-call-started',
   'tool-call-finished', 'tool-call-not-dispatched', 'tool-call-deferred', 'unknown-effect-risk-accepted', 'unknown-effect-retry-approved', 'unknown-effect-retry-consumed', 'unknown-effect-resolved', 'approval-waiting', 'approval-resolved', 'approval-deferred',
   'approval-updated', 'invocation-parked', 'invocation-interrupted',
@@ -393,7 +410,7 @@ export function rebuildInvocationStates(snapshot: HistorySnapshot): Map<string, 
         if (typeof toolCall.id === 'string' && toolCall.id.trim()) pendingToolCalls.set(toolCall.id, event.eventId)
       }
     }
-    if (event.kind === 'session-input-committed' || event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted' || event.kind === 'model-request-started' || event.kind === 'replay-message-committed') openInvocationEventId = event.eventId
+    if (event.kind === 'session-input-committed' || event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted' || event.kind === 'model-request-started' || event.kind === 'provider-attempt-result' || event.kind === 'replay-message-committed') openInvocationEventId = event.eventId
     if (event.kind === 'model-attempt-discarded') openInvocationEventId = event.eventId
     const approvalId = typeof payload?.toolCallId === 'string'
       ? payload.toolCallId

@@ -1206,7 +1206,7 @@ describe('runAgentTurn', () => {
       }
     })
     expect((await history.read('preflight-request')).events.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'transcript-compacted', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'invocation-context-committed', 'transcript-compacted', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
     expect((await history.read('preflight-request')).events[1]).toMatchObject({ payload: {
       messages: [currentMessage], requiredUserMessage: { id: 'user-current', message: currentMessage }
@@ -1342,7 +1342,7 @@ describe('runAgentTurn', () => {
 
     const events = (await history.read('accepted-input')).events
     expect(events.map(({ kind }) => kind)).toEqual([
-      'session-input-committed', 'invocation-context-committed', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'session-input-committed', 'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
     expect(events[1]).toMatchObject({ sequence: 2, payload: { messages: [userMessage], requiredUserMessage: { id: 'user-a', message: userMessage } } })
   })
@@ -1694,7 +1694,7 @@ describe('runAgentTurn', () => {
     })
     const events = (await history.read('request-outbox')).events
     expect(events.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
   })
 
@@ -2056,20 +2056,29 @@ describe('runAgentTurn', () => {
     expect(events.at(-1)?.kind).toBe('invocation-completed')
   })
 
-  it('consumes the host attempt budget for two transient failures in one invocation', async () => {
+  it('keeps physical and recovery-kind counters within bounds over a seeded mixed failure sequence', async () => {
+    let randomState = 0x5eed
+    const nextRandom = () => { randomState = (randomState * 1664525 + 1013904223) >>> 0; return randomState }
+    const failureKinds: Array<'transient' | 'idle-timeout' | 'overflow' | 'effort'> = ['transient', 'idle-timeout', 'overflow', 'effort']
+    for (let index = failureKinds.length - 1; index > 0; index -= 1) {
+      const swapIndex = nextRandom() % (index + 1)
+      ;[failureKinds[index], failureKinds[swapIndex]] = [failureKinds[swapIndex]!, failureKinds[index]!]
+    }
     const registry = new ModelProviderRegistry()
     let calls = 0
     registry.register(route, { providerId: 'fake', stream: () => {
       calls += 1
-      if (calls < 3) return (async function* () { throw Object.assign(new Error('temporarily unavailable'), { status: 503 }) })()
+      const failureKind = failureKinds[calls - 1]
+      if (failureKind) return (async function* () { throw Object.assign(new Error(`temporary ${failureKind}`), { status: failureKind === 'transient' ? 503 : undefined, recoveryKind: failureKind }) })()
       return stream({ type: 'text-delta', text: 'recovered' }, { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
     } })
     const history = new MemoryHistory()
     const capabilities = new CapabilityRegistry()
     capabilities.define('inv-retry-budget', [])
     const permits = new InMemorySafetyPermitStore()
-    const recoverProviderAttempt = vi.fn(async ({ messages, attempt, error }: { messages: readonly CanonicalModelMessage[]; attempt: number; error?: unknown }) => error ? ({
-      kind: 'retry' as const, reasonCode: 'PROVIDER_SERVER_ERROR', messages, maxAttempts: 3,
+    const recoverProviderAttempt = vi.fn(async ({ messages, attempt, recoveryCounts, error }: { messages: readonly CanonicalModelMessage[]; attempt: number; recoveryCounts: { transient: number; idleTimeout: number; overflow: number; effort: number }; error?: unknown }) => error ? ({
+      kind: 'retry' as const, reasonCode: 'PROVIDER_SERVER_ERROR', messages, maxAttempts: 5,
+      recoveryKind: (error as { recoveryKind: 'transient' | 'idle-timeout' | 'overflow' | 'effort' }).recoveryKind, plannedWaitMs: 0,
       retryEvent: { attempt, code: 'provider_server_error' }
     }) : undefined)
 
@@ -2081,11 +2090,26 @@ describe('runAgentTurn', () => {
     })
 
     expect(result.text).toBe('recovered')
-    expect(calls).toBe(3)
-    expect(recoverProviderAttempt.mock.calls.map(([input]) => input.attempt)).toEqual([1, 2])
+    expect(calls).toBe(5)
+    expect(recoverProviderAttempt.mock.calls.map(([input]) => input.attempt)).toEqual([1, 2, 3, 4])
+    const expectedCounts: Array<{ transient: number; idleTimeout: number; overflow: number; effort: number }> = []
+    const seenCounts = { transient: 0, idleTimeout: 0, overflow: 0, effort: 0 }
+    for (const kind of failureKinds.slice(0, 4)) {
+      expectedCounts.push({ ...seenCounts })
+      seenCounts[kind === 'idle-timeout' ? 'idleTimeout' : kind] += 1
+    }
+    expect(recoverProviderAttempt.mock.calls.map(([input]) => input.recoveryCounts)).toEqual(expectedCounts)
     const events = (await history.read('inv-retry-budget')).events
-    expect(events.filter((event) => event.kind === 'provider-retry-scheduled')).toHaveLength(2)
-    expect(events.filter((event) => event.kind === 'model-request-started').map((event) => (event.payload as { attempt: number }).attempt)).toEqual([1, 2, 3])
+    expect(events.filter((event) => event.kind === 'provider-retry-scheduled')).toHaveLength(4)
+    expect(events.filter((event) => event.kind === 'model-request-started').map((event) => (event.payload as { attempt: number }).attempt)).toEqual([1, 2, 3, 4, 5])
+    const expectedSources = [
+      { kind: 'initial' },
+      ...failureKinds.map((recoveryKind) => ({ kind: 'recovery', recoveryKind }))
+    ]
+    expect(events.filter((event) => event.kind === 'provider-attempt-result').map((event) => event.payload)).toMatchObject([
+      ...failureKinds.slice(0, 4).map((_, index) => ({ attempt: index + 1, attemptSource: expectedSources[index], outcome: 'failed', usage: { status: 'unreported' } })),
+      { attempt: 5, attemptSource: expectedSources[4], outcome: 'succeeded', usage: { status: 'reported', inputTokens: 2, outputTokens: 1 } }
+    ])
   })
 
   it('returns the host stable exhaustion code after the final transient provider attempt', async () => {
@@ -2531,6 +2555,17 @@ describe('runAgentTurn', () => {
     expect(recordAttemptUsage).toHaveBeenNthCalledWith(1, expect.objectContaining({ attempt: 1, disposition: 'discarded', usage: expect.objectContaining({ inputTokens: 80, outputTokens: 0, cacheReadInputTokens: 15, cacheCreationInputTokens: 6 }) }))
     expect(recordAttemptUsage).toHaveBeenNthCalledWith(2, expect.objectContaining({ attempt: 2, disposition: 'completed', usage: expect.objectContaining({ inputTokens: 70, outputTokens: 3 }) }))
     expect(result.usage).toEqual({ inputTokens: 150, outputTokens: 3, cacheReadInputTokens: 15, cacheCreationInputTokens: 6 })
+    const auditedUsage = events.filter((event) => event.kind === 'provider-attempt-result').reduce((total, event) => {
+      const usage = (event.payload as { usage: { status: string; inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } }).usage
+      if (usage.status !== 'reported') return total
+      return {
+        inputTokens: total.inputTokens + (usage.inputTokens ?? 0),
+        outputTokens: total.outputTokens + (usage.outputTokens ?? 0),
+        cacheReadInputTokens: total.cacheReadInputTokens + (usage.cacheReadInputTokens ?? 0),
+        cacheCreationInputTokens: total.cacheCreationInputTokens + (usage.cacheCreationInputTokens ?? 0)
+      }
+    }, { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 })
+    expect(auditedUsage).toEqual(result.usage)
     expect(events.filter((event) => event.kind === 'transcript-compacted')).toHaveLength(1)
     expect(events.find((event) => event.kind === 'model-attempt-discarded')?.payload).toMatchObject({
       modelTurn: 1, attempt: 1, reasonCode: 'SILENT_CONTEXT_OVERFLOW', finishReason: 'stop', usage: expect.objectContaining({ inputTokens: 80, outputTokens: 0, cacheReadInputTokens: 15, cacheCreationInputTokens: 6 })
@@ -3433,7 +3468,7 @@ describe('runAgentTurn', () => {
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: new InMemorySafetyPermitStore(), policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
       prepareTool: vi.fn(), toolExecution: toolExecutionPort(new InMemorySafetyPermitStore(), vi.fn()), maxModelTurns: 1, history
     })).rejects.toMatchObject({ code: 'INVALID_MODEL_STREAM' })
-    expect(history.appendBatch).toHaveBeenCalledTimes(3)
+    expect(history.appendBatch).toHaveBeenCalledTimes(4)
   })
 
   it('fails closed and withholds turn completion when recording invocation completion fails', async () => {
@@ -3511,7 +3546,7 @@ describe('runAgentTurn', () => {
 
     expect(executed).toHaveBeenCalledOnce()
     expect(modelCalls).toBe(1)
-    expect(persisted.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'model-response-committed', 'tool-call-started', 'invocation-interrupted'])
+    expect(persisted.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'tool-call-started', 'invocation-interrupted'])
     expect(persisted.at(-1)?.payload).toMatchObject({ status: 'interrupted', reason: 'unknown-after-dispatch' })
   })
 
@@ -3575,16 +3610,17 @@ describe('runAgentTurn', () => {
 
     const { events } = await history.read('inv')
     expect(events.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'model-request-started', 'model-response-committed', 'tool-call-started', 'tool-call-finished', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'tool-call-started', 'tool-call-finished', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
     expect(events[0]?.payload).toMatchObject({ messages: [{ role: 'user', content: 'weather?' }] })
-    expect(events[2]?.payload).toMatchObject({ requestId: 'inv:turn:1', message: { role: 'assistant', toolCalls: [{ id: 'tc-history', name: 'lookup' }] }, finishReason: 'tool-calls', usage: { inputTokens: 2, outputTokens: 1 } })
-    expect(events[3]?.payload).toMatchObject({ toolCallId: 'tc-history', toolName: 'lookup', inputHash: expect.any(String) })
-    expect((events[3]?.payload as { inputHash: string; input?: unknown }).inputHash).toMatch(/^[a-f0-9]{64}$/)
-    expect(events[3]?.payload).not.toHaveProperty('input')
-    expect(events[4]?.payload).toMatchObject({ toolCallId: 'tc-history', success: true, result: 'sunny' })
-    expect(events[6]?.payload).toMatchObject({ requestId: 'inv:turn:2', message: { role: 'assistant', content: 'sunny' }, finishReason: 'stop' })
-    expect(events[7]?.payload).toEqual({ status: 'completed', outputText: 'sunny', usage: { inputTokens: 3, outputTokens: 2 } })
+    expect(events[2]?.payload).toMatchObject({ requestId: 'inv:round:1', modelTurn: 1, attempt: 1, outcome: 'succeeded', usage: { status: 'reported', inputTokens: 2, outputTokens: 1 } })
+    expect(events[3]?.payload).toMatchObject({ requestId: 'inv:turn:1', message: { role: 'assistant', toolCalls: [{ id: 'tc-history', name: 'lookup' }] }, finishReason: 'tool-calls', usage: { inputTokens: 2, outputTokens: 1 } })
+    expect(events[4]?.payload).toMatchObject({ toolCallId: 'tc-history', toolName: 'lookup', inputHash: expect.any(String) })
+    expect((events[4]?.payload as { inputHash: string; input?: unknown }).inputHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(events[4]?.payload).not.toHaveProperty('input')
+    expect(events[5]?.payload).toMatchObject({ toolCallId: 'tc-history', success: true, result: 'sunny' })
+    expect(events[8]?.payload).toMatchObject({ requestId: 'inv:turn:2', message: { role: 'assistant', content: 'sunny' }, finishReason: 'stop' })
+    expect(events[9]?.payload).toEqual({ status: 'completed', outputText: 'sunny', usage: { inputTokens: 3, outputTokens: 2 } })
   })
 
   it('commits provider tool-call thought signatures into canonical assistant history', async () => {
@@ -3632,7 +3668,7 @@ describe('runAgentTurn', () => {
     })
     expect(result.text).toBe('accepted answer')
     expect(observed).toEqual([{
-      committedKinds: ['invocation-context-committed', 'model-request-started', 'model-response-committed'],
+      committedKinds: ['invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed'],
       message: { role: 'assistant', content: 'accepted answer' }
     }])
   })
@@ -3830,7 +3866,7 @@ describe('runAgentTurn', () => {
     })).resolves.toMatchObject({ text: 'committed', modelTurns: 1, finishReason: 'stop' })
     expect(onObservationError).toHaveBeenCalledWith(expect.objectContaining({ message: 'UI projection failed' }), 'model-response-committed')
     expect((await history.read('inv')).events.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
   })
 
@@ -4111,6 +4147,7 @@ describe('runAgentTurn', () => {
     expect((await history.read('inv')).events).toMatchObject([
       { kind: 'invocation-context-committed' },
       { kind: 'model-request-started' },
+      { kind: 'provider-attempt-result' },
       { kind: 'invocation-failed', payload: { status: 'failed' } }
     ])
   })
@@ -4382,7 +4419,7 @@ describe('runAgentTurn', () => {
     expect(result.text).toBe('Sunny')
     const committedEvents = (await history.read('inv')).events
     expect(committedEvents.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'model-request-started', 'model-response-committed', 'approval-waiting', 'approval-resolved', 'tool-call-started', 'tool-call-finished', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'approval-waiting', 'approval-resolved', 'tool-call-started', 'tool-call-finished', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
     expect(committedEvents.find(({ kind }) => kind === 'approval-waiting')?.payload).toMatchObject({
       toolCallId: 'tc1', approvalId: 'confirm-1', answerer: 'user', reasonCode: 'needs-confirmation', requestedAt: expect.any(Number)
@@ -4490,7 +4527,7 @@ describe('runAgentTurn', () => {
     expect(decisions).toHaveLength(0)
     expect(execute).not.toHaveBeenCalled()
     expect((await history.read('inv')).events.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'model-request-started', 'model-response-committed', 'approval-waiting', 'approval-resolved', 'tool-call-not-dispatched', 'invocation-failed'
+      'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'approval-waiting', 'approval-resolved', 'tool-call-not-dispatched', 'invocation-failed'
     ])
     expect((await history.read('inv')).events.at(-1)?.payload).toEqual({
       status: 'denied', reason: 'POLICY_DENY', usage: { type: 'usage', inputTokens: 2, outputTokens: 3 }
@@ -4860,7 +4897,7 @@ describe('runAgentTurn', () => {
     expect(admission.activeLeaseCount('req')).toBe(0)
     expect([...admission.closedOutcomes.values()]).toEqual(['unknown-after-dispatch'])
     const interruptedSnapshot = await history.read('inv')
-    expect(interruptedSnapshot.events.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'model-response-committed', 'tool-call-started', 'tool-call-finished', 'invocation-interrupted'])
+    expect(interruptedSnapshot.events.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'tool-call-started', 'tool-call-finished', 'invocation-interrupted'])
     expect(interruptedSnapshot.events.at(-2)?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', invocationDisposition: 'cancelled' })
     expect(rebuildInvocationStates(interruptedSnapshot).get('inv')).toMatchObject({ state: 'cancelled' })
   })

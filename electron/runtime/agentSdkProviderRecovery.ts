@@ -7,6 +7,9 @@ type RecoveryInput = Readonly<{
   error?: unknown
   response?: Readonly<{ finishReason: 'stop' | 'tool-calls' | 'length' | 'cancelled'; usage: { inputTokens: number; outputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }; hasOutputContent: boolean }>
   attempt: number
+  attemptInRequest?: number
+  recoveryCounts?: Readonly<{ transient: number; idleTimeout: number; overflow: number; effort: number }>
+  waitBudgetRemainingMs?: number
   modelTurn: number
   routeId: string
   request?: PreparedModelCall['request']
@@ -42,15 +45,26 @@ export function createAgentSdkProviderRecovery(input: {
   model?: string
   llmServiceId?: string
   onEffortUnsupported?(error: unknown): void | Promise<void>
-}): (request: RecoveryInput) => Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalModelMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; maxAttempts?: number; retryAfterMs?: number; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string }> | undefined> {
+  random?: () => number
+  now?: () => number
+}): (request: RecoveryInput) => Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalModelMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; maxAttempts?: number; retryAfterMs?: number; plannedWaitMs?: number; recoveryKind?: 'transient' | 'idle-timeout' | 'overflow' | 'effort'; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string }> | undefined> {
   return async (request) => {
     const transient = request.error ? transientProviderError(request.error) : undefined
     if (transient) {
-      if (request.attempt >= 3) return { kind: 'reject', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' }
+      const attempt = request.attemptInRequest ?? request.attempt
+      if (attempt >= 5) return { kind: 'reject', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' }
+      const recoveryCount = request.recoveryCounts?.transient ?? Math.max(0, attempt - 1)
+      const localBackoff = Math.min(8_000, 500 * (2 ** recoveryCount))
+      const randomValue = Math.min(1, Math.max(0, (input.random ?? Math.random)()))
+      const jitterMs = Math.floor(localBackoff * randomValue)
+      const serverWaitMs = retryAfterMs(request.error, (input.now ?? Date.now)()) ?? 0
+      const plannedWaitMs = Math.max(jitterMs, serverWaitMs)
       return { kind: 'retry', reasonCode: transient.reasonCode, messages: request.messages, retryEvent: { attempt: request.attempt, code: transient.code }, recordTranscriptCompaction: false,
-        maxAttempts: 3, ...(retryAfterMs(request.error) !== undefined ? { retryAfterMs: retryAfterMs(request.error) } : {}) }
+        maxAttempts: 5, plannedWaitMs, recoveryKind: 'transient', ...(serverWaitMs > 0 ? { retryAfterMs: serverWaitMs } : {}) }
     }
-    if (request.attempt === 1 && request.request?.thinking?.effort && isOutputConfigRejectedError(request.error)) {
+    const recoveryCounts = request.recoveryCounts
+    if ((recoveryCounts?.effort ?? (request.attempt > 1 ? 1 : 0)) < 1 && request.request?.thinking?.effort && isOutputConfigRejectedError(request.error)) {
+      if ((request.attemptInRequest ?? request.attempt) >= 5) return { kind: 'reject', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' }
       memoizeEffortUnsupported(input.llmServiceId, input.model ?? request.routeId)
       await input.onEffortUnsupported?.(request.error)
       return {
@@ -59,20 +73,23 @@ export function createAgentSdkProviderRecovery(input: {
         messages: request.messages,
         requestPatch: { thinking: { enabled: request.request.thinking.enabled } },
         recordTranscriptCompaction: false,
-        retryEvent: { attempt: 1, code: 'effort_unsupported' }
+        retryEvent: { attempt: request.attempt, code: 'effort_unsupported' },
+        maxAttempts: 5,
+        recoveryKind: 'effort', plannedWaitMs: 0
       }
     }
     // Provider 流空闲超时（评审后真机回归：DeepSeek /anthropic 对 tool_result 回传请求偶发挂起，
     // 15 分钟静默后 MODEL_PROVIDER_ERROR）。挂起的请求体本身无害：原样重发幂等（工具结果已在
     // 消息里，不会重复执行工具），不触发转录压缩；attempt 2 仍超时则拒绝（避免无限循环）。
     if (request.error instanceof ModelStreamIdleTimeoutError) {
-      if (request.attempt > 1) return { kind: 'reject', reasonCode: 'PROVIDER_STREAM_IDLE_TIMEOUT_RETRY_LIMIT' }
+      if ((recoveryCounts?.idleTimeout ?? (request.attempt > 1 ? 1 : 0)) >= 1) return { kind: 'reject', reasonCode: 'PROVIDER_STREAM_IDLE_TIMEOUT_RETRY_LIMIT' }
+      if ((request.attemptInRequest ?? request.attempt) >= 5) return { kind: 'reject', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' }
       return {
         kind: 'retry',
         reasonCode: 'PROVIDER_STREAM_IDLE_TIMEOUT',
         messages: request.messages,
-        retryEvent: { attempt: 1, code: 'provider_stream_idle_timeout' },
-        recordTranscriptCompaction: false
+        retryEvent: { attempt: request.attempt, code: 'provider_stream_idle_timeout' },
+        recordTranscriptCompaction: false, maxAttempts: 5, recoveryKind: 'idle-timeout', plannedWaitMs: 0
       }
     }
     const silentOverflow = request.response ? detectSilentContextOverflow({
@@ -92,7 +109,7 @@ export function createAgentSdkProviderRecovery(input: {
     if (overflowError === undefined) return undefined
     const decision = decideOverflowRecovery({
       error: overflowError,
-      retries: Math.max(0, request.attempt - 1),
+      retries: recoveryCounts?.overflow ?? Math.max(0, request.attempt - 1),
       maxRetries: 1,
       inFlightToolCount: 0,
       safeBoundary: true
@@ -101,6 +118,7 @@ export function createAgentSdkProviderRecovery(input: {
       if (silentOverflow.overflow) return { kind: 'reject', reasonCode: decision.reason === 'retry_limit' ? 'SILENT_CONTEXT_OVERFLOW_RETRY_LIMIT' : 'SILENT_CONTEXT_OVERFLOW_UNSAFE_BOUNDARY' }
       return undefined
     }
+    if ((request.attemptInRequest ?? request.attempt) >= 5) return { kind: 'reject', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' }
     const recoveredMessages = selectRecoveryMessages(request.messages, request.currentUserMessageId, request.requiredUserMessage?.message)
     if (request.requiredUserMessage && !recoveredMessages.some((message) =>
       message.role === 'user' && JSON.stringify(message) === JSON.stringify(request.requiredUserMessage!.message)
@@ -111,8 +129,8 @@ export function createAgentSdkProviderRecovery(input: {
       kind: 'retry',
       reasonCode: silentOverflow.overflow ? 'SILENT_CONTEXT_OVERFLOW' : 'PROVIDER_CONTEXT_OVERFLOW',
       messages: recoveredMessages,
-      retryEvent: { attempt: decision.nextRetry, code: 'provider_context_overflow' },
-      recordTranscriptCompaction: true
+      retryEvent: { attempt: request.attempt, code: 'provider_context_overflow' },
+      recordTranscriptCompaction: true, maxAttempts: 5, recoveryKind: 'overflow', plannedWaitMs: 0
     }
   }
 }
