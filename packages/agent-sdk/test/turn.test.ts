@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { AgentTurnCancelledError, AgentTurnLifecycleInvalidatedError, PlanRejectedError, ToolDeniedError, consumeProviderRetryWaitBudget, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
+import { AGENT_TURN_TIMEOUT_ABORT_REASON, AgentTurnCancelledError, AgentTurnLifecycleInvalidatedError, PlanRejectedError, ToolDeniedError, consumeProviderRetryWaitBudget, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
 import { ModelProviderRegistry, type CanonicalModelMessage, type StreamChunk } from '../src/model'
 import { CapabilityRegistry } from '../src/capability'
 import { InMemorySafetyPermitStore, type PermitBinding } from '../src/safetyPermit'
@@ -5551,6 +5551,76 @@ describe('runAgentTurn', () => {
       expect(events.at(-1)).toMatchObject(aborted
         ? { kind: 'invocation-interrupted', payload: { status: 'cancelled' } }
         : { kind: 'invocation-failed', payload: { status: 'failed' } })
+    }
+  })
+
+  it.each([
+    { abort: false, reportUsage: true },
+    { abort: true, reportUsage: true },
+    { abort: true, reportUsage: false },
+    { abort: true, reportUsage: true, timeout: true },
+    { abort: true, reportUsage: true, abortAttempt: 2 }
+  ])('retains failed stream usage in audit and totals, and audits dispatched aborts (%#)', async (scenario) => {
+    const invocationId = `failed-stream-usage-${scenario.abort}-${scenario.reportUsage}-${scenario.abortAttempt ?? 1}`
+    const registry = new ModelProviderRegistry()
+    const controller = new AbortController()
+    let calls = 0
+    registry.register(route, { providerId: 'failed-stream-usage-provider', stream: async function* () {
+      calls += 1
+      if (calls === 1 && scenario.abortAttempt !== 2) {
+        if (scenario.reportUsage) yield { type: 'usage' as const, inputTokens: 10, outputTokens: 3 }
+        if (scenario.abort) controller.abort(scenario.timeout ? AGENT_TURN_TIMEOUT_ABORT_REASON : undefined)
+        throw Object.assign(new Error('network reset'), { code: 'ECONNRESET' })
+      }
+      if (calls === 1) throw Object.assign(new Error('network reset'), { code: 'ECONNRESET' })
+      if (scenario.abortAttempt === 2) {
+        yield { type: 'usage' as const, inputTokens: 10, outputTokens: 3 }
+        controller.abort()
+        throw Object.assign(new Error('network reset'), { code: 'ECONNRESET' })
+      }
+      yield { type: 'text-delta' as const, text: 'recovered' }
+      yield { type: 'usage' as const, inputTokens: 2, outputTokens: 1 }
+      yield { type: 'finish' as const, reason: 'stop' as const }
+    } })
+    const history = new MemoryHistory()
+    const permits = new InMemorySafetyPermitStore()
+    const recordProviderAttemptUsage = vi.fn()
+    const sessionLedgerForAttemptUsage = vi.fn(async () => ({ usageReceipt: `attempt-${calls}` }))
+    const recoverProviderAttempt = vi.fn(async ({ error, messages }) => error
+      ? { kind: 'retry' as const, reasonCode: 'PROVIDER_SERVER_ERROR', messages, maxAttempts: 5, recoveryKind: 'transient' as const, plannedWaitMs: 0, recordTranscriptCompaction: false }
+      : undefined)
+    const run = runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10, signal: controller.signal },
+      maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn()),
+      recordProviderAttemptUsage, sessionLedgerForAttemptUsage,
+      recoverProviderAttempt
+    })
+
+    if (scenario.abort) await expect(run).rejects.toMatchObject({ code: scenario.timeout ? 'TURN_TIMED_OUT' : 'TURN_CANCELLED' })
+    else await expect(run).resolves.toMatchObject({ usage: { inputTokens: 12, outputTokens: 4 } })
+
+    const results = (await history.read(invocationId)).events.filter((event) => event.kind === 'provider-attempt-result')
+    if (scenario.abort) {
+      const auditedAttempt = scenario.abortAttempt ?? 1
+      expect(results).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({
+        attempt: auditedAttempt, physical: true, outcome: 'failed', errorClass: scenario.timeout ? 'TURN_TIMED_OUT' : 'TURN_CANCELLED',
+        usage: scenario.reportUsage ? { status: 'reported', inputTokens: 10, outputTokens: 3 } : { status: 'unreported' },
+        ...(scenario.reportUsage ? { sessionLedger: { usageReceipt: `attempt-${auditedAttempt}` } } : {})
+      }) }))
+      expect(results).toHaveLength(scenario.abortAttempt === 2 ? 2 : 1)
+      expect(recoverProviderAttempt).toHaveBeenCalledTimes(scenario.abortAttempt === 2 ? 1 : 0)
+    } else {
+      expect(results).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({
+        attempt: 1, physical: true, outcome: 'failed',
+        usage: { status: 'reported', inputTokens: 10, outputTokens: 3 }, sessionLedger: { usageReceipt: 'attempt-1' }
+      }) }))
+      expect(results).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({
+        attempt: 2, outcome: 'succeeded', usage: { status: 'reported', inputTokens: 2, outputTokens: 1 }
+      }) }))
+      expect(results).toHaveLength(2)
     }
   })
 
