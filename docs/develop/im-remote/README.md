@@ -20,6 +20,8 @@
 
 ## 在途（in-flight）
 
+- [IM标准模式安全审核替代一刀切技术方案.md](./in-flight/IM标准模式安全审核替代一刀切技术方案.md) —— 方向已决策的方案草案：目录外文件、Shell、网页、附件和联网脚本的逐调用审核、标准模式自动迁移与验收边界。
+
 - [IM指令权限预检与集中审批技术方案.md](./in-flight/IM指令权限预检与集中审批技术方案.md) —— 技术方案草稿：IM 先行用请求级预检合并权限申请；漏项仍走现有运行时审批；达到试点门槛后再评估定时任务迁移。
 - [2026-10-11-im-security-review-improvement-development-plan.md](./in-flight/2026-10-11-im-security-review-improvement-development-plan.md) —— 实施方案草案：本文的新类型/字段/模块名是建议设计，**当前仓库尚未实现**（核验：`rg -n 'imPolicy|imSecurityPolicy' electron/` 无匹配；但依赖能力已落地：`1d4c9bcd` intent tracking、`8f1a21fc` 远程确认渠道归属、`71efa790` durable async IM approvals、`36edb110` Track isolation）
 

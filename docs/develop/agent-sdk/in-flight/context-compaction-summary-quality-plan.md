@@ -4,7 +4,7 @@
 > 文档性质：**技术方案 —— 状态：实施中**（阶段 1、3 已实现；阶段 2 主体已实现、验收待逐项核对；阶段 4 已决定不做）
 > 代码基线：`990d1e2e`（2026-10-29 核验）。初稿基线 `28dd3223` 已过时，事实卡按新基线逐条复核（见附录 A 的状态列）
 > 实现提交：`4718e532`（自动压缩阈值可配）、`8cf7de55`（设置页阈值项）、`e15f3c5c`（自动压缩结构化摘要）
-> 上游关联：[`agent-long-task-stability-improvement-plan.md`](../../agent-long-task-stability-improvement-plan.md) §2.4。该文把「固定栏目 checkpoint」记为 Phase 3 完成，但**当时只覆盖手动压缩路径**；自动路径的结构化摘要由 `e15f3c5c` 补齐。
+> 上游关联：[`agent-long-task-stability-improvement-plan.md`](../agent-long-task-stability-improvement-plan.md) §2.4。该文把「固定栏目 checkpoint」记为 Phase 3 完成，但**当时只覆盖手动压缩路径**；自动路径的结构化摘要由 `e15f3c5c` 补齐。
 > 读者分层：第 0 层决策 → 第 1 层概要 → 第 2 层规格 → 附录
 
 ---

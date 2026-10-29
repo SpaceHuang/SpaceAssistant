@@ -1,7 +1,7 @@
 # docs/develop 总索引
 
 > 组织方式：**按主题**（不再按时间堆积）。每个主题 = 一份 `README.md`（索引与状态）+ 现状文档（只写与最新代码一致的事实）+ `history.md`（迭代流水账）+ `in-flight/`（未收口的在途项）。
-> 核对基线：`main` `17236274`（2026-10-14）｜整理分支：`codex/docs-consolidation`
+> 核对基线：`main` `17236274`（2026-10-14）｜首轮整理分支 `codex/docs-consolidation` 已合入 `main`｜**2026-10-29 归位批**：`main` `f99aab2f`（只做结构归位与状态更正，未重跑断言核验）
 > 整理规则与全量判定：见 [`_consolidation/`](./_consolidation/)；本篇只做导航。
 
 ## 主题目录
@@ -21,6 +21,7 @@
 ## 归档
 
 - 已完成迭代的计划、证据、阶段件、复测门禁与台账 → [`archive/<主题>/`](./archive/)（`git mv` 搬迁，**文件名与内容零改动**；仅对 `D` 类补一行废弃标注）。
+- **2026-10-29 归位批**：`docs/develop/` 根下平铺的 23 篇已按判定分流 —— 8 篇现行安全策略契约 → [`safety-approval/`](./safety-approval/)，`agent-long-task-stability-improvement-plan.md` → [`agent-sdk/`](./agent-sdk/)，14 篇过程件 → [`archive/safety-approval/`](./archive/safety-approval/)（另有 1 篇 in-flight 早期稿一并归档），1 件历史抽取件保留在 `safety-approval/in-flight/`；逐件映射见 [`archive/INDEX.md`](./archive/INDEX.md)「2026-10-29 根下归位」节。主题目录根部不应再有 `.md` 文档。
 - 旧路径 → 新路径映射：见 [`archive/INDEX.md`](./archive/INDEX.md) 与全量清单 [`_consolidation/docs-inventory.tsv`](./_consolidation/docs-inventory.tsv)。
 - 归档件正文里的相对链接按**搬迁前布局**书写，搬迁后可能失效；这是「内容零改动」的直接后果，属预期（不回头改归档件）。
 

@@ -3,7 +3,7 @@
 > 日期：2026-10-18
 > 文档性质：**技术方案（在途草稿，未实施）**
 > 基线：`main` `28dd3223`（2026-10-17）
-> 上游关联：[`agent-long-task-stability-improvement-plan.md`](../../agent-long-task-stability-improvement-plan.md) §2.1「模型请求恢复范围过窄」与 §4.1「Provider 恢复策略归宿主统一管理」。该文把 Phase 1B 记为完成（覆盖了 429/5xx/网络错误与 `Retry-After`），但**未实现指数退避与抖动，且三处等待上限仍是硬编码**（`F-2`、`F-3`）。本文补这一段。
+> 上游关联：[`agent-long-task-stability-improvement-plan.md`](../agent-long-task-stability-improvement-plan.md) §2.1「模型请求恢复范围过窄」与 §4.1「Provider 恢复策略归宿主统一管理」。该文把 Phase 1B 记为完成（覆盖了 429/5xx/网络错误与 `Retry-After`），但**未实现指数退避与抖动，且三处等待上限仍是硬编码**（`F-2`、`F-3`）。本文补这一段。
 > 读者分层：第 0 层决策 → 第 1 层概要 → 第 2 层规格 → 附录
 
 ---

@@ -331,3 +331,28 @@ docs/requirement/im-security-agent-agency-principles-requirement.md	im-remote	A	
 docs/develop/agent-long-task-stability-improvement-plan.md	agent-sdk	C	（2026-10-15 新增）长程任务稳定性改进方案；自述「分阶段改造方案，首批不改运行时代码」→ 未实施，进 in-flight/
 docs/develop/security-policy-three-stage-architecture-development-plan.md	safety-approval	C	（2026-10-15 新增）安全策略三阶段架构；自述「已审批，尚未开始代码实现」→ 进 in-flight/
 docs/requirement/run-shell-justification-requirement.md	tools-mcp	B	（2026-10-15 新增）自述「需求细化稿」，但实现已在代码（packages/agent-sdk/src/runShellJustification.ts、src/shared/runShellJustification.ts、builtinToolDefinitions）→ 状态滞后，归档
+docs/develop/agent-long-task-stability-improvement-plan.md	agent-sdk	A	2026-10-29 归位**更正**（原判 C 有误）：方案已含「首批阶段实施记录」，属现行方案 → 移入 docs/develop/agent-sdk/
+docs/develop/security-policy-three-stage-architecture-development-plan.md	safety-approval	B	2026-10-29 归位**更正**（原判 C 有误）：Phase 0–5 已于 2026-10-15～16 收口（6ec720af / e79e5aaf / dec8954d / 78e51e62 / e1ec50a5 / df47283c）→ 归档
+docs/develop/safety-approval/in-flight/security-policy-three-stage-architecture-development-plan.md	safety-approval	B	2026-10-29 归档：早期稿，被根下最终版取代；同名冲突加 `-2026-10-15-draft` 后缀
+docs/develop/safety-approval/in-flight/security-policy-three-stage-architecture-decision-summary-draft.md	safety-approval	C	2026-10-29 **保留**（不归档）：所属计划已收口的历史抽取件，因 docs/rules/document-writing-guide-sources.md 引用它作人类决策层规则验证样本而保留；头部已标注「正文不再更新」
+docs/develop/security-policy-baseline.md	safety-approval	B	2026-10-29 归位：源码基线快照（过程产物）
+docs/develop/security-policy-policy-baseline.md	safety-approval	B	2026-10-29 归位：Phase 0 验收矩阵（过程产物）
+docs/develop/security-policy-candidate-inventory.md	safety-approval	B	2026-10-29 归位：Phase 0 候选清单（过程产物）
+docs/develop/security-policy-phase0-test-record.md	safety-approval	B	2026-10-29 归位：阶段测试记录（过程产物）
+docs/develop/security-policy-phase1-test-record.md	safety-approval	B	2026-10-29 归位：阶段测试记录（过程产物）
+docs/develop/security-policy-phase2-test-record.md	safety-approval	B	2026-10-29 归位：阶段测试记录（过程产物）
+docs/develop/security-policy-phase3-test-record.md	safety-approval	B	2026-10-29 归位：阶段测试记录（过程产物）
+docs/develop/security-policy-phase4-test-record.md	safety-approval	B	2026-10-29 归位：阶段测试记录（过程产物）
+docs/develop/security-policy-phase5-test-record.md	safety-approval	B	2026-10-29 归位：阶段验收记录（过程产物）
+docs/develop/security-policy-phase1-equivalence-matrix.md	safety-approval	B	2026-10-29 归位：兼容期等价矩阵（过程产物）
+docs/develop/security-policy-execution-closure-matrix.md	safety-approval	B	2026-10-29 归位：final-check 闭合矩阵（过程产物）
+docs/develop/security-policy-final-decision-scan.md	safety-approval	B	2026-10-29 归位：隐藏改判二次扫描记录（过程产物）
+docs/develop/security-policy-three-stage-development-decisions.md	safety-approval	B	2026-10-29 归位：实施口径（决策记录，已执行完毕）
+docs/develop/security-policy-three-stage-architecture-contract.md	safety-approval	A	2026-10-29 归位：阶段契约（现行，与 AGENTS.md 安全逻辑变更规范同口径）→ docs/develop/safety-approval/
+docs/develop/security-policy-tool-facts-contract.md	safety-approval	A	2026-10-29 归位：ToolFacts 现行契约 → docs/develop/safety-approval/
+docs/develop/security-policy-execution-subjects.md	safety-approval	A	2026-10-29 归位：执行批准对象绑定规格（src/shared/security/executionSubject.ts）→ docs/develop/safety-approval/
+docs/develop/security-policy-approval-invalidation.md	safety-approval	A	2026-10-29 归位：审批失效与并发协议（policyDecision.dependencyFingerprint）→ docs/develop/safety-approval/
+docs/develop/security-policy-invariant-registry-design.md	safety-approval	A	2026-10-29 归位：不变量登记表设计（实际落点 src/shared/security/systemInvariantRegistry.ts，正文旧路径为漂移）→ docs/develop/safety-approval/
+docs/develop/security-policy-audit-field-map.md	safety-approval	A	2026-10-29 归位：审计字段真源 → docs/develop/safety-approval/
+docs/develop/security-policy-locked-floor-classification.md	safety-approval	A	2026-10-29 归位：locked 规则分类盘点 → docs/develop/safety-approval/
+docs/develop/security-policy-remote-rule-mapping.md	safety-approval	A	2026-10-29 归位：Remote IM 规则映射 → docs/develop/safety-approval/

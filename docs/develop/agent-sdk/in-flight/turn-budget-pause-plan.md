@@ -3,7 +3,7 @@
 > 日期：2026-10-18
 > 文档性质：**技术方案（在途草稿，未实施）**
 > 基线：`main` `28dd3223`（2026-10-17）
-> 上游关联：[`agent-long-task-stability-improvement-plan.md`](../../agent-long-task-stability-improvement-plan.md)。**该文未覆盖本课题**——它只在 §5「后续 L」提到「无人值守跨轮次任务」（属跨轮自动推进，与本课题不同）；本文是对「回合预算耗尽后如何收场」这一缺口的独立补充。
+> 上游关联：[`agent-long-task-stability-improvement-plan.md`](../agent-long-task-stability-improvement-plan.md)。**该文未覆盖本课题**——它只在 §5「后续 L」提到「无人值守跨轮次任务」（属跨轮自动推进，与本课题不同）；本文是对「回合预算耗尽后如何收场」这一缺口的独立补充。
 > 读者分层：第 0 层决策 → 第 1 层概要 → 第 2 层规格 → 附录。每节标题已标读者标记。
 
 ---

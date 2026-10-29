@@ -135,6 +135,7 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 | [agents-md-workdir-instructions-behavior.md](./agents-md-workdir-instructions-behavior.md) | 行为说明（**merge main 补入**）—— 工作目录 `AGENTS.md` 的加载与生效行为 |
 | [agents-md-workdir-instructions-runtime-baseline.md](./agents-md-workdir-instructions-runtime-baseline.md) | 运行时基线（**merge main 补入**）—— 入口与逻辑请求边界（阶段 0 代码核查，不改运行时行为） |
 | [runtime/](./runtime/)（11 篇） | **草稿（未实施）**：核验独有符号 0 命中 |
+| [agent-long-task-stability-improvement-plan.md](./agent-long-task-stability-improvement-plan.md) | 方案（**现行**，含「首批阶段实施记录」；2026-10-29 由 `docs/develop/` 根下归位） |
 | 本 README + 10 篇接口说明 | SDK 接口现状 |
 
 ## 在途 / 草稿箱（in-flight）
@@ -145,7 +146,8 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 - [provider-retry-backoff-plan.md](./in-flight/provider-retry-backoff-plan.md) —— **草稿（未实施）**：模型服务重试策略。决策 `D-1`～`D-6` 已全部批复，代码未改动（仍是 3 次尝试、无退避）。
 - [turn-budget-pause-plan.md](./in-flight/turn-budget-pause-plan.md) —— **草稿（未实施）**：回合预算耗尽改为阶段暂停。决策 `D-1`～`D-5` 已批，代码未改动。
 
-> **2026-10-29 去重**：原 `in-flight/agent-long-task-stability-improvement-plan.md` 与 [`../agent-long-task-stability-improvement-plan.md`](../agent-long-task-stability-improvement-plan.md) 重名重复。经比对（357 行 vs 323 行，且后者缺「首批阶段实施记录」），保留根下那份作为唯一现行版本；in-flight 旧稿已 `git mv` 至 [`../archive/agent-sdk/`](../archive/agent-sdk/agent-long-task-stability-improvement-plan.md) 并标注取代关系。
+> **2026-10-29 去重**：原 `in-flight/agent-long-task-stability-improvement-plan.md` 与本目录 [`agent-long-task-stability-improvement-plan.md`](./agent-long-task-stability-improvement-plan.md) 重名重复。经比对（357 行 vs 323 行，且后者缺「首批阶段实施记录」），保留本目录那份作为唯一现行版本；in-flight 旧稿已 `git mv` 至 [`../archive/agent-sdk/`](../archive/agent-sdk/agent-long-task-stability-improvement-plan.md) 并标注取代关系。
+> **同日归位**：现行版本原平铺在 `docs/develop/` 根下（违反 `docs-guide` §2.1「主题即二级目录」），已 `git mv` 至本目录。
 
 - [runtime/](./runtime/)（01–10 + README，11 篇）—— **草稿（未实施）**：Runtime 目标形态设计与实施计划。核验（2026-10-14）：独有符号 `wake_one`、`bWaitAll`、`namedQuota`、`quotaLease`、`callStateMachine` **全部 0 命中**，无实现提交 → 真正在途。
 
@@ -155,7 +157,7 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 
 ## 归档
 
-已完成迭代原件见 [`../archive/agent-sdk/`](../archive/agent-sdk/)（20 件），含生命周期改进与契约矩阵、上下文 token 成本优化、`agent-core-contract-path-refactor-plan.md`（旧称，文件名保留）、驱动权限重构、失败 turn 续跑、工具错误恢复与 turn 连续性、`batch3-p0-evidence-audit.md`，以及 2026-10-29 迁入的重名旧稿 `agent-long-task-stability-improvement-plan.md`（现行版本见 develop 主题根）。映射见 [`../archive/INDEX.md`](../archive/INDEX.md)。
+已完成迭代原件见 [`../archive/agent-sdk/`](../archive/agent-sdk/)（20 件），含生命周期改进与契约矩阵、上下文 token 成本优化、`agent-core-contract-path-refactor-plan.md`（旧称，文件名保留）、驱动权限重构、失败 turn 续跑、工具错误恢复与 turn 连续性、`batch3-p0-evidence-audit.md`，以及 2026-10-29 迁入的重名旧稿 `agent-long-task-stability-improvement-plan.md`（现行版本见本目录）。映射见 [`../archive/INDEX.md`](../archive/INDEX.md)。
 
 ## 核验记录
 

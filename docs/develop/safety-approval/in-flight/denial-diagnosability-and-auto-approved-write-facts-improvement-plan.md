@@ -189,7 +189,7 @@ rg -n 'bytesWritten' electron/tools/builtinExecutors.ts
 | 拒绝判定与规则 | **policy** | **本次不改判定**：不加规则、不动 floor、不动 package 档位；只在「拒绝结果的表达」上扩展 |
 | 最终校验（final-check / permit 核验） | **final-check** | **本次不改** |
 | 系统不变量登记（`src/shared/security/systemInvariantRegistry.ts`） | **不登记** | 判据：登记要求是「新增不可配置的系统约束」；本方案不新增此类约束，只改文案与审计字段。若后续把「拒绝必须可解释」升级为不可配置约束，则须另行登记（owner / 依据 / 范围 / 审计 / 测试） |
-| 审计字段映射 | 登记到 `docs/develop/security-policy-audit-field-map.md` | 字段语义变化必须在该表更新（它是审计字段的真源） |
+| 审计字段映射 | 登记到 `docs/develop/safety-approval/security-policy-audit-field-map.md` | 字段语义变化必须在该表更新（它是审计字段的真源；2026-10-29 由 `docs/develop/` 根下归位到本主题目录） |
 | 规则 ID | 不新增 | 复用既有 `caseId`；若需新增「拒绝可解释性」相关规则，须给稳定 rule ID 与 decision trace（本方案不涉及） |
 
 **边界测试（安全改动要求）**：见 §3.2 各任务的完成判据，覆盖七个边界 ——「命中映射 / 未命中回退 / 挂载与非挂载 / 两类写工具 / 统计不可用 / **编辑语义差异（EOL 容差、转义回退）** / **拒绝解释三处同源**」。
@@ -285,7 +285,7 @@ B-06 ─┴→ C-01 → C-02(外部)
 
 | ID | 动作 | 依赖 | 目标文件 / 模块 | 产物 | 完成判据 | 验证命令 | 环境 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| B-01 | 冻结字段语义（`path` / `bytesWritten` / `added` / `removed`）并同步审计字段映射表 | — | `src/shared/domainTypes.ts`（字段注释）、`docs/develop/security-policy-audit-field-map.md` | 类型注释 + 文档一行 | 两处表述一致；不可用态有明确表达方式 | 人工核对 + `rg -n 'autoApprovedWrite\|bytesWritten' src/shared/domainTypes.ts docs/develop/security-policy-audit-field-map.md` | 本机 |
+| B-01 | 冻结字段语义（`path` / `bytesWritten` / `added` / `removed`）并同步审计字段映射表 | — | `src/shared/domainTypes.ts`（字段注释）、`docs/develop/safety-approval/security-policy-audit-field-map.md` | 类型注释 + 文档一行 | 两处表述一致；不可用态有明确表达方式 | 人工核对 + `rg -n 'autoApprovedWrite\|bytesWritten' src/shared/domainTypes.ts docs/develop/safety-approval/security-policy-audit-field-map.md` | 本机 |
 | B-02 | **执行层**：两类写工具在写盘成功后，基于**实际使用的写前内容与最终写入内容**产出统计（`bytesWritten` / `added` / `removed`），随执行结果返回；覆盖换行归一与转义回退路径 | B-01 | `electron/tools/builtinExecutors.ts`（写盘实现）、`electron/tools/writeFileRegisteredTools.ts`（如需透出字段） | 代码 + 单测 | AC-9 通过；两类工具口径同一（写入后文件字节数 + 相对实际写前内容的行数增减）；F-10 不再成立 | `npm exec vitest run electron/tools/builtinExecutors.editDiagnosis.test.ts electron/tools/builtinExecutors.fileState.test.ts` | 本机 |
 | B-03 | **装配层**：记录只做关联与投影 —— 挂靠本次调用已冻结的权威写入目标、直接取执行结果里的统计；**删除**自行重演编辑与自行解析路径 | B-02 | `electron/runtime/invocationAssembler.ts`（记录构造点）、`electron/confirmation/confirmDiff.ts`（本用途调用退役） | 代码 | AC-5、AC-6 通过（含「同名目录」现场不得读错对象） | `npm exec vitest run electron/runtime/invocationAssembler.test.ts` | 本机 |
 | B-04 | **兜底与失败隔离**：取不到权威目标或统计时标记不可用（**不写 0**）；写盘失败不生成成功写入事实 | B-03 | 同 B-03 | 代码 + 用例 | AC-6 不可用分支、AC-10 通过 | `npm exec vitest run electron/runtime/invocationAssembler.test.ts` + 新增用例 | 本机 |

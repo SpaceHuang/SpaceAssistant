@@ -1,7 +1,7 @@
 # 安全策略三阶段架构：决策摘要（读者分层试点）
 
-> 状态：试点草稿（未实施）｜生成：2026-10-16
-> 性质：把 [`security-policy-three-stage-architecture-development-plan.md`](security-policy-three-stage-architecture-development-plan.md)（596 行，2026-10-15 第三轮复审通过）按「读者分层」重排的**抽取件**。**规格真源仍是原计划**，本文件不复制其正文，只承载决策项与索引。
+> 状态：**历史抽取件（所属计划已于 2026-10-15～16 收口）**｜生成：2026-10-16｜2026-10-29 保留原因：`docs/rules/document-writing-guide-sources.md` 引用它作为人类决策层规则（R1–R3）的验证样本；**正文不再更新**，计划本体与过程件见 [`../../archive/safety-approval/`](../../archive/safety-approval/)。
+> 性质：把 [`security-policy-three-stage-architecture-development-plan.md`](../../archive/safety-approval/security-policy-three-stage-architecture-development-plan.md)（596 行，2026-10-15 第三轮复审通过）按「读者分层」重排的**抽取件**。**规格真源仍是原计划**，本文件不复制其正文，只承载决策项与索引。
 > 读法：第 0 层人工必读（约 5 分钟，其余可跳过）；第 1 层可选；第 2 层为机器/实现者索引，**人工可跳过**。
 > 依据材料：原计划 §1–§10；`docs/review/2026-10-15-security-policy-three-stage-architecture-development-plan-review.md`（v1，6 项阻断）、`-review-v2.md`（2 项）、`-review-v3.md`（无阻断）。
 
