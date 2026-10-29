@@ -480,6 +480,9 @@ export type CacheKey =
   | { kind: 'remote-write'; sessionId: string }
   | { kind: 'script-content'; digest: string; workdirDigest: string; sessionId: string }
 
+/** Provenance of a session review-scope grant; it is never inferred from a cached allow. */
+export type ReviewCacheSource = 'agent' | 'user'
+
 export interface DecisionCacheEntry {
   id: string
   key: CacheKey
@@ -653,6 +656,8 @@ export interface PolicyRule {
   userOverride?: true
   /** This ask explicitly supports its declared user memory tier (for example exact script trust). */
   cacheableAsk?: true
+  /** Explicitly permits consuming a review-scope grant from the listed approval source. */
+  reviewCacheSources?: readonly ReviewCacheSource[]
   /** 安全语义标记：即使 rule.action 被档位映射为 auto-evaluator，也必须原渠道逐次人工确认。 */
   humanRequired?: boolean
   /** Explicit reviewer for an ask rule; defaults to the lane's established reviewer. */
@@ -695,6 +700,8 @@ export interface PolicyEngineDeps {
   config: Record<string, unknown>
   /** 迁移完成位（参数化配置引用问询）。 */
   migrationComplete: boolean
+  /** Host-verified active scope grant. Scope and task constraints are checked before this reaches policy. */
+  reviewScopeGrant?: { readonly source: ReviewCacheSource }
   /** 第 3 步自动审批器（可注入，缺省不裁决）。 */
   autoEvaluator?: AutoEvaluator
   /**
