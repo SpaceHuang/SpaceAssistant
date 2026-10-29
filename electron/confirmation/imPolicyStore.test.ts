@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { runInTransaction } from '../database/transaction'
-import { commitDesktopPolicySnapshot, commitImPolicySnapshot, readImPolicySnapshot, restoreImPolicySnapshot, migrateLegacyImPolicySnapshot, switchToCurrentImStandard } from './imPolicyStore'
+import { commitDesktopPolicySnapshot, commitImPolicySnapshot, readImPolicySnapshot, restoreImPolicySnapshot, migrateLegacyImPolicySnapshot, switchToCurrentImStandard, rollbackImPolicyToVersion, reenableImStandardV3 } from './imPolicyStore'
 
 function makeDb(): DatabaseSync {
   const db = new DatabaseSync(':memory:')
@@ -26,6 +26,91 @@ function makeDb(): DatabaseSync {
 }
 
 describe('IM policy snapshot atomic transaction', () => {
+  it('rejects direct v3 writes through the generic policy snapshot writer', () => {
+    const db = makeDb()
+    expect(() => commitImPolicySnapshot(db, { expectedRevision: 1, policyBehaviorVersion: 'im-standard-v3',
+      snapshot: { selectedPackage: 'standard' }, updatedAt: 20, eventId: 'unapproved-direct-v3' }))
+      .toThrow('IM standard v3 can only be written by a release-gated startup migration or explicit re-enable')
+    expect(readImPolicySnapshot(db, { supportedBehaviorVersions: ['v1'] })).toMatchObject({ revision: 1, policyBehaviorVersion: 'v1' })
+    db.close()
+  })
+
+  it('rolls a v3 policy back with the v3 migration suppression in one audited revision', () => {
+    const db = makeDb()
+    db.prepare("UPDATE policy_behavior_snapshots SET policy_behavior_version='im-standard-v3',snapshot_json=? WHERE domain='im'")
+      .run(JSON.stringify({ selectedPackage: 'standard' }))
+
+    const result = rollbackImPolicyToVersion(db, { expectedRevision: 1, policyBehaviorVersion: 'im-standard-v2',
+      supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'], updatedAt: 30, eventId: 'rollback-v3' })
+
+    expect(result).toMatchObject({ status: 'committed', revision: 2 })
+    expect(readImPolicySnapshot(db, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-standard-v2', revision: 2,
+        snapshot: { automaticMigrationSuppressedVersions: ['im-standard-v3'] } })
+    expect(JSON.parse((db.prepare("SELECT event_json FROM policy_audit_events WHERE event_id='rollback-v3'").get() as { event_json: string }).event_json))
+      .toMatchObject({ kind: 'policy-behavior-version-rolled-back', actor: 'user', suppressedBehaviorVersion: 'im-standard-v3' })
+    db.close()
+  })
+
+  it('preserves the migration suppression through ordinary writes and only explicit re-enable removes it', () => {
+    const db = makeDb()
+    rollbackImPolicyToVersion(db, { expectedRevision: 1, policyBehaviorVersion: 'im-standard-v2',
+      supportedBehaviorVersions: ['v1', 'im-standard-v2'], updatedAt: 20, eventId: 'suppressed-seed' })
+
+    const ordinary = commitImPolicySnapshot(db, { expectedRevision: 2, policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'loose' }, updatedAt: 30, eventId: 'ordinary-write' })
+    expect(ordinary).toMatchObject({ status: 'committed', revision: 3 })
+    expect(readImPolicySnapshot(db, { supportedBehaviorVersions: ['im-standard-v2'] }).snapshot)
+      .toMatchObject({ selectedPackage: 'loose', automaticMigrationSuppressedVersions: ['im-standard-v3'] })
+
+    expect(reenableImStandardV3(db, { expectedRevision: 3, releaseGate: { publishedV3Ready: true, fixedRuleSetVerified: true,
+      restrictionMappingVerified: true }, updatedAt: 40, eventId: 'reenable-v3' }))
+      .toMatchObject({ status: 'committed', revision: 4 })
+    expect(readImPolicySnapshot(db, { supportedBehaviorVersions: ['im-standard-v2', 'im-standard-v3'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-standard-v3', revision: 4, snapshot: { automaticMigrationSuppressedVersions: [] } })
+    db.close()
+  })
+
+  it('fails closed on corrupt suppression state and rolls back snapshot, revision, and audit on failure', () => {
+    const db = makeDb()
+    db.prepare("UPDATE policy_behavior_snapshots SET snapshot_json=? WHERE domain='im'").run(JSON.stringify({ automaticMigrationSuppressedVersions: 'im-standard-v3' }))
+    expect(() => readImPolicySnapshot(db, { supportedBehaviorVersions: ['v1'] })).toThrow('Invalid IM automatic migration suppression field')
+    expect(() => commitImPolicySnapshot(db, { expectedRevision: 1, policyBehaviorVersion: 'v1', snapshot: {}, updatedAt: 20,
+      eventId: 'corrupt-write' })).toThrow('Invalid IM automatic migration suppression field')
+    for (const invalidSuppression of [null, ['im-standard-v3', 'im-standard-v3'], ['im-standard-future']]) {
+      db.prepare("UPDATE policy_behavior_snapshots SET snapshot_json=? WHERE domain='im'").run(JSON.stringify({
+        automaticMigrationSuppressedVersions: invalidSuppression
+      }))
+      expect(() => readImPolicySnapshot(db, { supportedBehaviorVersions: ['v1'] }))
+        .toThrow('Invalid IM automatic migration suppression field')
+    }
+    db.prepare("UPDATE policy_behavior_snapshots SET policy_behavior_version='im-standard-v3',snapshot_json='{}' WHERE domain='im'").run()
+    expect(() => rollbackImPolicyToVersion(db, { expectedRevision: 1, policyBehaviorVersion: 'im-standard-v2',
+      supportedBehaviorVersions: ['im-standard-v2'], updatedAt: 30, eventId: 'failed-rollback', beforeAudit: () => { throw new Error('audit failure') } }))
+      .toThrow('audit failure')
+    expect(db.prepare("SELECT policy_behavior_version,revision,snapshot_json FROM policy_behavior_snapshots WHERE domain='im'").get())
+      .toEqual({ policy_behavior_version: 'im-standard-v3', revision: 1, snapshot_json: '{}' })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM policy_audit_events').get()).toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rejects stale rollback revisions and refuses re-enable before the release gate passes', () => {
+    const db = makeDb()
+    db.prepare("UPDATE policy_behavior_snapshots SET policy_behavior_version='im-standard-v3',snapshot_json=? WHERE domain='im'")
+      .run(JSON.stringify({ selectedPackage: 'standard' }))
+    rollbackImPolicyToVersion(db, { expectedRevision: 1, policyBehaviorVersion: 'im-standard-v2',
+      supportedBehaviorVersions: ['im-standard-v2'], updatedAt: 25, eventId: 'actual-rollback' })
+    expect(rollbackImPolicyToVersion(db, { expectedRevision: 1, policyBehaviorVersion: 'im-standard-v2',
+      supportedBehaviorVersions: ['im-standard-v2'], updatedAt: 30, eventId: 'stale-rollback' }))
+      .toMatchObject({ status: 'conflict', currentRevision: 2 })
+    expect(() => reenableImStandardV3(db, { expectedRevision: 2, releaseGate: { publishedV3Ready: true,
+      fixedRuleSetVerified: true, restrictionMappingVerified: false }, updatedAt: 30, eventId: 'blocked-reenable' }))
+      .toThrow('IM standard v3 release gate is not satisfied')
+    expect(readImPolicySnapshot(db, { supportedBehaviorVersions: ['im-standard-v2', 'im-standard-v3'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-standard-v2', revision: 2, snapshot: { automaticMigrationSuppressedVersions: ['im-standard-v3'] } })
+    db.close()
+  })
+
   it('publishes authorization changes only after a successful revision commit', () => {
     const db = makeDb()
     const onCommitted = vi.fn()

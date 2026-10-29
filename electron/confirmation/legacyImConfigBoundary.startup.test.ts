@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getConfigValue, getDbConnection, setConfigValue } from '../database'
-import { commitDesktopPolicySnapshot, commitImPolicySnapshot, readImPolicySnapshot, readPolicyBehaviorSnapshot } from './imPolicyStore'
+import { commitDesktopPolicySnapshot, commitImPolicySnapshot, readImPolicySnapshot, readPolicyBehaviorSnapshot, rollbackImPolicyToVersion } from './imPolicyStore'
 import { ensureImPolicySnapshotAtStartup } from './legacyImConfigBoundary'
 import { PolicyRuleStore } from './policyRuleStore'
 import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin, writePolicyPackages } from './policyRulesRuntime'
@@ -18,6 +18,109 @@ function registerPolicyHandlers(db: ReturnType<typeof createMemoryAppDb>) {
 }
 
 describe('legacy IM policy migration at startup', () => {
+  const releasedV3Gate = { publishedV3Ready: true as const, fixedRuleSetVerified: true, restrictionMappingVerified: true }
+
+  it('migrates only standard snapshots under the complete release gate and records one atomic migration', () => {
+    const db = createMemoryAppDb('im-v3-startup-migration')
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'standard', remoteDenyOutbound: true, remoteScriptRequiresConfirm: true,
+        ruleOverrides: { 'mcp-tool-ask': 'deny' } }, updatedAt: 1, eventId: 'v2-seed' })
+
+    ensureImPolicySnapshotAtStartup(db, releasedV3Gate)
+
+    const migrated = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2', 'im-standard-v3'] })
+    expect(migrated).toMatchObject({ policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: {
+      selectedPackage: 'standard', remoteDenyOutbound: true, remoteScriptRequiresConfirm: true,
+      ruleOverrides: { 'mcp-tool-ask': 'deny' }, migrationSourceVersion: 'im-standard-v2'
+    } })
+    expect(conn.prepare("SELECT COUNT(*) AS count FROM policy_audit_events WHERE event_json LIKE '%im-standard-v3-startup-migration%' AND domain='im'").get())
+      .toEqual({ count: 1 })
+    ensureImPolicySnapshotAtStartup(db, releasedV3Gate)
+    expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v3'] }).revision).toBe(2)
+    expect(conn.prepare("SELECT COUNT(*) AS count FROM policy_audit_events WHERE event_json LIKE '%im-standard-v3-startup-migration%' AND domain='im'").get())
+      .toEqual({ count: 1 })
+    db.close()
+  })
+
+  it('keeps development startup and fresh installs on the old default without the full release gate', () => {
+    const developmentDb = createMemoryAppDb('im-v3-unpublished-startup')
+    const developmentConn = getDbConnection(developmentDb)
+    commitImPolicySnapshot(developmentConn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: 1, eventId: 'v2-dev-seed' })
+    ensureImPolicySnapshotAtStartup(developmentDb)
+    expect(readImPolicySnapshot(developmentConn, { supportedBehaviorVersions: ['im-standard-v2'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-standard-v2', revision: 1 })
+    const freshDb = createMemoryAppDb('im-v3-unpublished-install')
+    ensureImPolicySnapshotAtStartup(freshDb)
+    expect(() => readImPolicySnapshot(getDbConnection(freshDb), { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] }))
+      .toThrow(/snapshot is missing/)
+    developmentDb.close()
+    freshDb.close()
+  })
+
+  it.each([
+    { publishedV3Ready: false, fixedRuleSetVerified: true, restrictionMappingVerified: true },
+    { publishedV3Ready: true, fixedRuleSetVerified: false, restrictionMappingVerified: true },
+    { publishedV3Ready: true, fixedRuleSetVerified: true, restrictionMappingVerified: false }
+  ])('does not migrate when any single v3 release gate fact is missing: %o', (incompleteGate) => {
+    const db = createMemoryAppDb('im-v3-incomplete-gate')
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: 1, eventId: 'incomplete-gate-seed' })
+    ensureImPolicySnapshotAtStartup(db, incompleteGate)
+    expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-standard-v2', revision: 1 })
+    db.close()
+  })
+
+  it('does not automatically migrate custom packages or a snapshot suppressed after rollback', () => {
+    const customDb = createMemoryAppDb('im-v3-custom-not-migrated')
+    const customConn = getDbConnection(customDb)
+    commitImPolicySnapshot(customConn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'custom' },
+      updatedAt: 1, eventId: 'custom-seed' })
+    ensureImPolicySnapshotAtStartup(customDb, releasedV3Gate)
+    expect(readImPolicySnapshot(customConn, { supportedBehaviorVersions: ['im-standard-v2'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-standard-v2', revision: 1 })
+
+    const suppressedDb = createMemoryAppDb('im-v3-suppressed-not-migrated')
+    const suppressedConn = getDbConnection(suppressedDb)
+    commitImPolicySnapshot(suppressedConn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: 1, eventId: 'v2-seed' })
+    ensureImPolicySnapshotAtStartup(suppressedDb, releasedV3Gate)
+    rollbackImPolicyToVersion(suppressedConn, { expectedRevision: 2, policyBehaviorVersion: 'im-standard-v2',
+      supportedBehaviorVersions: ['im-standard-v2'], updatedAt: 2, eventId: 'rollback-v3' })
+    ensureImPolicySnapshotAtStartup(suppressedDb, releasedV3Gate)
+    expect(readImPolicySnapshot(suppressedConn, { supportedBehaviorVersions: ['im-standard-v2'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-standard-v2', revision: 3,
+        snapshot: { automaticMigrationSuppressedVersions: ['im-standard-v3'] } })
+    customDb.close()
+    suppressedDb.close()
+  })
+
+  it('fails closed instead of treating a corrupt suppression field as empty during startup migration', () => {
+    const db = createMemoryAppDb('im-v3-corrupt-suppression')
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: 1, eventId: 'corrupt-suppression-seed' })
+    conn.prepare("UPDATE policy_behavior_snapshots SET snapshot_json=? WHERE domain='im'")
+      .run(JSON.stringify({ selectedPackage: 'standard', automaticMigrationSuppressedVersions: ['unknown-version'] }))
+    expect(() => ensureImPolicySnapshotAtStartup(db, releasedV3Gate))
+      .toThrow('Invalid IM automatic migration suppression field')
+    expect(conn.prepare("SELECT policy_behavior_version,revision FROM policy_behavior_snapshots WHERE domain='im'").get())
+      .toEqual({ policy_behavior_version: 'im-standard-v2', revision: 1 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM policy_audit_events').get()).toEqual({ count: 1 })
+    db.close()
+  })
+
+  it('initializes a fresh standard snapshot as v3 only when every release gate is explicitly true', () => {
+    const db = createMemoryAppDb('im-v3-fresh-install-release-gated')
+    ensureImPolicySnapshotAtStartup(db, releasedV3Gate)
+    expect(readImPolicySnapshot(getDbConnection(db), { supportedBehaviorVersions: ['im-standard-v3'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } })
+    db.close()
+  })
+
   it('creates a frozen policy snapshot from existing channel config without rewriting channel config', () => {
     const db = createMemoryAppDb('legacy-im-startup')
     const legacyConfig = {

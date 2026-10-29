@@ -82,9 +82,10 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
   it('production runtime refuses an isolated im-standard-v3 candidate snapshot before release', () => {
     const d = db()
     commitImPolicySnapshot(getDbConnection(d), {
-      policyBehaviorVersion: 'im-standard-v3', snapshot: { selectedPackage: 'standard' },
+      policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
       updatedAt: 1, eventId: 'unreleased-v3-candidate'
     })
+    getDbConnection(d).prepare("UPDATE policy_behavior_snapshots SET policy_behavior_version='im-standard-v3' WHERE domain='im'").run()
     const rules = resolveEffectivePolicyRulesWithOrigin(d, 'wechat').rules
     expect(rules.find((rule) => rule.id === 'remote-outside-read-deny')).toMatchObject({ action: 'deny', locked: true })
     expect(rules.some((rule) => rule.id === 'im-outside-read-review')).toBe(false)
