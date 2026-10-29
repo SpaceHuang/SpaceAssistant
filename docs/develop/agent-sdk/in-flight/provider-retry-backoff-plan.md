@@ -356,6 +356,7 @@
 | `errorClass` | 稳定大写码，可选 | 如 `PROVIDER_RATE_LIMIT`、`PROVIDER_RETRY_AFTER_EXCEEDS_SINGLE_CAP` |
 | `usage` | `{ status:'reported', …tokens }` / `{ status:'unreported' }` / `{ status:'none' }` | `none` 只用于 `not-dispatched` |
 | `retryAt` | 毫秒时间戳，可选 | 仅服务端给过等待提示时出现 |
+| `waitBudgetOverrunMs` | 非负毫秒数，可选 | 单调时钟实测等待超过计划时记录差值；不追溯、不取消已安排的尝试 |
 
 **事实模型**：首次派发使用 `initial`；每次失败先记录该次结果及 `errorClass`，再由策略分类决定是否恢复。恢复实际派发时使用 `recovery` 来源并递增对应分类计数；拒绝或取消时以拟派发序号和拟采用的 `recovery` 来源写 `not-dispatched`，不递增物理或分类计数。首次失败的分类不能回填为首次来源。消费端按联合类型识别首次和各恢复来源，`errorClass` 独立表示结果原因。
 
