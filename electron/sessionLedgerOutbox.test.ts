@@ -49,6 +49,30 @@ describe('canonical session ledger outbox', () => {
   const databases: ReturnType<typeof createMemoryAppDb>[] = []
   afterEach(() => { for (const db of databases.splice(0)) db.close() })
 
+  it('projects reported usage from provider-attempt-result and retains per-attempt identity', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const session = createSession(db, { name: 'provider attempt result usage' })
+    const conn = getDbConnection(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-attempt-outbox-'))
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const requestUsage = { requestId: 'inv-result:round:1:attempt:2', turnId: 'turn-result', usage: { input_tokens: 4, output_tokens: 1 }, source: 'api' }
+    const result: HistoryEvent = {
+      invocationId: 'inv-result', turnId: 'turn-result', sequence: 1, schemaVersion: 1,
+      eventId: 'provider-attempt-result-outbox', idempotencyKey: 'provider-attempt-result-outbox', kind: 'provider-attempt-result',
+      payload: { requestId: 'inv-result:round:1', modelTurn: 1, attempt: 2, physical: true, attemptSource: { kind: 'recovery', recoveryKind: 'transient' }, outcome: 'succeeded', usage: { status: 'reported', inputTokens: 4, outputTokens: 1 }, sessionLedger: { location, requestUsage } }
+    }
+
+    const targets = buildCanonicalToolResultProjectionTargets(conn, [result], session.id, session.generation)
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toMatchObject({ projectionKind: 'request-usage', expectedEvents: [{ type: 'request_usage', payload: requestUsage }] })
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    await expect(projectCanonicalSessionLedgerTarget(sink, targets[0]!)).resolves.toMatchObject({ eventIds: ['request_usage:inv-result:round:1:attempt:2'] })
+    await expect(readSessionEvents(sink.eventsPath)).resolves.toMatchObject([{ type: 'request_usage', payload: requestUsage }])
+    await sink.close()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
   it('encodes a versioned canonical marker while preserving a digest of canonical projection material', () => {
     const expectedEvents: CanonicalLedgerProjectionTarget['expectedEvents'] = [
       { type: 'turn_start', payload: { turnId: 'turn-1' } }

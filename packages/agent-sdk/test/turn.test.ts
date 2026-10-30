@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { AgentTurnCancelledError, AgentTurnLifecycleInvalidatedError, PlanRejectedError, ToolDeniedError, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
+import { AGENT_TURN_TIMEOUT_ABORT_REASON, AgentTurnCancelledError, AgentTurnLifecycleInvalidatedError, PlanRejectedError, ToolDeniedError, consumeProviderRetryWaitBudget, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
 import { ModelProviderRegistry, type CanonicalModelMessage, type StreamChunk } from '../src/model'
 import { CapabilityRegistry } from '../src/capability'
 import { InMemorySafetyPermitStore, type PermitBinding } from '../src/safetyPermit'
@@ -10,6 +10,7 @@ import { createPermitBoundToolExecutionPort } from '../src/toolExecutionPort'
 import { InvocationHistoryWriter, MemoryHistory, rebuildInvocationStates, type HistoryEvent } from '../src/history'
 import { ResourceLockRegistry } from '../src/resourceLock'
 import { createAgentSdkSafetyPolicy, markAgentSdkSafetyDecisionConfirmed } from '../../../electron/confirmation/agentSdkSafetyPolicy'
+import { createAgentSdkProviderRecovery } from '../../../electron/runtime/agentSdkProviderRecovery'
 
 const route = { routeId: 'test', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
 const toolBinding = { requestId: 'req', turnId: 'turn', invocationId: 'inv', toolCallId: 'tc1', capabilityId: 'lookup', inputSnapshotHash: 'input-hash', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth-v1', phase: 'initial-compat' as const }
@@ -27,6 +28,72 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('rechecks a silent overflow after an intervening transient retry', async () => {
+    const registry = new ModelProviderRegistry()
+    const history = new MemoryHistory()
+    let calls = 0
+    registry.register(route, { providerId: 'mixed-recovery-overflow', stream: async function* () {
+      calls += 1
+      if (calls === 2) throw Object.assign(new Error('busy'), { status: 503 })
+      yield { type: 'usage', inputTokens: 101, outputTokens: 0 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('mixed-recovery-overflow', [])
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'mixed-recovery-overflow', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+      recoverProviderAttempt: createAgentSdkProviderRecovery({ contextWindow: 100, contextWindowTrusted: true, random: () => 0 })
+    })).rejects.toMatchObject({ reasonCode: 'SILENT_CONTEXT_OVERFLOW_RETRY_LIMIT' })
+    expect(calls).toBe(3)
+    expect((await history.read('mixed-recovery-overflow')).events.some((event) => event.kind === 'model-response-committed')).toBe(false)
+  })
+
+  it('audits observed usage when the provider stream ends without finish', async () => {
+    const registry = new ModelProviderRegistry()
+    const history = new MemoryHistory()
+    registry.register(route, { providerId: 'missing-finish-usage', stream: async function* () {
+      yield { type: 'usage', inputTokens: 10, outputTokens: 3 }
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('missing-finish-usage', [])
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'missing-finish-usage', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' }))
+    })).rejects.toThrow('stream ended without finish')
+    expect((await history.read('missing-finish-usage')).events).toContainEqual(expect.objectContaining({
+      kind: 'provider-attempt-result', payload: expect.objectContaining({ outcome: 'failed', usage: { status: 'reported', inputTokens: 10, outputTokens: 3 } })
+    }))
+  })
+
+  it('audits observed usage when an event follows the provider finish marker', async () => {
+    const registry = new ModelProviderRegistry()
+    const history = new MemoryHistory()
+    registry.register(route, { providerId: 'post-finish-event', stream: async function* () {
+      yield { type: 'usage', inputTokens: 10, outputTokens: 3 }
+      yield { type: 'finish', reason: 'stop' }
+      yield { type: 'text-delta', text: 'invalid trailing event' }
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('post-finish-event', [])
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'post-finish-event', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' }))
+    })).rejects.toThrow('event received after finish')
+    expect((await history.read('post-finish-event')).events).toContainEqual(expect.objectContaining({
+      kind: 'provider-attempt-result', payload: expect.objectContaining({ outcome: 'failed', usage: { status: 'reported', inputTokens: 10, outputTokens: 3 } })
+    }))
+  })
+
   it('mirrors all thinking blocks from the completed turn into the assistant message', async () => {
     const registry = new ModelProviderRegistry()
     let requestCount = 0
@@ -1206,7 +1273,7 @@ describe('runAgentTurn', () => {
       }
     })
     expect((await history.read('preflight-request')).events.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'transcript-compacted', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'invocation-context-committed', 'transcript-compacted', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
     expect((await history.read('preflight-request')).events[1]).toMatchObject({ payload: {
       messages: [currentMessage], requiredUserMessage: { id: 'user-current', message: currentMessage }
@@ -1342,7 +1409,7 @@ describe('runAgentTurn', () => {
 
     const events = (await history.read('accepted-input')).events
     expect(events.map(({ kind }) => kind)).toEqual([
-      'session-input-committed', 'invocation-context-committed', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'session-input-committed', 'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
     expect(events[1]).toMatchObject({ sequence: 2, payload: { messages: [userMessage], requiredUserMessage: { id: 'user-a', message: userMessage } } })
   })
@@ -1694,7 +1761,7 @@ describe('runAgentTurn', () => {
     })
     const events = (await history.read('request-outbox')).events
     expect(events.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
   })
 
@@ -2011,14 +2078,18 @@ describe('runAgentTurn', () => {
     const permits = new InMemorySafetyPermitStore()
     const order: string[] = []
     const recoverProviderAttempt = vi.fn(async ({ messages, error }: { messages: readonly CanonicalModelMessage[]; error?: unknown }) => error
-      ? { reasonCode: 'CONTEXT_OVERFLOW', messages, retryEvent: { attempt: 1, code: 'provider_context_overflow' } }
+      ? { reasonCode: 'CONTEXT_OVERFLOW', messages, plannedWaitMs: 500, retryEvent: { attempt: 1, code: 'provider_context_overflow' } }
       : undefined)
     const onModelRequest = vi.fn(({ attempt }: { attempt: number; modelTurn: number }) => { order.push(`request:${attempt}`) })
     const contextProjectionCommitter = vi.fn(async (_candidate: import('../src/context').ContextReplacement) => { order.push('context-projection') })
     const onProviderRetry = vi.fn(async () => {
       const events = (await history.read('inv')).events
       expect(events.some((event) => event.kind === 'transcript-compacted')).toBe(true)
-      expect(events.some((event) => event.kind === 'provider-retry-scheduled')).toBe(true)
+      expect(events.find((event) => event.kind === 'provider-retry-scheduled')?.payload).toMatchObject({
+        requestId: 'inv:round:1', attemptInRequest: 2, maxAttempts: 2, reasonCode: 'CONTEXT_OVERFLOW',
+        recoveryKind: 'overflow', plannedWaitMs: 500, backoffMs: 500
+      })
+      expect(order).not.toContain('wait')
       order.push('retry-event')
     })
 
@@ -2027,20 +2098,25 @@ describe('runAgentTurn', () => {
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
       prepareTool: async () => { throw new Error('unused') },
       toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
-      history, contextProjectionCommitter, maxModelTurns: 1, recoverProviderAttempt, observer: {
+      history, contextProjectionCommitter, maxModelTurns: 1, recoverProviderAttempt,
+      waitForRetry: async () => { order.push('wait') }, observer: {
         onModelRequest, onProviderRetry, criticalModelRequestProjection: true,
         onModelAttemptDiscarded: () => { order.push('attempt-discarded') }
       }
     })
 
     expect(calls).toEqual([1, 2])
-    expect(recoverProviderAttempt).toHaveBeenCalledOnce()
+    expect(recoverProviderAttempt).toHaveBeenCalledTimes(2)
     expect(onModelRequest.mock.calls.map(([request]) => ({ modelTurn: request.modelTurn, attempt: request.attempt }))).toEqual([
       { modelTurn: 1, attempt: 1 },
       { modelTurn: 1, attempt: 2 }
     ])
-    expect(onProviderRetry).toHaveBeenCalledWith({ attempt: 1, modelTurn: 1, routeId: route.routeId, requestId: 'inv:round:1', code: 'provider_context_overflow' })
-    expect(order).toEqual(['request:1', 'context-projection', 'attempt-discarded', 'retry-event', 'request:2'])
+    expect(onProviderRetry).toHaveBeenCalledWith({
+      attempt: 1, attemptInRequest: 2, maxAttempts: 2, modelTurn: 1, routeId: route.routeId,
+      requestId: 'inv:round:1', code: 'provider_context_overflow', reasonCode: 'CONTEXT_OVERFLOW',
+      recoveryKind: 'overflow', plannedWaitMs: 500
+    })
+    expect(order).toEqual(['request:1', 'context-projection', 'attempt-discarded', 'retry-event', 'wait', 'request:2'])
     expect(contextProjectionCommitter).toHaveBeenCalledOnce()
     const recoveryProjection = contextProjectionCommitter.mock.calls[0]?.[0] as { reason?: string; historyPayload?: Record<string, unknown> }
     expect(recoveryProjection).toMatchObject({
@@ -2056,20 +2132,29 @@ describe('runAgentTurn', () => {
     expect(events.at(-1)?.kind).toBe('invocation-completed')
   })
 
-  it('consumes the host attempt budget for two transient failures in one invocation', async () => {
+  it('keeps physical and recovery-kind counters within bounds over a seeded mixed failure sequence', async () => {
+    let randomState = 0x5eed
+    const nextRandom = () => { randomState = (randomState * 1664525 + 1013904223) >>> 0; return randomState }
+    const failureKinds: Array<'transient' | 'idle-timeout' | 'overflow' | 'effort'> = ['transient', 'idle-timeout', 'overflow', 'effort']
+    for (let index = failureKinds.length - 1; index > 0; index -= 1) {
+      const swapIndex = nextRandom() % (index + 1)
+      ;[failureKinds[index], failureKinds[swapIndex]] = [failureKinds[swapIndex]!, failureKinds[index]!]
+    }
     const registry = new ModelProviderRegistry()
     let calls = 0
     registry.register(route, { providerId: 'fake', stream: () => {
       calls += 1
-      if (calls < 3) return (async function* () { throw Object.assign(new Error('temporarily unavailable'), { status: 503 }) })()
+      const failureKind = failureKinds[calls - 1]
+      if (failureKind) return (async function* () { throw Object.assign(new Error(`temporary ${failureKind}`), { status: failureKind === 'transient' ? 503 : undefined, recoveryKind: failureKind }) })()
       return stream({ type: 'text-delta', text: 'recovered' }, { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
     } })
     const history = new MemoryHistory()
     const capabilities = new CapabilityRegistry()
     capabilities.define('inv-retry-budget', [])
     const permits = new InMemorySafetyPermitStore()
-    const recoverProviderAttempt = vi.fn(async ({ messages, attempt, error }: { messages: readonly CanonicalModelMessage[]; attempt: number; error?: unknown }) => error ? ({
-      kind: 'retry' as const, reasonCode: 'PROVIDER_SERVER_ERROR', messages, maxAttempts: 3,
+    const recoverProviderAttempt = vi.fn(async ({ messages, attempt, recoveryCounts, error }: { messages: readonly CanonicalModelMessage[]; attempt: number; recoveryCounts: { transient: number; idleTimeout: number; overflow: number; effort: number }; error?: unknown }) => error ? ({
+      kind: 'retry' as const, reasonCode: 'PROVIDER_SERVER_ERROR', messages, maxAttempts: 5,
+      recoveryKind: (error as { recoveryKind: 'transient' | 'idle-timeout' | 'overflow' | 'effort' }).recoveryKind, plannedWaitMs: 0,
       retryEvent: { attempt, code: 'provider_server_error' }
     }) : undefined)
 
@@ -2081,11 +2166,27 @@ describe('runAgentTurn', () => {
     })
 
     expect(result.text).toBe('recovered')
-    expect(calls).toBe(3)
-    expect(recoverProviderAttempt.mock.calls.map(([input]) => input.attempt)).toEqual([1, 2])
+    expect(calls).toBe(5)
+    expect(recoverProviderAttempt.mock.calls.map(([input]) => input.attempt)).toEqual([1, 2, 3, 4, 5])
+    const expectedCounts: Array<{ transient: number; idleTimeout: number; overflow: number; effort: number }> = []
+    const seenCounts = { transient: 0, idleTimeout: 0, overflow: 0, effort: 0 }
+    for (const kind of failureKinds.slice(0, 4)) {
+      expectedCounts.push({ ...seenCounts })
+      seenCounts[kind === 'idle-timeout' ? 'idleTimeout' : kind] += 1
+    }
+    expectedCounts.push({ ...seenCounts })
+    expect(recoverProviderAttempt.mock.calls.map(([input]) => input.recoveryCounts)).toEqual(expectedCounts)
     const events = (await history.read('inv-retry-budget')).events
-    expect(events.filter((event) => event.kind === 'provider-retry-scheduled')).toHaveLength(2)
-    expect(events.filter((event) => event.kind === 'model-request-started').map((event) => (event.payload as { attempt: number }).attempt)).toEqual([1, 2, 3])
+    expect(events.filter((event) => event.kind === 'provider-retry-scheduled')).toHaveLength(4)
+    expect(events.filter((event) => event.kind === 'model-request-started').map((event) => (event.payload as { attempt: number }).attempt)).toEqual([1, 2, 3, 4, 5])
+    const expectedSources = [
+      { kind: 'initial' },
+      ...failureKinds.map((recoveryKind) => ({ kind: 'recovery', recoveryKind }))
+    ]
+    expect(events.filter((event) => event.kind === 'provider-attempt-result').map((event) => event.payload)).toMatchObject([
+      ...failureKinds.slice(0, 4).map((_, index) => ({ attempt: index + 1, attemptSource: expectedSources[index], outcome: 'failed', usage: { status: 'unreported' } })),
+      { attempt: 5, attemptSource: expectedSources[4], outcome: 'succeeded', usage: { status: 'reported', inputTokens: 2, outputTokens: 1 } }
+    ])
   })
 
   it('returns the host stable exhaustion code after the final transient provider attempt', async () => {
@@ -2138,6 +2239,300 @@ describe('runAgentTurn', () => {
     setTimeout(() => controller.abort(), 10)
     await expect(attempt).rejects.toThrow()
     expect(calls).toBe(1)
+    const events = (await history.read('inv-retry-cancel')).events
+    expect(events.some((event) => event.kind === 'provider-retry-scheduled')).toBe(true)
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'provider-attempt-result', payload: expect.objectContaining({ attempt: 2, physical: false, outcome: 'not-dispatched', errorClass: 'TURN_CANCELLED' }) }))
+  })
+
+  it('does not wait or dispatch if the scheduled retry event cannot be appended', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'retry-schedule-failure', stream: () => {
+      calls += 1
+      return (async function* () { throw Object.assign(new Error('rate limited'), { status: 429 }) })()
+    } })
+    const delegate = new MemoryHistory()
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], version: number) => {
+        if (events.some((event) => event.kind === 'provider-retry-scheduled')) throw new Error('retry schedule append failed')
+        return delegate.appendBatch(events, version)
+      },
+      read: (invocationId: string) => delegate.read(invocationId)
+    }
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('retry-schedule-failure', [])
+    const permits = new InMemorySafetyPermitStore()
+    const waits: number[] = []
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'retry-schedule-failure', history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 10 }, maxModelTurns: 1,
+      recoverProviderAttempt: async ({ error, messages }) => error ? ({ kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 5, recoveryKind: 'transient', plannedWaitMs: 45_000, retryEvent: { attempt: 1, code: 'provider_rate_limit' } }) : undefined,
+      waitForRetry: async (delayMs) => { waits.push(delayMs) },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' })))
+    })).rejects.toThrow('retry schedule append failed')
+    expect(waits).toEqual([])
+    expect(calls).toBe(1)
+  })
+
+  it('stops before another recovery when a retry attempt result cannot be appended', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'retry-result-failure', stream: () => {
+      calls += 1
+      return (async function* () { throw Object.assign(new Error('rate limited'), { status: 429 }) })()
+    } })
+    const delegate = new MemoryHistory()
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], version: number) => {
+        if (events.some((event) => event.kind === 'provider-attempt-result' && (event.payload as { attempt?: number }).attempt === 2)) throw new Error('retry result append failed')
+        return delegate.appendBatch(events, version)
+      },
+      read: (invocationId: string) => delegate.read(invocationId)
+    }
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('retry-result-failure', [])
+    const permits = new InMemorySafetyPermitStore()
+    const recoverProviderAttempt = vi.fn(async ({ error, messages }: { error?: unknown; messages: readonly CanonicalModelMessage[] }) => error
+      ? ({ kind: 'retry' as const, reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 3, recoveryKind: 'transient' as const, retryEvent: { attempt: 1, code: 'provider_rate_limit' } })
+      : undefined)
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'retry-result-failure', history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 10 }, maxModelTurns: 1,
+      recoverProviderAttempt,
+      waitForRetry: async () => undefined,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' })))
+    })).rejects.toThrow('retry result append failed')
+    expect(calls).toBe(2)
+    expect(recoverProviderAttempt).toHaveBeenCalledOnce()
+  })
+
+  it('uses the full 45-second Retry-After delay without a hidden 30-second cap', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      calls += 1
+      return (async function* () { throw Object.assign(new Error('rate limited'), { status: 429 }) })()
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv-retry-exact-wait', [])
+    const permits = new InMemorySafetyPermitStore()
+    const controller = new AbortController()
+    const originalSetTimeout = globalThis.setTimeout
+    const scheduledDelays: number[] = []
+    const recoverProviderAttempt = vi.fn(async ({ messages }: { messages: readonly CanonicalModelMessage[] }) => ({
+      kind: 'retry' as const, reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 5, plannedWaitMs: 45_000,
+      retryAfterMs: 45_000, recoveryKind: 'transient' as const,
+      retryEvent: { attempt: 1, code: 'provider_rate_limit' }
+    }))
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === 45_000) {
+        scheduledDelays.push(timeout)
+        queueMicrotask(() => controller.abort())
+      }
+      return originalSetTimeout(handler, timeout, ...args)
+    }) as typeof setTimeout)
+    try {
+      await expect(runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'inv-retry-exact-wait', history,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10, signal: controller.signal }, maxModelTurns: 1,
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+        prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' }))), recoverProviderAttempt
+      })).rejects.toThrow()
+      expect(scheduledDelays).toEqual([45_000])
+      expect(calls).toBe(1)
+    } finally {
+      timeoutSpy.mockRestore()
+    }
+  })
+
+  it('surfaces single-cap retry metadata and does not dispatch another provider attempt', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      calls += 1
+      return (async function* () { throw Object.assign(new Error('rate limited'), { status: 429 }) })()
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv-retry-single-cap', [])
+    const permits = new InMemorySafetyPermitStore()
+    const now = Date.parse('2026-10-30T00:00:00.000Z')
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'inv-retry-single-cap', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' }))),
+      recoverProviderAttempt: async ({ messages }) => ({ kind: 'reject' as const, reasonCode: 'PROVIDER_RETRY_AFTER_EXCEEDS_SINGLE_CAP', serverAskedMs: 120_000, retryAt: now + 120_000, messages })
+    })).rejects.toMatchObject({ code: 'MODEL_ATTEMPT_RECOVERY_REJECTED', reasonCode: 'PROVIDER_RETRY_AFTER_EXCEEDS_SINGLE_CAP', details: { serverAskedMs: 120_000, retryAt: now + 120_000 } })
+    expect(calls).toBe(1)
+  })
+
+  it('shares the retry wait budget across logical model turns and records the denied attempt', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'shared-retry-budget', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1 || providerCalls === 3) throw Object.assign(new Error('rate limited'), { status: 429 })
+      if (providerCalls === 2) {
+        yield { type: 'tool-call', toolCallId: 'budget-tool', toolName: 'lookup', input: {} }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+        return
+      }
+      yield { type: 'text-delta', text: 'done' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'shared-retry-budget'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const waits: number[] = []
+    const recoveryInputs: Array<{ modelTurn: number; waitBudgetRemainingMs: number }> = []
+    let monotonicNow = 0
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      recoverProviderAttempt: async ({ error, messages, modelTurn, waitBudgetRemainingMs }) => {
+        if (!error) return undefined
+        recoveryInputs.push({ modelTurn, waitBudgetRemainingMs })
+        return { kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 5, recoveryKind: 'transient', plannedWaitMs: modelTurn === 1 ? 40_000 : 30_000 }
+      },
+      monotonicNow: () => monotonicNow,
+      waitForRetry: async (delayMs: number) => { waits.push(delayMs); monotonicNow += delayMs },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'tool done' })), maxModelTurns: 3
+    })).rejects.toMatchObject({ code: 'MODEL_ATTEMPT_RECOVERY_REJECTED', reasonCode: 'PROVIDER_RETRY_BUDGET_EXHAUSTED' })
+    expect(recoveryInputs).toEqual([{ modelTurn: 1, waitBudgetRemainingMs: 60_000 }, { modelTurn: 2, waitBudgetRemainingMs: 20_000 }])
+    expect(waits).toEqual([40_000])
+    expect(providerCalls).toBe(3)
+    const events = (await history.read(invocationId)).events
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'provider-attempt-result', payload: expect.objectContaining({ modelTurn: 2, attempt: 2, physical: false, outcome: 'not-dispatched' }) }))
+  })
+
+  it('allows a retry whose planned wait exactly equals the remaining budget', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    let monotonicNow = 0
+    registry.register(route, { providerId: 'exact-retry-budget', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) { monotonicNow += 100_000; throw Object.assign(new Error('rate limited'), { status: 429 }) }
+      yield { type: 'text-delta', text: 'completed' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'exact-retry-budget'
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, [])
+    const permits = new InMemorySafetyPermitStore()
+    const waits: number[] = []
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 16 }, maxModelTurns: 1,
+      recoverProviderAttempt: async ({ error, messages, waitBudgetRemainingMs }) => error ? ({ kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 5, recoveryKind: 'transient', plannedWaitMs: waitBudgetRemainingMs }) : undefined,
+      monotonicNow: () => monotonicNow,
+      waitForRetry: async (delayMs) => { waits.push(delayMs); monotonicNow += delayMs + 1_000 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' }))
+    })
+    expect(result.text).toBe('completed')
+    expect(waits).toEqual([60_000])
+    expect(providerCalls).toBe(2)
+    expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({ kind: 'provider-attempt-result', payload: expect.objectContaining({ attempt: 2, outcome: 'succeeded', waitBudgetOverrunMs: 1_000 }) }))
+  })
+
+  it('rejects a zero-wait transient recovery when the invocation balance is exhausted', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    let monotonicNow = 0
+    registry.register(route, { providerId: 'zero-retry-budget', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls <= 2) throw Object.assign(new Error('rate limited'), { status: 429 })
+      yield { type: 'text-delta', text: 'unexpected' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'zero-retry-budget'
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, [])
+    const permits = new InMemorySafetyPermitStore()
+    const budgets: number[] = []
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 16 }, maxModelTurns: 1,
+      recoverProviderAttempt: async ({ error, messages, waitBudgetRemainingMs }) => {
+        if (!error) return undefined
+        budgets.push(waitBudgetRemainingMs)
+        return { kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 5, recoveryKind: 'transient', plannedWaitMs: budgets.length === 1 ? 60_000 : 0 }
+      },
+      monotonicNow: () => monotonicNow,
+      waitForRetry: async (delayMs) => { monotonicNow += delayMs },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' }))
+    })).rejects.toMatchObject({ code: 'MODEL_ATTEMPT_RECOVERY_REJECTED', reasonCode: 'PROVIDER_RETRY_BUDGET_EXHAUSTED' })
+    expect(budgets).toEqual([60_000, 0])
+    expect(providerCalls).toBe(2)
+    expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({ kind: 'provider-attempt-result', payload: expect.objectContaining({ attempt: 3, physical: false, outcome: 'not-dispatched' }) }))
+  })
+
+  it('permits zero-wait dedicated recovery at zero balance without replenishing it', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'dedicated-zero-budget', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) throw Object.assign(new Error('rate limited'), { status: 429 })
+      if (providerCalls === 2) throw new Error('provider stream idle timeout')
+      yield { type: 'text-delta', text: 'completed' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'dedicated-zero-budget'
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, [])
+    const permits = new InMemorySafetyPermitStore()
+    const inputs: Array<{ waitBudgetRemainingMs: number; kind: string }> = []
+    let monotonicNow = 0
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 16 }, maxModelTurns: 1,
+      recoverProviderAttempt: async ({ error, messages, waitBudgetRemainingMs }) => {
+        if (!error) return undefined
+        const kind = (error as { status?: number }).status === 429 ? 'transient' : 'idle-timeout'
+        inputs.push({ waitBudgetRemainingMs, kind })
+        return { kind: 'retry', reasonCode: kind === 'transient' ? 'PROVIDER_RATE_LIMIT' : 'PROVIDER_STREAM_IDLE_TIMEOUT', messages, maxAttempts: 5, recoveryKind: kind, plannedWaitMs: kind === 'transient' ? 60_000 : 0 }
+      },
+      monotonicNow: () => monotonicNow,
+      waitForRetry: async (delayMs) => { monotonicNow += delayMs },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' }))
+    })
+    expect(result.text).toBe('completed')
+    expect(inputs).toEqual([{ waitBudgetRemainingMs: 60_000, kind: 'transient' }, { waitBudgetRemainingMs: 0, kind: 'idle-timeout' }])
+    expect(providerCalls).toBe(3)
+  })
+
+  it('maintains the retry budget invariant over a seeded sequence of measured waits', () => {
+    let seed = 0x5eed1234
+    const random = () => { seed = (1664525 * seed + 1013904223) >>> 0; return seed / 0x1_0000_0000 }
+    let remaining = 60_000
+    for (let operation = 0; operation < 1_000; operation += 1) {
+      const before = remaining
+      const measured = Math.floor(random() * 90_000) - 5_000
+      remaining = consumeProviderRetryWaitBudget(remaining, measured)
+      expect(remaining).toBeGreaterThanOrEqual(0)
+      expect(remaining).toBeLessThanOrEqual(before)
+      expect(remaining).toBeLessThanOrEqual(60_000)
+      expect(remaining).toBe(Math.max(0, before - Math.max(0, measured)))
+    }
   })
 
   it('rechecks the host recovery gate inside the final dispatch lease before recording start', async () => {
@@ -2531,6 +2926,17 @@ describe('runAgentTurn', () => {
     expect(recordAttemptUsage).toHaveBeenNthCalledWith(1, expect.objectContaining({ attempt: 1, disposition: 'discarded', usage: expect.objectContaining({ inputTokens: 80, outputTokens: 0, cacheReadInputTokens: 15, cacheCreationInputTokens: 6 }) }))
     expect(recordAttemptUsage).toHaveBeenNthCalledWith(2, expect.objectContaining({ attempt: 2, disposition: 'completed', usage: expect.objectContaining({ inputTokens: 70, outputTokens: 3 }) }))
     expect(result.usage).toEqual({ inputTokens: 150, outputTokens: 3, cacheReadInputTokens: 15, cacheCreationInputTokens: 6 })
+    const auditedUsage = events.filter((event) => event.kind === 'provider-attempt-result').reduce((total, event) => {
+      const usage = (event.payload as { usage: { status: string; inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } }).usage
+      if (usage.status !== 'reported') return total
+      return {
+        inputTokens: total.inputTokens + (usage.inputTokens ?? 0),
+        outputTokens: total.outputTokens + (usage.outputTokens ?? 0),
+        cacheReadInputTokens: total.cacheReadInputTokens + (usage.cacheReadInputTokens ?? 0),
+        cacheCreationInputTokens: total.cacheCreationInputTokens + (usage.cacheCreationInputTokens ?? 0)
+      }
+    }, { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 })
+    expect(auditedUsage).toEqual(result.usage)
     expect(events.filter((event) => event.kind === 'transcript-compacted')).toHaveLength(1)
     expect(events.find((event) => event.kind === 'model-attempt-discarded')?.payload).toMatchObject({
       modelTurn: 1, attempt: 1, reasonCode: 'SILENT_CONTEXT_OVERFLOW', finishReason: 'stop', usage: expect.objectContaining({ inputTokens: 80, outputTokens: 0, cacheReadInputTokens: 15, cacheCreationInputTokens: 6 })
@@ -3433,7 +3839,7 @@ describe('runAgentTurn', () => {
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: new InMemorySafetyPermitStore(), policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
       prepareTool: vi.fn(), toolExecution: toolExecutionPort(new InMemorySafetyPermitStore(), vi.fn()), maxModelTurns: 1, history
     })).rejects.toMatchObject({ code: 'INVALID_MODEL_STREAM' })
-    expect(history.appendBatch).toHaveBeenCalledTimes(3)
+    expect(history.appendBatch).toHaveBeenCalledTimes(4)
   })
 
   it('fails closed and withholds turn completion when recording invocation completion fails', async () => {
@@ -3511,7 +3917,7 @@ describe('runAgentTurn', () => {
 
     expect(executed).toHaveBeenCalledOnce()
     expect(modelCalls).toBe(1)
-    expect(persisted.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'model-response-committed', 'tool-call-started', 'invocation-interrupted'])
+    expect(persisted.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'tool-call-started', 'invocation-interrupted'])
     expect(persisted.at(-1)?.payload).toMatchObject({ status: 'interrupted', reason: 'unknown-after-dispatch' })
   })
 
@@ -3575,16 +3981,17 @@ describe('runAgentTurn', () => {
 
     const { events } = await history.read('inv')
     expect(events.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'model-request-started', 'model-response-committed', 'tool-call-started', 'tool-call-finished', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'tool-call-started', 'tool-call-finished', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
     expect(events[0]?.payload).toMatchObject({ messages: [{ role: 'user', content: 'weather?' }] })
-    expect(events[2]?.payload).toMatchObject({ requestId: 'inv:turn:1', message: { role: 'assistant', toolCalls: [{ id: 'tc-history', name: 'lookup' }] }, finishReason: 'tool-calls', usage: { inputTokens: 2, outputTokens: 1 } })
-    expect(events[3]?.payload).toMatchObject({ toolCallId: 'tc-history', toolName: 'lookup', inputHash: expect.any(String) })
-    expect((events[3]?.payload as { inputHash: string; input?: unknown }).inputHash).toMatch(/^[a-f0-9]{64}$/)
-    expect(events[3]?.payload).not.toHaveProperty('input')
-    expect(events[4]?.payload).toMatchObject({ toolCallId: 'tc-history', success: true, result: 'sunny' })
-    expect(events[6]?.payload).toMatchObject({ requestId: 'inv:turn:2', message: { role: 'assistant', content: 'sunny' }, finishReason: 'stop' })
-    expect(events[7]?.payload).toEqual({ status: 'completed', outputText: 'sunny', usage: { inputTokens: 3, outputTokens: 2 } })
+    expect(events[2]?.payload).toMatchObject({ requestId: 'inv:round:1', modelTurn: 1, attempt: 1, outcome: 'succeeded', usage: { status: 'reported', inputTokens: 2, outputTokens: 1 } })
+    expect(events[3]?.payload).toMatchObject({ requestId: 'inv:turn:1', message: { role: 'assistant', toolCalls: [{ id: 'tc-history', name: 'lookup' }] }, finishReason: 'tool-calls', usage: { inputTokens: 2, outputTokens: 1 } })
+    expect(events[4]?.payload).toMatchObject({ toolCallId: 'tc-history', toolName: 'lookup', inputHash: expect.any(String) })
+    expect((events[4]?.payload as { inputHash: string; input?: unknown }).inputHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(events[4]?.payload).not.toHaveProperty('input')
+    expect(events[5]?.payload).toMatchObject({ toolCallId: 'tc-history', success: true, result: 'sunny' })
+    expect(events[8]?.payload).toMatchObject({ requestId: 'inv:turn:2', message: { role: 'assistant', content: 'sunny' }, finishReason: 'stop' })
+    expect(events[9]?.payload).toEqual({ status: 'completed', outputText: 'sunny', usage: { inputTokens: 3, outputTokens: 2 } })
   })
 
   it('commits provider tool-call thought signatures into canonical assistant history', async () => {
@@ -3632,7 +4039,7 @@ describe('runAgentTurn', () => {
     })
     expect(result.text).toBe('accepted answer')
     expect(observed).toEqual([{
-      committedKinds: ['invocation-context-committed', 'model-request-started', 'model-response-committed'],
+      committedKinds: ['invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed'],
       message: { role: 'assistant', content: 'accepted answer' }
     }])
   })
@@ -3830,7 +4237,7 @@ describe('runAgentTurn', () => {
     })).resolves.toMatchObject({ text: 'committed', modelTurns: 1, finishReason: 'stop' })
     expect(onObservationError).toHaveBeenCalledWith(expect.objectContaining({ message: 'UI projection failed' }), 'model-response-committed')
     expect((await history.read('inv')).events.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
   })
 
@@ -4111,6 +4518,7 @@ describe('runAgentTurn', () => {
     expect((await history.read('inv')).events).toMatchObject([
       { kind: 'invocation-context-committed' },
       { kind: 'model-request-started' },
+      { kind: 'provider-attempt-result' },
       { kind: 'invocation-failed', payload: { status: 'failed' } }
     ])
   })
@@ -4382,7 +4790,7 @@ describe('runAgentTurn', () => {
     expect(result.text).toBe('Sunny')
     const committedEvents = (await history.read('inv')).events
     expect(committedEvents.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'model-request-started', 'model-response-committed', 'approval-waiting', 'approval-resolved', 'tool-call-started', 'tool-call-finished', 'model-request-started', 'model-response-committed', 'invocation-completed'
+      'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'approval-waiting', 'approval-resolved', 'tool-call-started', 'tool-call-finished', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'invocation-completed'
     ])
     expect(committedEvents.find(({ kind }) => kind === 'approval-waiting')?.payload).toMatchObject({
       toolCallId: 'tc1', approvalId: 'confirm-1', answerer: 'user', reasonCode: 'needs-confirmation', requestedAt: expect.any(Number)
@@ -4490,7 +4898,7 @@ describe('runAgentTurn', () => {
     expect(decisions).toHaveLength(0)
     expect(execute).not.toHaveBeenCalled()
     expect((await history.read('inv')).events.map(({ kind }) => kind)).toEqual([
-      'invocation-context-committed', 'model-request-started', 'model-response-committed', 'approval-waiting', 'approval-resolved', 'tool-call-not-dispatched', 'invocation-failed'
+      'invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'approval-waiting', 'approval-resolved', 'tool-call-not-dispatched', 'invocation-failed'
     ])
     expect((await history.read('inv')).events.at(-1)?.payload).toEqual({
       status: 'denied', reason: 'POLICY_DENY', usage: { type: 'usage', inputTokens: 2, outputTokens: 3 }
@@ -4860,7 +5268,7 @@ describe('runAgentTurn', () => {
     expect(admission.activeLeaseCount('req')).toBe(0)
     expect([...admission.closedOutcomes.values()]).toEqual(['unknown-after-dispatch'])
     const interruptedSnapshot = await history.read('inv')
-    expect(interruptedSnapshot.events.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'model-response-committed', 'tool-call-started', 'tool-call-finished', 'invocation-interrupted'])
+    expect(interruptedSnapshot.events.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'provider-attempt-result', 'model-response-committed', 'tool-call-started', 'tool-call-finished', 'invocation-interrupted'])
     expect(interruptedSnapshot.events.at(-2)?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', invocationDisposition: 'cancelled' })
     expect(rebuildInvocationStates(interruptedSnapshot).get('inv')).toMatchObject({ state: 'cancelled' })
   })
@@ -5211,6 +5619,76 @@ describe('runAgentTurn', () => {
       expect(events.at(-1)).toMatchObject(aborted
         ? { kind: 'invocation-interrupted', payload: { status: 'cancelled' } }
         : { kind: 'invocation-failed', payload: { status: 'failed' } })
+    }
+  })
+
+  it.each([
+    { abort: false, reportUsage: true },
+    { abort: true, reportUsage: true },
+    { abort: true, reportUsage: false },
+    { abort: true, reportUsage: true, timeout: true },
+    { abort: true, reportUsage: true, abortAttempt: 2 }
+  ])('retains failed stream usage in audit and totals, and audits dispatched aborts (%#)', async (scenario) => {
+    const invocationId = `failed-stream-usage-${scenario.abort}-${scenario.reportUsage}-${scenario.abortAttempt ?? 1}`
+    const registry = new ModelProviderRegistry()
+    const controller = new AbortController()
+    let calls = 0
+    registry.register(route, { providerId: 'failed-stream-usage-provider', stream: async function* () {
+      calls += 1
+      if (calls === 1 && scenario.abortAttempt !== 2) {
+        if (scenario.reportUsage) yield { type: 'usage' as const, inputTokens: 10, outputTokens: 3 }
+        if (scenario.abort) controller.abort(scenario.timeout ? AGENT_TURN_TIMEOUT_ABORT_REASON : undefined)
+        throw Object.assign(new Error('network reset'), { code: 'ECONNRESET' })
+      }
+      if (calls === 1) throw Object.assign(new Error('network reset'), { code: 'ECONNRESET' })
+      if (scenario.abortAttempt === 2) {
+        yield { type: 'usage' as const, inputTokens: 10, outputTokens: 3 }
+        controller.abort()
+        throw Object.assign(new Error('network reset'), { code: 'ECONNRESET' })
+      }
+      yield { type: 'text-delta' as const, text: 'recovered' }
+      yield { type: 'usage' as const, inputTokens: 2, outputTokens: 1 }
+      yield { type: 'finish' as const, reason: 'stop' as const }
+    } })
+    const history = new MemoryHistory()
+    const permits = new InMemorySafetyPermitStore()
+    const recordProviderAttemptUsage = vi.fn()
+    const sessionLedgerForAttemptUsage = vi.fn(async () => ({ usageReceipt: `attempt-${calls}` }))
+    const recoverProviderAttempt = vi.fn(async ({ error, messages }) => error
+      ? { kind: 'retry' as const, reasonCode: 'PROVIDER_SERVER_ERROR', messages, maxAttempts: 5, recoveryKind: 'transient' as const, plannedWaitMs: 0, recordTranscriptCompaction: false }
+      : undefined)
+    const run = runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10, signal: controller.signal },
+      maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn()),
+      recordProviderAttemptUsage, sessionLedgerForAttemptUsage,
+      recoverProviderAttempt
+    })
+
+    if (scenario.abort) await expect(run).rejects.toMatchObject({ code: scenario.timeout ? 'TURN_TIMED_OUT' : 'TURN_CANCELLED' })
+    else await expect(run).resolves.toMatchObject({ usage: { inputTokens: 12, outputTokens: 4 } })
+
+    const results = (await history.read(invocationId)).events.filter((event) => event.kind === 'provider-attempt-result')
+    if (scenario.abort) {
+      const auditedAttempt = scenario.abortAttempt ?? 1
+      expect(results).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({
+        attempt: auditedAttempt, physical: true, outcome: 'failed', errorClass: scenario.timeout ? 'TURN_TIMED_OUT' : 'TURN_CANCELLED',
+        usage: scenario.reportUsage ? { status: 'reported', inputTokens: 10, outputTokens: 3 } : { status: 'unreported' },
+        ...(scenario.reportUsage ? { sessionLedger: { usageReceipt: `attempt-${auditedAttempt}` } } : {})
+      }) }))
+      expect(results).toHaveLength(scenario.abortAttempt === 2 ? 2 : 1)
+      expect(recoverProviderAttempt).toHaveBeenCalledTimes(scenario.abortAttempt === 2 ? 1 : 0)
+    } else {
+      expect(results).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({
+        attempt: 1, physical: true, outcome: 'failed',
+        usage: { status: 'reported', inputTokens: 10, outputTokens: 3 }, sessionLedger: { usageReceipt: 'attempt-1' }
+      }) }))
+      expect(results).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({
+        attempt: 2, outcome: 'succeeded', usage: { status: 'reported', inputTokens: 2, outputTokens: 1 }
+      }) }))
+      expect(results).toHaveLength(2)
     }
   })
 

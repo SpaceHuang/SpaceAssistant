@@ -352,6 +352,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       if (!configured) throw new Error('approval Hosted route not registered')
       runtime.modelProviders.register(configured.profile, { providerId: 'hosted-approval-fixture', stream: async function* () {
         providerCalls += 1
+        if (providerCalls === 1) throw Object.assign(new Error('temporary rate limit'), { status: 429 })
         yield { type: 'text-delta', text: '{"kind":"approve","riskLevel":"low","reason":{"summary":"hosted approval"}}' } as const
         yield { type: 'usage', inputTokens: 3, outputTokens: 8 } as const
         yield { type: 'finish', reason: 'stop' } as const
@@ -378,7 +379,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
         requestId: childRequestId, invocationId: childInvocationId, sessionId: 'sess-outer'
       }))
       expect(result).toMatchObject({ ok: true, verdict: { kind: 'approve', reason: { summary: 'hosted approval' } } })
-      expect(providerCalls).toBe(1)
+      expect(providerCalls).toBe(2)
       const snapshot = await hostedHistory!.read(hostedInvocationId)
       expect(snapshot.invocationId).toBe(hostedInvocationId)
       expect(hostedInvocationId).toBe(childRequestId)
@@ -392,6 +393,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       )
       expect(snapshot.events.map((event) => event.sequence)).toEqual(snapshot.events.map((_, index) => index + 1))
       expect(snapshot.events.filter((event) => event.kind === 'invocation-completed')).toHaveLength(1)
+      expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'provider-retry-scheduled', payload: expect.objectContaining({ recoveryKind: 'transient', attemptInRequest: 2 }) }))
       expect(snapshot.events.at(-1)?.kind).toBe('invocation-completed')
       fileDb.close()
       fileDb = openDatabase(databasePath)

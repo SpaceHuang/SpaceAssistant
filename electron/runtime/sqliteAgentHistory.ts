@@ -424,7 +424,13 @@ export class SqliteAgentHistory implements HistoryPort {
     const rows = this.readValidatedSessionHistoryRows(sessionId)
     if (!rows) return undefined
     const result: CanonicalContextMeterEvent[] = []
+    const projectedUsageRequestIds = new Set<string>()
     const add = (seq: number, type: CanonicalContextMeterEvent['type'], payload: Record<string, unknown>) => result.push({ seq, type, payload })
+    const addRequestUsage = (seq: number, usage: unknown) => {
+      if (!isRecord(usage) || typeof usage.requestId !== 'string' || projectedUsageRequestIds.has(usage.requestId)) return
+      projectedUsageRequestIds.add(usage.requestId)
+      add(seq, 'request_usage', usage)
+    }
     for (const row of rows) {
       const raw: unknown = JSON.parse(row.payload_json)
       if (!isRecord(raw)) continue
@@ -443,9 +449,9 @@ export class SqliteAgentHistory implements HistoryPort {
       } else if (row.kind === 'provider-retry-scheduled') {
         const retry = ledger.requestRetry
         if (isRecord(retry) && typeof retry.requestId === 'string' && Number.isInteger(retry.attempt)) add(baseSeq + 1, 'request_retry', retry)
-      } else if (row.kind === 'model-response-committed' || row.kind === 'model-attempt-discarded') {
+      } else if (row.kind === 'provider-attempt-result' || row.kind === 'model-response-committed' || row.kind === 'model-attempt-discarded') {
         const usage = ledger.requestUsage
-        if (isRecord(usage) && typeof usage.requestId === 'string') add(baseSeq + 1, 'request_usage', usage)
+        addRequestUsage(baseSeq + 1, usage)
         if (row.kind === 'model-response-committed' && isRecord(ledger.requestContext)) {
           const context = ledger.requestContext
           if (typeof context.requestId === 'string' && Number.isInteger(context.attempt)) {
@@ -1850,6 +1856,7 @@ export class SqliteAgentHistory implements HistoryPort {
         const ledgerKey = (location: SessionHistoryLedgerLocation) => JSON.stringify([location.workDir, location.sessionId, location.createdAt])
         const recoveryLocations = new Map<string, SessionHistoryLedgerLocation>()
         const requestIdsByTurn = new Map<string, string>()
+        const repairedUsagePayloads = new Map<string, string>()
         // S4: keep the real callback error per repair so the governance classifier can see
         // workspace-root-rejected / storage-access-denied categories; the boolean folding made
         // the terminal categories unreachable for every repair kind except invocation-terminal.
@@ -1910,7 +1917,7 @@ export class SqliteAgentHistory implements HistoryPort {
           const hasProjectionWork = event.kind === 'model-request-started' ? has('requestHeader') || has('requestContext')
             : event.kind === 'provider-retry-scheduled' ? has('requestRetry')
             : event.kind === 'model-response-committed' ? hasToolCalls || has('requestUsage') || has('requestContext')
-            : event.kind === 'model-attempt-discarded' ? has('requestUsage')
+            : event.kind === 'provider-attempt-result' || event.kind === 'model-attempt-discarded' ? has('requestUsage')
             : event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' ? has('result')
             : event.kind === 'transcript-compacted' ? has('start') || has('summary')
             : ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)
@@ -1920,7 +1927,7 @@ export class SqliteAgentHistory implements HistoryPort {
               (!hasToolCalls || Boolean(options.repairToolCallLedger)) &&
               (!has('requestUsage') || Boolean(options.repairUsageLedger)) &&
               (!has('requestContext') || Boolean(options.repairFinalRequestContextLedger))
-            : event.kind === 'model-attempt-discarded' ? (!has('requestUsage') || Boolean(options.repairUsageLedger))
+            : event.kind === 'provider-attempt-result' || event.kind === 'model-attempt-discarded' ? (!has('requestUsage') || Boolean(options.repairUsageLedger))
             : event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' ? Boolean(options.repairToolLedger)
             : event.kind === 'transcript-compacted' ? Boolean(options.repairCompaction)
             : ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind) ? Boolean(options.repairInvocationTerminal)
@@ -2077,7 +2084,7 @@ export class SqliteAgentHistory implements HistoryPort {
               }
             }
           }
-          if ((event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') && (options.repairUsageLedger || (event.kind === 'model-response-committed' && options.repairFinalRequestContextLedger))) {
+          if ((event.kind === 'provider-attempt-result' || event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') && (options.repairUsageLedger || (event.kind === 'model-response-committed' && options.repairFinalRequestContextLedger))) {
             const ledger = (event.payload as { sessionLedger?: unknown }).sessionLedger as Partial<CanonicalToolCallLedger> | undefined
             const location = ledger?.location
             if (location && typeof location.workDir === 'string' && typeof location.sessionId === 'string' && Number.isFinite(location.createdAt)) {
@@ -2089,7 +2096,7 @@ export class SqliteAgentHistory implements HistoryPort {
                 ? requestIdsByTurn.get(`${event.turnId}:${modelTurn}:${attempt}`) ??
                   `${invocationId}:round:${modelTurn}${(attempt as number) > 1 ? `:attempt:${attempt}` : ''}`
                 : undefined
-              if ((event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') && ledger.requestUsage && typeof ledger.requestUsage === 'object' && !Array.isArray(ledger.requestUsage)) {
+              if ((event.kind === 'provider-attempt-result' || event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') && ledger.requestUsage && typeof ledger.requestUsage === 'object' && !Array.isArray(ledger.requestUsage)) {
                 const usage = ledger.requestUsage as Record<string, unknown>
                 if (!expectedUsageRequestId || typeof usage.requestId !== 'string' || usage.requestId !== expectedUsageRequestId || usage.turnId !== event.turnId) {
                   blockedSessionLedgers.add(key)
@@ -2100,10 +2107,20 @@ export class SqliteAgentHistory implements HistoryPort {
                       typeof usage.requestId === 'string' ? usage.requestId : 'request-usage'
                     )
                   } catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                } else if (repairedUsagePayloads.has(usage.requestId)) {
+                  const previousPayload = repairedUsagePayloads.get(usage.requestId)
+                  const currentPayload = JSON.stringify(stableCanonicalValue(usage))
+                  if (previousPayload !== currentPayload) {
+                    blockedSessionLedgers.add(key)
+                    try { options.onUsageLedgerRepairError?.(new Error('canonical request usage facts conflict for one provider attempt'), invocationId, usage.requestId) }
+                    catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                    markEventRepair(event.eventId, false, new Error('canonical request usage facts conflict for one provider attempt'))
+                  } else markEventRepair(event.eventId, true)
                 } else {
                   try {
                     if (!blockedSessionLedgers.has(key) && options.repairUsageLedger) {
                       await options.repairUsageLedger(location as SessionHistoryLedgerLocation, usage)
+                      repairedUsagePayloads.set(usage.requestId, JSON.stringify(stableCanonicalValue(usage)))
                       markEventRepair(event.eventId, true)
                     }
                   }

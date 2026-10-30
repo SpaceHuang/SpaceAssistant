@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { canCreateSymlinks } from '../../src/test/symlinkCapability'
-import type { AgentTurnObserver } from '../../packages/agent-sdk/src/turn'
+import { ModelAttemptRecoveryRejectedError, PlanRejectedError, ToolDeniedError, type AgentTurnObserver } from '../../packages/agent-sdk/src/turn'
 import { createAgentSdkDesktopObserver } from './agentSdkDesktopObserver'
 import { runAgentTurn } from '../../packages/agent-sdk/src/turn'
 import { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
@@ -23,6 +23,19 @@ import path from 'node:path'
 
 describe('createAgentSdkDesktopObserver', () => {
   afterEach(() => vi.unstubAllEnvs())
+  it('does not show policy and plan rejections as provider retry failures', async () => {
+    const facts: Array<{ type: string; operation?: { kind?: string } }> = []
+    const observer = createAgentSdkDesktopObserver({ requestId: 'policy-denial', sessionId: 's', turnId: 't', emitFactEvent: (event) => facts.push(event as typeof facts[number]) })
+    await observer.onTurnFailed?.({ error: new ToolDeniedError('POLICY_DENY'), status: 'denied' })
+    await observer.onTurnFailed?.({ error: new PlanRejectedError('PLAN_REJECTED'), status: 'denied' })
+    expect(facts.filter((event) => event.type === 'system-operation-updated' && event.operation?.kind === 'provider-retry')).toEqual([])
+  })
+  it('still shows an explicit provider recovery rejection as failed', async () => {
+    const facts: Array<{ type: string; operation?: { kind?: string; reason?: string } }> = []
+    const observer = createAgentSdkDesktopObserver({ requestId: 'retry-denial', sessionId: 's', turnId: 't', emitFactEvent: (event) => facts.push(event as typeof facts[number]) })
+    await observer.onTurnFailed?.({ error: new ModelAttemptRecoveryRejectedError('PROVIDER_RETRY_BUDGET_EXHAUSTED'), status: 'failed' })
+    expect(facts.find((event) => event.type === 'system-operation-updated' && event.operation?.kind === 'provider-retry')?.operation?.reason).toBe('PROVIDER_RETRY_FAILED')
+  })
   it('tells the model when AGENTS.md failed to load so it cannot claim it followed the file', async () => {
     const observer = createAgentSdkDesktopObserver({ requestId: 'failed-instructions', sessionId: 's', turnId: 't', getWorkDir: () => '' })
     const prepared = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
@@ -306,6 +319,15 @@ describe('createAgentSdkDesktopObserver', () => {
       expect(systems.map((system) => system.match(/<project_instructions /g)?.length ?? 0)).toEqual([1, 1, 1])
       const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
       expect(requestEvents.every((event) => !('agentsMdSnapshot' in (event.payload as { requestMetadata: Record<string, unknown> }).requestMetadata))).toBe(true)
+      const attemptResults = (await history.read(invocationId)).events.filter((event) => event.kind === 'provider-attempt-result')
+      expect(attemptResults.map((event) => {
+        const payload = event.payload as { requestId: string; attempt: number; attemptSource: unknown; outcome: string }
+        return { requestId: payload.requestId, attempt: payload.attempt, attemptSource: payload.attemptSource, outcome: payload.outcome }
+      })).toEqual([
+        { requestId: `${invocationId}:round:1`, attempt: 1, attemptSource: { kind: 'initial' }, outcome: 'failed' },
+        { requestId: `${invocationId}:round:1`, attempt: 2, attemptSource: { kind: 'recovery', recoveryKind: 'transient' }, outcome: 'succeeded' },
+        { requestId: `${invocationId}:round:2`, attempt: 1, attemptSource: { kind: 'initial' }, outcome: 'succeeded' }
+      ])
     } finally {
       await rm(workDir, { recursive: true, force: true })
     }
@@ -500,10 +522,33 @@ describe('createAgentSdkDesktopObserver', () => {
       requestId: 'r', sessionId: 's', turnId: 't',
       sessionEventLocation: { workDir: '/workspace', sessionId: 's', createdAt: 123 }
     })
-    await expect(observer.prepareProviderRetry?.({ attempt: 2, modelTurn: 3, routeId: 'route', requestId: 'r:round:3', code: 'provider_context_overflow' })).resolves.toEqual({
+    await expect(observer.prepareProviderRetry?.({ attempt: 2, attemptInRequest: 3, maxAttempts: 3, modelTurn: 3, routeId: 'route', requestId: 'r:round:3', code: 'provider_context_overflow', reasonCode: 'PROVIDER_CONTEXT_OVERFLOW', recoveryKind: 'overflow', plannedWaitMs: 0 })).resolves.toEqual({
       location: { workDir: '/workspace', sessionId: 's', createdAt: 123 },
       requestRetry: { turnId: 't', stepId: 'r', requestId: 'r:round:3', attempt: 2, backoffMs: 0, code: 'provider_context_overflow' }
     })
+  })
+
+  it('projects one retry system operation and settles it without exposing provider text', async () => {
+    const facts: AssistantFactEvent[] = []
+    const observer = createAgentSdkDesktopObserver({ requestId: 'r', sessionId: 's', turnId: 't', emitFactEvent: (event) => facts.push(event) })
+    const retry = { attempt: 1, attemptInRequest: 2, maxAttempts: 5, modelTurn: 1, routeId: 'route', requestId: 'r:round:1', code: 'provider_rate_limit', reasonCode: 'PROVIDER_RATE_LIMIT', recoveryKind: 'transient' as const, plannedWaitMs: 2500 }
+    await observer.onProviderRetry?.(retry)
+    await observer.onProviderRetry?.({ ...retry, attempt: 2, attemptInRequest: 3, plannedWaitMs: 4000 })
+    await observer.onTurnFailed?.({ error: new Error('secret provider body'), status: 'cancelled' })
+    const operations = facts.filter((event): event is Extract<AssistantFactEvent, { type: 'system-operation-updated' }> => event.type === 'system-operation-updated')
+    expect(operations).toHaveLength(3)
+    expect(operations[0]?.operation).toMatchObject({ id: 'r:round:1:provider-retry', kind: 'provider-retry', status: 'running', attemptInRequest: 2, maxAttempts: 5, plannedWaitMs: 2500 })
+    expect(operations[1]?.operation).toMatchObject({ id: 'r:round:1:provider-retry', status: 'running', attemptInRequest: 3, plannedWaitMs: 4000 })
+    expect(operations[2]?.operation).toMatchObject({ id: 'r:round:1:provider-retry', status: 'cancelled' })
+    expect(JSON.stringify(operations)).not.toContain('secret provider body')
+  })
+
+  it('marks the retry operation recovered when the turn completes', async () => {
+    const facts: AssistantFactEvent[] = []
+    const observer = createAgentSdkDesktopObserver({ requestId: 'r', sessionId: 's', turnId: 't', emitFactEvent: (event) => facts.push(event) })
+    await observer.onProviderRetry?.({ attempt: 1, attemptInRequest: 2, maxAttempts: 3, modelTurn: 1, routeId: 'route', requestId: 'r:round:1', code: 'provider_rate_limit', reasonCode: 'PROVIDER_RATE_LIMIT', recoveryKind: 'transient', plannedWaitMs: 100 })
+    await observer.onTurnFinished?.({ text: 'ok', messages: [], modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1 } })
+    expect(facts.at(-1)).toMatchObject({ type: 'system-operation-updated', operation: { id: 'r:round:1:provider-retry', status: 'succeeded' } })
   })
 
   it('projects accepted chunks and tool lifecycle into legacy session events and facts in source order', async () => {

@@ -452,6 +452,10 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
           continuationProviderTurns += 1
           if (continuationProviderTurns === 1) {
             expect(call.request.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'write-once', content: 'written exactly once' }))
+            throw Object.assign(new Error('simulated continuation rate limit'), { status: 429 })
+          }
+          if (continuationProviderTurns === 2) {
+            expect(call.request.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'write-once', content: 'written exactly once' }))
             yield { type: 'text-delta', text: 'continued from committed result' }
             yield { type: 'usage', inputTokens: 2, outputTokens: 1 }
             yield { type: 'finish', reason: 'stop' }
@@ -470,14 +474,22 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
       const prepared = turnRuntime.prepareContinuation({ turnId: continuation.targetTurnId, startToken: continuation.targetStartToken, requestId: continuation.targetInvocationId, sessionId: session.id, userMessageId: user.message.id, config: { lane: 'desktop', continuationSource: { continuationId: continuation.continuationId, invocationId: continuation.sourceInvocationId, sourceTurnId: continuation.sourceTurnId, checkpointSequence: continuation.checkpointSequence, checkpointSha256: continuation.checkpointSha256 } } })
       expect(prepared).toMatchObject({ turnId: continuation.targetTurnId, requestId: continuation.targetInvocationId, startToken: continuation.targetStartToken })
       const targetSdk = { ...target.agentSdk, createHostedTurnRuntime: (input: Parameters<typeof target.agentSdk.createHostedTurnRuntime>[0]) => target.agentSdk.createHostedTurnRuntime({ ...input, registry: createBuiltinToolRegistry() }) }
+      const targetRecovery = async (input: Parameters<typeof target.agentSdk.recoverProviderAttempt>[0]) => {
+        const recovery = await target.agentSdk.recoverProviderAttempt(input)
+        return recovery?.kind === 'retry' && recovery.recoveryKind === 'transient'
+          ? { ...recovery, plannedWaitMs: 0, serverAskedMs: undefined, retryAt: undefined }
+          : recovery
+      }
       const handoffHistory = {
         appendBatch: targetHistory.appendBatch.bind(targetHistory),
         read: targetHistory.read.bind(targetHistory)
       }
-      const targetHandoff = createHostedTurnHandoff({ agentSdk: targetSdk as never, history: handoffHistory, invocationId: continuation.targetTurnId, turnId: continuation.targetTurnId, routeId: providerRouteId, sessionId: session.id })
+      const targetHandoff = createHostedTurnHandoff({ agentSdk: targetSdk as never, history: handoffHistory, invocationId: continuation.targetTurnId, turnId: continuation.targetTurnId, routeId: providerRouteId, sessionId: session.id, recoverProviderAttempt: targetRecovery })
 
       await expect(runToolChatSession(target.invocation, target.ports, { onHostedTurnHandoff: targetHandoff })).resolves.toMatchObject({ ok: true })
-      expect(continuationProviderTurns).toBe(1)
+      expect(continuationProviderTurns).toBe(2)
+      const targetEvents = await targetHistory.read(continuation.targetTurnId)
+      expect(targetEvents.events.map((event) => event.kind)).toContain('provider-retry-scheduled')
       expect(writeExecutions).toBe(1)
       expect(await fs.readFile(filePath, 'utf8')).toBe('persisted result')
       appDb.close()

@@ -962,6 +962,57 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     }
   })
 
+  it('Automation Hosted turn hands provider failures to the shared retry policy', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
+    expect(modelId).toBeTruthy()
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    setDefaultAgentRuntime(runtime)
+    let providerCalls = 0
+    let history: { read(id: string): Promise<{ events: Array<{ kind: string; payload?: unknown }> }> } | undefined
+    const runLoop = vi.spyOn(toolChatLoop, 'runToolChatSession').mockImplementation(async (agentInvocation: never, ports: never, runOptions: never) => {
+      const record = agentInvocation as unknown as { profile: { providerRouteId?: string }; trace: { windowId?: string }; messages: { currentUserMessageId?: string; list: Array<{ id?: string; role: 'user'; content: string }> } }
+      const routeId = record.profile.providerRouteId
+      if (!routeId) throw new Error('automation Hosted route missing')
+      const route = runtime.modelProviders.getRoute(routeId)
+      if (!route) throw new Error('automation Hosted route not registered')
+      runtime.modelProviders.register(route.profile, { providerId: 'automation-retry-fixture', stream: async function* () {
+        providerCalls += 1
+        if (providerCalls === 1) throw Object.assign(new Error('temporary rate limit'), { status: 429 })
+        yield { type: 'text-delta', text: 'scheduled task recovered' } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 3 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      } })
+      history = (ports as unknown as { history: typeof history }).history
+      const latestMessage = record.messages.list.at(-1)!
+      const callback = (runOptions as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<{ result: Awaited<ReturnType<typeof runToolChatSession>> }> }).onHostedTurnHandoff
+      const outcome = await callback({
+        authorizedToolNames: new Set(),
+        request: { messages: [{ role: 'user', content: latestMessage.content }], maxTokens: 128, credentials: { apiKey: 'automation-key' } },
+        currentUserMessageId: record.messages.currentUserMessageId,
+        requiredUserMessage: { id: record.messages.currentUserMessageId, message: { role: 'user', content: latestMessage.content } },
+        windowId: record.trace.windowId
+      })
+      return outcome.result
+    })
+    try {
+      setConfigValue(db, 'config.defaultModel', modelId!)
+      const task = createAutomationTask(db, {
+        name: 'scheduled provider recovery', schedule: { kind: 'interval', intervalMinutes: 30 },
+        prompt: 'summarize status', deliveryPref: 'none', workDirs: [testWorkDir]
+      })
+      const result = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-butler-provider-retry' })
+      expect(result).toMatchObject({ ok: true, summary: 'scheduled task recovered' })
+      expect(providerCalls).toBe(2)
+      expect((await history!.read('req-butler-provider-retry')).events).toContainEqual(expect.objectContaining({
+        kind: 'provider-retry-scheduled', payload: expect.objectContaining({ recoveryKind: 'transient', attemptInRequest: 2 })
+      }))
+    } finally {
+      runLoop.mockRestore()
+      setDefaultAgentRuntime(previousRuntime)
+    }
+  })
+
   it('Automation rejects a changed accepted prompt before Hosted/provider execution', async () => {
     const task = createAutomationTask(db, {
       name: 'accepted prompt guard', schedule: { kind: 'interval', intervalMinutes: 30 },

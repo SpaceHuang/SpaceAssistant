@@ -86,6 +86,31 @@ describe('History Port semantics', () => {
     await expect(history.read('inv-1')).resolves.toEqual({ invocationId: 'inv-1', version: 2, schemaVersion: 1, events })
   })
 
+  it('accepts provider attempt result facts as a first-class history event', async () => {
+    const history = new MemoryHistory()
+    const result = event('provider-attempt-1', 1, 'provider-attempt-result', {
+      requestId: 'inv-1:round:1', attempt: 1, physical: true,
+      attemptSource: { kind: 'initial' }, outcome: 'failed', errorClass: 'PROVIDER_NETWORK_ERROR',
+      usage: { status: 'unreported' }
+    })
+    await expect(history.appendBatch([result], 0)).resolves.toEqual({ version: 1, duplicate: false })
+    await expect(history.read('inv-1')).resolves.toMatchObject({ events: [result] })
+  })
+
+  it('deduplicates a replayed provider attempt result by request and attempt', async () => {
+    const history = new MemoryHistory()
+    const writer = new InvocationHistoryWriter(history, { invocationId: 'inv-1', turnId: 'turn-1' })
+    const payload = {
+      requestId: 'inv-1:round:2', attempt: 3, physical: true,
+      attemptSource: { kind: 'recovery', recoveryKind: 'transient' }, outcome: 'failed',
+      errorClass: 'PROVIDER_SERVER_ERROR', usage: { status: 'unreported' }
+    }
+    await writer.append([{ kind: 'provider-attempt-result', payload }])
+    const replay = await writer.append([{ kind: 'provider-attempt-result', payload }])
+    expect(replay.duplicate).toBe(true)
+    expect((await history.read('inv-1')).events).toHaveLength(1)
+  })
+
   it('replays a matching idempotency batch without duplicating events', async () => {
     const history = new MemoryHistory()
     const events = [event('e1', 1), event('e2', 2)]
