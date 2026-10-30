@@ -15,7 +15,7 @@
 
 ## 各条来源映射（按拆出前的小节号对照）
 
-- **§1 与方案篇的分工（原 5.1）** ← [`explicit-output-directory-candidate-technical-design-review`](../review/explicit-output-directory-candidate-technical-design-review.md)（阶段一声称完成 AC-01~AC-15，其中 4 条依赖阶段二才实现的能力）；"验收与不变量的真源在方案"承接技术方案指南 §2（规格层）的验收写法。
+- **§1 与方案篇的分工（原 5.1）** ← [`explicit-output-directory-candidate-technical-design-review`](../review/explicit-output-directory-candidate-technical-design-review.md)（阶段一声称完成 AC-01~AC-15，其中 4 条依赖阶段二才实现的能力）；"验收与不变量的真源在方案"承接技术方案指南 §3（规格层）的验收写法。
 - **§2 任务粒度（原 5.2）** ← [`2026-10-11-im-security-review-improvement-todo-review`](../review/2026-10-11-im-security-review-improvement-todo-review.md) C3（使用可独立验收的交付单元，避免机械拆分或单项过宽："不能仅以一个 GREEN 编号视作已足够细"）及其 [v2](../review/2026-10-11-im-security-review-improvement-todo-review-v2.md) N2（拆分后未同步修订验收范围，第一个 GREEN 不可能通过）；[`renderer-process-jank-optimization-plan-review-v29`](../review/renderer-process-jank-optimization-plan-review-v29.md)（跨阶段 API 依赖导致两阶段都无法独立验收）。
 - **§3 顺序与依赖（原 5.3）** ← todo-review 及其 v2（回退晚于启用、真实链路验收早于实现依赖、阶段检查点要求后置证据、环境与基线准备）；[`2026-10-15-security-policy-three-stage-architecture-development-plan-review`](../review/2026-10-15-security-policy-three-stage-architecture-development-plan-review.md) 及 v2/v3（DAG 自环与验收自环、依赖表与正文不一致"无法确定哪份是权威"、外部资源前置、阶段门禁与仓库纪律冲突）；[`renderer-process-jank-optimization-plan-review-v8`](../review/renderer-process-jank-optimization-plan-review-v8.md)（阶段可独立验收的要素）；[`explicit-output-directory-candidate-technical-design-review`](../review/explicit-output-directory-candidate-technical-design-review.md)（阶段声明的 AC 依赖后一阶段）。
 - **§4 任务登记与完成判据（原 5.4）** ← todo-review C2（RED/GREEN 需定义任务级完成标准；目标文件、测试名、命令、通过标准应登记）及其 [v3](../review/2026-10-11-im-security-review-improvement-todo-review-v3.md)（实施前的登记仍须落实）；todo-review C4（依赖就绪判据与基线失败分流）。
