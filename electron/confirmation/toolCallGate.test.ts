@@ -311,7 +311,7 @@ describe('IM standard policy override is final at the gate', () => {
     expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-settings')).toMatchObject({ kind: 'script-execution-settings', status: 'complete', interpreter: expect.any(String), digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', code, url: 'https://docs.example.com/', host: 'docs.example.com', method: 'GET', complete: true })
     expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: os.tmpdir(), timeoutSeconds: toolsConfig().scriptTimeout,
-      interpreter: 'python', interpreterFallbackCandidates: ['python3'], interpreterResolution: 'first-version-probe-success' })
+      interpreter: 'python', interpreterFallbackCandidates: process.platform === 'win32' ? ['py', 'python3'] : ['python3'], interpreterResolution: 'first-version-probe-success' })
     const explicitTimeout = await evaluate(code, 'im-standard-v3', 3600)
     expect(explicitTimeout.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: os.tmpdir(), timeoutSeconds: 3600 })
     let scriptPrompt = ''

@@ -21,7 +21,9 @@ async function readWriteTargetForReview(fact: WritePathFact | undefined): Promis
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
     const after = await handle.stat()
     if (bytesRead !== expected.size || !matches(after)) return undefined
-    return new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytesRead))
+    // Keep UTF-8 BOM as U+FEFF, matching editFileExecutor's fs.readFile(..., 'utf8') semantics.
+    // Review projection must use the same source string as execution or its proposed content can lie.
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buffer.subarray(0, bytesRead))
   } catch {
     return undefined
   } finally {

@@ -16,6 +16,42 @@ const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))) })
 
 describe('IM outside-write approval integration', () => {
+  it.each(['wechat', 'feishu'] as const)('%s: UTF-8 BOM edit preview exactly matches the bytes written', async (lane) => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'im-outside-edit-bom-')))
+    roots.push(root)
+    const workDir = path.join(root, 'work')
+    await fs.mkdir(workDir)
+    const target = path.join(root, 'settings.txt')
+    const original = '\uFEFFADMIN=false\n'
+    await fs.writeFile(target, original)
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const input = { path: target, old_string: '\uFEFFADMIN=false', new_string: 'ADMIN=true' }
+    const args = {
+      workDir, userDataDir: path.join(root, '.userdata'), sessionId: 's', requestId: `bom-r-${lane}`, toolUseId: `bom-t-${lane}`,
+      lane, lanePackage: 'standard', toolName: 'edit_file', toolInput: input,
+      toolsConfig: DEFAULT_TOOLS_CONFIG, audit: { record() {} }, imPolicySnapshot: snapshot,
+      effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES }),
+      decisionCache: { lookup: () => null, record() {}, clear: () => 0, clearAllSession: () => 0, expireDormant: () => 0 },
+      shellPrecheck: { touchTrustedCommand() {} }
+    } as ToolCallGateArgs
+    const gate = await evaluateToolCallGate(args)
+    expect(gate.facts.reviewMaterials).toMatchObject({ kind: 'outside-file-write', targetContent: original,
+      proposedContent: 'ADMIN=true\n', matchCount: 1, executionOutcome: 'applies-first', complete: true })
+    const cache = new FileStateCache()
+    const stat = await fs.stat(target)
+    cache.set(target, { path: target, content: original, mtime: stat.mtimeMs, size: stat.size, readAt: Date.now(), isPartial: false })
+    const runtime = { ...args, sendProgress() {}, signal: new AbortController().signal, fileStateCache: cache } as Record<string, any>
+    const handoff = createAgentSdkStructuralPermitHandoff({ updateExecutionContext: (_call, update) => update(runtime) })
+    let prompt = ''
+    const approval = new AgentChannel({ lane, requestId: `bom-r-${lane}`, sessionId: 's', toolName: 'edit_file', policy: { kind: 'agent' },
+      invokeApproval: async (invocation) => { prompt = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
+    await approval.request({ facts: gate.facts, riskLevel: 'medium', memoryTiers: [], timeoutMs: 5000 })
+    expect(prompt).toContain('ADMIN=true')
+    handoff.onConfirmed!({ invocationId: `bom-r-${lane}`, requestId: `bom-r-${lane}`, toolCallId: `bom-t-${lane}` } as never, gate, args, 'agent')
+    expect(await editFileExecutor.execute(input, runtime as never)).toMatchObject({ success: true })
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe((gate.facts.reviewMaterials as { proposedContent: string }).proposedContent)
+  })
+
   it.each(['wechat', 'feishu'] as const)('%s: approved outside-workdir write reaches the real executor', async (lane) => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'im-outside-write-')))
     roots.push(root)
