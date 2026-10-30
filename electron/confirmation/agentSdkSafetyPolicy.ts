@@ -220,8 +220,22 @@ export function createAgentSdkStructuralPermitHandoff(input: {
   updateExecutionContext(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }, update: (context: Record<string, unknown>) => void): void
   readConfirmationRegistry?: import('./readConfirmationRegistry').ReadConfirmationRegistry
 }): Pick<NonNullable<Parameters<typeof createAgentSdkSafetyPolicy>[0]>, 'onInitialGateResult' | 'onReapprovalRequired' | 'onConfirmed'> {
+  const bindApprovedBrowserPage = (
+    call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> },
+    args: ToolCallGateArgs
+  ) => {
+    if (args.toolName !== 'browser' || args.toolInput.action !== 'act') return
+    input.updateExecutionContext(call, (context) => {
+      if (args.currentPageUrl) context.approvedBrowserPageIdentity = createHash('sha256').update(args.currentPageUrl).digest('hex')
+      else delete context.approvedBrowserPageIdentity
+    })
+  }
   return {
     onInitialGateResult(binding, result, args) {
+      if (args.toolName === 'browser' && args.toolInput.action === 'act' && result.decision.type === 'auto-allow') {
+        const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }
+        bindApprovedBrowserPage(call, args)
+      }
       if (result.readExecutionPermit) {
         input.updateExecutionContext({ invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }, (context) => {
           context.readExecutionPermit = result.readExecutionPermit
@@ -266,10 +280,7 @@ export function createAgentSdkStructuralPermitHandoff(input: {
     onConfirmed(binding, result, args, answerer = 'user') {
       const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }
       if (result.decision.type !== 'require-confirm') return true
-      if (args.toolName === 'browser' && args.toolInput.action === 'act' && args.currentPageUrl) {
-        const approvedBrowserPageIdentity = createHash('sha256').update(args.currentPageUrl).digest('hex')
-        input.updateExecutionContext(call, (context) => { context.approvedBrowserPageIdentity = approvedBrowserPageIdentity })
-      }
+      bindApprovedBrowserPage(call, args)
       const readPermit = answerer === 'agent'
         ? finalizeAgentReadReview({
           toolName: args.toolName,
