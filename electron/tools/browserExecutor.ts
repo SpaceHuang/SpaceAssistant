@@ -281,8 +281,13 @@ export const browserExecutor: ToolExecutor = {
     }
 
     // final-check: verify the exact approved page after asynchronous queue waits and immediately before dispatch.
-    if (action === 'act' && ctx.approvedBrowserPageIdentity) {
+    if (action === 'act' && !ctx.approvedBrowserPageIdentity) {
+      return { success: false, error: 'BROWSER_APPROVED_PAGE_IDENTITY_MISSING', duration: Date.now() - started }
+    }
+    if (action === 'act') {
+      const currentPage = stagehand.context.pages()[0]
       const currentIdentity = createHash('sha256').update(page.url()).digest('hex')
+      if (currentPage !== page) return { success: false, error: 'BROWSER_APPROVED_PAGE_CHANGED', duration: Date.now() - started }
       if (currentIdentity !== ctx.approvedBrowserPageIdentity) return { success: false, error: 'BROWSER_APPROVED_PAGE_CHANGED', duration: Date.now() - started }
     }
 
@@ -420,6 +425,12 @@ export const browserExecutor: ToolExecutor = {
 
         ctx.sendProgress('acting', instruction.slice(0, 120))
         const urlBefore = page.url()
+        if (stagehand.context.pages()[0] !== page) {
+          return { success: false, error: 'BROWSER_APPROVED_PAGE_CHANGED', duration: Date.now() - started }
+        }
+        if (createHash('sha256').update(urlBefore).digest('hex') !== ctx.approvedBrowserPageIdentity) {
+          return { success: false, error: 'BROWSER_APPROVED_PAGE_CHANGED', duration: Date.now() - started }
+        }
         browserActionStarted = true
         const actResult = (await raceWithUserAbort(
           withTimeout(stagehand.act(instruction), navTimeout, 'act'),

@@ -3,7 +3,7 @@ import type { AppDatabase } from '../database'
 import { getConfigValue, getDbConnection, setConfigValue } from '../database'
 import { runInTransaction } from '../database/transaction'
 import { commitDesktopPolicySnapshot, commitImPolicySnapshot, commitImPolicySnapshotFromStartupMigration, readImPolicySnapshot, readPolicyBehaviorSnapshot,
-  type ImStandardV3ReleaseGate } from './imPolicyStore'
+  validateImStandardV3SnapshotQualification, type ImStandardV3ReleaseGate } from './imPolicyStore'
 import { LEGACY_IM_POLICY_MIGRATION_VERSION, planLegacyImPolicyMigration } from '../../src/shared/policy/legacyPolicyMigration'
 import { PolicyRuleStore } from './policyRuleStore'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
@@ -67,24 +67,13 @@ function migrateImStandardV3IfReleaseReady(db: AppDatabase, releaseGate?: ImStan
   if (current.policyBehaviorVersion === 'im-standard-v3') return
   // migration invariant: release-wide mapping approval cannot resolve conflicts in this user's
   // already migrated legacy snapshot. Keep that snapshot/version until its differences are handled.
-  const unresolvedDifferences = current.snapshot.unresolvedDifferences
-  const humanRequired = current.snapshot.humanRequired
-  if ((humanRequired !== undefined && typeof humanRequired !== 'boolean') || humanRequired === true ||
-    (unresolvedDifferences !== undefined && (!Array.isArray(unresolvedDifferences) || unresolvedDifferences.length > 0))) return
+  if (validateImStandardV3SnapshotQualification(current.snapshot)) return
   const suppressed = Array.isArray(current.snapshot.automaticMigrationSuppressedVersions)
     ? current.snapshot.automaticMigrationSuppressedVersions as string[] : []
   if (suppressed.includes('im-standard-v3')) return
   const legacyPackages = current.snapshot.legacySelectedPackages && typeof current.snapshot.legacySelectedPackages === 'object' &&
     !Array.isArray(current.snapshot.legacySelectedPackages)
     ? current.snapshot.legacySelectedPackages as Record<string, unknown> : {}
-  if (Object.hasOwn(current.snapshot, 'selectedPackage') && !isPolicyPackage(current.snapshot.selectedPackage)) return
-  if (Object.hasOwn(current.snapshot, 'legacySelectedPackages')) {
-    const rawLegacyPackages = current.snapshot.legacySelectedPackages
-    if (!rawLegacyPackages || typeof rawLegacyPackages !== 'object' || Array.isArray(rawLegacyPackages)) return
-    const record = rawLegacyPackages as Record<string, unknown>
-    if (Object.keys(record).some((key) => key !== 'wechat' && key !== 'feishu') ||
-      Object.values(record).some((value) => !isPolicyPackage(value))) return
-  }
   const selectedPackage = isPolicyPackage(current.snapshot.selectedPackage) ? current.snapshot.selectedPackage
     : isPolicyPackage(legacyPackages.wechat) ? legacyPackages.wechat : readPolicyPackages(db).wechat
   const currentPackages = readPolicyPackages(db)

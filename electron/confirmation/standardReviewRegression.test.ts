@@ -7,6 +7,27 @@ import { ensureImPolicySnapshotAtStartup } from './legacyImConfigBoundary'
 const gate = { publishedV3Ready: true, fixedRuleSetVerified: true, restrictionMappingVerified: true }
 
 describe('IM standard re-review blockers', () => {
+  it('binds an automatically allowed browser act to the URL from the gate', async () => {
+    const { createHash } = await import('node:crypto')
+    const { createAgentSdkSafetyPolicy, createAgentSdkStructuralPermitHandoff } = await import('./agentSdkSafetyPolicy')
+    const { evaluateToolCallGate } = await import('./toolCallGate')
+    const { DEFAULT_POLICY_RULES } = await import('../../src/shared/policy/defaultRules')
+    const { resolveImPolicyRulesForVersion } = await import('../../src/shared/policy/policyPackages')
+    const { DEFAULT_TOOLS_CONFIG } = await import('../../src/shared/domainTypes')
+    const input = { action: 'act', instruction: 'click search' }
+    const pageUrl = 'https://example.com/docs/a'
+    const runtime: Record<string, unknown> = {}
+    const imPolicySnapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard', remoteBrowserActRequiresConfirm: false } }
+    const args: any = { toolName: 'browser', toolInput: input, sessionId: 's', requestId: 'r', toolUseId: 't', lane: 'feishu', lanePackage: 'standard', remoteContext: { source: 'feishu' }, workDir: '/tmp', userDataDir: '/tmp', toolsConfig: DEFAULT_TOOLS_CONFIG, effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v3', pkg: 'standard', rules: DEFAULT_POLICY_RULES }), decisionCache: { lookup: () => null, record() {}, clear: () => 0, clearAllSession: () => 0, expireDormant: () => 0 }, shellPrecheck: { touchTrustedCommand() {} }, browserConfig: { enabled: true, allowRemoteSessions: true, actRequiresConfirm: false, actSessionTrustEnabled: false }, imPolicySnapshot, currentPageUrl: pageUrl, audit: { record() {} } }
+    const binding: any = { requestId: 'r', turnId: 'turn', invocationId: 'inv', toolCallId: 't', capabilityId: 'browser', inputSnapshotHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'), planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'a', phase: 'initial-compat', capability: { state: 'known-authorized', id: 'browser' } }
+    const handoff = createAgentSdkStructuralPermitHandoff({ updateExecutionContext: (_call, update) => update(runtime) })
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, ...handoff, evaluateGate: evaluateToolCallGate })
+    expect(await policy.evaluate(binding)).toMatchObject({ kind: 'allow' })
+    expect(runtime.approvedBrowserPageIdentity).toBe(createHash('sha256').update(pageUrl).digest('hex'))
+    expect(await policy.evaluate({ ...binding, phase: 'recheck' })).toMatchObject({ kind: 'allow' })
+    expect(runtime.approvedBrowserPageIdentity).toBe(createHash('sha256').update(pageUrl).digest('hex'))
+  })
+
   it('does not re-register a consumed initial user read approval at recheck', async () => {
     const { createHash } = await import('node:crypto')
     const fs = await import('node:fs/promises')
@@ -59,6 +80,24 @@ describe('IM standard re-review blockers', () => {
     commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot, updatedAt: 1, eventId: 'seed' })
     ensureImPolicySnapshotAtStartup(db, gate)
     expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2', 'im-standard-v3'] })).toMatchObject({ policyBehaviorVersion: 'im-standard-v2', revision: 1 })
+    db.close()
+  })
+
+  it.each([
+    { selectedPackage: 'bad-value' },
+    { selectedPackage: 'standard', legacySelectedPackages: { wechat: 'bad-value', feishu: 'standard' } }
+  ])('rejects explicit re-enable after restoring an invalid package snapshot: %o', (snapshot) => {
+    const db = createMemoryAppDb('rereview-invalid-reenable')
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-v1.6', snapshot, updatedAt: 1, eventId: 'invalid-v1' })
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 2, eventId: 'clean-v2' })
+    ensureImPolicySnapshotAtStartup(db, gate)
+    rollbackImPolicyToVersion(conn, { expectedRevision: 3, policyBehaviorVersion: 'im-standard-v2', supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'], updatedAt: 3, eventId: 'rollback' })
+    restoreImPolicySnapshot(conn, { historyId: 'im:1', supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'], updatedAt: 4, eventId: 'restore' })
+    const before = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
+    expect(() => reenableImStandardV3(conn, { expectedRevision: before.revision, releaseGate: gate, updatedAt: 5, eventId: 'reenable-invalid' })).toThrow(/qualification|package/i)
+    expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })).toEqual(before)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM policy_audit_events').get()).toEqual({ count: 5 })
     db.close()
   })
 })
