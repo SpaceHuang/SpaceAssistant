@@ -59,6 +59,41 @@ import { DEFAULT_POLICY_RULES } from './defaultRules'
 /** 底线集默认取内置默认规则的 locked 条目。 */
 export const DEFAULT_FLOOR: readonly PolicyRule[] = DEFAULT_POLICY_RULES
 
+/** Frozen floor for an isolated candidate behavior; production loaders do not activate this version yet. */
+export function resolveImPolicyFloorForVersion(version: unknown, pkg: 'standard' | 'strict' | 'loose' | 'custom' = 'standard'): readonly PolicyRule[] {
+  if (version === 'im-standard-v3') {
+    if (pkg !== 'standard') return DEFAULT_FLOOR
+    const unverifiedTargetFloors: PolicyRule[] = (['missing', 'symlink', 'special', 'unknown'] as const).map((targetKind) => ({
+      id: `remote-outside-read-${targetKind}-deny`, when: 'invocation',
+      match: { lane: ['wechat', 'feishu'], toolName: ['read_file', 'grep', 'list_directory'], actionClass: 'read',
+        signals: ['path-target:outside-workdir', `read-target-kind:${targetKind}`] },
+      action: 'deny', locked: true, denyClass: 'forbidden', reason: 'Unverified external read targets remain denied'
+    }))
+    const nonstandardWechatMediaDeny: PolicyRule = {
+      id: 'remote-wechat-media-outside-nonstandard-deny', when: 'invocation',
+      match: { lane: ['wechat'], toolName: ['wechat_send', 'wechat_reply'], signals: ['wechat-media-target:outside-workdir'], excludeSignals: ['policy-tier:standard'] },
+      action: 'deny', locked: true, denyClass: 'forbidden', reason: 'Only complete standard attachment candidates can be reviewed'
+    }
+    const incompleteWechatReplyMediaDeny: PolicyRule = {
+      id: 'remote-wechat-media-outside-reply-deny', when: 'invocation',
+      match: { lane: ['wechat'], toolName: 'wechat_reply', signals: ['wechat-media-target:outside-workdir', 'policy-tier:standard'], excludeSignals: ['wechat-media-review-materials:complete'] },
+      action: 'deny', locked: true, denyClass: 'forbidden', reason: 'Incomplete external attachment reviews remain denied'
+    }
+    return [...DEFAULT_FLOOR.map((rule) => rule.id === 'remote-shell-disabled'
+      ? { ...rule, match: { ...rule.match!, excludeSignals: ['im-shell-review-candidate:git-status', 'im-shell-review-candidate:git-log'] } }
+      : rule.id === 'remote-outside-read-deny'
+      ? { ...rule, match: { ...rule.match!, signals: ['path-target:outside-workdir', 'read-target-scope:subtree'] } }
+      : rule.id === 'remote-outside-write-deny'
+        ? { ...rule, match: { ...rule.match!, signals: ['write-target-scope:outside-workdir', 'write-target-unsupported'] } }
+      : rule.id === 'remote-wechat-media-outside-deny'
+        ? { ...rule, match: { ...rule.match!, toolName: 'wechat_send', signals: ['wechat-media-target:outside-workdir', 'policy-tier:standard'] } }
+      : rule.id === 'script-network-deny-remote' || rule.id === 'script-uncertified-ask-remote'
+        ? { ...rule, match: { ...rule.match!, excludeSignals: ['im-script-network-review-candidate:complete'] } }
+        : rule), ...unverifiedTargetFloors, nonstandardWechatMediaDeny, incompleteWechatReplyMediaDeny]
+  }
+  return DEFAULT_FLOOR
+}
+
 /**
  * 嵌套交集：内层规则相对父调用规则取交集（放行集合只收窄）。
  * 同 id 条目动作取更严者；floor 特有条目（含 locked 保护）并入结果，防止内层缺失保护。

@@ -36,7 +36,7 @@ import {
   outcomeFromFileToolSignal,
   throwIfAborted
 } from './toolExecutionResource'
-import { buildPythonScriptEnv } from '../processOutputEncoding'
+import { buildScriptExecutionEnv } from '../processOutputEncoding'
 import { UTF8_CONTRACT } from '../processOutput/contracts'
 import { createChildStreamDecoder } from '../processOutput/decodeChildOutput'
 import { processTreeKiller, runCommandWithTimeout } from '../spawnUtil'
@@ -841,7 +841,7 @@ async function resolveWriteTargetFromPermit(input: Record<string, unknown>, ctx:
     const relFromBase = path.relative(resolution.realBase, permit.target.normalizedPath)
     if (relFromBase.startsWith('..') || path.isAbsolute(relFromBase)) throw new Error('wiki-mount-consistency-mismatch')
   }
-  if (ctx.lane === 'feishu' || ctx.lane === 'wechat' || ctx.remoteContext !== undefined) {
+  if ((ctx.lane === 'feishu' || ctx.lane === 'wechat' || ctx.remoteContext !== undefined) && !permit.approvedOutsideWorkdir) {
     // T1.9：挂载命中按 scopeBase（realBase）断言包含；未挂载维持 workDir 断言（远程豁免面仅限 wiki 命名空间）
     await assertRemoteWriteTargetInsideWorkDir(permit.target.scopeBase ?? ctx.workDir, permit.target.normalizedPath)
   }
@@ -2447,7 +2447,10 @@ export const runScriptExecutor: ToolExecutor = {
       if (language === 'python') {
         const interpreter = await resolvePythonInterpreter(ctx.toolsConfig.pythonPath)
         command = interpreter.command
-        commandArgs = ['-c', code]
+        // Python isolated mode ignores cwd, PYTHONPATH, and user site imports. Safe-path mode
+        // prevents an unreviewed requests.py/package in the session workDir from executing
+        // during an approved static network candidate.
+        commandArgs = [...(ctx.scriptNetworkReviewCandidate ? ['-I'] : []), '-c', code]
         interpreterName = 'python'
         fallbackFrom = interpreter.fallbackFrom
       } else {
@@ -2461,7 +2464,7 @@ export const runScriptExecutor: ToolExecutor = {
       return { success: false, error: caseId, diagnostic: { caseId: caseId.toLowerCase().replace(/_/g, '-'), category: 'executor', retryable: false }, duration: Date.now() - started }
     }
     ctx.sendProgress('script', fallbackFrom ? `未找到 ${fallbackFrom}，改用 ${command} 启动 Python...` : `启动 ${interpreterName}...`)
-    const env = buildPythonScriptEnv()
+    const env = ctx.scriptEnvironment ?? buildScriptExecutionEnv(process.env, ctx.lane)
     // §7.5 / §12-#6：宿主侧已用 PYTHONUTF8=1 与 PYTHONIOENCODING=utf-8 钉死契约，这里显式登记同一契约。
     const stdoutDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })
     const stderrDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })

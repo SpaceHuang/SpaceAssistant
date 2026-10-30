@@ -38,6 +38,14 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`path-target:${signal.zone}`)
         break
+      case 'read-target-scope':
+        tokens.add(signal.kind)
+        tokens.add(`read-target-scope:${signal.scope}`)
+        break
+      case 'read-target-kind':
+        tokens.add(signal.kind)
+        tokens.add(`read-target-kind:${signal.targetKind}`)
+        break
       case 'write-target-scope':
         tokens.add(signal.kind)
         tokens.add(`write-target-scope:${signal.scope}`)
@@ -75,10 +83,31 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         for (const evidence of signal.evidenceKinds) tokens.add(`outbound-evidence:${evidence}`)
         break
       case 'wechat-media-content-assessment':
+        tokens.add(signal.kind)
+        tokens.add(`wechat-media-content-assessment:${signal.inspectionCoverage}`)
+        tokens.add(`wechat-media-content-digest:${signal.contentDigest}`)
         tokens.add(`outbound-inspection:${signal.inspectionCoverage}`)
         if (signal.inspectionCoverage !== 'complete') tokens.add('outbound-inspection-incomplete')
         if (signal.evidenceKinds.length > 0) tokens.add('outbound-evidence-present')
         for (const evidence of signal.evidenceKinds) tokens.add(`outbound-evidence:${evidence}`)
+        break
+      case 'wechat-media-content':
+        tokens.add(signal.kind)
+        break
+      case 'wechat-media-identity':
+        tokens.add(signal.kind)
+        break
+      case 'wechat-media-review-binding':
+        tokens.add(signal.kind)
+        tokens.add(`wechat-media-review-binding:${signal.status}`)
+        break
+      case 'approval-review-materials':
+        tokens.add(signal.kind)
+        tokens.add(`approval-review-materials:${signal.status}`)
+        break
+      case 'wechat-media-review-materials':
+        tokens.add(signal.kind)
+        tokens.add(`wechat-media-review-materials:${signal.status}`)
         break
       case 'write-target-new':
       case 'write-target-existing':
@@ -88,6 +117,10 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
       case 'command-effect':
         tokens.add(signal.kind)
         tokens.add(`command-effect:${signal.effect}`)
+        break
+      case 'im-shell-review-candidate':
+        tokens.add(signal.kind)
+        tokens.add(`im-shell-review-candidate:${signal.command}`)
         break
       case 'path-outside-heuristic':
         tokens.add(signal.kind)
@@ -99,6 +132,8 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
       case 'wechat-media-target':
         tokens.add(signal.kind)
         tokens.add(`wechat-media-target:${signal.boundary}`)
+        tokens.add(`wechat-media-target-kind:${signal.targetKind}`)
+        if (signal.zone) tokens.add(`wechat-media-target-zone:${signal.zone}`)
         break
       case 'workdir-profile-target':
         tokens.add(signal.kind)
@@ -110,6 +145,18 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         if (signal.dynamicAccess) tokens.add('script-dynamic-access')
         if (signal.unknownReason) tokens.add(`script-path-extraction:${signal.unknownReason}`)
         else if (signal.completeness === 'unknown') tokens.add('script-path-extraction:unclassified')
+        break
+      case 'im-script-network-review-candidate':
+        tokens.add(signal.kind)
+        tokens.add(`im-script-network-review-candidate:${signal.status}`)
+        break
+      case 'script-execution-environment':
+        tokens.add(signal.kind)
+        tokens.add(`script-execution-environment:${signal.status}`)
+        break
+      case 'script-execution-settings':
+        tokens.add(signal.kind)
+        tokens.add(`script-execution-settings:${signal.status}`)
         break
       case 'script-path-declaration':
         tokens.add(signal.kind)

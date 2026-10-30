@@ -6,6 +6,7 @@ import { extractScriptSignals } from './scriptAnalysisExtractor'
 import { extractBrowserSignals } from './browserDomainExtractor'
 import { extractOutboundTarget, extractLarkSubcommand } from './outboundExtractors'
 import { runExtractors } from './runExtractors'
+import { classifyShellCommandEffect } from './shellEffectFacts'
 
 const env: EnvFacts = {
   os: 'win32',
@@ -18,6 +19,12 @@ function signalKinds(signals: { kind: string }[]): string[] {
 }
 
 describe('commandSequenceExtractor', () => {
+  it('does not classify Git config-selected helpers as pure reads', () => {
+    const complete = { verdict: 'allow', facts: { analysisCompleteness: 'complete', operations: [{ verb: 'git', args: ['-c', 'core.fsmonitor=helper', 'status'] }], unresolved: [], connectors: [], redirects: [] } } as never
+    expect(classifyShellCommandEffect('git -c core.fsmonitor=helper status', complete)).toBe('unknown')
+    const repositoryHelper = { verdict: 'allow', facts: { analysisCompleteness: 'complete', operations: [{ verb: 'git', args: ['status'] }], unresolved: [], connectors: [], redirects: [] } } as never
+    expect(classifyShellCommandEffect('git status', repositoryHelper)).toBe('unknown')
+  })
   it('emits command effect and analysis completeness as observations only', () => {
     const read = extractCommandSignals('cat report.txt', { os: 'darwin', workDir: '/workspace', sensitivePaths: [] })
     expect(read.signals).toEqual(expect.arrayContaining([
@@ -155,6 +162,25 @@ describe('scriptAnalysisExtractor', () => {
   it('网络脚本额外产 script-network 信号', () => {
     const r = extractScriptSignals("import requests\nrequests.get('http://x')", env)
     expect(signalKinds(r.signals)).toContain('script-network')
+  })
+
+  it('仅将无副作用、单一静态 HTTPS GET/HEAD 目标标为 IM 网络审核候选', () => {
+    const candidate = extractScriptSignals(
+      "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)", env
+    )
+    expect(candidate.signals).toContainEqual({
+      kind: 'im-script-network-review-candidate', status: 'complete',
+      host: 'docs.example.com', method: 'GET', url: 'https://docs.example.com/'
+    })
+    for (const code of [
+      "import requests\nrequests.get(url, timeout=5, allow_redirects=False)",
+      "import requests\nrequests.get('https://docs.example.com/', timeout=5)",
+      "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)\nprint('extra')",
+      "import requests\nrequests.get('http://127.0.0.1/', timeout=5, allow_redirects=False)",
+      "import requests\nrequests.get('https://docs.example.com/private?token=x', timeout=5, allow_redirects=False)"
+    ]) {
+      expect(extractScriptSignals(code, env).signals).not.toContainEqual(expect.objectContaining({ kind: 'im-script-network-review-candidate' }))
+    }
   })
 
   it('危险脚本产 script-analysis=dangerous', () => {

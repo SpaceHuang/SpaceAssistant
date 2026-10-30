@@ -164,6 +164,28 @@ describe('runShellRegisteredTool', () => {
     expect(result).toMatchObject({ success: true })
   })
 
+  it('shell 审核后策略代次变化会使预备计划失效且不启动进程', async () => {
+    const executor = vi.spyOn(runShellExecutor, 'executePreparedShellExecutionWithHostFallback')
+    const executionContext = { ...runtime, policyRevision: 'policy-before' }
+    const handle = await runShellRegisteredTool.begin(
+      { command: process.platform === 'win32' ? 'Write-Output stale' : 'printf stale' },
+      { requestId: 'r', toolUseId: 'shell-review-policy-drift', signal: runtime.signal, executionContext }
+    )
+    handle.awaitConfirmation()
+    handle.confirm()
+    executionContext.policyRevision = 'policy-after'
+    try {
+      await expect(handle.execute({
+        requestId: 'r', toolUseId: 'shell-review-policy-drift', signal: runtime.signal,
+        toolName: 'run_shell', runtimeContext: executionContext
+      } as never)).rejects.toMatchObject({ code: 'PLAN_STALE', reasons: expect.arrayContaining(['policyRevision']) })
+      expect(executor).not.toHaveBeenCalled()
+    } finally {
+      handle.release()
+      executor.mockRestore()
+    }
+  })
+
   it('shell 已启动后超时将结果归为不确定，避免把部分副作用作为可重试工具结果', async () => {
     const executor = vi.spyOn(runShellExecutor, 'executePreparedShellExecutionWithHostFallback')
       .mockResolvedValue({ success: false, error: 'SHELL_TIMEOUT', data: { timeoutSec: 17, terminationReason: 'timeout' } } as never)

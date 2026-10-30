@@ -1,10 +1,15 @@
 import { createHash } from 'node:crypto'
+import { buildScriptExecutionEnv, stableScriptMaterialDigest } from '../processOutputEncoding'
 import fsPromises from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
 import path from 'node:path'
 import { decide, ruleMatchesInvocation } from '../../src/shared/policy/policyEngine'
 import { createImAttachmentFacts } from '../../src/shared/confirmation/imAttachmentFacts'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
-import { validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
+import { resolveImPolicyFloorForVersion, validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
+import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
+import { analyzeScriptContent, parsePythonModule, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
+import type { IrModule } from '../shell/scriptIr/types'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import type {
   AutoApproveFallback,
@@ -83,9 +88,6 @@ function isWikiRawSignalTarget(args: { workDir: string; userDataDir: string; wik
     : resolveWikiRelPath(args.workDir, wikiConfig, rawPath)
   return classifyWikiPath(args.workDir, wikiConfig, vocabulary) === 'raw'
 }
-import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
-import { analyzeScriptContent, parsePythonModule, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
-import type { IrModule } from '../shell/scriptIr/types'
 import { precheckRunShellTool } from '../shell/shellToolLoopHelpers'
 import { analyzeShellCommand } from '../shell/analyzeShellCommand'
 import { classifyShellCommandEffect } from './extractors/shellEffectFacts'
@@ -142,6 +144,17 @@ export type GateDecisionCache = import('./auditedDecisionCache').AuditedDecision
 export interface ToolCallGateArgs {
   toolName: string
   toolInput: Record<string, unknown>
+  /** Host prepared immutable shell execution facts, projected only for v3 review. */
+  preparedShellReview?: {
+    command: string
+    cwd: string
+    timeoutSeconds: number
+    shell: string
+    environmentKeys: string[]
+    environmentFingerprint: string
+    planDigest: string
+    behaviorCoverage: 'complete' | 'partial'
+  }
   sessionId: string
   workDir: string
   /** Frozen task roots supplied by the trusted automation run snapshot. */
@@ -276,6 +289,8 @@ export interface ToolCallGateResult {
   /** Host-issued result-directory grant attestation; consumed by the execution permit final-check. */
   automationOutputScope?: AutomationRunOutputScope
   writeExecutionPermit?: WriteExecutionPermit
+  /** Host prepared execution plan projection for bounded Git-query approvals. */
+  preparedShellReview?: { command: string; cwd: string; timeoutSeconds: number; shell: string; environmentKeys: string[]; environmentFingerprint: string; planDigest: string; behaviorCoverage: 'complete' | 'partial' }
   /** run_shell 预检通过时的结构化结果（供日志/确认卡片 hints）。 */
   shellPrecheck?: { analysis: ShellAnalysisResult; legacyAutoAllowEligible: boolean; legacyPolicy: import('../shell/legacyShellPolicyAdapter').LegacyShellPolicyInput; hints: ShellSecurityHints }
   /** run_shell 预检拒绝（validator 性质，gate 前置短路，不进引擎）。 */
@@ -358,7 +373,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   if (lane === 'wechat' || lane === 'feishu') {
     const snapshot = args.imPolicySnapshot
     const supported = snapshot?.domain === 'im' &&
-      ['im-v1.6', 'im-standard-v2'].includes(snapshot.policyBehaviorVersion) &&
+      ['im-v1.6', 'im-standard-v2', 'im-standard-v3'].includes(snapshot.policyBehaviorVersion) &&
       Number.isSafeInteger(snapshot.revision) && snapshot.revision >= 0 &&
       !!snapshot.snapshot && typeof snapshot.snapshot === 'object' && !Array.isArray(snapshot.snapshot)
     if (!supported) {
@@ -374,7 +389,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
 
   // ===== P3 底线校验（§7.1 判据 2）：传入规则集相对 locked 底线可收紧不可放宽 =====
   // 违规 → 拒绝本次工具调用 + cause=rules-violated 审计（与正常拒绝、缺料失败互斥不混计）
-  const floorCheck = validatePolicyRulesFloor(args.effectiveRules)
+  const floor = lane === 'wechat' || lane === 'feishu'
+    ? resolveImPolicyFloorForVersion(args.imPolicySnapshot?.policyBehaviorVersion, args.lanePackage ?? 'standard')
+    : undefined
+  const floorCheck = validatePolicyRulesFloor(args.effectiveRules, floor)
   if (!floorCheck.ok) {
     result.decision = {
       type: 'deny',
@@ -440,6 +458,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
     if (shellAnalysis.shellSecurityHints.outsideWorkDirRisk) shellPathSignals.push({ kind: 'path-outside-heuristic', reason: 'command-may-touch-outside-workdir' })
     shellPathSignals.push({ kind: 'command-effect', effect: classifyShellCommandEffect(command, shellAnalysis) })
+    const onlyGitQuery = shellFacts?.analysisCompleteness === 'complete' && shellFacts.operations.length === 1 &&
+      shellFacts.unresolved.length === 0 && (shellFacts.connectors?.length ?? 0) === 0 && (shellFacts.redirects?.length ?? 0) === 0 &&
+      shellFacts.operations[0]?.verb.toLowerCase().split(/[\\/]/).pop() === 'git'
+    if (onlyGitQuery) {
+      const gitArgs = shellFacts!.operations[0]!.args
+      const subcommandIndex = gitArgs.findIndex((arg) => !arg.startsWith('-'))
+      const subcommand = gitArgs[subcommandIndex]?.toLowerCase()
+      const options = gitArgs.filter((_, index) => index !== subcommandIndex)
+      if ((subcommand === 'status' || subcommand === 'log') && options.every((arg) => ['--short', '--oneline', '--decorate', '--no-color'].includes(arg))) {
+        shellPathSignals.push({ kind: 'im-shell-review-candidate', command: subcommand === 'status' ? 'git-status' : 'git-log' })
+      }
+    }
     if (shellPathProbeFailed) shellPathSignals.push({ kind: 'extraction-failed', reason: 'shell-path-facts-incomplete' })
     const precheck = await (args.runShellPrecheck ?? precheckRunShellTool)({
       command,
@@ -533,6 +563,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   let facts: ContentFacts
   let readPathFact: import('./extractors/readPathFacts').ReadPathFact | undefined
   let wechatMediaPathFact: ReadPathFact | undefined
+  let reviewedAttachmentContent: { path: string; fileName: string; content: string; contentDigest: string; inspectionCoverage: 'complete' | 'partial'; evidenceKinds: readonly string[] } | undefined
   let feishuMediaFact: FeishuMediaTargetFact | undefined
   let readPathProbeFailure: ReadPathProbeError | undefined
   let writePathFact: WritePathFact | undefined
@@ -650,6 +681,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     const signals: FactSignal[] = pythonLanguage
       ? pythonSignals!.signals
       : [{ kind: 'script-language-analysis' as const, language: language === 'python' ? 'unknown' as const : language, status: 'unverified' as const }]
+    const networkReviewCandidate = signals.some((signal) => signal.kind === 'im-script-network-review-candidate' && signal.status === 'complete')
+    let scriptEnvironmentDigest: string | undefined
+    if (networkReviewCandidate) {
+      scriptEnvironmentDigest = stableScriptMaterialDigest(buildScriptExecutionEnv(process.env, lane, true))
+      signals.push({ kind: 'script-execution-environment', status: 'complete', digest: scriptEnvironmentDigest })
+      const scriptSettings = {
+        workDir: args.workDir, userDataDir: args.userDataDir, scriptTimeout: args.toolsConfig.scriptTimeout,
+        ...(args.toolsConfig.pythonPath !== undefined ? { pythonPath: args.toolsConfig.pythonPath } : {}),
+        ...(args.toolsConfig.scriptInterpreterPaths ? { scriptInterpreterPaths: args.toolsConfig.scriptInterpreterPaths } : {})
+      }
+      signals.push({ kind: 'script-execution-settings', status: 'complete', digest: stableScriptMaterialDigest(scriptSettings), interpreter: args.toolsConfig.pythonPath?.trim() || 'python' })
+    }
     let summary = pythonLanguage
       ? pythonSignals!.summary
       : { text: `run_script ${language} 路径事实已提取；内容安全分析未认证` }
@@ -663,7 +706,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       contentDigest: createHash('sha256').update(code, 'utf8').digest('hex'),
       workdirDigest: createHash('sha256').update(path.resolve(args.workDir), 'utf8').digest('hex'),
       parametersDigest: createHash('sha256').update(JSON.stringify({ ...args.toolInput, code }), 'utf8').digest('hex'),
-      environmentDigest: createHash('sha256').update(JSON.stringify({ workDir: path.resolve(args.workDir), userDataDir: path.resolve(args.userDataDir), lane }), 'utf8').digest('hex'),
+      environmentDigest: stableScriptMaterialDigest({ workDir: path.resolve(args.workDir), userDataDir: path.resolve(args.userDataDir), lane, scriptEnvironmentDigest }),
       authenticationVersion: 'script-certifier-v1'
     })
     let scriptPathHint: string | undefined
@@ -767,12 +810,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           summary: { text: `${args.toolName} 写入目标已检查` }
         }
         if (automationOutputBinding || automationOutputScope) facts.signals.push({ kind: 'automation-output-binding', status: 'matched' })
-        if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2'
-          && args.toolName === 'write_file' && writePathFact.targetKind === 'missing' && writePathFact.zone === 'workdir-normal'
-          && writeScope === 'inside-workdir') facts.signals.push({ kind: 'write-target-new' })
-        if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2'
-          && args.toolName === 'edit_file' && writePathFact.targetKind === 'file' && writePathFact.zone === 'workdir-normal'
-          && writeScope === 'inside-workdir') facts.signals.push({ kind: 'write-target-existing' })
+        if ((args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2' || args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v3')
+          && args.toolName === 'write_file' && writePathFact.targetKind === 'missing') facts.signals.push({ kind: 'write-target-new' })
+        if ((args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2' || args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v3')
+          && args.toolName === 'edit_file' && writePathFact.targetKind === 'file') facts.signals.push({ kind: 'write-target-existing' })
         if (writePathFact.targetKind !== 'file' && writePathFact.targetKind !== 'missing') facts.signals.push({ kind: 'write-target-unsupported' })
         if (isWikiRawSignalTarget(args, rawPath)) {
           facts.signals.push({ kind: 'wiki-raw-target' })
@@ -818,6 +859,13 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           })
           facts = readResult.facts
           readPathFact = readResult.readPathFact
+          const readScope = args.toolName === 'list_directory'
+            ? 'direct-entries' as const
+            : args.toolName === 'grep' && (readPathFact.targetKind === 'directory' || readPathFact.resolvedKind === 'directory')
+              ? 'subtree' as const
+              : 'single-target' as const
+          facts.signals.push({ kind: 'read-target-scope', scope: readScope })
+          facts.signals.push({ kind: 'read-target-kind', targetKind: readPathFact.targetKind })
         } catch (error) {
           if (!(error instanceof ReadPathProbeError)) throw error
           readPathProbeFailure = error
@@ -877,36 +925,89 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
               ? 'unknown'
               : workdirScope === 'inside-workdir' ? 'inside-workdir' : 'outside-workdir'
             facts.signals.push({ kind: 'wechat-media-target', boundary, zone: wechatMediaPathFact.zone, targetKind: wechatMediaPathFact.targetKind })
-            if (boundary === 'inside-workdir' && wechatMediaPathFact.targetKind === 'file') {
-              const resolvedMediaPath = await resolveSafeWorkDirPath(args.workDir, mediaPath)
-              const mediaStat = await fsPromises.stat(resolvedMediaPath)
+            if (wechatMediaPathFact.targetKind === 'file' && wechatMediaPathFact.identity) {
+              facts.signals.push({ kind: 'wechat-media-identity', ...wechatMediaPathFact.identity })
+            }
+            if ((boundary === 'inside-workdir' || boundary === 'outside-workdir') && wechatMediaPathFact.targetKind === 'file' && wechatMediaPathFact.identity) {
+              const resolvedMediaPath = boundary === 'inside-workdir'
+                ? await resolveSafeWorkDirPath(args.workDir, mediaPath)
+                : wechatMediaPathFact.normalizedPath
               const extension = path.extname(resolvedMediaPath).toLowerCase()
               const imageRequest = typeof args.toolInput.imagePath === 'string'
               // Hashing is needed to bind human approval to the exact attachment. This is
               // not the transport limit; avoid silently treating an unbound file as approved.
               const maxBytes = imageRequest || ['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)
                 ? 10 * 1024 * 1024 : 512 * 1024 * 1024
-              if (mediaStat.isFile() && mediaStat.size <= maxBytes) {
-                const mediaBytes = await fsPromises.readFile(resolvedMediaPath)
+              let mediaBytes: Buffer | undefined
+              try {
+                const linkStat = await fsPromises.lstat(resolvedMediaPath)
+                if (!linkStat.isSymbolicLink() && linkStat.isFile()) {
+                  const handle = await fsPromises.open(resolvedMediaPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+                  try {
+                    const openedStat = await handle.stat()
+                    const expected = wechatMediaPathFact.identity
+                    const matches = (stat: typeof openedStat) => stat.isFile() && stat.dev === expected.dev && stat.ino === expected.ino &&
+                      stat.mode === expected.mode && stat.size === expected.size && stat.mtimeMs === expected.mtimeMs
+                    if (matches(openedStat) && openedStat.size <= maxBytes) {
+                      const bytes = await handle.readFile()
+                      const afterReadStat = await handle.stat()
+                      if (matches(afterReadStat) && bytes.byteLength === afterReadStat.size) mediaBytes = bytes
+                    }
+                  } finally { await handle.close() }
+                }
+              } catch { /* Missing, replaced, linked or unreadable files stay outside the complete candidate set. */ }
+              if (mediaBytes) {
                 const contentDigest = createHash('sha256').update(mediaBytes).digest('hex')
+                const displayPath = boundary === 'inside-workdir'
+                  ? path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/')
+                  : path.basename(resolvedMediaPath)
                 facts.signals.push({ kind: 'wechat-media-content',
                   sha256: contentDigest, byteSize: mediaBytes.length,
                   fileName: path.basename(resolvedMediaPath),
-                  displayPath: path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/') })
+                  displayPath })
                 let inspectedText = ''
                 let inspectionCoverage: 'complete' | 'partial' = 'complete'
                 try { inspectedText = new TextDecoder('utf-8', { fatal: true }).decode(mediaBytes) }
                 catch { inspectionCoverage = 'partial' }
                 const attachmentFacts = await createImAttachmentFacts({
                   fileName: path.basename(resolvedMediaPath),
-                  relativePath: path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/'),
+                  relativePath: displayPath,
                   content: inspectedText,
                   contentDigest,
                   inspectionCoverage
                 })
                 facts.signals.push({ kind: 'wechat-media-content-assessment', ...attachmentFacts })
+                if (mediaBytes.length <= 20_000 && inspectionCoverage === 'complete') {
+                  reviewedAttachmentContent = { path: resolvedMediaPath, fileName: path.basename(resolvedMediaPath), content: inspectedText,
+                    contentDigest, inspectionCoverage, evidenceKinds: attachmentFacts.evidenceKinds }
+                }
               }
             }
+            const recipient = typeof args.toolInput.userId === 'string' && args.toolInput.userId.length > 0
+              ? args.toolInput.userId
+              : args.toolName === 'wechat_reply' && args.remoteContext?.source === 'wechat' ? args.remoteContext.userId : undefined
+            const ownerId = args.remoteContext?.source === 'wechat' ? args.remoteContext.authOwner : undefined
+            const authorizationGeneration = args.remoteContext?.source === 'wechat' ? args.remoteContext.authorizationGeneration : undefined
+            const bindingComplete = Boolean(recipient && ownerId && Number.isInteger(authorizationGeneration) &&
+              args.remoteContext?.source === 'wechat' && args.remoteContext.messageId && args.requestId && args.toolUseId)
+            facts.signals.push({ kind: 'wechat-media-review-binding', status: bindingComplete ? 'complete' : 'incomplete',
+              ...(recipient ? { recipient } : {}), ...(ownerId ? { ownerId } : {}), ...(authorizationGeneration !== undefined ? { authorizationGeneration } : {}),
+              ...(args.remoteContext?.source === 'wechat' ? { messageId: args.remoteContext.messageId } : {}),
+              ...(args.requestId ? { requestId: args.requestId } : {}), ...(args.toolUseId ? { toolUseId: args.toolUseId } : {}) })
+            const contentCoverage = facts.signals.find((signal) => signal.kind === 'wechat-media-content-assessment')
+            if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v3') {
+              const reviewMaterialComplete = args.toolName === 'wechat_reply' && boundary === 'outside-workdir' && bindingComplete &&
+                Boolean(reviewedAttachmentContent && recipient && ownerId)
+              if (reviewMaterialComplete && reviewedAttachmentContent) {
+                facts.reviewMaterials = { kind: 'wechat-attachment', path: reviewedAttachmentContent.path, fileName: reviewedAttachmentContent.fileName,
+                  recipient, ownerId, content: reviewedAttachmentContent.content, contentDigest: reviewedAttachmentContent.contentDigest,
+                  inspectionCoverage: reviewedAttachmentContent.inspectionCoverage, evidenceKinds: reviewedAttachmentContent.evidenceKinds, complete: true }
+              }
+              facts.signals.push({ kind: 'approval-review-materials', status: reviewMaterialComplete ? 'complete' : 'incomplete' })
+            }
+            facts.signals.push({ kind: 'wechat-media-review-materials',
+              status: boundary === 'outside-workdir' && wechatMediaPathFact.targetKind === 'file' && contentCoverage?.inspectionCoverage === 'complete' && bindingComplete
+                ? 'complete' : 'incomplete' })
           } catch (error) {
             if (!(error instanceof ReadPathProbeError)) throw error
             facts.signals.push({ kind: 'wechat-media-target', boundary: 'unknown', targetKind: 'unknown' })
@@ -1105,6 +1206,65 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     if (!(signal.kind in factSources)) factSources[signal.kind] = 'host-environment'
   }
   facts.signals = [...facts.signals, ...(providerSignals ?? [])]
+  const wechatMediaTarget = facts.signals.find((signal) => signal.kind === 'wechat-media-target' && signal.boundary === 'outside-workdir')
+  // facts phase: a directory-external standard reply is reviewable only when the
+  // gate's host read is the same immutable material the registered executor prepared.
+  if (lane === 'wechat' && wechatMediaTarget) {
+    const hostAttachment = facts.signals.find((signal) => signal.kind === 'wechat-media-content-assessment')
+    const preparedAttachments = (providerSignals ?? []).filter((signal) => signal.kind === 'wechat-media-content-assessment')
+    const preparedDigest = preparedAttachments.length === 1 ? preparedAttachments[0]!.contentDigest : undefined
+    const materials = facts.signals.find((signal) => signal.kind === 'wechat-media-review-materials')
+    const standardReplyCandidate = args.toolName === 'wechat_reply' && lanePackage === 'standard'
+    const hasSensitiveEvidence = hostAttachment?.evidenceKinds.length
+    if (standardReplyCandidate && !hasSensitiveEvidence && materials?.kind === 'wechat-media-review-materials' &&
+      (!hostAttachment || preparedDigest !== hostAttachment.contentDigest)) {
+      materials.status = 'incomplete'
+      const approvalMaterials = facts.signals.find((signal) => signal.kind === 'approval-review-materials')
+      if (approvalMaterials?.kind === 'approval-review-materials') approvalMaterials.status = 'incomplete'
+      facts.reviewMaterials = undefined
+    }
+  }
+  const reviewCandidateSignal = facts.signals.find((signal) =>
+    signal.kind === 'im-script-network-review-candidate' || signal.kind === 'im-shell-review-candidate' ||
+    signal.kind === 'write-target-new' || signal.kind === 'write-target-existing')
+  if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v3' && reviewCandidateSignal && !facts.signals.some((signal) => signal.kind === 'approval-review-materials')) {
+    const byteLength = (value: string) => Buffer.byteLength(value, 'utf8')
+    let reviewMaterials: import('../../src/shared/confirmation/types').ApprovalReviewMaterials | undefined
+    let complete = false
+    if ((args.toolName === 'write_file' || args.toolName === 'edit_file') &&
+      facts.signals.some((signal) => signal.kind === 'write-target-scope' && signal.scope === 'outside-workdir')) {
+      const target = typeof args.toolInput.path === 'string' ? args.toolInput.path : undefined
+      if (args.toolName === 'write_file') {
+        const content = typeof args.toolInput.content === 'string' ? args.toolInput.content : undefined
+        complete = Boolean(target && content !== undefined && byteLength(content) <= 20_000)
+        if (target && content !== undefined) reviewMaterials = { kind: 'outside-file-write', operation: 'new', target, content, complete }
+      } else {
+        const oldText = typeof args.toolInput.old_string === 'string' ? args.toolInput.old_string : undefined
+        const replacementText = typeof args.toolInput.new_string === 'string' ? args.toolInput.new_string : undefined
+        complete = Boolean(target && oldText !== undefined && replacementText !== undefined && byteLength(oldText) + byteLength(replacementText) <= 20_000)
+        if (target && oldText !== undefined && replacementText !== undefined) reviewMaterials = { kind: 'outside-file-write', operation: 'edit', target, oldText, replacementText, complete }
+      }
+    } else if (reviewCandidateSignal.kind === 'im-shell-review-candidate') {
+      const plan = args.preparedShellReview
+      complete = Boolean(plan && plan.behaviorCoverage === 'complete' && plan.command === args.toolInput.command &&
+        byteLength(plan.command) <= 20_000 && plan.cwd && plan.shell && plan.environmentFingerprint && plan.planDigest && Number.isFinite(plan.timeoutSeconds))
+      if (plan) reviewMaterials = { kind: 'git-query', command: plan.command, cwd: plan.cwd, timeoutSeconds: plan.timeoutSeconds,
+        shell: plan.shell, environmentKeys: plan.environmentKeys, environmentFingerprint: plan.environmentFingerprint,
+        planDigest: plan.planDigest, behaviorCoverage: plan.behaviorCoverage, complete }
+    } else if (reviewCandidateSignal.kind === 'im-script-network-review-candidate') {
+      const code = typeof args.toolInput.code === 'string' ? args.toolInput.code : ''
+      const settings = facts.signals.find((signal) => signal.kind === 'script-execution-settings')
+      const environment = facts.signals.find((signal) => signal.kind === 'script-execution-environment')
+      complete = byteLength(code) <= 20_000 && settings?.kind === 'script-execution-settings' && environment?.kind === 'script-execution-environment'
+      if (settings?.kind === 'script-execution-settings' && environment?.kind === 'script-execution-environment') {
+        reviewMaterials = { kind: 'static-network-script', code, url: reviewCandidateSignal.url, host: reviewCandidateSignal.host,
+          method: reviewCandidateSignal.method, interpreter: settings.interpreter, settingsDigest: settings.digest,
+          environmentDigest: environment.digest, complete }
+      }
+    }
+    facts.reviewMaterials = reviewMaterials
+    facts.signals.push({ kind: 'approval-review-materials', status: complete && reviewMaterials?.complete ? 'complete' : 'incomplete' })
+  }
   facts.signals.push({ kind: 'policy-tier', tier: lanePackage })
   facts.factSources = factSources
   facts.factsProviderDeclared = args.factsProvider !== undefined
@@ -1212,7 +1372,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   // 目录目标可签发 permit 的工具：list_directory（direct-entries）与 grep（subtree）——§7.4 改动 4
   const directoryPermittable = isListDirectoryTool || args.toolName === 'grep'
 
-  if (readPathFact && isPermitReadTool && (decision.type === 'auto-allow' || (decision.type === 'require-confirm' && decision.answerer === 'user')) && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
+  if (readPathFact && isPermitReadTool && (decision.type === 'auto-allow' || (decision.type === 'require-confirm' && (decision.answerer === 'user' || decision.answerer === 'agent'))) && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const readTarget = { factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId }
     result.readTargetMapping = [readTarget]
     if (decision.type === 'auto-allow') result.approvedFactIds = [readTarget]

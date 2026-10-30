@@ -14,6 +14,8 @@ import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { effectiveActionFor, resolveImPolicyRulesForVersion } from '../../src/shared/policy/policyPackages'
 import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
+import { AgentChannel } from './agentChannel'
+import { renderCluePackForTest } from './approvalAgent'
 import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 import { canonicalKeyJson } from './sqliteDecisionCache'
 import { PolicyRuleStore } from './policyRuleStore'
@@ -294,6 +296,120 @@ function auditSink(): { record: (e: SecurityAuditEvent) => void; events: Securit
 }
 
 describe('IM standard policy override is final at the gate', () => {
+  it.each(['wechat', 'feishu'] as const)('%s isolated standard v3 sends only a complete static HTTPS request to Agent review', async (lane) => {
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const code = "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)"
+    const evaluate = (code: string, version = 'im-standard-v3') => {
+      const policySnapshot = { ...snapshot, policyBehaviorVersion: version }
+      const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: version, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+      return evaluateToolCallGate(base({ lane, toolName: 'run_script', toolInput: { language: 'python', code }, effectiveRules: rules, imPolicySnapshot: policySnapshot }))
+    }
+    const candidate = await evaluate(code)
+    expect(candidate.facts.signals).toContainEqual({ kind: 'im-script-network-review-candidate', status: 'complete', host: 'docs.example.com', method: 'GET', url: 'https://docs.example.com/' })
+    expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-environment')).toMatchObject({ kind: 'script-execution-environment', status: 'complete', digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-settings')).toMatchObject({ kind: 'script-execution-settings', status: 'complete', interpreter: expect.any(String), digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', code, url: 'https://docs.example.com/', host: 'docs.example.com', method: 'GET', complete: true })
+    let scriptPrompt = ''
+    const scriptApproval = new AgentChannel({ lane, requestId: 'script-review-materials', sessionId: 's', toolName: 'run_script', policy: { kind: 'agent' },
+      invokeApproval: async (invocation) => { scriptPrompt = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
+    expect(await scriptApproval.request({ facts: candidate.facts, riskLevel: candidate.decision.type === 'require-confirm' ? candidate.decision.riskLevel : 'high', memoryTiers: [], timeoutMs: 5000 })).toMatchObject({ kind: 'approved' })
+    expect(scriptPrompt).toContain(JSON.stringify(code))
+    expect(scriptPrompt).toContain('https://docs.example.com/')
+    expect(scriptPrompt).toContain('settingsDigest')
+    expect(scriptPrompt).toContain('environmentDigest')
+    expect(candidate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-script-network-review', answerer: 'agent' })
+    for (const code of [
+      "import requests\nrequests.get(url, timeout=5, allow_redirects=False)",
+      "import requests\nrequests.get('https://docs.example.com/', timeout=5)",
+      "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)\nprint('extra')"
+    ]) expect((await evaluate(code)).decision).toMatchObject({ type: 'deny', ruleId: 'script-network-deny-remote' })
+    expect((await evaluate("import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)", 'im-v1.6')).decision)
+      .toMatchObject({ type: 'deny', ruleId: 'script-network-deny-remote' })
+    expect(effectiveRules.find((rule) => rule.id === 'im-script-network-review')?.action).toBe('ask')
+  })
+
+  it.each(['wechat', 'feishu'] as const)('%s isolated v3 routes bounded git status/log to Agent and leaves other shell calls denied', async (lane) => {
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'shell-review-')))
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const run = (command: string, version = 'im-standard-v3') => {
+      const imPolicySnapshot = { ...snapshot, policyBehaviorVersion: version }
+      const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: version, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+      const reviewable = version === 'im-standard-v3' && (command === 'git status' || command === 'git log')
+      return evaluateToolCallGate(base({ lane, workDir, userDataDir: path.join(workDir, '.userdata'), toolName: 'run_shell', toolInput: { command },
+        ...(reviewable ? { preparedShellReview: { command, cwd: workDir, timeoutSeconds: 300, shell: 'zsh', environmentKeys: ['PATH'],
+          environmentFingerprint: 'a'.repeat(64), planDigest: 'b'.repeat(64), behaviorCoverage: 'complete' as const } } : {}),
+        effectiveRules: rules, imPolicySnapshot }))
+    }
+    try {
+      for (const command of ['git status', 'git log']) {
+        const result = await run(command)
+        expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'im-shell-review-candidate' }))
+        expect(result.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'unknown' })
+        expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-shell-review', answerer: 'agent' })
+        expect(result.facts.reviewMaterials).toMatchObject({ kind: 'git-query', command, cwd: workDir, timeoutSeconds: 300,
+          shell: 'zsh', environmentKeys: ['PATH'], environmentFingerprint: 'a'.repeat(64), planDigest: 'b'.repeat(64), behaviorCoverage: 'complete', complete: true })
+        let shellPrompt = ''
+        const shellApproval = new AgentChannel({ lane, requestId: 'shell-review-materials', sessionId: 's', toolName: 'run_shell', policy: { kind: 'agent' },
+          invokeApproval: async (invocation) => { shellPrompt = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
+        expect(await shellApproval.request({ facts: result.facts, riskLevel: result.decision.type === 'require-confirm' ? result.decision.riskLevel : 'high', memoryTiers: [], timeoutMs: 5000 })).toMatchObject({ kind: 'approved' })
+        for (const material of [command, workDir, '300', 'zsh', 'PATH', 'b'.repeat(64), 'complete']) expect(shellPrompt).toContain(material)
+      }
+      for (const command of ['git push', 'git -c core.fsmonitor=helper status', 'git status && touch marker', 'git status | cat']) {
+        const result = await run(command)
+        expect(result.facts.signals).not.toContainEqual(expect.objectContaining({ kind: 'im-shell-review-candidate' }))
+        expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'remote-shell-disabled' })
+      }
+      expect((await run('git status', 'im-v1.6')).decision).toMatchObject({ type: 'deny', ruleId: 'remote-shell-disabled' })
+    } finally { await fs.rm(workDir, { recursive: true, force: true }) }
+  })
+
+  it.each(['wechat', 'feishu'] as const)('%s isolated v3 write candidate reviews only ordinary outside new/edit targets', async (lane) => {
+    const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-candidate-')))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const existing = path.join(outside, 'existing.txt')
+    await fs.writeFile(existing, 'before')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const created = await evaluateToolCallGate(base({ lane, workDir, toolName: 'write_file', toolInput: { path: path.join(outside, 'new.txt'), content: 'approved new content' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const edited = await evaluateToolCallGate(base({ lane, workDir, toolName: 'edit_file', toolInput: { path: existing, old_string: 'before', new_string: 'approved edit' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const unknownScope = await evaluateToolCallGate(base({ lane, workDir, toolName: 'write_file', toolInput: { path: path.join(outside, 'missing-parent', 'new.txt'), content: 'should stay denied' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const unsupported = await evaluateToolCallGate(base({ lane, workDir, toolName: 'write_file', toolInput: { path: outside, content: 'not a file' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const hardlink = path.join(outside, 'hardlink.txt')
+      await fs.link(existing, hardlink)
+      const hardlinkWrite = await evaluateToolCallGate(base({ lane, workDir, toolName: 'edit_file', toolInput: { path: hardlink, old_string: 'before', new_string: 'bad' }, effectiveRules, imPolicySnapshot: snapshot }))
+      let symlinkWrite: Awaited<ReturnType<typeof evaluateToolCallGate>> | undefined
+      if (canCreateSymlinks()) {
+        const symlink = path.join(outside, 'symlink.txt')
+        await fs.symlink(existing, symlink)
+        symlinkWrite = await evaluateToolCallGate(base({ lane, workDir, toolName: 'edit_file', toolInput: { path: symlink, old_string: 'before', new_string: 'bad' }, effectiveRules, imPolicySnapshot: snapshot }))
+      }
+      expect(created.facts.signals).toContainEqual({ kind: 'write-target-new' })
+      expect(created.facts.signals).toContainEqual({ kind: 'write-target-scope', scope: 'outside-workdir' })
+      expect(created.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-outside-write-new-review' })
+      expect(edited.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-outside-write-edit-review' })
+      expect(created.writePathFact).toMatchObject({ zone: 'outside-workdir', targetKind: 'missing' })
+      expect(edited.writePathFact).toMatchObject({ zone: 'outside-workdir', targetKind: 'file' })
+      expect(edited.writePathFact?.identity).toBeDefined()
+      expect(unknownScope.decision).toMatchObject({ type: 'deny', ruleId: 'write-parent-directory-missing' })
+      expect(unsupported.decision.type).toBe('deny')
+      expect(unsupported.facts.signals).toContainEqual({ kind: 'write-target-unsupported' })
+      expect(hardlinkWrite.writePathFact?.targetKind).toBe('hardlink')
+      expect(hardlinkWrite.decision.type).toBe('deny')
+      expect(hardlinkWrite.facts.signals).toContainEqual({ kind: 'write-target-unsupported' })
+      if (symlinkWrite) {
+        expect(symlinkWrite.writePathFact?.targetKind).toBe('symlink')
+        expect(symlinkWrite.decision.type).toBe('deny')
+        expect(symlinkWrite.facts.signals).toContainEqual({ kind: 'write-target-unsupported' })
+      }
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
   it('keeps a persisted user ask override as user confirmation instead of remapping it to Agent review', async () => {
     const db = openDb()
     commitImPolicySnapshot(getDbConnection(db), {
@@ -320,6 +436,59 @@ describe('IM standard policy override is final at the gate', () => {
 })
 
 describe('evaluateToolCallGate 诊断契约（R2）', () => {
+  it.each(['wechat', 'feishu'] as const)('%s isolated v3 read candidate reviews file and direct listing only', async (lane) => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-candidate-root-')))
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-candidate-outside-')))
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const file = path.join(outside, 'note.txt')
+      await fs.writeFile(file, 'needle')
+      const single = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: file }, effectiveRules, imPolicySnapshot: snapshot }))
+      const listing = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'list_directory', toolInput: { path: outside }, effectiveRules, imPolicySnapshot: snapshot }))
+      const recursive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'grep', toolInput: { path: outside, pattern: 'needle' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const sensitive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: '/etc/hosts' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const special = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: outside }, effectiveRules, imPolicySnapshot: snapshot }))
+      const unknown = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: path.join(outside, '**', '*.txt') }, effectiveRules, imPolicySnapshot: snapshot }))
+
+      expect(single.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-outside-read-review' })
+      expect(single.readPathFact).toMatchObject({ zone: 'outside-workdir', targetKind: 'file' })
+      expect(single.readExecutionPermit).toBeUndefined()
+      expect(listing.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-outside-list-review' })
+      expect(listing.readPathFact).toMatchObject({ zone: 'outside-workdir', targetKind: 'directory', scope: 'direct-entries-snapshot' })
+      expect(recursive.facts.signals).toContainEqual({ kind: 'read-target-scope', scope: 'subtree' })
+      expect(recursive.decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-read-deny' })
+      expect(recursive.readExecutionPermit).toBeUndefined()
+      expect(sensitive.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'path-system-dir-ask' })
+      expect(special.decision.type).toBe('deny')
+      expect(special.readExecutionPermit).toBeUndefined()
+      expect(unknown.decision.type).toBe('deny')
+      expect(unknown.readExecutionPermit).toBeUndefined()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('extracts a stable read scope token so an isolated candidate can exclude recursive directory grep', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-scope-token-')))
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-scope-outside-')))
+    try {
+      const file = path.join(outside, 'note.txt')
+      await fs.writeFile(file, 'needle')
+      const single = await evaluateToolCallGate(base({ lane: 'wechat', workDir: root, toolName: 'grep', toolInput: { path: file, pattern: 'needle' } }))
+      const listing = await evaluateToolCallGate(base({ lane: 'wechat', workDir: root, toolName: 'list_directory', toolInput: { path: outside } }))
+      const recursive = await evaluateToolCallGate(base({ lane: 'wechat', workDir: root, toolName: 'grep', toolInput: { path: outside, pattern: 'needle' } }))
+
+      expect(single.facts.signals).toContainEqual({ kind: 'read-target-scope', scope: 'single-target' })
+      expect(listing.facts.signals).toContainEqual({ kind: 'read-target-scope', scope: 'direct-entries' })
+      expect(recursive.facts.signals).toContainEqual({ kind: 'read-target-scope', scope: 'subtree' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
   it('policy dependency fingerprint ignores unmatched rules and changes for a newly matching deny rule', async () => {
     const unrelated = await evaluateToolCallGate(base({ effectiveRules: [
       ...DEFAULT_POLICY_RULES,
@@ -1461,6 +1630,23 @@ describe('evaluateToolCallGate', () => {
     expect(current.decision).toMatchObject({ type: 'require-confirm', ruleId: 'browser-navigate-ask-remote', answerer: 'agent', disposition: 'auto-eligible' })
   })
 
+  it.each(['wechat', 'feishu'] as const)('%s isolated v3 routes ordinary browser navigate/act to Agent and keeps dangerous act human', async (lane) => {
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const remoteContextValue = remoteContext({ source: lane })
+    const common = { lane, remoteContext: remoteContextValue, effectiveRules, imPolicySnapshot: snapshot,
+      browserConfig: { allowRemoteSessions: true, navigateRequiresConfirm: true, actRequiresConfirm: true } as never }
+    const navigate = await evaluateToolCallGate(base({ ...common, toolName: 'browser', toolInput: { action: 'navigate', mode: 'open', url: 'https://example.com' } }))
+    const lowRiskAct = await evaluateToolCallGate(base({ ...common, toolName: 'browser', toolInput: { action: 'act', instruction: 'search public documentation' } }))
+    const dangerousAct = await evaluateToolCallGate(base({ ...common, toolName: 'browser', toolInput: { action: 'act', instruction: 'submit payment' }, dangerAssessment: {
+      dangerous: true, source: 'keyword', userReason: 'payment', consequence: 'money'
+    } }))
+    expect(navigate.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'browser-navigate-ask-remote' })
+    expect(lowRiskAct.facts.signals).toContainEqual(expect.objectContaining({ kind: 'browser-action', sideEffect: 'read', completeness: 'complete' }))
+    expect(lowRiskAct.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'browser-act-ask-remote' })
+    expect(dangerousAct.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'im-browser-act-danger-human' })
+  })
+
   it('routes only a new ordinary in-workspace IM write through the standard review candidate', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/im-low-risk-create-'))
     const candidateDb = openDb()
@@ -2571,6 +2757,37 @@ describe('evaluateToolCallGate', () => {
     expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'remote-deny-lark-write-outbound' })
   })
 
+  it('T07：敏感出站人审与 remoteDenyOutbound 同时命中时 deny 优先且不产生候选许可', async () => {
+    const r = await evaluateToolCallGate(base({
+      lane: 'feishu',
+      toolName: 'run_lark_cli',
+      toolInput: { args: ['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other', '--text', 'password=secret-value'] },
+      remoteContext: remoteContext({ source: 'feishu', authOwner: 'ou_owner' }),
+      effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v3', pkg: 'standard', rules: DEFAULT_POLICY_RULES }),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard', remoteDenyOutbound: true } }
+    }))
+    expect(r.facts.signals).toContainEqual(expect.objectContaining({ kind: 'outbound-content', evidenceKinds: ['credential-like-pattern'] }))
+    expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'remote-deny-lark-write-outbound' })
+    expect(r.writeExecutionPermit).toBeUndefined()
+    expect(r.decision.type).not.toBe('require-confirm')
+  })
+
+  it('T07：敏感文件真人底线与显式 deny 同时命中时拒绝，候选规则不能降级 deny', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'im-review-deny-priority-')))
+    const target = path.join(root, 'credential.txt')
+    await fs.writeFile(target, 'sensitive')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    rules.push({ id: 'test-explicit-sensitive-deny', when: 'invocation', match: { lane: 'wechat', toolName: 'read_file', signals: ['path-target:sensitive-file'] }, action: 'deny', reason: 'explicit test deny' })
+    try {
+      const r = await evaluateToolCallGate(base({ lane: 'wechat', workDir: path.dirname(root), userDataDir: path.join(root, '.userdata'),
+        toolName: 'read_file', toolInput: { path: target }, shellConfig: { ...DEFAULT_SHELL_CONFIG, customSensitivePrefixes: [root] }, effectiveRules: rules, imPolicySnapshot: snapshot }))
+      expect(r.readPathFact?.zone).toBe('sensitive-file')
+      expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'test-explicit-sensitive-deny' })
+      expect(r.readExecutionPermit).toBeUndefined()
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
   it('IM standard compares Feishu message targets to the authenticated actor and splits policy outcomes', async () => {
     const run = async (args: string[]) => evaluateToolCallGate(base({
       toolName: 'run_lark_cli', toolInput: { args },
@@ -2744,6 +2961,158 @@ describe('evaluateToolCallGate', () => {
     } finally {
       await fs.rm(workDir, { recursive: true, force: true })
     }
+  })
+
+  it('T10：隔离 v3 为普通目录外微信附件提取完整审核事实并交 Agent', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-review-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'ordinary report content')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const remote = remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remote, workDir, userDataDir: path.join(parent, '.userdata'),
+        toolName: 'wechat_reply', toolInput: { text: 'report', filePath: attachment }, effectiveRules, imPolicySnapshot: snapshot,
+        factsProvider: () => [{ kind: 'wechat-media-content-assessment', factId: 'prepared-attachment',
+          contentDigest: createHash('sha256').update('ordinary report content').digest('hex'), extractorVersion: 'host-im-attachment-v1',
+          inspectionCoverage: 'complete', evidenceKinds: [] }] }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-target', boundary: 'outside-workdir', targetKind: 'file' }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-content', byteSize: 23, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-identity', dev: expect.any(Number), ino: expect.any(Number), size: 23 }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-content', displayPath: 'report.txt' }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-content-assessment', inspectionCoverage: 'complete', evidenceKinds: [] }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-review-binding', status: 'complete', recipient: 'owner', ownerId: 'owner', authorizationGeneration: 7 }))
+      expect(gate.facts.signals).toContainEqual({ kind: 'wechat-media-review-materials', status: 'complete' })
+      expect(gate.facts.reviewMaterials).toMatchObject({ kind: 'wechat-attachment', path: attachment, fileName: 'report.txt', recipient: 'owner', ownerId: 'owner', content: 'ordinary report content', complete: true })
+      let rendered = ''
+      const approval = new AgentChannel({ lane: 'wechat', requestId: 'attachment-materials', sessionId: 's', toolName: 'wechat_reply', policy: { kind: 'agent' },
+        invokeApproval: async (invocation) => { rendered = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
+      expect(await approval.request({ facts: gate.facts, riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : 'medium', memoryTiers: [], timeoutMs: 5000 })).toMatchObject({ kind: 'approved' })
+      expect(rendered).toContain(attachment)
+      expect(rendered).toContain('report.txt')
+      expect(rendered).toContain('owner')
+      expect(rendered).toContain('ordinary report content')
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-wechat-media-outside-review' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：自定义敏感前缀下的目录外附件不得进入普通 Agent 审核', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-sensitive-outside-review-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'restricted')
+    await fs.mkdir(workDir); await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    const content = 'ordinary information'
+    await fs.writeFile(attachment, content)
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 }),
+        workDir, userDataDir: path.join(parent, '.userdata'), shellConfig: { ...DEFAULT_SHELL_CONFIG, customSensitivePrefixes: [outside] },
+        toolName: 'wechat_reply', toolInput: { text: 'report', filePath: attachment }, effectiveRules: rules, imPolicySnapshot: snapshot,
+        factsProvider: () => [{ kind: 'wechat-media-content-assessment', factId: 'prepared-sensitive',
+          contentDigest: createHash('sha256').update(content).digest('hex'), extractorVersion: 'host-im-attachment-v1', inspectionCoverage: 'complete', evidenceKinds: [] }] }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-target', zone: 'sensitive-file' }))
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-sensitive-file-outside-deny' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：附件授权代次或接收者缺失时目录外文件不产生审核候选', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-incomplete-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'ordinary report content')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', authOwner: 'owner' }), workDir,
+        userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_reply', toolInput: { text: 'report', filePath: attachment }, effectiveRules, imPolicySnapshot: snapshot }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-review-binding', status: 'incomplete' }))
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-outside-reply-deny' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：执行器准备附件摘要与审核实际读取摘要不一致时拒绝候选', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-digest-mismatch-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'ordinary report content')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 }),
+        workDir, userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_reply', toolInput: { text: 'report', filePath: attachment }, effectiveRules,
+        imPolicySnapshot: snapshot, factsProvider: () => [{ kind: 'wechat-media-content-assessment', factId: 'prepared-attachment',
+          contentDigest: 'a'.repeat(64), extractorVersion: 'host-im-attachment-v1', inspectionCoverage: 'complete', evidenceKinds: [] }] }))
+      expect(gate.facts.signals).toContainEqual({ kind: 'wechat-media-review-materials', status: 'incomplete' })
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-outside-reply-deny' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：目录外附件命中凭证内容底线时必须真人确认', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-sensitive-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'password=secret-value')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 }),
+        workDir, userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_reply', toolInput: { text: 'report', filePath: attachment },
+        effectiveRules, imPolicySnapshot: snapshot }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-content-assessment', evidenceKinds: ['credential-like-pattern'] }))
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'outbound-sensitive-standard-human' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：标准模式外的附件即使事实完整也保持拒绝', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-nonstandard-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'ordinary report content')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'strict' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'strict', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 }),
+        workDir, userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_send', toolInput: { userId: 'recipient-1', text: 'report', filePath: attachment },
+        effectiveRules, imPolicySnapshot: snapshot, lanePackage: 'strict' }))
+      expect(gate.facts.signals).toContainEqual({ kind: 'wechat-media-review-materials', status: 'complete' })
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-outside-deny' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：目录外附件仍不能绕过微信主动发送拒绝', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-active-send-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'outside')
+    await fs.mkdir(workDir)
+    await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    await fs.writeFile(attachment, 'ordinary report content')
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 }),
+        workDir, userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_send',
+        toolInput: { userId: 'recipient-1', text: 'report', filePath: attachment }, effectiveRules, imPolicySnapshot: snapshot }))
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-outside-deny' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
   })
 
   it('微信附件敏感内容证据触发真人 outbound 规则且不保存附件正文', async () => {

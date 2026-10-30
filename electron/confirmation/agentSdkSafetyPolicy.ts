@@ -4,7 +4,7 @@ import type { CapabilityLookup } from '../../packages/agent-sdk/src/capability'
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
 import { isSafetyRecheckAllowed } from './safetyRecheck'
 import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs, type ToolCallGateResult } from './toolCallGate'
-import { finalizeReadConfirmation } from './readConfirmationFlow'
+import { finalizeAgentReadReview, finalizeReadConfirmation } from './readConfirmationFlow'
 import { buildWriteExecutionPermit } from './writeExecutionPermit'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 
@@ -91,11 +91,15 @@ export function createAgentSdkSafetyPolicy(input: {
         }
         const args = await input.resolveGateArgs(binding, call, binding.signal)
         if (binding.signal?.aborted) return deny(binding, 'POLICY_DENY')
-        if (call && (call.toolName === 'wechat_send' || call.toolName === 'wechat_reply' || call.toolName === 'run_lark_cli')) {
+        if (call && (call.toolName === 'wechat_send' || call.toolName === 'wechat_reply' || call.toolName === 'run_lark_cli' || call.toolName === 'run_shell')) {
           const prepared = input.getPreparedFacts?.(call)
           const projection = prepared && typeof prepared === 'object' ? (prepared as { outboundPolicyFacts?: unknown }).outboundPolicyFacts : undefined
           const facts = Array.isArray(projection) ? projection as import('../../src/shared/confirmation/types').FactSignal[] : []
-          args.factsProvider = () => facts
+          if (call.toolName === 'run_shell' && prepared && typeof prepared === 'object') {
+            const shellReview = (prepared as { preparedShellReview?: unknown }).preparedShellReview
+            if (shellReview && typeof shellReview === 'object') args.preparedShellReview = shellReview as ToolCallGateArgs['preparedShellReview']
+          }
+          if (projection !== undefined) args.factsProvider = () => facts
         }
         const resolvedInputHash = createHash('sha256').update(stableSerialize(args.toolInput)).digest('hex')
         if (resolvedInputHash !== binding.inputSnapshotHash) return deny(binding, 'STALE_AUTHORIZATION')
@@ -236,7 +240,20 @@ export function createAgentSdkStructuralPermitHandoff(input: {
     onConfirmed(binding, result, args, answerer = 'user') {
       const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }
       if (result.decision.type !== 'require-confirm') return
-      const readPermit = finalizeReadConfirmation({
+      const readPermit = answerer === 'agent'
+        ? finalizeAgentReadReview({
+          toolName: args.toolName,
+          toolInput: args.toolInput,
+          requestId: binding.requestId,
+          toolUseId: binding.toolCallId,
+          outcome: 'approved',
+          answerer,
+          readPathFact: result.readPathFact,
+          approvedTargets: result.readTargetMapping,
+          decisionId: result.policyDecision?.decisionId,
+          policyDependencyFingerprint: result.policyDecision?.dependencyFingerprint
+        })
+        : finalizeReadConfirmation({
         toolName: args.toolName,
         toolInput: args.toolInput,
         requestId: binding.requestId,
