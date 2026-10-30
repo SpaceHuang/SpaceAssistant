@@ -605,7 +605,7 @@ git merge main --no-edit        # 只在 worktree 内跑，不触碰 main 工作
   1. **库管理**：`docs-guide.md`（本文件；仅"整理 / 搬迁 / 归档文档"类任务必读）。
   2. **已归档**：`archive/reusable-work-method-scenario-blocks.md` + `…-sources.md`（2026-10-16 起**不作为正式指南**；内容与 git 历史保留供追溯，**不参与路由**）。
   3. **元方法的元方法 + 通用文档层（元指南）**：`document-writing-guide.md` + `…-sources.md` —— §1–§7 管"这类元方法本身怎么写"（正文与 sources 的归属判据、**通用性准入（§2 判据 C）**、动作导向写法、一条规则只在一处定义、加载层次与路由、迁移与修订记录）；**§8–§11 是通用文档层**：读者分层与人机分工、写作流程与门禁、人类决策层规则 R1–R8、通用自检——需求 / 技术方案 / 执行计划三类任务**必读**（2026-10-16 由技术方案篇迁入）。
-  4. **元方法（专题指南）**：`technical-plan-writing-guide.md`（技术方案：方案读者分层、规格层要求、修订纪律、反模式、方案自检）、`execution-plan-writing-guide.md`（执行计划）、`requirement-writing-guide.md`（需求）、`interaction-design-guide.md`（交互行为：确认与打断、设置项开关），各自配 `-sources.md`（按需）；后续"代码写作指南"按同一"正文 + `-sources`"成对产出。
+  4. **元方法（专题指南）**：`technical-plan-writing-guide.md`（技术方案：评审包 RP-1~6、方案读者分层、规格层要求、人层↔机层一致性 X-1~3、修订纪律、反模式、方案自检）、`execution-plan-writing-guide.md`（执行计划）、`requirement-writing-guide.md`（需求）、`interaction-design-guide.md`（交互行为：确认与打断、设置项开关），各自配 `-sources.md`（按需）；后续"代码写作指南"按同一"正文 + `-sources`"成对产出。
   - **分层惯例**：见 [`document-writing-guide.md`](document-writing-guide.md) §1 —— 正文只放动作；出处、口径、待办主题、维护规则、被精简的举证进 `-sources.md`。
 - **入口**：
   1. ✅ **`AGENTS.md` 已新增「## 文档规范」一节**指向本指南 —— 这是保证「后人找得到」的挂点；
