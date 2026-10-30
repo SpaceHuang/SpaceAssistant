@@ -300,16 +300,20 @@ describe('IM standard policy override is final at the gate', () => {
     const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
     const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
     const code = "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)"
-    const evaluate = (code: string, version = 'im-standard-v3') => {
+    const evaluate = (code: string, version = 'im-standard-v3', timeout?: number) => {
       const policySnapshot = { ...snapshot, policyBehaviorVersion: version }
       const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: version, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
-      return evaluateToolCallGate(base({ lane, toolName: 'run_script', toolInput: { language: 'python', code }, effectiveRules: rules, imPolicySnapshot: policySnapshot }))
+      return evaluateToolCallGate(base({ lane, toolName: 'run_script', toolInput: { language: 'python', code, ...(timeout !== undefined ? { timeout } : {}) }, effectiveRules: rules, imPolicySnapshot: policySnapshot }))
     }
     const candidate = await evaluate(code)
     expect(candidate.facts.signals).toContainEqual({ kind: 'im-script-network-review-candidate', status: 'complete', host: 'docs.example.com', method: 'GET', url: 'https://docs.example.com/' })
     expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-environment')).toMatchObject({ kind: 'script-execution-environment', status: 'complete', digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-settings')).toMatchObject({ kind: 'script-execution-settings', status: 'complete', interpreter: expect.any(String), digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', code, url: 'https://docs.example.com/', host: 'docs.example.com', method: 'GET', complete: true })
+    expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: os.tmpdir(), timeoutSeconds: toolsConfig().scriptTimeout,
+      interpreter: 'python', interpreterFallbackCandidates: ['python3'], interpreterResolution: 'first-version-probe-success' })
+    const explicitTimeout = await evaluate(code, 'im-standard-v3', 3600)
+    expect(explicitTimeout.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: os.tmpdir(), timeoutSeconds: 3600 })
     let scriptPrompt = ''
     const scriptApproval = new AgentChannel({ lane, requestId: 'script-review-materials', sessionId: 's', toolName: 'run_script', policy: { kind: 'agent' },
       invokeApproval: async (invocation) => { scriptPrompt = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
@@ -318,6 +322,8 @@ describe('IM standard policy override is final at the gate', () => {
     expect(scriptPrompt).toContain('https://docs.example.com/')
     expect(scriptPrompt).toContain('settingsDigest')
     expect(scriptPrompt).toContain('environmentDigest')
+    expect(scriptPrompt).toContain('cwd')
+    expect(scriptPrompt).toContain('timeoutSeconds')
     expect(candidate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-script-network-review', answerer: 'agent' })
     for (const code of [
       "import requests\nrequests.get(url, timeout=5, allow_redirects=False)",
