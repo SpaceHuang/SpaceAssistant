@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { runInTransaction } from '../database/transaction'
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
+import { isPolicyPackage } from '../../src/shared/policy/policyPackages'
 
 export interface CommitImPolicySnapshotInput {
   expectedRevision?: number
@@ -89,6 +90,25 @@ function validateAutomaticMigrationSuppression(snapshot: Record<string, unknown>
   }
   if (new Set(value).size !== value.length) throw new Error('Invalid IM automatic migration suppression field')
   return value as string[]
+}
+
+/** migration qualification: validate snapshot-local evidence shared by startup migration and explicit re-enable. */
+export function validateImStandardV3SnapshotQualification(snapshot: Record<string, unknown>): 'unresolved-restrictions' | 'invalid-package' | undefined {
+  const humanRequired = snapshot.humanRequired
+  const unresolvedDifferences = snapshot.unresolvedDifferences
+  if ((humanRequired !== undefined && typeof humanRequired !== 'boolean') || humanRequired === true ||
+    (unresolvedDifferences !== undefined && (!Array.isArray(unresolvedDifferences) || unresolvedDifferences.length > 0))) {
+    return 'unresolved-restrictions'
+  }
+  if (Object.hasOwn(snapshot, 'selectedPackage') && !isPolicyPackage(snapshot.selectedPackage)) return 'invalid-package'
+  if (Object.hasOwn(snapshot, 'legacySelectedPackages')) {
+    const value = snapshot.legacySelectedPackages
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return 'invalid-package'
+    const packages = value as Record<string, unknown>
+    if (Object.keys(packages).length !== 2 || !Object.hasOwn(packages, 'wechat') || !Object.hasOwn(packages, 'feishu') ||
+      Object.values(packages).some((pkg) => !isPolicyPackage(pkg))) return 'invalid-package'
+  }
+  return undefined
 }
 
 interface ImSuppressionMutation { operation: 'add' | 'remove'; behaviorVersion: string }
@@ -271,11 +291,8 @@ export interface ReenableImStandardV3Input {
 export function reenableImStandardV3(db: DatabaseSync, input: ReenableImStandardV3Input): CommitImPolicySnapshotResult {
   if (!isCompleteImStandardV3ReleaseGate(input.releaseGate)) throw new Error('IM standard v3 release gate is not satisfied')
   const current = readImPolicySnapshot(db, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
-  const unresolved = current.snapshot.unresolvedDifferences
-  if (current.snapshot.humanRequired === true || (current.snapshot.humanRequired !== undefined && typeof current.snapshot.humanRequired !== 'boolean') ||
-    (unresolved !== undefined && (!Array.isArray(unresolved) || unresolved.length > 0))) {
-    throw new Error('IM standard v3 re-enable blocked by unresolved snapshot qualification')
-  }
+  const qualificationFailure = validateImStandardV3SnapshotQualification(current.snapshot)
+  if (qualificationFailure) throw new Error(`IM standard v3 re-enable blocked by ${qualificationFailure}`)
   const suppressed = validateAutomaticMigrationSuppression(current.snapshot) ?? []
   if (!suppressed.includes(IM_STANDARD_V3_BEHAVIOR_VERSION)) throw new Error('IM standard v3 is not migration-suppressed')
   return commitImPolicySnapshotInternal(db, {

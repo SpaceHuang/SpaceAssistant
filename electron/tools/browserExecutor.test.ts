@@ -125,10 +125,23 @@ describe('browserExecutor', () => {
     mockAcquire.mockImplementationOnce(async () => { currentUrl = 'https://example.org/docs/b' })
     const registered = createBrowserRegisteredTool(browserExecutor)
     const ctx = baseCtx({ lane: 'feishu', remoteContext: { source: 'feishu' }, toolUserConfirmed: true,
-      approvedBrowserPageIdentity: createHash('sha256').update(currentUrl).digest('hex'),
-      browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, rateLimitEnabled: true, actSessionTrustEnabled: false } })
+      browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, rateLimitEnabled: true, actSessionTrustEnabled: false, actRequiresConfirm: false } })
+    const { createAgentSdkSafetyPolicy, createAgentSdkStructuralPermitHandoff } = await import('../confirmation/agentSdkSafetyPolicy')
+    const { evaluateToolCallGate } = await import('../confirmation/toolCallGate')
+    const { DEFAULT_POLICY_RULES } = await import('../../src/shared/policy/defaultRules')
+    const { resolveImPolicyRulesForVersion } = await import('../../src/shared/policy/policyPackages')
+    const { DEFAULT_TOOLS_CONFIG } = await import('../../src/shared/domainTypes')
+    const browserInput = { action: 'act', instruction: 'click the documentation search button' }
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard', remoteBrowserActRequiresConfirm: false } }
+    const args: any = { toolName: 'browser', toolInput: browserInput, sessionId: ctx.sessionId, requestId: 'page-wait', toolUseId: 'page-wait-call', lane: 'feishu', lanePackage: 'standard', remoteContext: { source: 'feishu' }, workDir: '/tmp', userDataDir: '/tmp/ud', toolsConfig: DEFAULT_TOOLS_CONFIG, effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v3', pkg: 'standard', rules: DEFAULT_POLICY_RULES }), decisionCache: { lookup: () => null, record() {}, clear: () => 0, clearAllSession: () => 0, expireDormant: () => 0 }, shellPrecheck: { touchTrustedCommand() {} }, browserConfig: ctx.browserConfig, imPolicySnapshot: snapshot, currentPageUrl: currentUrl, audit: { record() {} } }
+    const handoff = createAgentSdkStructuralPermitHandoff({ updateExecutionContext: (_call, update) => update(ctx as unknown as Record<string, unknown>) })
+    const binding = { requestId: 'page-wait', turnId: 'turn', invocationId: 'inv', toolCallId: 'page-wait-call', capabilityId: 'browser',
+      inputSnapshotHash: createHash('sha256').update(JSON.stringify(browserInput)).digest('hex'), planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'a', phase: 'initial-compat' as const,
+      capability: { state: 'known-authorized' as const, id: 'browser' } }
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, ...handoff, evaluateGate: evaluateToolCallGate })
+    expect(await policy.evaluate(binding)).toMatchObject({ kind: 'allow' })
     const signal = new AbortController().signal
-    const handle = await registered.begin({ action: 'act', instruction: 'click the documentation search button' },
+    const handle = await registered.begin(browserInput,
       { requestId: 'page-wait', toolUseId: 'page-wait-call', signal, executionContext: ctx as never })
     handle.awaitConfirmation(); handle.confirm(); handle.beginValidation()
     await handle.validatePrepared({ requestId: 'page-wait', toolUseId: 'page-wait-call', signal, runtimeContext: ctx as never })
@@ -137,6 +150,16 @@ describe('browserExecutor', () => {
     expect(result.success).toBe(false)
     expect(act).not.toHaveBeenCalled()
     handle.release()
+  })
+
+  it('fails closed when act execution has no page identity from the authorization handoff', async () => {
+    const act = vi.fn().mockResolvedValue({})
+    mockGetOrCreate.mockResolvedValueOnce({ stagehand: { act, context: { pages: () => [{ url: () => 'https://example.com/docs/a', title: async () => 'Docs' }] } } })
+    const result = await browserExecutor.execute({ action: 'act', instruction: 'click search' }, baseCtx({
+      browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, rateLimitEnabled: false }
+    }))
+    expect(result).toMatchObject({ success: false, error: 'BROWSER_APPROVED_PAGE_IDENTITY_MISSING' })
+    expect(act).not.toHaveBeenCalled()
   })
 
   it('rejects when browser disabled', async () => {
@@ -323,6 +346,7 @@ describe('browserExecutor', () => {
       requestId, turnId, registry, permits, admission, toolRevocations: revocations,
       createExecutionContext: (call) => ({
         ...baseCtx({ requestId, toolUseId: call.toolCallId, sessionId: 'browser-hosted-session' }),
+        ...(action === 'act' ? { approvedBrowserPageIdentity: createHash('sha256').update('https://example.com').digest('hex') } : {}),
         browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, navigateRequiresConfirm: false, actionTimeoutSec: 0.2 },
         appDatabase: {} as never,
         toolUserConfirmed: true
@@ -493,28 +517,28 @@ describe('browserExecutor', () => {
   })
 
   it('act captures actions count and navigated flag', async () => {
+    let currentUrl = 'https://example.com/a'
     const page = {
       goto: vi.fn(),
       reload: vi.fn(),
       goBack: vi.fn(),
       goForward: vi.fn(),
       screenshot: vi.fn(),
-      url: vi
-        .fn()
-        .mockReturnValueOnce('https://example.com/a')
-        .mockReturnValueOnce('https://example.com/b'),
+      url: () => currentUrl,
       title: vi.fn()
     }
     mockGetOrCreate.mockResolvedValueOnce({
       stagehand: {
-        act: vi.fn().mockResolvedValue({
-          success: true,
-          actions: [{ method: 'click', selector: '#btn', description: 'Submit' }]
+        act: vi.fn().mockImplementation(async () => {
+          currentUrl = 'https://example.com/b'
+          return { success: true, actions: [{ method: 'click', selector: '#btn', description: 'Submit' }] }
         }),
         context: { pages: () => [page] }
       }
     })
-    const r = await browserExecutor.execute({ action: 'act', instruction: 'click submit' }, baseCtx())
+    const r = await browserExecutor.execute({ action: 'act', instruction: 'click submit' }, baseCtx({
+      approvedBrowserPageIdentity: createHash('sha256').update(currentUrl).digest('hex')
+    }))
     expect(r.success).toBe(true)
     expect(r.data).toMatchObject({ acted: true, navigated: true, actions: 1 })
   })
