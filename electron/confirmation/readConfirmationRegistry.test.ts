@@ -2,6 +2,35 @@ import { describe, expect, it } from 'vitest'
 import { ReadConfirmationRegistry } from './readConfirmationRegistry'
 
 describe('ReadConfirmationRegistry', () => {
+  it('refreshes a live pending entry for fresh facts while preserving approval state', () => {
+    const r = new ReadConfirmationRegistry({ now: () => 10 })
+    const original = { requestId: 'r', toolUseId: 't', inputDigest: 'old-input', factIds: ['old-fact'], ruleId: 'old-rule', expiresAt: 100 }
+    expect(r.register(original)).toBe(true)
+    expect(r.refreshPending({ ...original, inputDigest: 'new-input', factIds: ['new-fact'], ruleId: 'new-rule' })).toBe(true)
+    expect(r.matchesPending({ ...original, inputDigest: 'new-input', factIds: ['new-fact'], ruleId: 'new-rule' })).toBe(true)
+    expect(r.matchesPending(original)).toBe(false)
+    expect(r.approve({ requestId: 'r', toolUseId: 't', inputDigest: 'new-input', approvedFactIds: ['new-fact'], ruleId: 'new-rule' })).toBe(true)
+    expect(r.refreshPending({ ...original, inputDigest: 'late-change', factIds: ['late-fact'], ruleId: 'late-rule' })).toBe(false)
+  })
+
+  it('keeps bounded state under a deterministic mixed registration operation sequence', () => {
+    const r = new ReadConfirmationRegistry({ now: () => 10 }, { maxEntries: 3, maxTombstones: 5 })
+    let seed = 0x2468ace
+    const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed }
+    for (let index = 0; index < 500; index++) {
+      const key = `k-${random() % 7}`
+      const entry = { requestId: 'sequence', toolUseId: key, inputDigest: `digest-${index}`, factIds: [`fact-${index}`], ruleId: `rule-${index}`, expiresAt: 100 }
+      switch (random() % 5) {
+        case 0: r.register(entry); break
+        case 1: r.refreshPending(entry); break
+        case 2: r.approve({ requestId: entry.requestId, toolUseId: key, inputDigest: entry.inputDigest, approvedFactIds: entry.factIds, ruleId: entry.ruleId }); break
+        case 3: r.settle(entry.requestId, key, 'rejected'); break
+        default: r.consume(entry.requestId, key)
+      }
+      expect(r.stats().activeEntries).toBeLessThanOrEqual(3)
+      expect(r.stats().tombstones).toBeLessThanOrEqual(5)
+    }
+  })
   it('只允许完全匹配且仍 pending 的原读取登记被 deferred 重判复用', () => {
     const r = new ReadConfirmationRegistry({ now: () => 10 })
     const entry = { requestId: 'deferred-request', toolUseId: 'deferred-call', inputDigest: 'input-a', factIds: ['fact-a'], ruleId: 'read-confirm', expiresAt: 100 }

@@ -4,7 +4,7 @@ import type { CapabilityLookup } from '../../packages/agent-sdk/src/capability'
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
 import { isSafetyRecheckAllowed } from './safetyRecheck'
 import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs, type ToolCallGateResult } from './toolCallGate'
-import { finalizeAgentReadReview, finalizeReadConfirmation } from './readConfirmationFlow'
+import { finalizeAgentReadReview, finalizeReadConfirmation, registerReadReapproval } from './readConfirmationFlow'
 import { buildWriteExecutionPermit } from './writeExecutionPermit'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 
@@ -20,10 +20,12 @@ export function createAgentSdkSafetyPolicy(input: {
   resolveToolName?(providerToolName: string): string
   /** Attach structural read/write permits from the initial host gate to the call-private execution context. */
   onInitialGateResult?(binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs): void | Promise<void>
+  /** Refresh read authorization state before a changed-scope decision is shown for human approval. */
+  onReapprovalRequired?(binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs): boolean | Promise<boolean>
   /** Finalize user-approved structural permits after the existing confirmation channel approves. */
-  onConfirmed?(binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs, answerer: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey): void
+  onConfirmed?(binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs, answerer: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey): boolean | void
 }): SafetyPolicyPort & { markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer?: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey): void } {
-  const initial = new Map<string, { binding: PermitBinding; result: ToolCallGateResult; args: ToolCallGateArgs; confirmed: boolean; confirmedAnswerer?: 'user' | 'agent' }>()
+  const initial = new Map<string, { binding: PermitBinding; result: ToolCallGateResult; args: ToolCallGateArgs; confirmed: boolean; confirmationFailed?: boolean; confirmedAnswerer?: 'user' | 'agent' }>()
   const callKey = (binding: PermitBinding) => JSON.stringify([binding.invocationId, binding.toolCallId])
   const deny = (binding: PermitBinding, reasonCode: SafetyDenyReason) => {
     if (binding.phase === 'recheck') initial.delete(callKey(binding))
@@ -68,9 +70,10 @@ export function createAgentSdkSafetyPolicy(input: {
     markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer: 'user' | 'agent' = 'user', memory?: import('../../src/shared/confirmation/types').CacheKey) {
       const decision = initial.get(JSON.stringify([call.invocationId, call.toolCallId]))
       if (decision) {
-        input.onConfirmed?.(decision.binding, decision.result, decision.args, answerer, memory)
-        decision.confirmed = true
-        decision.confirmedAnswerer = answerer
+        const completed = input.onConfirmed?.(decision.binding, decision.result, decision.args, answerer, memory) !== false
+        decision.confirmed = completed
+        decision.confirmationFailed = !completed
+        if (completed) decision.confirmedAnswerer = answerer
       }
     },
     async evaluate(binding) {
@@ -78,6 +81,7 @@ export function createAgentSdkSafetyPolicy(input: {
       const previous = binding.phase === 'recheck' ? initial.get(key) : undefined
       if (binding.phase === 'recheck') {
         if (!previous && !binding.policyChanged) return { kind: 'deny', reasonCode: 'MISSING_MATERIAL' }
+        if (previous?.confirmationFailed) return { kind: 'deny', reasonCode: 'MISSING_MATERIAL' }
         // Claim the prior decision before asynchronous work; a policyChanged recheck
         // without a prior baseline instead performs a completely fresh gate pass.
         if (previous) initial.delete(key)
@@ -181,6 +185,11 @@ export function createAgentSdkSafetyPolicy(input: {
               const humanResult = decision.answerer === 'user' && decision.disposition === 'human-required'
                 ? result
                 : { ...result, decision: { ...decision, answerer: 'user' as const, disposition: 'human-required' as const } }
+              const readNeedsRefresh = humanResult.readPathFact?.zone === 'outside-workdir' && ['read_file', 'grep', 'list_directory'].includes(gateArgs.toolName)
+              if (readNeedsRefresh && !input.onReapprovalRequired) return deny(binding, 'MISSING_MATERIAL')
+              if (await input.onReapprovalRequired?.(structuredClone(binding), structuredClone(humanResult), gateArgs) === false) {
+                return deny(binding, 'MISSING_MATERIAL')
+              }
               initial.set(key, { binding: structuredClone(binding), result: structuredClone(humanResult), args: gateArgs, confirmed: false })
               return ask(binding, humanResult, gateArgs)
             }
@@ -210,7 +219,7 @@ export function createAgentSdkSafetyPolicy(input: {
 export function createAgentSdkStructuralPermitHandoff(input: {
   updateExecutionContext(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }, update: (context: Record<string, unknown>) => void): void
   readConfirmationRegistry?: import('./readConfirmationRegistry').ReadConfirmationRegistry
-}): Pick<NonNullable<Parameters<typeof createAgentSdkSafetyPolicy>[0]>, 'onInitialGateResult' | 'onConfirmed'> {
+}): Pick<NonNullable<Parameters<typeof createAgentSdkSafetyPolicy>[0]>, 'onInitialGateResult' | 'onReapprovalRequired' | 'onConfirmed'> {
   return {
     onInitialGateResult(binding, result, args) {
       if (result.readExecutionPermit) {
@@ -237,9 +246,26 @@ export function createAgentSdkStructuralPermitHandoff(input: {
         })
       }
     },
+    onReapprovalRequired(binding, result, args) {
+      if (result.readPathFact?.zone !== 'outside-workdir') return true
+      let registered: boolean
+      try { registered = registerReadReapproval({
+        toolName: args.toolName,
+        toolInput: args.toolInput,
+        requestId: binding.requestId,
+        toolUseId: binding.toolCallId,
+        readPathFact: result.readPathFact,
+        approvedTargets: result.readTargetMapping,
+        timeoutMs: result.decision.type === 'require-confirm' && typeof result.decision.timeoutMs === 'number' ? result.decision.timeoutMs : undefined
+      }, input.readConfirmationRegistry) } catch { return false }
+      if (!registered) return false
+      const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }
+      input.updateExecutionContext(call, (context) => { delete context.readExecutionPermit })
+      return true
+    },
     onConfirmed(binding, result, args, answerer = 'user') {
       const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }
-      if (result.decision.type !== 'require-confirm') return
+      if (result.decision.type !== 'require-confirm') return true
       const readPermit = answerer === 'agent'
         ? finalizeAgentReadReview({
           toolName: args.toolName,
@@ -264,6 +290,8 @@ export function createAgentSdkStructuralPermitHandoff(input: {
         feishuMediaFact: result.feishuMediaFact,
         approvedTargets: result.readTargetMapping
       }, input.readConfirmationRegistry)
+      const readNeedsPermit = result.readPathFact?.zone === 'outside-workdir' && ['read_file', 'grep', 'list_directory'].includes(args.toolName)
+      if (readNeedsPermit && !readPermit) return false
       if (readPermit) input.updateExecutionContext(call, (context) => { context.readExecutionPermit = readPermit })
       if (result.writePathFact) {
         const writePermit = buildWriteExecutionPermit({
@@ -281,6 +309,7 @@ export function createAgentSdkStructuralPermitHandoff(input: {
         })
         input.updateExecutionContext(call, (context) => { context.writeExecutionPermit = writePermit })
       }
+      return true
     }
   }
 }

@@ -913,7 +913,9 @@ export const editFileExecutor: ToolExecutor = {
         try {
           cur = await fs.readFile(abs, { encoding: 'utf8', signal: op })
           expectedIdentity = await captureFileIdentity(abs)
-          if (ctx.lane === 'desktop' && !capturedIdentityMatchesPermit(ctx, expectedIdentity)) {
+          // final-check: every permit binds the approved file identity, including remote permits.
+          // Never adopt a replacement object observed after approval as the new write baseline.
+          if (ctx.writeExecutionPermit && !capturedIdentityMatchesPermit(ctx, expectedIdentity)) {
             return { ...writePermitFailure(new Error('write-target-identity-mismatch')), duration: Date.now() - started }
           }
         } catch (e) {
@@ -1074,7 +1076,8 @@ export const writeFileExecutor: ToolExecutor = {
         try {
           cur = await fs.readFile(abs, { encoding: 'utf8', signal: op })
           expectedIdentity = await captureFileIdentity(abs)
-          if (ctx.lane === 'desktop' && !capturedIdentityMatchesPermit(ctx, expectedIdentity)) {
+          // final-check: keep write_file on the same permit-to-object identity contract as edit_file.
+          if (ctx.writeExecutionPermit && !capturedIdentityMatchesPermit(ctx, expectedIdentity)) {
             return { ...writePermitFailure(new Error('write-target-identity-mismatch')), duration: Date.now() - started }
           }
         } catch (e) {
