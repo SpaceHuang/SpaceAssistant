@@ -163,6 +163,7 @@ export type FactSignal =
   | { kind: 'script-network'; patterns: string[] }
   /** Complete, static HTTP target facts for the isolated standard IM script review candidate. */
   | { kind: 'im-script-network-review-candidate'; status: 'complete'; host: string; method: 'GET' | 'HEAD'; url: string }
+  | { kind: 'approval-review-materials'; status: 'complete' | 'incomplete' }
   | { kind: 'script-execution-environment'; status: 'complete'; digest: string }
   | { kind: 'script-execution-settings'; status: 'complete'; digest: string; interpreter: string }
   /** 未通过 isScriptCertifiedRemoteSafe 认证时产出。 */
@@ -237,12 +238,20 @@ export type FactSignal =
   // reserved: 沙箱迭代启用
   | { kind: 'sandbox-escape'; blockedReason: string }
 
+export type ApprovalReviewMaterials =
+  | { kind: 'outside-file-write'; operation: 'new' | 'edit'; target: string; content?: string; oldText?: string; replacementText?: string; complete: boolean }
+  | { kind: 'git-query'; command: string; cwd: string; timeoutSeconds: number; shell: string; environmentKeys: string[]; environmentFingerprint: string; planDigest: string; behaviorCoverage: 'complete' | 'partial'; complete: boolean }
+  | { kind: 'wechat-attachment'; path: string; fileName: string; recipient?: string; ownerId?: string; content: string; contentDigest: string; inspectionCoverage: 'complete' | 'partial'; evidenceKinds: readonly string[]; complete: boolean }
+  | { kind: 'static-network-script'; code: string; url: string; host: string; method: 'GET' | 'HEAD'; interpreter: string; settingsDigest: string; environmentDigest: string; complete: boolean }
+
 export interface ContentFacts {
   toolName: string
   actionClass: ActionClass
   baseRiskLevel: RiskLevel
   signals: FactSignal[]
   summary: ConfirmSummary
+  /** Exact bounded materials shown to the approval model for reviewable IM candidates. */
+  reviewMaterials?: ApprovalReviewMaterials
   /** P5：事实来源标注（信号 kind → 来源半区：工具契约 / 宿主环境）；审计可回答「结论基于谁提供的事实」。 */
   factSources?: Record<string, 'tool-contract' | 'host-environment'>
   /** P5：宿主是否声明了 factsProvider——「声明为空」与「忘了声明」必须可区分（基线 §5.2 硬要求）。 */
@@ -369,6 +378,8 @@ export interface ApprovalCluePack {
   riskLevel: RiskLevel
   /** ConfirmSummary 纯文本摘要。 */
   summary: string
+  /** Exact bounded operation materials, rendered as untrusted evidence for the reviewer. */
+  reviewMaterials?: ApprovalReviewMaterials
   /** 事实信号种类清单（不落原始输入全文）。 */
   signals: string[]
   targetPath?: string

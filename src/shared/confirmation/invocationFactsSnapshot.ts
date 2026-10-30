@@ -84,7 +84,12 @@ export async function createInvocationFactsSnapshot(input: CreateInvocationFacts
     throw new Error('evidence references are invalid')
   }
   const envelopeJson = stableJson(input.envelope)
-  const factsJson = stableJson(input.facts)
+  // Approval review materials are delivered only to the live reviewer prompt. Snapshots
+  // bind their digest and completeness signal, never their potentially sensitive body.
+  const { reviewMaterials, ...snapshotFacts } = input.facts
+  const factsJson = stableJson({ ...snapshotFacts, ...(reviewMaterials ? {
+    reviewMaterialsDigest: await sha256(stableJson(reviewMaterials))
+  } : {}) })
   const facts = JSON.parse(factsJson) as ContentFacts
   const envelopeHash = await sha256(envelopeJson)
   const factsHash = await sha256(factsJson)

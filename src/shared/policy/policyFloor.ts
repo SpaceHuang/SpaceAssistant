@@ -60,8 +60,9 @@ import { DEFAULT_POLICY_RULES } from './defaultRules'
 export const DEFAULT_FLOOR: readonly PolicyRule[] = DEFAULT_POLICY_RULES
 
 /** Frozen floor for an isolated candidate behavior; production loaders do not activate this version yet. */
-export function resolveImPolicyFloorForVersion(version: unknown): readonly PolicyRule[] {
+export function resolveImPolicyFloorForVersion(version: unknown, pkg: 'standard' | 'strict' | 'loose' | 'custom' = 'standard'): readonly PolicyRule[] {
   if (version === 'im-standard-v3') {
+    if (pkg !== 'standard') return DEFAULT_FLOOR
     const unverifiedTargetFloors: PolicyRule[] = (['missing', 'symlink', 'special', 'unknown'] as const).map((targetKind) => ({
       id: `remote-outside-read-${targetKind}-deny`, when: 'invocation',
       match: { lane: ['wechat', 'feishu'], toolName: ['read_file', 'grep', 'list_directory'], actionClass: 'read',

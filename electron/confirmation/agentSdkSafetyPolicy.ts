@@ -91,11 +91,15 @@ export function createAgentSdkSafetyPolicy(input: {
         }
         const args = await input.resolveGateArgs(binding, call, binding.signal)
         if (binding.signal?.aborted) return deny(binding, 'POLICY_DENY')
-        if (call && (call.toolName === 'wechat_send' || call.toolName === 'wechat_reply' || call.toolName === 'run_lark_cli')) {
+        if (call && (call.toolName === 'wechat_send' || call.toolName === 'wechat_reply' || call.toolName === 'run_lark_cli' || call.toolName === 'run_shell')) {
           const prepared = input.getPreparedFacts?.(call)
           const projection = prepared && typeof prepared === 'object' ? (prepared as { outboundPolicyFacts?: unknown }).outboundPolicyFacts : undefined
           const facts = Array.isArray(projection) ? projection as import('../../src/shared/confirmation/types').FactSignal[] : []
-          args.factsProvider = () => facts
+          if (call.toolName === 'run_shell' && prepared && typeof prepared === 'object') {
+            const shellReview = (prepared as { preparedShellReview?: unknown }).preparedShellReview
+            if (shellReview && typeof shellReview === 'object') args.preparedShellReview = shellReview as ToolCallGateArgs['preparedShellReview']
+          }
+          if (projection !== undefined) args.factsProvider = () => facts
         }
         const resolvedInputHash = createHash('sha256').update(stableSerialize(args.toolInput)).digest('hex')
         if (resolvedInputHash !== binding.inputSnapshotHash) return deny(binding, 'STALE_AUTHORIZATION')

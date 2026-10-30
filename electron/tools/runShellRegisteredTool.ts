@@ -86,6 +86,19 @@ export const runShellRegisteredTool: RegisteredTool = definePlannedTool<
     }
     return result
   },
-  facts: (prepared) => prepared.facts,
+  facts: (prepared) => ({
+    shellFacts: prepared.facts,
+    preparedShellReview: {
+      command: prepared.command,
+      cwd: prepared.cwd,
+      timeoutSeconds: prepared.timeoutMs / 1000,
+      shell: prepared.spawnSpec.shellId,
+      environmentKeys: Object.keys(prepared.environment).sort(),
+      environmentFingerprint: prepared.environmentFingerprint,
+      planDigest: prepared.planDigest,
+      behaviorCoverage: prepared.facts && typeof prepared.facts === 'object' && 'analysisCompleteness' in prepared.facts &&
+        (prepared.facts as { analysisCompleteness?: unknown }).analysisCompleteness === 'complete' ? 'complete' : 'partial'
+    }
+  }),
   display: (prepared) => ({ command: prepared.command, cwd: prepared.cwd, shell: prepared.spawnSpec.shellId })
 })

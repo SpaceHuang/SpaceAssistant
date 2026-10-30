@@ -191,6 +191,7 @@ export class AgentChannel implements ConfirmationChannel {
       actionClass: req.facts.actionClass,
       riskLevel: req.riskLevel,
       summary: req.facts.summary.text,
+      ...(req.facts.reviewMaterials ? { reviewMaterials: structuredClone(req.facts.reviewMaterials) } : {}),
       signals: req.facts.signals.map((s) => s.kind),
       ...(req.factsProvenance ? { factsProvenance: { ...req.factsProvenance } } : {}),
       ...deriveClueExtras(req.facts),
