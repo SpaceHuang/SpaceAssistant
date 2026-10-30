@@ -75,12 +75,7 @@ export async function collectModelAttempt(
   // 上时其 return() 永不 resolve 也不转发——取消必须直接作用于底层 iterator。
   // provider 流抛错时先观测（onStreamError）再上抛，保持原 generator 包装的语义。
   const consumeSource = async (): Promise<IteratorResult<StreamChunk>> => {
-    try {
-      return await sourceIterator.next()
-    } catch (error) {
-      await observer?.onStreamError?.({ error, ...(usage ? { usage } : {}) })
-      throw error
-    }
+    return await sourceIterator.next()
   }
   // 每 chunk 到位即重置计时：超过 idleTimeoutMs 无任何新字节 → 判定 provider 流挂起（无整体超时，长回复不受限）
   const nextWithIdleGuard = (): Promise<IteratorResult<StreamChunk>> => {
@@ -128,14 +123,11 @@ export async function collectModelAttempt(
       }
       if (chunk.type !== 'finish') await observer?.onChunk?.(chunk)
     }
+    if (!finish) throw new InvalidModelStreamError('stream ended without finish')
   } catch (error) {
-    // 空闲超时是本层注入的护栏错误（provider 流本身未抛错）——补观测后上抛，恢复层据此重试
-    if (error instanceof ModelStreamIdleTimeoutError) {
-      await observer?.onStreamError?.({ error, ...(usage ? { usage } : {}) })
-    }
+    await observer?.onStreamError?.({ error, ...(usage ? { usage } : {}) })
     throw error
   }
-  if (!finish) throw new InvalidModelStreamError('stream ended without finish')
   if (finish.reason === 'cancelled') return { chunks: accepted, ...(usage ? { usage } : {}), finish: finish as CancelledFinish }
   if (!usage) throw new InvalidModelStreamError('stream ended without usage')
   return { chunks: accepted, usage, finish: finish as NonCancelledFinish }

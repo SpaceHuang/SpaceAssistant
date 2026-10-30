@@ -556,8 +556,9 @@ export function getProjectedChatMessagePage(
   const conn = getDbConnection(db)
   const pageIds = page.entries.map(({ message }) => message.id)
   const retryRows = conn.prepare(`SELECT t.assistant_message_id AS assistantMessageId,e.kind,e.payload_json AS payloadJson,e.created_at AS createdAt
-    FROM turns t JOIN agent_history_events e ON e.turn_id=t.turn_id
+    FROM turns t CROSS JOIN agent_history_events e INDEXED BY idx_agent_history_events_turn
     WHERE t.session_id=? AND t.assistant_message_id IN (${pageIds.map(() => '?').join(',')})
+      AND e.invocation_id=t.request_id AND e.turn_id=t.turn_id
       AND e.kind IN ('provider-retry-scheduled','provider-attempt-result','invocation-interrupted','invocation-failed')
     ORDER BY e.created_at,e.sequence`).all(sessionId, ...pageIds) as RetryHistoryRow[]
   const retryOperations = reconstructProviderRetryOperations(retryRows)

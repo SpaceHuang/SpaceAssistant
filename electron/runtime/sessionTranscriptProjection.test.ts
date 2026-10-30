@@ -8,6 +8,7 @@ import { appendMessage, createPersistedTurn, createSession, enqueueQueuedUserMes
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { getDbConnection, reopenDatabaseConnection } from '../database/sqliteStore'
+import { runInTransaction } from '../database/transaction'
 import { advanceProcessGeneration } from '../database/processGeneration'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
@@ -67,6 +68,28 @@ describe('provider retry card history reconstruction', () => {
 
     expect(getProjectedChatMessagePage(db, session.id, null, 20).entries.find(({ message }) => message.id === 'retry-assistant')?.message.systemOperations)
       .toEqual([expect.objectContaining({ id: 'retry-invocation:round:1:provider-retry', kind: 'provider-retry', status: 'cancelled', reason: 'PROVIDER_RETRY_INTERRUPTED', attemptInRequest: 2, plannedWaitMs: 2500 })])
+    db.close()
+  })
+
+  it('looks up retry events through the invocation and turn index amid unrelated history', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'retry query plan', model: 'test' })
+    appendMessage(db, { id: 'query-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'query-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'failed' })
+    createPersistedTurn(db, { turnId: 'query-turn', requestId: 'query-invocation', sessionId: session.id, userMessageId: 'query-user', assistantMessageId: 'query-assistant', state: 'terminal', outcome: 'failed' })
+    const conn = getDbConnection(db)
+    const insert = conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at,commit_order,session_id,session_seq) VALUES(?,?,?,?,?,1,'provider-attempt-result','{}',1,?,'other-session',?)`)
+    runInTransaction(conn, () => {
+      for (let i = 1; i <= 20_000; i += 1) insert.run(`other-inv-${i}`, 1, `other-event-${i}`, `other-key-${i}`, `other-turn-${i}`, i, i)
+    })
+    conn.exec('ANALYZE')
+    const plan = conn.prepare(`EXPLAIN QUERY PLAN SELECT t.assistant_message_id AS assistantMessageId,e.kind,e.payload_json AS payloadJson,e.created_at AS createdAt
+      FROM turns t CROSS JOIN agent_history_events e INDEXED BY idx_agent_history_events_turn
+      WHERE t.session_id=? AND t.assistant_message_id IN (?)
+        AND e.invocation_id=t.request_id AND e.turn_id=t.turn_id
+        AND e.kind IN ('provider-retry-scheduled','provider-attempt-result','invocation-interrupted','invocation-failed')
+      ORDER BY e.created_at,e.sequence`).all(session.id, 'query-assistant') as Array<{ detail: string }>
+    expect(plan.some(({ detail }) => /SCAN e\b/.test(detail))).toBe(false)
     db.close()
   })
 })

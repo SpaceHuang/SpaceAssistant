@@ -1106,8 +1106,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     }
     // The host has already streamed and committed this response; reduce its canonical message without re-emitting provisional chunks.
     let collected: CollectedModelStream
-    let recoveredAttempt = false
-    let retryCameFromCompleteResponse = false
     let providerAttempt = 1
     let providerAttemptBudget = 2
     const recoveryCounts = { transient: 0, idleTimeout: 0, overflow: 0, effort: 0 }
@@ -1246,7 +1244,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         await recordNotDispatched('RETRY_LIMIT_EXCEEDED', recovery.retryAt)
         throw new ModelAttemptRecoveryRejectedError('RETRY_LIMIT_EXCEEDED', { ...(recovery.retryAt !== undefined ? { retryAt: recovery.retryAt } : {}) })
       }
-      retryCameFromCompleteResponse = Boolean(details.response)
       const plannedWaitMs = recovery.plannedWaitMs ?? recovery.retryAfterMs ?? 0
       if (recoveryKind === 'transient' && (waitBudgetRemainingMs <= 0 || plannedWaitMs > waitBudgetRemainingMs)) {
         await recordNotDispatched('PROVIDER_RETRY_BUDGET_EXHAUSTED', recovery.retryAt)
@@ -1379,7 +1376,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       messages.splice(0, messages.length, ...recoveredMessages)
       requestTemplate = { ...requestTemplate, ...(recovery.requestPatch ?? {}) }
       baseRequestTemplate = { ...baseRequestTemplate, ...(recovery.requestPatch ?? {}) }
-        recoveredAttempt = true
         providerAttempt += 1
         providerAttemptDispatched = false
         attemptSource = { kind: 'recovery', recoveryKind }
@@ -1458,7 +1454,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         await input.beforeModelRequest?.()
         throwIfAborted(input.request.signal)
         providerAttemptDispatched = true
-        collected = await collectProviderAttempt(provider.stream(call), modelTurns, recoveredAttempt ? 2 : 1)
+        collected = await collectProviderAttempt(provider.stream(call), modelTurns, providerAttempt)
       } catch (error) {
         if (await settleAbortedProviderAttempt()) throwIfAborted(input.request.signal)
         const retry = await recover({ error })
@@ -1473,7 +1469,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         throw new AgentTurnCancelledError()
       }
       if (!collected.usage) throw new InvalidModelStreamError('non-cancelled provider attempt completed without usage')
-      while (input.recoverProviderAttempt && (!recoveredAttempt || retryCameFromCompleteResponse)) {
+      while (input.recoverProviderAttempt) {
         const collectedUsage = collected.usage
         if (!collectedUsage) throw new InvalidModelStreamError('non-cancelled provider attempt completed without usage')
         const hasOutputContent = collected.chunks.some((chunk) => chunk.type === 'text-delta' || chunk.type === 'thinking-delta' || chunk.type === 'thinking-signature' || chunk.type === 'tool-call')
@@ -2564,7 +2560,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
 
   async function collectProviderAttempt(stream: AsyncIterable<StreamChunk>, modelTurn: number, attempt: number): Promise<CollectedModelStream> {
     return collectModelAttempt(stream, {
-      onChunk: (chunk) => observe(input.observer, 'model-chunk', () => input.observer?.onModelChunk?.(chunk)),
+      onChunk: (chunk) => {
+        if (chunk.type === 'usage') observedAttemptUsages.set(attempt, chunk)
+        return observe(input.observer, 'model-chunk', () => input.observer?.onModelChunk?.(chunk))
+      },
       onStreamError: async ({ usage }) => {
         if (!usage) return
         observedAttemptUsages.set(attempt, usage)
