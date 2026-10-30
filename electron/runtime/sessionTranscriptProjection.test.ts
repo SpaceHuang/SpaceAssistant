@@ -71,6 +71,39 @@ describe('provider retry card history reconstruction', () => {
     db.close()
   })
 
+  it('restores retry cards for hosted and request-scoped invocations without crossing sessions', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'retry identity target', model: 'test' })
+    const otherSession = createSession(db, { name: 'retry identity other', model: 'test' })
+    const createTurn = (prefix: string, ownerSessionId: string, turnId: string, requestId: string) => {
+      appendMessage(db, { id: `${prefix}-user`, sessionId: ownerSessionId, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
+      appendMessage(db, { id: `${prefix}-assistant`, sessionId: ownerSessionId, role: 'assistant', content: '', timestamp: 2, status: 'failed' })
+      createPersistedTurn(db, { turnId, requestId, sessionId: ownerSessionId, userMessageId: `${prefix}-user`, assistantMessageId: `${prefix}-assistant`, state: 'terminal', outcome: 'failed' })
+    }
+    createTurn('hosted', session.id, 'hosted-turn', 'transport-request')
+    createTurn('legacy', session.id, 'legacy-turn', 'legacy-request')
+    createTurn('isolated', otherSession.id, 'isolated-turn', 'isolated-request')
+    const conn = getDbConnection(db)
+    const appendRetryHistory = async (ownerSessionId: string, invocationId: string, turnId: string) => {
+      const history = new SqliteAgentHistory(conn, 1, () => 50, ownerSessionId)
+      await history.appendBatch([
+        { invocationId, turnId, sequence: 1, schemaVersion: 1, eventId: `${invocationId}-scheduled`, idempotencyKey: `${invocationId}-scheduled`, kind: 'provider-retry-scheduled', payload: { requestId: `${invocationId}:round:1`, attemptInRequest: 2, maxAttempts: 5, plannedWaitMs: 100 } },
+        { invocationId, turnId, sequence: 2, schemaVersion: 1, eventId: `${invocationId}-failed`, idempotencyKey: `${invocationId}-failed`, kind: 'invocation-failed', payload: { status: 'failed' } }
+      ], 0)
+    }
+    await appendRetryHistory(session.id, 'hosted-turn', 'hosted-turn')
+    await appendRetryHistory(session.id, 'legacy-request', 'legacy-turn')
+    await appendRetryHistory(otherSession.id, 'isolated-turn', 'isolated-turn')
+
+    const page = getProjectedChatMessagePage(db, session.id, null, 20)
+    expect(page.entries.find(({ message }) => message.id === 'hosted-assistant')?.message.systemOperations)
+      .toEqual([expect.objectContaining({ id: 'hosted-turn:round:1:provider-retry', kind: 'provider-retry', status: 'failed' })])
+    expect(page.entries.find(({ message }) => message.id === 'legacy-assistant')?.message.systemOperations)
+      .toEqual([expect.objectContaining({ id: 'legacy-request:round:1:provider-retry', kind: 'provider-retry', status: 'failed' })])
+    expect(page.entries.some(({ message }) => message.id === 'isolated-assistant')).toBe(false)
+    db.close()
+  })
+
   it('looks up retry events through the invocation and turn index amid unrelated history', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'retry query plan', model: 'test' })
@@ -86,7 +119,7 @@ describe('provider retry card history reconstruction', () => {
     const plan = conn.prepare(`EXPLAIN QUERY PLAN SELECT t.assistant_message_id AS assistantMessageId,e.kind,e.payload_json AS payloadJson,e.created_at AS createdAt
       FROM turns t CROSS JOIN agent_history_events e INDEXED BY idx_agent_history_events_turn
       WHERE t.session_id=? AND t.assistant_message_id IN (?)
-        AND e.invocation_id=t.request_id AND e.turn_id=t.turn_id
+        AND e.invocation_id IN (t.turn_id,t.request_id) AND e.turn_id=t.turn_id
         AND e.kind IN ('provider-retry-scheduled','provider-attempt-result','invocation-interrupted','invocation-failed')
       ORDER BY e.created_at,e.sequence`).all(session.id, 'query-assistant') as Array<{ detail: string }>
     expect(plan.some(({ detail }) => /SCAN e\b/.test(detail))).toBe(false)
