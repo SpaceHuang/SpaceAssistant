@@ -10,6 +10,7 @@ import { createPermitBoundToolExecutionPort } from '../src/toolExecutionPort'
 import { InvocationHistoryWriter, MemoryHistory, rebuildInvocationStates, type HistoryEvent } from '../src/history'
 import { ResourceLockRegistry } from '../src/resourceLock'
 import { createAgentSdkSafetyPolicy, markAgentSdkSafetyDecisionConfirmed } from '../../../electron/confirmation/agentSdkSafetyPolicy'
+import { createAgentSdkProviderRecovery } from '../../../electron/runtime/agentSdkProviderRecovery'
 
 const route = { routeId: 'test', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
 const toolBinding = { requestId: 'req', turnId: 'turn', invocationId: 'inv', toolCallId: 'tc1', capabilityId: 'lookup', inputSnapshotHash: 'input-hash', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth-v1', phase: 'initial-compat' as const }
@@ -27,6 +28,72 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('rechecks a silent overflow after an intervening transient retry', async () => {
+    const registry = new ModelProviderRegistry()
+    const history = new MemoryHistory()
+    let calls = 0
+    registry.register(route, { providerId: 'mixed-recovery-overflow', stream: async function* () {
+      calls += 1
+      if (calls === 2) throw Object.assign(new Error('busy'), { status: 503 })
+      yield { type: 'usage', inputTokens: 101, outputTokens: 0 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('mixed-recovery-overflow', [])
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'mixed-recovery-overflow', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+      recoverProviderAttempt: createAgentSdkProviderRecovery({ contextWindow: 100, contextWindowTrusted: true, random: () => 0 })
+    })).rejects.toMatchObject({ reasonCode: 'SILENT_CONTEXT_OVERFLOW_RETRY_LIMIT' })
+    expect(calls).toBe(3)
+    expect((await history.read('mixed-recovery-overflow')).events.some((event) => event.kind === 'model-response-committed')).toBe(false)
+  })
+
+  it('audits observed usage when the provider stream ends without finish', async () => {
+    const registry = new ModelProviderRegistry()
+    const history = new MemoryHistory()
+    registry.register(route, { providerId: 'missing-finish-usage', stream: async function* () {
+      yield { type: 'usage', inputTokens: 10, outputTokens: 3 }
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('missing-finish-usage', [])
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'missing-finish-usage', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' }))
+    })).rejects.toThrow('stream ended without finish')
+    expect((await history.read('missing-finish-usage')).events).toContainEqual(expect.objectContaining({
+      kind: 'provider-attempt-result', payload: expect.objectContaining({ outcome: 'failed', usage: { status: 'reported', inputTokens: 10, outputTokens: 3 } })
+    }))
+  })
+
+  it('audits observed usage when an event follows the provider finish marker', async () => {
+    const registry = new ModelProviderRegistry()
+    const history = new MemoryHistory()
+    registry.register(route, { providerId: 'post-finish-event', stream: async function* () {
+      yield { type: 'usage', inputTokens: 10, outputTokens: 3 }
+      yield { type: 'finish', reason: 'stop' }
+      yield { type: 'text-delta', text: 'invalid trailing event' }
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('post-finish-event', [])
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'post-finish-event', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' }))
+    })).rejects.toThrow('event received after finish')
+    expect((await history.read('post-finish-event')).events).toContainEqual(expect.objectContaining({
+      kind: 'provider-attempt-result', payload: expect.objectContaining({ outcome: 'failed', usage: { status: 'reported', inputTokens: 10, outputTokens: 3 } })
+    }))
+  })
+
   it('mirrors all thinking blocks from the completed turn into the assistant message', async () => {
     const registry = new ModelProviderRegistry()
     let requestCount = 0
@@ -2039,7 +2106,7 @@ describe('runAgentTurn', () => {
     })
 
     expect(calls).toEqual([1, 2])
-    expect(recoverProviderAttempt).toHaveBeenCalledOnce()
+    expect(recoverProviderAttempt).toHaveBeenCalledTimes(2)
     expect(onModelRequest.mock.calls.map(([request]) => ({ modelTurn: request.modelTurn, attempt: request.attempt }))).toEqual([
       { modelTurn: 1, attempt: 1 },
       { modelTurn: 1, attempt: 2 }
@@ -2100,13 +2167,14 @@ describe('runAgentTurn', () => {
 
     expect(result.text).toBe('recovered')
     expect(calls).toBe(5)
-    expect(recoverProviderAttempt.mock.calls.map(([input]) => input.attempt)).toEqual([1, 2, 3, 4])
+    expect(recoverProviderAttempt.mock.calls.map(([input]) => input.attempt)).toEqual([1, 2, 3, 4, 5])
     const expectedCounts: Array<{ transient: number; idleTimeout: number; overflow: number; effort: number }> = []
     const seenCounts = { transient: 0, idleTimeout: 0, overflow: 0, effort: 0 }
     for (const kind of failureKinds.slice(0, 4)) {
       expectedCounts.push({ ...seenCounts })
       seenCounts[kind === 'idle-timeout' ? 'idleTimeout' : kind] += 1
     }
+    expectedCounts.push({ ...seenCounts })
     expect(recoverProviderAttempt.mock.calls.map(([input]) => input.recoveryCounts)).toEqual(expectedCounts)
     const events = (await history.read('inv-retry-budget')).events
     expect(events.filter((event) => event.kind === 'provider-retry-scheduled')).toHaveLength(4)

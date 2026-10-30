@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { canCreateSymlinks } from '../../src/test/symlinkCapability'
-import type { AgentTurnObserver } from '../../packages/agent-sdk/src/turn'
+import { ModelAttemptRecoveryRejectedError, PlanRejectedError, ToolDeniedError, type AgentTurnObserver } from '../../packages/agent-sdk/src/turn'
 import { createAgentSdkDesktopObserver } from './agentSdkDesktopObserver'
 import { runAgentTurn } from '../../packages/agent-sdk/src/turn'
 import { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
@@ -23,6 +23,19 @@ import path from 'node:path'
 
 describe('createAgentSdkDesktopObserver', () => {
   afterEach(() => vi.unstubAllEnvs())
+  it('does not show policy and plan rejections as provider retry failures', async () => {
+    const facts: Array<{ type: string; operation?: { kind?: string } }> = []
+    const observer = createAgentSdkDesktopObserver({ requestId: 'policy-denial', sessionId: 's', turnId: 't', emitFactEvent: (event) => facts.push(event as typeof facts[number]) })
+    await observer.onTurnFailed?.({ error: new ToolDeniedError('POLICY_DENY'), status: 'denied' })
+    await observer.onTurnFailed?.({ error: new PlanRejectedError('PLAN_REJECTED'), status: 'denied' })
+    expect(facts.filter((event) => event.type === 'system-operation-updated' && event.operation?.kind === 'provider-retry')).toEqual([])
+  })
+  it('still shows an explicit provider recovery rejection as failed', async () => {
+    const facts: Array<{ type: string; operation?: { kind?: string; reason?: string } }> = []
+    const observer = createAgentSdkDesktopObserver({ requestId: 'retry-denial', sessionId: 's', turnId: 't', emitFactEvent: (event) => facts.push(event as typeof facts[number]) })
+    await observer.onTurnFailed?.({ error: new ModelAttemptRecoveryRejectedError('PROVIDER_RETRY_BUDGET_EXHAUSTED'), status: 'failed' })
+    expect(facts.find((event) => event.type === 'system-operation-updated' && event.operation?.kind === 'provider-retry')?.operation?.reason).toBe('PROVIDER_RETRY_FAILED')
+  })
   it('tells the model when AGENTS.md failed to load so it cannot claim it followed the file', async () => {
     const observer = createAgentSdkDesktopObserver({ requestId: 'failed-instructions', sessionId: 's', turnId: 't', getWorkDir: () => '' })
     const prepared = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {

@@ -677,8 +677,8 @@ export function createAgentSdkDesktopObserver(input: {
         emitFact({ type: 'system-operation-updated', operation: providerRetryOperation })
         providerRetryOperation = undefined
       } else {
-        const error = failure.error && typeof failure.error === 'object' ? failure.error as { reasonCode?: unknown; name?: unknown; kinds?: unknown } : undefined
-        const retryRejected = typeof error?.reasonCode === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.reasonCode)
+        const error = failure.error && typeof failure.error === 'object' ? failure.error as { code?: unknown; name?: unknown; kinds?: unknown } : undefined
+        const retryRejected = error?.code === 'MODEL_ATTEMPT_RECOVERY_REJECTED'
         const retryResultUnknown = error?.name === 'AgentTurnHistoryAppendError' && Array.isArray(error.kinds) && error.kinds.includes('provider-attempt-result')
         if (retryRejected || retryResultUnknown) {
           const id = `${input.requestId}:round:${activeModelTurn}:provider-retry`
