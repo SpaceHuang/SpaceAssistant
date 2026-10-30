@@ -55,6 +55,7 @@ export function validatePolicyRulesFloor(
 }
 
 import { DEFAULT_POLICY_RULES } from './defaultRules'
+import { IM_STANDARD_V3_LOCKED_RULES } from './imStandardV3Rules'
 
 /** 底线集默认取内置默认规则的 locked 条目。 */
 export const DEFAULT_FLOOR: readonly PolicyRule[] = DEFAULT_POLICY_RULES
@@ -89,7 +90,7 @@ export function resolveImPolicyFloorForVersion(version: unknown, pkg: 'standard'
         ? { ...rule, match: { ...rule.match!, toolName: 'wechat_send', signals: ['wechat-media-target:outside-workdir', 'policy-tier:standard'] } }
       : rule.id === 'script-network-deny-remote' || rule.id === 'script-uncertified-ask-remote'
         ? { ...rule, match: { ...rule.match!, excludeSignals: ['im-script-network-review-candidate:complete'] } }
-        : rule), ...unverifiedTargetFloors, nonstandardWechatMediaDeny, incompleteWechatReplyMediaDeny]
+        : rule), ...IM_STANDARD_V3_LOCKED_RULES, ...unverifiedTargetFloors, nonstandardWechatMediaDeny, incompleteWechatReplyMediaDeny]
   }
   return DEFAULT_FLOOR
 }

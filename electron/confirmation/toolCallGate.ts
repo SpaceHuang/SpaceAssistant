@@ -53,6 +53,7 @@ import type { AutomationRunOutputScope, TargetBinding } from '../../src/shared/a
 import { matchesAutomationRunOutputWriteTarget, matchesBoundOutputWriteTarget } from '../butler/taskOutputDirectory'
 import { matchAutomationResultWritePermission } from '../butler/automationTaskPermissionMatch'
 import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
+import { createOutsideEditReviewFields, REVIEW_MATERIAL_MAX_BYTES } from './imEditReviewMaterials'
 
 /**
  * T1.2/T1.3：以 resolveWikiMount 为本次路径入参构造探测锚点与敏感根豁免。
@@ -1236,13 +1237,20 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       const target = typeof args.toolInput.path === 'string' ? args.toolInput.path : undefined
       if (args.toolName === 'write_file') {
         const content = typeof args.toolInput.content === 'string' ? args.toolInput.content : undefined
-        complete = Boolean(target && content !== undefined && byteLength(content) <= 20_000)
-        if (target && content !== undefined) reviewMaterials = { kind: 'outside-file-write', operation: 'new', target, content, complete }
+        complete = Boolean(target && content !== undefined && byteLength(content) <= REVIEW_MATERIAL_MAX_BYTES)
+        if (target && content !== undefined && byteLength(content) <= REVIEW_MATERIAL_MAX_BYTES) {
+          reviewMaterials = { kind: 'outside-file-write', operation: 'new', target, content, complete }
+        }
       } else {
         const oldText = typeof args.toolInput.old_string === 'string' ? args.toolInput.old_string : undefined
         const replacementText = typeof args.toolInput.new_string === 'string' ? args.toolInput.new_string : undefined
-        complete = Boolean(target && oldText !== undefined && replacementText !== undefined && byteLength(oldText) + byteLength(replacementText) <= 20_000)
-        if (target && oldText !== undefined && replacementText !== undefined) reviewMaterials = { kind: 'outside-file-write', operation: 'edit', target, oldText, replacementText, complete }
+        const replaceAll = Boolean(args.toolInput.replace_all)
+        const tolerateEscapeLayer = args.toolInput.tolerate_escape_layer === true
+        if (target && oldText !== undefined && replacementText !== undefined) {
+          const editReview = await createOutsideEditReviewFields({ targetFact: writePathFact, target, oldText, replacementText, replaceAll, tolerateEscapeLayer })
+          complete = editReview.complete
+          reviewMaterials = { kind: 'outside-file-write', operation: 'edit', target, ...editReview }
+        }
       }
     } else if (reviewCandidateSignal.kind === 'im-shell-review-candidate') {
       const plan = args.preparedShellReview
@@ -1255,11 +1263,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       const code = typeof args.toolInput.code === 'string' ? args.toolInput.code : ''
       const settings = facts.signals.find((signal) => signal.kind === 'script-execution-settings')
       const environment = facts.signals.find((signal) => signal.kind === 'script-execution-environment')
-      complete = byteLength(code) <= 20_000 && settings?.kind === 'script-execution-settings' && environment?.kind === 'script-execution-environment'
-      if (settings?.kind === 'script-execution-settings' && environment?.kind === 'script-execution-environment') {
+      const configuredInterpreter = args.toolsConfig.pythonPath?.trim() || 'python'
+      const interpreterFallbackCandidates = configuredInterpreter === 'python'
+        ? process.platform === 'win32' ? ['py', 'python3'] : ['python3'] : []
+      const timeoutSeconds = typeof args.toolInput.timeout === 'number' ? args.toolInput.timeout : args.toolsConfig.scriptTimeout
+      const cwd = path.resolve(args.workDir)
+      complete = byteLength(code) <= REVIEW_MATERIAL_MAX_BYTES && settings?.kind === 'script-execution-settings' &&
+        environment?.kind === 'script-execution-environment' && cwd.length > 0 && Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
+      if (byteLength(code) <= REVIEW_MATERIAL_MAX_BYTES && settings?.kind === 'script-execution-settings' && environment?.kind === 'script-execution-environment') {
         reviewMaterials = { kind: 'static-network-script', code, url: reviewCandidateSignal.url, host: reviewCandidateSignal.host,
-          method: reviewCandidateSignal.method, interpreter: settings.interpreter, settingsDigest: settings.digest,
-          environmentDigest: environment.digest, complete }
+          method: reviewCandidateSignal.method, interpreter: configuredInterpreter, interpreterFallbackCandidates, cwd, timeoutSeconds,
+          interpreterResolution: interpreterFallbackCandidates.length > 0 ? 'first-version-probe-success' : 'configured-command',
+          settingsDigest: settings.digest, environmentDigest: environment.digest, complete }
       }
     }
     facts.reviewMaterials = reviewMaterials
