@@ -18,6 +18,17 @@ function registerPolicyHandlers(db: ReturnType<typeof createMemoryAppDb>) {
 }
 
 describe('legacy IM policy migration at startup', () => {
+  it('keeps the legacy policy version when conversion leaves unresolved channel restrictions', () => {
+    const db = createMemoryAppDb('im-v3-unresolved-legacy-restrictions')
+    const conn = getDbConnection(db)
+    setConfigValue(db, 'config.wechat', JSON.stringify({ customRules: [{ id: 'a', action: 'deny' }] }))
+    setConfigValue(db, 'config.feishu', JSON.stringify({ customRules: [{ id: 'a', action: 'allow' }] }))
+    ensureImPolicySnapshotAtStartup(db, releasedV3Gate)
+    expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v3'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-v1.6', snapshot: { humanRequired: true, unresolvedDifferences: ['customRules'] } })
+    db.close()
+  })
+
   it.each([
     { wechat: 'standard', feishu: 'strict' },
     { wechat: 'strict', feishu: 'standard' },

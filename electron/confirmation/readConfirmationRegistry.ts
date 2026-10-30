@@ -88,6 +88,17 @@ export class ReadConfirmationRegistry {
       expectedFacts.length === currentFacts.length && expectedFacts.every((factId, index) => factId === currentFacts[index])
   }
 
+  /** Replace a live pending entry when a safety recheck requires fresh approval for changed facts. */
+  refreshPending(entry: Omit<ReadConfirmationEntry, 'state'>): boolean {
+    const now = this.clock.now()
+    this.prune(now)
+    const key = this.key(entry.requestId, entry.toolUseId)
+    const current = this.entries.get(key)
+    if (!current || current.state !== 'pending' || entry.expiresAt <= now) return false
+    this.entries.set(key, Object.freeze({ ...entry, factIds: [...entry.factIds], state: 'pending' }))
+    return true
+  }
+
   settle(requestId: string, toolUseId: string, _state: 'rejected' | 'expired'): boolean {
     const now = this.clock.now()
     this.prune(now)

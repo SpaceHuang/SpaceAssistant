@@ -545,14 +545,17 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     )
   }
   if (args.toolName === 'browser' && args.toolInput.action === 'act') {
-    // 高危或会话信任关闭时不注入 currentHost（不派生缓存键、不消费域名信任），等价现状。
+    // facts: pageIdentity always binds the current page into approval scope; currentHost remains
+    // gated by the session-trust setting so disabling trust cannot derive or consume a trust key.
     const dangerous = args.dangerAssessment?.dangerous === true
     const host =
       !dangerous && args.browserConfig?.actSessionTrustEnabled !== false && args.currentPageUrl
         ? extractHostname(args.currentPageUrl)
         : null
+    const pageIdentity = args.currentPageUrl ? createHash('sha256').update(args.currentPageUrl).digest('hex') : undefined
     env.browserAct = {
       ...(host ? { currentHost: host } : {}),
+      ...(pageIdentity ? { pageIdentity } : {}),
       ...(dangerous ? { dangerous: true } : {})
     }
   }
@@ -1409,7 +1412,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       input: args.toolInput,
       facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: permitTargetKind, ...(permitScope ? { scope: permitScope } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}), ...(readPathFact.vocabularyPath ? { vocabularyPath: readPathFact.vocabularyPath } : {}), ...(selectedDirectoryGrant ? { directoryGrant: { grantId: selectedDirectoryGrant.grantId, sessionId: selectedDirectoryGrant.sessionId, realPath: selectedDirectoryGrant.realPath, identity: selectedDirectoryGrant.identity } } : {}) }]
     })
-  } else if (args.phase !== 'recheck' && readPathFact && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
+  } else if ((args.phase !== 'recheck' || readPathFact?.zone === 'outside-workdir') && readPathFact && isPermitReadTool && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
     const registration = {
       requestId: args.requestId ?? args.sessionId,
@@ -1419,7 +1422,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       ruleId: decision.ruleId,
       expiresAt: Date.now() + (decision.timeoutMs ?? DEFAULT_USER_CONFIRMATION_TIMEOUT_MS)
     }
-    // policy: deferred re-evaluation may reuse the original live registration only when every bound fact is unchanged.
+    // policy: initial or changed-target human approval must register these exact current facts.
     const registered = registry.register(registration) || registry.matchesPending(registration)
     if (!registered) decision = { type: 'deny', ruleId: 'read-confirmation-registration-failed', reason: '无法建立本次读取确认登记，已阻止执行' }
   }

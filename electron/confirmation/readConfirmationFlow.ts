@@ -3,11 +3,29 @@ import { readConfirmationRegistry, type ReadConfirmationRegistry } from './readC
 import type { ReadPathFact } from './extractors/readPathFacts'
 import type { FeishuMediaTargetFact } from './extractors/feishuMediaFacts'
 import { extractPathField } from '../toolPathField'
+import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmationTimeout'
 
 export function settleReadConfirmation(input: { toolName: string; requestId: string; toolUseId: string; outcome: string }, registry: ReadConfirmationRegistry = readConfirmationRegistry): void {
   if (input.toolName !== 'read_file' && input.toolName !== 'grep' && input.toolName !== 'list_directory' && input.toolName !== 'read_feishu_attachment') return
   if (input.outcome === 'approved') return
   registry.settle(input.requestId, input.toolUseId, input.outcome === 'timeout' ? 'expired' : 'rejected')
+}
+
+/** Register the exact fresh target when a previously approved read is escalated to human review. */
+export function registerReadReapproval(input: { toolName: string; toolInput: Record<string, unknown>; requestId: string; toolUseId: string; readPathFact?: ReadPathFact; approvedTargets?: Array<{ factId: string; decisionRuleId: string }>; timeoutMs?: number }, registry: ReadConfirmationRegistry = readConfirmationRegistry): boolean {
+  if (!['read_file', 'grep', 'list_directory'].includes(input.toolName) || input.readPathFact?.zone !== 'outside-workdir' || !input.readPathFact.identity) return false
+  const factId = `fact-${input.readPathFact.normalizedPath}`
+  const mapping = input.approvedTargets
+  if (!mapping || mapping.length !== 1 || mapping[0]?.factId !== factId || !mapping[0]?.decisionRuleId) return false
+  const registration = {
+    requestId: input.requestId,
+    toolUseId: input.toolUseId,
+    inputDigest: readInputDigest(input.toolInput),
+    factIds: [factId],
+    ruleId: mapping[0].decisionRuleId,
+    expiresAt: Date.now() + (input.timeoutMs ?? DEFAULT_USER_CONFIRMATION_TIMEOUT_MS)
+  }
+  return registry.register(registration) || registry.matchesPending(registration) || registry.refreshPending(registration)
 }
 
 export function finalizeReadConfirmation(input: { toolName: string; toolInput: Record<string, unknown>; requestId: string; toolUseId: string; outcome: string; answerer: string; readPathFact?: ReadPathFact; feishuMediaFact?: FeishuMediaTargetFact; approvedTargets?: Array<{ factId: string; decisionRuleId: string }> }, registry: ReadConfirmationRegistry = readConfirmationRegistry): ReadExecutionPermit | undefined {

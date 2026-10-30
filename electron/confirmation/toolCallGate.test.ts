@@ -35,7 +35,7 @@ import { readFeishuAttachmentExecutor } from '../tools/readFeishuAttachmentExecu
 import type { ToolExecutionContext } from '../tools/types'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
 import { recordUserAnswerFromDecision } from './decisionCacheWriter'
-import { createAgentSdkSafetyPolicy } from './agentSdkSafetyPolicy'
+import { createAgentSdkSafetyPolicy, markAgentSdkSafetyDecisionConfirmed } from './agentSdkSafetyPolicy'
 import { ModelProviderRegistry, type StreamChunk } from '../../packages/agent-sdk/src/model'
 import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
 import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
@@ -1652,6 +1652,25 @@ describe('evaluateToolCallGate', () => {
     expect(lowRiskAct.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'browser-act-ask-remote' })
     expect(dangerousAct.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'im-browser-act-danger-human' })
   })
+
+  it.each(['https://other.example/b', 'https://origin.example/b'])(
+    'reasks for browser act when the current page changes to %s with session trust disabled', async (nextUrl) => {
+    const input = { action: 'act', instruction: 'search public documentation' }
+    let currentPageUrl = 'https://origin.example/a'
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    const args = () => base({ lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }), toolName: 'browser', toolInput: input,
+      requestId: 'browser-page-change', toolUseId: 'browser-act', currentPageUrl,
+      browserConfig: { enabled: true, allowRemoteSessions: true, actSessionTrustEnabled: false } as never,
+      imPolicySnapshot: snapshot, effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES }) })
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args() })
+    const binding = { requestId: 'browser-page-change', turnId: 'turn', invocationId: 'browser-page-change', toolCallId: 'browser-act', capabilityId: 'browser',
+      inputSnapshotHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'), planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'a', phase: 'initial-compat' as const,
+      capability: { state: 'known-authorized' as const, id: 'browser' } }
+    expect(await policy.evaluate(binding)).toMatchObject({ kind: 'ask', answerer: 'agent' })
+    markAgentSdkSafetyDecisionConfirmed(policy, binding, 'agent')
+    currentPageUrl = nextUrl
+    expect(await policy.evaluate({ ...binding, phase: 'recheck' })).toMatchObject({ kind: 'ask' })
+    })
 
   it('routes only a new ordinary in-workspace IM write through the standard review candidate', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/im-low-risk-create-'))

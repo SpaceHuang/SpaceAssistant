@@ -28,6 +28,15 @@ const facts: ContentFacts = { toolName: 'read_file', actionClass: 'read', baseRi
 const baseArgs = { toolName: 'read_file', toolInput: { path: 'x' }, sessionId: 'req', workDir: '/tmp', userDataDir: '/tmp', toolsConfig: {}, effectiveRules: [], decisionCache: {}, shellPrecheck: { touchTrustedCommand() {} } } as unknown as ToolCallGateArgs
 const result = (decision: Decision): ToolCallGateResult => ({ decision, facts, approvedFactIds: [] })
 
+it('fails closed when an approval callback cannot issue the required execution permit', async () => {
+  const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs,
+    evaluateGate: async () => result({ type: 'require-confirm', ruleId: 'read-review', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }),
+    onConfirmed: () => false })
+  expect(await policy.evaluate(binding)).toMatchObject({ kind: 'ask', answerer: 'user' })
+  markAgentSdkSafetyDecisionConfirmed(policy, binding, 'user')
+  expect(await policy.evaluate({ ...binding, phase: 'recheck' })).toMatchObject({ kind: 'deny', reasonCode: 'MISSING_MATERIAL' })
+})
+
 describe('createAgentSdkSafetyPolicy', () => {
   it('carries the current run_shell justification and truncation marker into automation approval context', async () => {
     const toolInput = { command: 'pwd', justification: '核对工作目录', _justificationTruncated: true }

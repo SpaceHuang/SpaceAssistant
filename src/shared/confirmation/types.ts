@@ -61,7 +61,7 @@ export interface EnvFacts {
    * 浏览器 act 的链路侧事实（当前页域名 + 高危评估结论），由执行链路注入：
    * 提取器只读 toolInput，act 的目标域名与 dangerAssessment 不在输入里。
    */
-  browserAct?: { currentHost?: string; dangerous?: boolean }
+  browserAct?: { currentHost?: string; pageIdentity?: string; dangerous?: boolean }
 }
 
 // ===== 事实提取层 =====
@@ -172,7 +172,7 @@ export type FactSignal =
    * 浏览器动作事实：动作名 + 目标域名（act 时为当前页域名，由执行链路注入 env）+
    * 高危评估结论。dangerous 映射 suspicious 档（§5.1 裁决：问而非拒）。
    */
-  | { kind: 'browser-action'; action: string; host?: string; dangerous?: boolean; querySensitivity?: 'public' | 'private' | 'unknown'; sideEffect?: 'navigate' | 'read' | 'submit' | 'upload' | 'payment' | 'delete' | 'authorization' | 'unknown'; completeness?: 'complete' | 'partial' }
+  | { kind: 'browser-action'; action: string; host?: string; pageIdentity?: string; dangerous?: boolean; querySensitivity?: 'public' | 'private' | 'unknown'; sideEffect?: 'navigate' | 'read' | 'submit' | 'upload' | 'payment' | 'delete' | 'authorization' | 'unknown'; completeness?: 'complete' | 'partial' }
   /** lark-cli 子命令读/写分类事实（复用 classifyLarkCliImpact；high_impact/unknown fail-closed 必确认）。 */
   | { kind: 'lark-subcommand'; impact: 'read' | 'write' | 'low_write' | 'high_impact' | 'unknown'; category?: string; classificationReason?: string; completeness?: 'complete' | 'partial'; messageTarget?: 'self' | 'direct-other' | 'group-or-multiple' | 'unknown' }
   /** MCP 工具调用事实：携带 serverId 与原始工具名（会话信任缓存键来源）。 */
