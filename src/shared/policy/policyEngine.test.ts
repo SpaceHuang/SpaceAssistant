@@ -554,6 +554,19 @@ describe('decide：统一策略结果优先级契约', () => {
 })
 
 describe('decide：IM effective action 覆盖契约', () => {
+  it('keeps sensitive external WeChat attachments out of ordinary Agent review', () => {
+    const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v3', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const facts = mkFacts('wechat_reply', 'outbound', [
+      { kind: 'wechat-media-target', boundary: 'outside-workdir', zone: 'sensitive-file', targetKind: 'file' },
+      { kind: 'wechat-media-content-assessment', factId: 'sensitive', contentDigest: 'a'.repeat(64), extractorVersion: 'host-v1', inspectionCoverage: 'complete', evidenceKinds: [] },
+      { kind: 'wechat-media-review-binding', status: 'complete', recipient: 'owner', ownerId: 'owner', authorizationGeneration: 1 },
+      { kind: 'wechat-media-review-materials', status: 'complete' },
+      { kind: 'policy-tier', tier: 'standard' }
+    ])
+    expect(decide(facts, { ...mkContext('wechat'), policyTier: 'standard' }, rules, { cache: emptyCache(), config: {}, migrationComplete: false }))
+      .toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-sensitive-file-outside-deny' })
+  })
+
   const facts = mkFacts('write_file', 'write', [], 'low')
   const context = mkContext('wechat')
   const lowRiskCreate = {

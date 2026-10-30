@@ -8,6 +8,22 @@ const facts: ContentFacts = {
 }
 
 describe('invocation facts snapshot', () => {
+  it('binds review material by digest without persisting its raw body', async () => {
+    const sensitive = 'private attachment contents'
+    const snapshot = await createInvocationFactsSnapshot({
+      invocationId: 'inv-review-material', envelope: { toolName: 'wechat_reply' },
+      facts: { ...facts, reviewMaterials: { kind: 'wechat-attachment', path: '/tmp/private.txt',
+        fileName: 'private.txt', recipient: 'owner', ownerId: 'owner', content: sensitive,
+        contentDigest: 'a'.repeat(64), inspection: 'ordinary', evidence: [], complete: true } },
+      extractorVersion: 'extractor-v1', completeness: 'complete', evidenceReferences: [],
+      environmentVersion: 'env-1', previousFactsRevision: 0
+    })
+    const serialized = serializeInvocationFactsSnapshot(snapshot)
+    expect(serialized).not.toContain(sensitive)
+    expect(serialized).not.toContain('private.txt')
+    expect(snapshot.facts).toHaveProperty('reviewMaterialsDigest')
+  })
+
   it('binds invocation, envelope, facts, extractor, completeness, evidence, environment, and monotonic revision', async () => {
     const snapshot = await createInvocationFactsSnapshot({
       invocationId: 'inv-1', envelope: { toolName: 'write_file', input: { path: 'report.txt' } },

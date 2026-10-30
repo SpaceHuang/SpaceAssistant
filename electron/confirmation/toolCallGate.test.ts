@@ -14,6 +14,8 @@ import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { effectiveActionFor, resolveImPolicyRulesForVersion } from '../../src/shared/policy/policyPackages'
 import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
+import { AgentChannel } from './agentChannel'
+import { renderCluePackForTest } from './approvalAgent'
 import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 import { canonicalKeyJson } from './sqliteDecisionCache'
 import { PolicyRuleStore } from './policyRuleStore'
@@ -297,15 +299,25 @@ describe('IM standard policy override is final at the gate', () => {
   it.each(['wechat', 'feishu'] as const)('%s isolated standard v3 sends only a complete static HTTPS request to Agent review', async (lane) => {
     const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
     const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const code = "import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)"
     const evaluate = (code: string, version = 'im-standard-v3') => {
       const policySnapshot = { ...snapshot, policyBehaviorVersion: version }
       const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: version, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
       return evaluateToolCallGate(base({ lane, toolName: 'run_script', toolInput: { language: 'python', code }, effectiveRules: rules, imPolicySnapshot: policySnapshot }))
     }
-    const candidate = await evaluate("import requests\nrequests.get('https://docs.example.com/', timeout=5, allow_redirects=False)")
+    const candidate = await evaluate(code)
     expect(candidate.facts.signals).toContainEqual({ kind: 'im-script-network-review-candidate', status: 'complete', host: 'docs.example.com', method: 'GET', url: 'https://docs.example.com/' })
     expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-environment')).toMatchObject({ kind: 'script-execution-environment', status: 'complete', digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-settings')).toMatchObject({ kind: 'script-execution-settings', status: 'complete', interpreter: expect.any(String), digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', code, url: 'https://docs.example.com/', host: 'docs.example.com', method: 'GET', complete: true })
+    let scriptPrompt = ''
+    const scriptApproval = new AgentChannel({ lane, requestId: 'script-review-materials', sessionId: 's', toolName: 'run_script', policy: { kind: 'agent' },
+      invokeApproval: async (invocation) => { scriptPrompt = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
+    expect(await scriptApproval.request({ facts: candidate.facts, riskLevel: candidate.decision.type === 'require-confirm' ? candidate.decision.riskLevel : 'high', memoryTiers: [], timeoutMs: 5000 })).toMatchObject({ kind: 'approved' })
+    expect(scriptPrompt).toContain(JSON.stringify(code))
+    expect(scriptPrompt).toContain('https://docs.example.com/')
+    expect(scriptPrompt).toContain('settingsDigest')
+    expect(scriptPrompt).toContain('environmentDigest')
     expect(candidate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-script-network-review', answerer: 'agent' })
     for (const code of [
       "import requests\nrequests.get(url, timeout=5, allow_redirects=False)",
@@ -324,7 +336,11 @@ describe('IM standard policy override is final at the gate', () => {
     const run = (command: string, version = 'im-standard-v3') => {
       const imPolicySnapshot = { ...snapshot, policyBehaviorVersion: version }
       const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: version, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
-      return evaluateToolCallGate(base({ lane, workDir, userDataDir: path.join(workDir, '.userdata'), toolName: 'run_shell', toolInput: { command }, effectiveRules: rules, imPolicySnapshot }))
+      const reviewable = version === 'im-standard-v3' && (command === 'git status' || command === 'git log')
+      return evaluateToolCallGate(base({ lane, workDir, userDataDir: path.join(workDir, '.userdata'), toolName: 'run_shell', toolInput: { command },
+        ...(reviewable ? { preparedShellReview: { command, cwd: workDir, timeoutSeconds: 300, shell: 'zsh', environmentKeys: ['PATH'],
+          environmentFingerprint: 'a'.repeat(64), planDigest: 'b'.repeat(64), behaviorCoverage: 'complete' as const } } : {}),
+        effectiveRules: rules, imPolicySnapshot }))
     }
     try {
       for (const command of ['git status', 'git log']) {
@@ -332,6 +348,13 @@ describe('IM standard policy override is final at the gate', () => {
         expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'im-shell-review-candidate' }))
         expect(result.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'unknown' })
         expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-shell-review', answerer: 'agent' })
+        expect(result.facts.reviewMaterials).toMatchObject({ kind: 'git-query', command, cwd: workDir, timeoutSeconds: 300,
+          shell: 'zsh', environmentKeys: ['PATH'], environmentFingerprint: 'a'.repeat(64), planDigest: 'b'.repeat(64), behaviorCoverage: 'complete', complete: true })
+        let shellPrompt = ''
+        const shellApproval = new AgentChannel({ lane, requestId: 'shell-review-materials', sessionId: 's', toolName: 'run_shell', policy: { kind: 'agent' },
+          invokeApproval: async (invocation) => { shellPrompt = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
+        expect(await shellApproval.request({ facts: result.facts, riskLevel: result.decision.type === 'require-confirm' ? result.decision.riskLevel : 'high', memoryTiers: [], timeoutMs: 5000 })).toMatchObject({ kind: 'approved' })
+        for (const material of [command, workDir, '300', 'zsh', 'PATH', 'b'.repeat(64), 'complete']) expect(shellPrompt).toContain(material)
       }
       for (const command of ['git push', 'git -c core.fsmonitor=helper status', 'git status && touch marker', 'git status | cat']) {
         const result = await run(command)
@@ -2964,7 +2987,37 @@ describe('evaluateToolCallGate', () => {
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-content-assessment', inspectionCoverage: 'complete', evidenceKinds: [] }))
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-review-binding', status: 'complete', recipient: 'owner', ownerId: 'owner', authorizationGeneration: 7 }))
       expect(gate.facts.signals).toContainEqual({ kind: 'wechat-media-review-materials', status: 'complete' })
+      expect(gate.facts.reviewMaterials).toMatchObject({ kind: 'wechat-attachment', path: attachment, fileName: 'report.txt', recipient: 'owner', ownerId: 'owner', content: 'ordinary report content', complete: true })
+      let rendered = ''
+      const approval = new AgentChannel({ lane: 'wechat', requestId: 'attachment-materials', sessionId: 's', toolName: 'wechat_reply', policy: { kind: 'agent' },
+        invokeApproval: async (invocation) => { rendered = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
+      expect(await approval.request({ facts: gate.facts, riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : 'medium', memoryTiers: [], timeoutMs: 5000 })).toMatchObject({ kind: 'approved' })
+      expect(rendered).toContain(attachment)
+      expect(rendered).toContain('report.txt')
+      expect(rendered).toContain('owner')
+      expect(rendered).toContain('ordinary report content')
       expect(gate.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'im-wechat-media-outside-review' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
+  it('T10：自定义敏感前缀下的目录外附件不得进入普通 Agent 审核', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-sensitive-outside-review-'))
+    const workDir = path.join(parent, 'work')
+    const outside = path.join(parent, 'restricted')
+    await fs.mkdir(workDir); await fs.mkdir(outside)
+    const attachment = path.join(outside, 'report.txt')
+    const content = 'ordinary information'
+    await fs.writeFile(attachment, content)
+    const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 2, snapshot: { selectedPackage: 'standard' } }
+    const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    try {
+      const gate = await evaluateToolCallGate(base({ lane: 'wechat', remoteContext: remoteContext({ source: 'wechat', userId: 'owner', authOwner: 'owner', authorizationGeneration: 7 }),
+        workDir, userDataDir: path.join(parent, '.userdata'), shellConfig: { ...DEFAULT_SHELL_CONFIG, customSensitivePrefixes: [outside] },
+        toolName: 'wechat_reply', toolInput: { text: 'report', filePath: attachment }, effectiveRules: rules, imPolicySnapshot: snapshot,
+        factsProvider: () => [{ kind: 'wechat-media-content-assessment', factId: 'prepared-sensitive',
+          contentDigest: createHash('sha256').update(content).digest('hex'), extractorVersion: 'host-im-attachment-v1', inspectionCoverage: 'complete', evidenceKinds: [] }] }))
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-target', zone: 'sensitive-file' }))
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-sensitive-file-outside-deny' })
     } finally { await fs.rm(parent, { recursive: true, force: true }) }
   })
 
@@ -3040,7 +3093,7 @@ describe('evaluateToolCallGate', () => {
         workDir, userDataDir: path.join(parent, '.userdata'), toolName: 'wechat_send', toolInput: { userId: 'recipient-1', text: 'report', filePath: attachment },
         effectiveRules, imPolicySnapshot: snapshot, lanePackage: 'strict' }))
       expect(gate.facts.signals).toContainEqual({ kind: 'wechat-media-review-materials', status: 'complete' })
-      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-outside-nonstandard-deny' })
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'remote-wechat-media-outside-deny' })
     } finally { await fs.rm(parent, { recursive: true, force: true }) }
   })
 

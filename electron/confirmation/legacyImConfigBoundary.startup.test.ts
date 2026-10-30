@@ -18,6 +18,24 @@ function registerPolicyHandlers(db: ReturnType<typeof createMemoryAppDb>) {
 }
 
 describe('legacy IM policy migration at startup', () => {
+  it.each([
+    { wechat: 'standard', feishu: 'strict' },
+    { wechat: 'strict', feishu: 'standard' },
+    { wechat: 'standard', feishu: 'custom' },
+    { wechat: 'loose', feishu: 'standard' }
+  ] as const)('does not migrate a shared snapshot when legacy lane packages cannot map to one standard package: %o', (legacySelectedPackages) => {
+    const db = createMemoryAppDb('im-v3-mixed-lane-packages')
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-v1.6', snapshot: {
+      legacySelectedPackages,
+      legacyPolicyMigrationVersion: 'legacy-im-policy-v1', ruleOverrides: {}, disabledRuleIds: []
+    }, updatedAt: 1, eventId: 'mixed-lane-seed' })
+    ensureImPolicySnapshotAtStartup(db, releasedV3Gate)
+    expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v3'] }))
+      .toMatchObject({ policyBehaviorVersion: 'im-v1.6' })
+    db.close()
+  })
+
   const releasedV3Gate = { publishedV3Ready: true as const, fixedRuleSetVerified: true, restrictionMappingVerified: true }
 
   it('migrates only standard snapshots under the complete release gate and records one atomic migration', () => {

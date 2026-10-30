@@ -47,6 +47,25 @@ describe('createAgentSdkSafetyPolicy', () => {
     })
   })
 
+  it('projects exact prepared Shell plan materials into the gate before Agent review', async () => {
+    const toolInput = { command: 'git status' }
+    const shellReview = { command: 'git status', cwd: '/repo/current', timeoutSeconds: 37, shell: 'zsh', environmentKeys: ['GIT_PAGER', 'PATH'],
+      environmentFingerprint: 'a'.repeat(64), planDigest: 'b'.repeat(64), behaviorCoverage: 'complete' as const }
+    const shellBinding = { ...binding, capabilityId: 'run_shell',
+      inputSnapshotHash: createHash('sha256').update(JSON.stringify(toolInput)).digest('hex'),
+      capability: { state: 'known-authorized' as const, id: 'run_shell' } }
+    const shellArgs = { ...baseArgs, toolName: 'run_shell', toolInput, lane: 'wechat' } as ToolCallGateArgs
+    let reviewedArgs: ToolCallGateArgs | undefined
+    const policy = createAgentSdkSafetyPolicy({
+      resolveToolCall: () => ({ invocationId: 'inv', toolCallId: 'call', toolName: 'run_shell', input: toolInput }),
+      resolveGateArgs: async () => shellArgs,
+      getPreparedFacts: () => ({ preparedShellReview: shellReview }),
+      evaluateGate: async (args) => { reviewedArgs = args; return result({ type: 'require-confirm', ruleId: 'im-shell-review', answerer: 'agent', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }) }
+    })
+    await policy.evaluate(shellBinding)
+    expect(reviewedArgs?.preparedShellReview).toEqual(shellReview)
+  })
+
   it('passes the gate snapshot provenance unchanged into approval context', async () => {
     const snapshot = { factId: 'fact-0123456789abcdef01234567', invocationId: 'req', envelopeHash: 'a'.repeat(64), factsHash: 'b'.repeat(64), extractorVersion: 'host-tool-facts-v1', completeness: 'partial' as const, evidenceReferences: [], environmentVersion: 'darwin:/tmp', policyVersion: 'desktop-policy-v1', factsRevision: 1, facts }
     const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs,

@@ -101,6 +101,10 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`wechat-media-review-binding:${signal.status}`)
         break
+      case 'approval-review-materials':
+        tokens.add(signal.kind)
+        tokens.add(`approval-review-materials:${signal.status}`)
+        break
       case 'wechat-media-review-materials':
         tokens.add(signal.kind)
         tokens.add(`wechat-media-review-materials:${signal.status}`)
@@ -129,6 +133,7 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`wechat-media-target:${signal.boundary}`)
         tokens.add(`wechat-media-target-kind:${signal.targetKind}`)
+        if (signal.zone) tokens.add(`wechat-media-target-zone:${signal.zone}`)
         break
       case 'workdir-profile-target':
         tokens.add(signal.kind)

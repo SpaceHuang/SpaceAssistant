@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { resolveImPolicyRulesForVersion } from './policyPackages'
+import { DEFAULT_POLICY_RULES } from './defaultRules'
+import { decide } from './policyEngine'
 
 const rules = [
   { id: 'im-low-risk-create', when: 'invocation' as const, action: 'ask' as const, reason: 'new file', match: { lane: ['wechat', 'feishu'], toolName: 'write_file', signals: ['write-target-new', 'write-target-scope:inside-workdir', 'path-target:workdir-normal'] } },
@@ -29,6 +31,21 @@ const rules = [
 ]
 
 describe('version-pinned IM behavior candidates', () => {
+  it.each(['strict', 'loose', 'custom'] as const)('keeps v3 file and Git policy unchanged for %s package', (pkg) => {
+    const samples = [
+      { toolName: 'read_file', actionClass: 'read' as const, signals: [{ kind: 'path-target', path: '/tmp/outside.txt', zone: 'outside-workdir' as const }, { kind: 'read-target-scope', scope: 'single-target' as const }, { kind: 'read-target-kind', targetKind: 'file' as const }] },
+      { toolName: 'write_file', actionClass: 'write' as const, signals: [{ kind: 'write-target-scope', scope: 'outside-workdir' as const }, { kind: 'write-target-new' as const }] },
+      { toolName: 'edit_file', actionClass: 'write' as const, signals: [{ kind: 'write-target-scope', scope: 'outside-workdir' as const }, { kind: 'write-target-existing' as const }] },
+      { toolName: 'run_shell', actionClass: 'execute' as const, signals: [{ kind: 'im-shell-review-candidate', command: 'git-status' as const }] }
+    ]
+    for (const sample of samples) {
+      const decisions = ['im-standard-v2', 'im-standard-v3'].map((policyBehaviorVersion) => decide({ ...sample, baseRiskLevel: 'medium', summary: { text: 'candidate' } },
+        { lane: 'wechat', origin: { kind: 'direct-owner' }, sessionId: 'pkg-parity', policyTier: pkg },
+        resolveImPolicyRulesForVersion({ policyBehaviorVersion, pkg, rules: DEFAULT_POLICY_RULES }), { cache: { lookup: () => null }, config: {}, migrationComplete: false }))
+      expect(decisions[1]).toMatchObject({ type: decisions[0]!.type, ruleId: decisions[0]!.ruleId })
+    }
+  })
+
   it('applies explicit candidate mappings only to im-standard-v2', () => {
     const v2 = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules })
     expect(v2.map(({ id, action }) => [id, action])).toEqual([

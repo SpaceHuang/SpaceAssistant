@@ -73,7 +73,12 @@ function migrateImStandardV3IfReleaseReady(db: AppDatabase, releaseGate?: ImStan
     ? current.snapshot.legacySelectedPackages as Record<string, unknown> : {}
   const selectedPackage = isPolicyPackage(current.snapshot.selectedPackage) ? current.snapshot.selectedPackage
     : isPolicyPackage(legacyPackages.wechat) ? legacyPackages.wechat : readPolicyPackages(db).wechat
-  if (selectedPackage !== 'standard') return
+  const currentPackages = readPolicyPackages(db)
+  const wechatPackage = isPolicyPackage(legacyPackages.wechat) ? legacyPackages.wechat : currentPackages.wechat
+  const feishuPackage = isPolicyPackage(legacyPackages.feishu) ? legacyPackages.feishu : currentPackages.feishu
+  // v3 stores one shared package. Preserve the old snapshot unless both channel semantics
+  // and any already-shared selection can be represented losslessly as standard.
+  if (selectedPackage !== 'standard' || wechatPackage !== 'standard' || feishuPackage !== 'standard') return
 
   const result = commitImPolicySnapshotFromStartupMigration(conn, {
     expectedRevision: current.revision,

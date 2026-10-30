@@ -841,7 +841,7 @@ async function resolveWriteTargetFromPermit(input: Record<string, unknown>, ctx:
     const relFromBase = path.relative(resolution.realBase, permit.target.normalizedPath)
     if (relFromBase.startsWith('..') || path.isAbsolute(relFromBase)) throw new Error('wiki-mount-consistency-mismatch')
   }
-  if (ctx.lane === 'feishu' || ctx.lane === 'wechat' || ctx.remoteContext !== undefined) {
+  if ((ctx.lane === 'feishu' || ctx.lane === 'wechat' || ctx.remoteContext !== undefined) && !permit.approvedOutsideWorkdir) {
     // T1.9：挂载命中按 scopeBase（realBase）断言包含；未挂载维持 workDir 断言（远程豁免面仅限 wiki 命名空间）
     await assertRemoteWriteTargetInsideWorkDir(permit.target.scopeBase ?? ctx.workDir, permit.target.normalizedPath)
   }

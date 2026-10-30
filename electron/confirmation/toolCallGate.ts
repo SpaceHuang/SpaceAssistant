@@ -144,6 +144,17 @@ export type GateDecisionCache = import('./auditedDecisionCache').AuditedDecision
 export interface ToolCallGateArgs {
   toolName: string
   toolInput: Record<string, unknown>
+  /** Host prepared immutable shell execution facts, projected only for v3 review. */
+  preparedShellReview?: {
+    command: string
+    cwd: string
+    timeoutSeconds: number
+    shell: string
+    environmentKeys: string[]
+    environmentFingerprint: string
+    planDigest: string
+    behaviorCoverage: 'complete' | 'partial'
+  }
   sessionId: string
   workDir: string
   /** Frozen task roots supplied by the trusted automation run snapshot. */
@@ -278,6 +289,8 @@ export interface ToolCallGateResult {
   /** Host-issued result-directory grant attestation; consumed by the execution permit final-check. */
   automationOutputScope?: AutomationRunOutputScope
   writeExecutionPermit?: WriteExecutionPermit
+  /** Host prepared execution plan projection for bounded Git-query approvals. */
+  preparedShellReview?: { command: string; cwd: string; timeoutSeconds: number; shell: string; environmentKeys: string[]; environmentFingerprint: string; planDigest: string; behaviorCoverage: 'complete' | 'partial' }
   /** run_shell 预检通过时的结构化结果（供日志/确认卡片 hints）。 */
   shellPrecheck?: { analysis: ShellAnalysisResult; legacyAutoAllowEligible: boolean; legacyPolicy: import('../shell/legacyShellPolicyAdapter').LegacyShellPolicyInput; hints: ShellSecurityHints }
   /** run_shell 预检拒绝（validator 性质，gate 前置短路，不进引擎）。 */
@@ -377,7 +390,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   // ===== P3 底线校验（§7.1 判据 2）：传入规则集相对 locked 底线可收紧不可放宽 =====
   // 违规 → 拒绝本次工具调用 + cause=rules-violated 审计（与正常拒绝、缺料失败互斥不混计）
   const floor = lane === 'wechat' || lane === 'feishu'
-    ? resolveImPolicyFloorForVersion(args.imPolicySnapshot?.policyBehaviorVersion)
+    ? resolveImPolicyFloorForVersion(args.imPolicySnapshot?.policyBehaviorVersion, args.lanePackage ?? 'standard')
     : undefined
   const floorCheck = validatePolicyRulesFloor(args.effectiveRules, floor)
   if (!floorCheck.ok) {
@@ -550,6 +563,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   let facts: ContentFacts
   let readPathFact: import('./extractors/readPathFacts').ReadPathFact | undefined
   let wechatMediaPathFact: ReadPathFact | undefined
+  let reviewedAttachmentContent: { path: string; fileName: string; content: string; contentDigest: string; inspectionCoverage: 'complete' | 'partial'; evidenceKinds: readonly string[] } | undefined
   let feishuMediaFact: FeishuMediaTargetFact | undefined
   let readPathProbeFailure: ReadPathProbeError | undefined
   let writePathFact: WritePathFact | undefined
@@ -963,6 +977,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
                   inspectionCoverage
                 })
                 facts.signals.push({ kind: 'wechat-media-content-assessment', ...attachmentFacts })
+                if (mediaBytes.length <= 20_000 && inspectionCoverage === 'complete') {
+                  reviewedAttachmentContent = { path: resolvedMediaPath, fileName: path.basename(resolvedMediaPath), content: inspectedText,
+                    contentDigest, inspectionCoverage, evidenceKinds: attachmentFacts.evidenceKinds }
+                }
               }
             }
             const recipient = typeof args.toolInput.userId === 'string' && args.toolInput.userId.length > 0
@@ -977,6 +995,16 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
               ...(args.remoteContext?.source === 'wechat' ? { messageId: args.remoteContext.messageId } : {}),
               ...(args.requestId ? { requestId: args.requestId } : {}), ...(args.toolUseId ? { toolUseId: args.toolUseId } : {}) })
             const contentCoverage = facts.signals.find((signal) => signal.kind === 'wechat-media-content-assessment')
+            if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v3') {
+              const reviewMaterialComplete = args.toolName === 'wechat_reply' && boundary === 'outside-workdir' && bindingComplete &&
+                Boolean(reviewedAttachmentContent && recipient && ownerId)
+              if (reviewMaterialComplete && reviewedAttachmentContent) {
+                facts.reviewMaterials = { kind: 'wechat-attachment', path: reviewedAttachmentContent.path, fileName: reviewedAttachmentContent.fileName,
+                  recipient, ownerId, content: reviewedAttachmentContent.content, contentDigest: reviewedAttachmentContent.contentDigest,
+                  inspectionCoverage: reviewedAttachmentContent.inspectionCoverage, evidenceKinds: reviewedAttachmentContent.evidenceKinds, complete: true }
+              }
+              facts.signals.push({ kind: 'approval-review-materials', status: reviewMaterialComplete ? 'complete' : 'incomplete' })
+            }
             facts.signals.push({ kind: 'wechat-media-review-materials',
               status: boundary === 'outside-workdir' && wechatMediaPathFact.targetKind === 'file' && contentCoverage?.inspectionCoverage === 'complete' && bindingComplete
                 ? 'complete' : 'incomplete' })
@@ -1191,7 +1219,51 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     if (standardReplyCandidate && !hasSensitiveEvidence && materials?.kind === 'wechat-media-review-materials' &&
       (!hostAttachment || preparedDigest !== hostAttachment.contentDigest)) {
       materials.status = 'incomplete'
+      const approvalMaterials = facts.signals.find((signal) => signal.kind === 'approval-review-materials')
+      if (approvalMaterials?.kind === 'approval-review-materials') approvalMaterials.status = 'incomplete'
+      facts.reviewMaterials = undefined
     }
+  }
+  const reviewCandidateSignal = facts.signals.find((signal) =>
+    signal.kind === 'im-script-network-review-candidate' || signal.kind === 'im-shell-review-candidate' ||
+    signal.kind === 'write-target-new' || signal.kind === 'write-target-existing')
+  if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v3' && reviewCandidateSignal && !facts.signals.some((signal) => signal.kind === 'approval-review-materials')) {
+    const byteLength = (value: string) => Buffer.byteLength(value, 'utf8')
+    let reviewMaterials: import('../../src/shared/confirmation/types').ApprovalReviewMaterials | undefined
+    let complete = false
+    if ((args.toolName === 'write_file' || args.toolName === 'edit_file') &&
+      facts.signals.some((signal) => signal.kind === 'write-target-scope' && signal.scope === 'outside-workdir')) {
+      const target = typeof args.toolInput.path === 'string' ? args.toolInput.path : undefined
+      if (args.toolName === 'write_file') {
+        const content = typeof args.toolInput.content === 'string' ? args.toolInput.content : undefined
+        complete = Boolean(target && content !== undefined && byteLength(content) <= 20_000)
+        if (target && content !== undefined) reviewMaterials = { kind: 'outside-file-write', operation: 'new', target, content, complete }
+      } else {
+        const oldText = typeof args.toolInput.old_string === 'string' ? args.toolInput.old_string : undefined
+        const replacementText = typeof args.toolInput.new_string === 'string' ? args.toolInput.new_string : undefined
+        complete = Boolean(target && oldText !== undefined && replacementText !== undefined && byteLength(oldText) + byteLength(replacementText) <= 20_000)
+        if (target && oldText !== undefined && replacementText !== undefined) reviewMaterials = { kind: 'outside-file-write', operation: 'edit', target, oldText, replacementText, complete }
+      }
+    } else if (reviewCandidateSignal.kind === 'im-shell-review-candidate') {
+      const plan = args.preparedShellReview
+      complete = Boolean(plan && plan.behaviorCoverage === 'complete' && plan.command === args.toolInput.command &&
+        byteLength(plan.command) <= 20_000 && plan.cwd && plan.shell && plan.environmentFingerprint && plan.planDigest && Number.isFinite(plan.timeoutSeconds))
+      if (plan) reviewMaterials = { kind: 'git-query', command: plan.command, cwd: plan.cwd, timeoutSeconds: plan.timeoutSeconds,
+        shell: plan.shell, environmentKeys: plan.environmentKeys, environmentFingerprint: plan.environmentFingerprint,
+        planDigest: plan.planDigest, behaviorCoverage: plan.behaviorCoverage, complete }
+    } else if (reviewCandidateSignal.kind === 'im-script-network-review-candidate') {
+      const code = typeof args.toolInput.code === 'string' ? args.toolInput.code : ''
+      const settings = facts.signals.find((signal) => signal.kind === 'script-execution-settings')
+      const environment = facts.signals.find((signal) => signal.kind === 'script-execution-environment')
+      complete = byteLength(code) <= 20_000 && settings?.kind === 'script-execution-settings' && environment?.kind === 'script-execution-environment'
+      if (settings?.kind === 'script-execution-settings' && environment?.kind === 'script-execution-environment') {
+        reviewMaterials = { kind: 'static-network-script', code, url: reviewCandidateSignal.url, host: reviewCandidateSignal.host,
+          method: reviewCandidateSignal.method, interpreter: settings.interpreter, settingsDigest: settings.digest,
+          environmentDigest: environment.digest, complete }
+      }
+    }
+    facts.reviewMaterials = reviewMaterials
+    facts.signals.push({ kind: 'approval-review-materials', status: complete && reviewMaterials?.complete ? 'complete' : 'incomplete' })
   }
   facts.signals.push({ kind: 'policy-tier', tier: lanePackage })
   facts.factSources = factSources
