@@ -1412,7 +1412,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       input: args.toolInput,
       facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: permitTargetKind, ...(permitScope ? { scope: permitScope } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}), ...(readPathFact.vocabularyPath ? { vocabularyPath: readPathFact.vocabularyPath } : {}), ...(selectedDirectoryGrant ? { directoryGrant: { grantId: selectedDirectoryGrant.grantId, sessionId: selectedDirectoryGrant.sessionId, realPath: selectedDirectoryGrant.realPath, identity: selectedDirectoryGrant.identity } } : {}) }]
     })
-  } else if ((args.phase !== 'recheck' || readPathFact?.zone === 'outside-workdir') && readPathFact && isPermitReadTool && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
+  } else if (args.phase !== 'recheck' && readPathFact && isPermitReadTool && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
     const registration = {
       requestId: args.requestId ?? args.sessionId,

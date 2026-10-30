@@ -121,6 +121,8 @@ export interface ToolExecutionContext {
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
   browserConfig?: BrowserConfig
+  /** final-check: SHA-256 of the browser URL approved by policy; executor verifies before act dispatch. */
+  approvedBrowserPageIdentity?: string
   shellConfig?: ShellConfig | null
   /** gate/policy snapshot used to detect stale prepared shell plans. */
   policyRevision?: string

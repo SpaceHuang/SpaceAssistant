@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { DEFAULT_BROWSER_CONFIG } from '../../src/shared/domainTypes'
 import type { ToolExecutionContext } from './types'
 
@@ -114,6 +115,28 @@ describe('browserExecutor', () => {
         }
       }
     })
+  })
+
+  it('rejects a prepared act when the page changes while waiting for its rate-limit slot', async () => {
+    let currentUrl = 'https://example.com/docs/a'
+    const act = vi.fn().mockResolvedValue({})
+    const page = { url: () => currentUrl, title: async () => 'Docs' }
+    mockGetOrCreate.mockResolvedValueOnce({ stagehand: { act, context: { pages: () => [page] } } })
+    mockAcquire.mockImplementationOnce(async () => { currentUrl = 'https://example.org/docs/b' })
+    const registered = createBrowserRegisteredTool(browserExecutor)
+    const ctx = baseCtx({ lane: 'feishu', remoteContext: { source: 'feishu' }, toolUserConfirmed: true,
+      approvedBrowserPageIdentity: createHash('sha256').update(currentUrl).digest('hex'),
+      browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, rateLimitEnabled: true, actSessionTrustEnabled: false } })
+    const signal = new AbortController().signal
+    const handle = await registered.begin({ action: 'act', instruction: 'click the documentation search button' },
+      { requestId: 'page-wait', toolUseId: 'page-wait-call', signal, executionContext: ctx as never })
+    handle.awaitConfirmation(); handle.confirm(); handle.beginValidation()
+    await handle.validatePrepared({ requestId: 'page-wait', toolUseId: 'page-wait-call', signal, runtimeContext: ctx as never })
+    handle.finishValidation()
+    const result = await handle.execute({ requestId: 'page-wait', toolUseId: 'page-wait-call', signal, runtimeContext: ctx as never })
+    expect(result.success).toBe(false)
+    expect(act).not.toHaveBeenCalled()
+    handle.release()
   })
 
   it('rejects when browser disabled', async () => {

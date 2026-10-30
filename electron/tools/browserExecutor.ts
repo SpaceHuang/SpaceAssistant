@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { createHash } from 'node:crypto'
 import { logAgentError, logAgentEvent } from '../agentLogger/agentLogger'
 import { DEFAULT_BROWSER_CONFIG, type BrowserConfig } from '../../src/shared/domainTypes'
 import { assertSafeInstruction } from '../browser/instructionGuards'
@@ -277,6 +278,12 @@ export const browserExecutor: ToolExecutor = {
         }
         throw e
       }
+    }
+
+    // final-check: verify the exact approved page after asynchronous queue waits and immediately before dispatch.
+    if (action === 'act' && ctx.approvedBrowserPageIdentity) {
+      const currentIdentity = createHash('sha256').update(page.url()).digest('hex')
+      if (currentIdentity !== ctx.approvedBrowserPageIdentity) return { success: false, error: 'BROWSER_APPROVED_PAGE_CHANGED', duration: Date.now() - started }
     }
 
     let browserActionStarted = false

@@ -266,6 +266,10 @@ export function createAgentSdkStructuralPermitHandoff(input: {
     onConfirmed(binding, result, args, answerer = 'user') {
       const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }
       if (result.decision.type !== 'require-confirm') return true
+      if (args.toolName === 'browser' && args.toolInput.action === 'act' && args.currentPageUrl) {
+        const approvedBrowserPageIdentity = createHash('sha256').update(args.currentPageUrl).digest('hex')
+        input.updateExecutionContext(call, (context) => { context.approvedBrowserPageIdentity = approvedBrowserPageIdentity })
+      }
       const readPermit = answerer === 'agent'
         ? finalizeAgentReadReview({
           toolName: args.toolName,
