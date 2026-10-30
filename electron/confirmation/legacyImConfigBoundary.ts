@@ -77,6 +77,14 @@ function migrateImStandardV3IfReleaseReady(db: AppDatabase, releaseGate?: ImStan
   const legacyPackages = current.snapshot.legacySelectedPackages && typeof current.snapshot.legacySelectedPackages === 'object' &&
     !Array.isArray(current.snapshot.legacySelectedPackages)
     ? current.snapshot.legacySelectedPackages as Record<string, unknown> : {}
+  if (Object.hasOwn(current.snapshot, 'selectedPackage') && !isPolicyPackage(current.snapshot.selectedPackage)) return
+  if (Object.hasOwn(current.snapshot, 'legacySelectedPackages')) {
+    const rawLegacyPackages = current.snapshot.legacySelectedPackages
+    if (!rawLegacyPackages || typeof rawLegacyPackages !== 'object' || Array.isArray(rawLegacyPackages)) return
+    const record = rawLegacyPackages as Record<string, unknown>
+    if (Object.keys(record).some((key) => key !== 'wechat' && key !== 'feishu') ||
+      Object.values(record).some((value) => !isPolicyPackage(value))) return
+  }
   const selectedPackage = isPolicyPackage(current.snapshot.selectedPackage) ? current.snapshot.selectedPackage
     : isPolicyPackage(legacyPackages.wechat) ? legacyPackages.wechat : readPolicyPackages(db).wechat
   const currentPackages = readPolicyPackages(db)

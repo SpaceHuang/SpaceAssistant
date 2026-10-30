@@ -271,6 +271,11 @@ export interface ReenableImStandardV3Input {
 export function reenableImStandardV3(db: DatabaseSync, input: ReenableImStandardV3Input): CommitImPolicySnapshotResult {
   if (!isCompleteImStandardV3ReleaseGate(input.releaseGate)) throw new Error('IM standard v3 release gate is not satisfied')
   const current = readImPolicySnapshot(db, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
+  const unresolved = current.snapshot.unresolvedDifferences
+  if (current.snapshot.humanRequired === true || (current.snapshot.humanRequired !== undefined && typeof current.snapshot.humanRequired !== 'boolean') ||
+    (unresolved !== undefined && (!Array.isArray(unresolved) || unresolved.length > 0))) {
+    throw new Error('IM standard v3 re-enable blocked by unresolved snapshot qualification')
+  }
   const suppressed = validateAutomaticMigrationSuppression(current.snapshot) ?? []
   if (!suppressed.includes(IM_STANDARD_V3_BEHAVIOR_VERSION)) throw new Error('IM standard v3 is not migration-suppressed')
   return commitImPolicySnapshotInternal(db, {
