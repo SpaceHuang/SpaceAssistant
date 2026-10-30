@@ -922,8 +922,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           }
         },
         onConfirmed: (binding, result, args, answerer, selectedMemory) => {
-          permitHandoff.onConfirmed?.(binding, result, args, answerer)
-          if (answerer !== 'user' || result.decision.type !== 'require-confirm') return
+          const permitReady = permitHandoff.onConfirmed?.(binding, result, args, answerer)
+          if (permitReady === false) return false
+          if (answerer !== 'user' || result.decision.type !== 'require-confirm') return permitReady
           if (args.toolName === 'run_script' && selectedMemory?.kind === 'script-content' && db) {
             persistObservable('recordUserAnswerFromDecision', () => recordUserAnswerFromDecision({
               lane: materialsLane,
@@ -935,9 +936,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
               db: db!,
               audit: getSecurityAuditLog()
             }))
-            return
+            return permitReady
           }
-          if (args.toolName !== 'browser') return
+          if (args.toolName !== 'browser') return permitReady
           let cacheKey: import('../../src/shared/confirmation/types').CacheKey | undefined
           if (
             args.toolInput.action === 'navigate' &&
@@ -968,6 +969,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
               audit: getSecurityAuditLog()
             }))
           }
+          return permitReady
         }
       })
     },

@@ -14,10 +14,10 @@ function extractHostFromUrl(url: string): string | null {
  *
  * - navigate 且 mode=open：产 `browser-action`(navigate-open) + 通用 `network-egress`
  *   （域名缓存键 domain-any-action 档由此派生）；非 open 模式不产 navigate-open 信号（现状免确认）。
- * - act：目标域名不在 toolInput 中，由执行链路经 `env.browserAct.currentHost` 注入；
+ * - act：目标域名/页面身份不在 toolInput 中，由执行链路经 `env.browserAct` 注入；
  *   高危结论经 `env.browserAct.dangerous` 注入（映射 suspicious 档，§5.1 裁决）。
  *   act 的域名缓存键走 domain+action 档（与 navigate 信任档分离）。执行链路在
- *   高危或会话信任关闭时不注入 currentHost（现状语义：这些情形不消费域名信任）。
+ *   高危或会话信任关闭时不注入 currentHost（这些情形不消费域名信任），但仍绑定页面身份以便复核。
  */
 export function extractBrowserSignals(toolInput: Record<string, unknown>, env: EnvFacts): {
   signals: FactSignal[]
@@ -72,6 +72,7 @@ export function extractBrowserSignals(toolInput: Record<string, unknown>, env: E
       querySensitivity,
       completeness: instruction ? 'complete' : 'partial',
       ...(host ? { host } : {}),
+      ...(env.browserAct?.pageIdentity ? { pageIdentity: env.browserAct.pageIdentity } : {}),
       ...(dangerous ? { dangerous } : {})
     })
     return { signals, summary: dangerous ? '页面操作（高危）' : '页面操作' }

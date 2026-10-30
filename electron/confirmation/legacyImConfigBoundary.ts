@@ -65,6 +65,12 @@ function migrateImStandardV3IfReleaseReady(db: AppDatabase, releaseGate?: ImStan
 
   const current = readImPolicySnapshot(conn, { supportedBehaviorVersions: [...SUPPORTED_IM_POLICY_VERSIONS, 'im-standard-v3'] })
   if (current.policyBehaviorVersion === 'im-standard-v3') return
+  // migration invariant: release-wide mapping approval cannot resolve conflicts in this user's
+  // already migrated legacy snapshot. Keep that snapshot/version until its differences are handled.
+  const unresolvedDifferences = current.snapshot.unresolvedDifferences
+  const humanRequired = current.snapshot.humanRequired
+  if ((humanRequired !== undefined && typeof humanRequired !== 'boolean') || humanRequired === true ||
+    (unresolvedDifferences !== undefined && (!Array.isArray(unresolvedDifferences) || unresolvedDifferences.length > 0))) return
   const suppressed = Array.isArray(current.snapshot.automaticMigrationSuppressedVersions)
     ? current.snapshot.automaticMigrationSuppressedVersions as string[] : []
   if (suppressed.includes('im-standard-v3')) return
