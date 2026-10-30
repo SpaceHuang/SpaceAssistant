@@ -20,6 +20,7 @@
 | 2026-10-13 | `36edb110` | 关闭 Track 隔离与消息 ID 缺口（跨主题：IM） | `2026-10-11-remote-im-intent-track-development-plan.md`（已归档） | 消息 ID 精度与隔离边界收口 |
 | 2026-09-09 | — | `refactor(message-fact): persist turn lifecycle in core` | `message-fact-persistence-core-refactor-plan.md`（已归档） | 原判「在途」，核验更正为已实现；需求侧同名文档同批归档 |
 | 2026-09-11 | `da010dcb` | 新增 prompt cache breakpoints | `message-fact-pipeline-prompt-cache-optimization-plan.md`（已归档） | 同上 |
+| 2026-10-30 | 文档基线 `58d28d76` | 新增全链路性能改进评审草稿 | [会话存储全链路性能改进方案](./in-flight/会话存储全链路性能改进方案.md) | 源码核实追加全前缀校验、控制信息读取正文等成本；只交方案，保留待批取舍与Windows外验，不宣称已修复或已实施 |
 
 ## 存疑（文档与记录不一致）
 
