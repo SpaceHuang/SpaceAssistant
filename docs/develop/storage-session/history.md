@@ -21,6 +21,7 @@
 | 2026-09-09 | — | `refactor(message-fact): persist turn lifecycle in core` | `message-fact-persistence-core-refactor-plan.md`（已归档） | 原判「在途」，核验更正为已实现；需求侧同名文档同批归档 |
 | 2026-09-11 | `da010dcb` | 新增 prompt cache breakpoints | `message-fact-pipeline-prompt-cache-optimization-plan.md`（已归档） | 同上 |
 | 2026-10-30 | 文档基线 `58d28d76` | 新增全链路性能改进评审草稿 | [会话存储全链路性能改进方案](./in-flight/会话存储全链路性能改进方案.md) | 源码核实追加全前缀校验、控制信息读取正文等成本；只交方案，保留待批取舍与Windows外验，不宣称已修复或已实施 |
+| 2026-10-30 | 评审基线 `e9c6aa6f` | 补齐性能方案三处遗漏 | [会话存储全链路性能改进方案](./in-flight/会话存储全链路性能改进方案.md) | 增补F-17～19、U27／28和AC-11～13；核正markers独立effect及live先于summary的顺序，先展示待保存内容另立D-4待批；无代码修改 |
 
 ## 存疑（文档与记录不一致）
 
