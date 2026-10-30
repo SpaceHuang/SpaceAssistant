@@ -2,6 +2,7 @@ import type { PolicyRule } from '../confirmation/types'
 import type { ImPolicyPackage } from './imPolicyBehavior'
 import { imEffectiveActionFor } from './imPolicyBehavior'
 import { resolvePolicyBehavior } from './policyBehaviorVersion'
+import { IM_STANDARD_V3_LOCKED_RULES } from './imStandardV3Rules'
 
 export interface ResolveImPolicyRulesForVersionInput {
   policyBehaviorVersion: unknown
@@ -54,6 +55,7 @@ export function resolveImPolicyRulesForVersion(input: ResolveImPolicyRulesForVer
           action: 'ask', answerer: 'agent', reason: 'Complete static HTTPS request target and execution environment are reviewed by the IM safety agent'
         } : undefined
         resolved.push(
+          ...IM_STANDARD_V3_LOCKED_RULES,
           { id: 'im-outside-read-review', when: 'invocation', match: { lane: ['wechat', 'feishu'], toolName: ['read_file', 'grep'], actionClass: 'read', signals: ['path-target:outside-workdir', 'read-target-scope:single-target', 'read-target-kind:file'] }, action: 'ask', answerer: 'agent', reason: 'IM directory-external single-file read review' },
           { id: 'im-outside-list-review', when: 'invocation', match: { lane: ['wechat', 'feishu'], toolName: 'list_directory', actionClass: 'read', signals: ['path-target:outside-workdir', 'read-target-scope:direct-entries', 'read-target-kind:directory'] }, action: 'ask', answerer: 'agent', reason: 'IM directory-external direct listing review' },
           { id: 'im-outside-write-new-review', when: 'invocation', match: { lane: ['wechat', 'feishu'], toolName: 'write_file', actionClass: 'write', signals: ['write-target-scope:outside-workdir', 'write-target-new', 'approval-review-materials:complete'], excludeSignals: ['write-target-unsupported', 'path-target:sensitive-file'] }, action: 'ask', answerer: 'agent', reason: 'IM directory-external new file review' },

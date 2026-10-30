@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveImPolicyRulesForVersion } from './policyPackages'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
 import { decide } from './policyEngine'
+import { resolveImPolicyFloorForVersion } from './policyFloor'
 
 const rules = [
   { id: 'im-low-risk-create', when: 'invocation' as const, action: 'ask' as const, reason: 'new file', match: { lane: ['wechat', 'feishu'], toolName: 'write_file', signals: ['write-target-new', 'write-target-scope:inside-workdir', 'path-target:workdir-normal'] } },
@@ -31,6 +32,35 @@ const rules = [
 ]
 
 describe('version-pinned IM behavior candidates', () => {
+  it('keeps v3-only locked rules out of frozen v1.6 and v2 rule sets and floors', () => {
+    const v3OnlyIds = [
+      'im-outside-write-review-materials-incomplete-deny', 'im-shell-review-materials-incomplete-deny',
+      'im-script-review-materials-incomplete-deny', 'im-wechat-attachment-review-materials-incomplete-deny',
+      'remote-wechat-media-sensitive-file-outside-deny', 'remote-wechat-media-system-dir-outside-deny'
+    ]
+    for (const version of ['im-v1.6', 'im-standard-v2'] as const) {
+      const resolved = resolveImPolicyRulesForVersion({ policyBehaviorVersion: version, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+      const floor = resolveImPolicyFloorForVersion(version, 'standard')
+      expect(resolved.some((rule) => v3OnlyIds.includes(rule.id))).toBe(false)
+      expect(floor.some((rule) => v3OnlyIds.includes(rule.id))).toBe(false)
+    }
+    const v3 = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v3', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    expect(v3OnlyIds.every((id) => v3.some((rule) => rule.id === id && rule.locked && rule.action === 'deny'))).toBe(true)
+    expect(v3OnlyIds.every((id) => resolveImPolicyFloorForVersion('im-standard-v3', 'standard').some((rule) => rule.id === id))).toBe(true)
+
+    const legacyOverride = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'remote-wechat-media-outside-deny' ? { ...rule, action: 'allow' as const } : rule)
+    const legacy = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-v1.6', pkg: 'custom', rules: legacyOverride })
+    expect(legacy.find((rule) => rule.id === 'remote-wechat-media-outside-deny')?.action).toBe('allow')
+    expect(legacy.some((rule) => v3OnlyIds.includes(rule.id))).toBe(false)
+    const sensitiveAttachment = decide({ toolName: 'wechat_reply', actionClass: 'outbound', baseRiskLevel: 'medium',
+      signals: [{ kind: 'wechat-media-target', boundary: 'outside-workdir', zone: 'sensitive-file', targetKind: 'file' }],
+      summary: { text: 'legacy reviewed attachment' } },
+    { lane: 'wechat', origin: { kind: 'direct-owner' }, sessionId: 'legacy-sensitive-override', policyTier: 'custom' },
+    [legacy.find((rule) => rule.id === 'remote-wechat-media-outside-deny')!],
+    { cache: { lookup: () => null }, config: {}, migrationComplete: false })
+    expect(sensitiveAttachment).toMatchObject({ type: 'auto-allow', ruleId: 'remote-wechat-media-outside-deny' })
+  })
+
   it.each(['strict', 'loose', 'custom'] as const)('keeps v3 file and Git policy unchanged for %s package', (pkg) => {
     const samples = [
       { toolName: 'read_file', actionClass: 'read' as const, signals: [{ kind: 'path-target', path: '/tmp/outside.txt', zone: 'outside-workdir' as const }, { kind: 'read-target-scope', scope: 'single-target' as const }, { kind: 'read-target-kind', targetKind: 'file' as const }] },

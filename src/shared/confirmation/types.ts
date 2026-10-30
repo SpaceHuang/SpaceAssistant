@@ -239,10 +239,17 @@ export type FactSignal =
   | { kind: 'sandbox-escape'; blockedReason: string }
 
 export type ApprovalReviewMaterials =
-  | { kind: 'outside-file-write'; operation: 'new' | 'edit'; target: string; content?: string; oldText?: string; replacementText?: string; complete: boolean }
+  | { kind: 'outside-file-write'; operation: 'new' | 'edit'; target: string; content?: string; oldText?: string; replacementText?: string;
+      targetContent?: string; proposedContent?: string; replaceAll?: boolean; tolerateEscapeLayer?: boolean;
+      matchCount?: number; matchRanges?: readonly { startLine: number; endLine: number }[];
+      matchRangesTruncated?: boolean;
+      executionOutcome?: 'applies-first' | 'applies-all' | 'rejects-ambiguous-matches' | 'no-match'; complete: boolean }
   | { kind: 'git-query'; command: string; cwd: string; timeoutSeconds: number; shell: string; environmentKeys: string[]; environmentFingerprint: string; planDigest: string; behaviorCoverage: 'complete' | 'partial'; complete: boolean }
   | { kind: 'wechat-attachment'; path: string; fileName: string; recipient?: string; ownerId?: string; content: string; contentDigest: string; inspectionCoverage: 'complete' | 'partial'; evidenceKinds: readonly string[]; complete: boolean }
-  | { kind: 'static-network-script'; code: string; url: string; host: string; method: 'GET' | 'HEAD'; interpreter: string; settingsDigest: string; environmentDigest: string; complete: boolean }
+  | { kind: 'static-network-script'; code: string; url: string; host: string; method: 'GET' | 'HEAD'; interpreter: string;
+      interpreterFallbackCandidates: readonly string[]; cwd: string; timeoutSeconds: number;
+      interpreterResolution: 'configured-command' | 'first-version-probe-success';
+      settingsDigest: string; environmentDigest: string; complete: boolean }
 
 export interface ContentFacts {
   toolName: string

@@ -62,32 +62,6 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'deny', locked: true, reason: '远程会话只能写入当前工作目录内的文件'
   },
   {
-    id: 'im-outside-write-review-materials-incomplete-deny', when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:outside-workdir', 'approval-review-materials:incomplete'] },
-    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'Incomplete outside-workdir write materials cannot be reviewed'
-  },
-  {
-    id: 'im-shell-review-materials-incomplete-deny', when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'run_shell', signals: ['im-shell-review-candidate', 'approval-review-materials:incomplete'] },
-    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'Incomplete prepared Git query materials cannot be reviewed'
-  },
-  {
-    id: 'im-script-review-materials-incomplete-deny', when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['im-script-network-review-candidate:complete', 'approval-review-materials:incomplete'] },
-    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'Incomplete static network script materials cannot be reviewed'
-  },
-  {
-    id: 'im-wechat-attachment-review-materials-incomplete-deny', when: 'invocation',
-    match: { lane: ['wechat'], toolName: 'wechat_reply', signals: ['wechat-media-target:outside-workdir', 'wechat-media-review-materials:complete', 'approval-review-materials:incomplete'] },
-    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'Incomplete external WeChat attachment materials cannot be reviewed'
-  },
-  ...(['sensitive-file', 'system-dir'] as const).map((zone) => ({
-    id: `remote-wechat-media-${zone}-outside-deny`, when: 'invocation' as const,
-    match: { lane: ['wechat' as const], toolName: 'wechat_reply', signals: ['wechat-media-target:outside-workdir', `wechat-media-target-zone:${zone}`] },
-    denyClass: 'forbidden' as const, action: 'deny' as const, locked: true,
-    reason: 'Sensitive external attachments cannot use ordinary Agent review'
-  })),
-  {
     id: 'write-outside-standard-review', when: 'invocation',
     match: { lane: ['desktop'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:outside-workdir', 'policy-tier:standard'] },
     denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '工作目录外写入由安全审核 Agent 审核'
