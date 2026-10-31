@@ -9,7 +9,7 @@ import type { Message } from '../../src/shared/domainTypes'
 import { createAcceptedTurn, type AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { TurnExecutionConfig } from '../../src/shared/assistantFactAggregator'
 import { queueInputFingerprint } from '../queueInputFingerprint'
-import { readSessionTranscript } from '../database/sessionTranscript'
+import { readSessionTranscript, readSessionTranscriptControl } from '../database/sessionTranscript'
 import { cancelQueuedSessionExecution, claimSessionExecution, markSessionExecutionStarted, markSessionExecutionUncertain, releaseSessionExecution } from '../database/sessionTranscript'
 import { acceptTurnContext, readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { runInTransaction } from '../database/transaction'
@@ -31,8 +31,12 @@ import { TurnRuntime, type TurnRuntimeOptions } from '../turnRuntime'
 import { cancelPendingAgentContinuation, claimAgentContinuation, createOrGetAgentContinuation, readAgentContinuationByRequest, readAgentContinuationByTarget, readAwaitingAgentContinuationBySource, readCancelledAgentContinuationBySource, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
 import { hasActiveSessionExecutionOwner, registerActiveSessionExecutionOwner, releaseActiveSessionExecutionOwner } from '../runtime/sessionExecutionOwnerRegistry'
 import { createSessionTranscriptRecoveryAdapter } from './recoveryDatabaseAdapter'
+import { restoreLegacySessionContextSnapshot, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
+import type { CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
 
 const turnStorageByExecution = new WeakMap<SessionExecutionStore, TurnRuntimeOptions['storage']>()
+
+type HostedContextCacheEntry = Readonly<{ generation: string; version: number; scopeKey: string; context: SessionContextState }>
 
 /** Host-only factory: the application execution port never exposes its raw TurnStorage. */
 export function createTurnRuntimeForSessionExecution(execution: SessionExecutionStore,
@@ -53,6 +57,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
   const liveConn = () => getDbConnection(db)
   const coordinator = createTurnCoordinatorStorage(db)
   const transcriptRecovery = createSessionTranscriptRecoveryAdapter(db)
+  const hostedContextBySession = new Map<string, HostedContextCacheEntry>()
   const execution: SessionExecutionStore = {
     continuations: Object.freeze({
       createOrGet: ({ sessionId, sourceInvocationId, requestIdempotencyKey, createdBy, frozenConfig }: Parameters<SessionExecutionStore['continuations']['createOrGet']>[0]) => {
@@ -125,10 +130,34 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
     getNextQueuedMessage: (sessionId) => getNextQueuedMessage(db, sessionId),
     readAccepted: ({ sessionId, requestId }) => readAcceptedTurn(db, sessionId, requestId),
     readTranscriptState: (sessionId) => {
-      const { messages: _messages, ...state } = readSessionTranscript(db, sessionId)
-      return state
+      const { sessionId: targetSessionId, version, lastTurnId, status } = readSessionTranscriptControl(db, sessionId)
+      return { sessionId: targetSessionId, version, ...(lastTurnId ? { lastTurnId } : {}), status }
     },
     readHostedTranscript: (sessionId) => readSessionTranscript(db, sessionId),
+    prepareHostedContext: async ({ sessionId, scopeKey }) => {
+      const control = readSessionTranscriptControl(db, sessionId)
+      if (!control.generation) throw new Error('SESSION_CONTEXT_SESSION_NOT_FOUND')
+      const generation = control.generation
+      const cached = hostedContextBySession.get(sessionId)
+      if (control.status === 'ready' && cached?.generation === generation && cached.version === control.version && cached.scopeKey === scopeKey) {
+        return { ...control, generation, context: cached.context, warm: true }
+      }
+      hostedContextBySession.delete(sessionId)
+      const snapshot = control.status === 'ready' ? readSessionTranscript(db, sessionId) : undefined
+      const context = restoreLegacySessionContextSnapshot({
+        invocationId: `session-context:${sessionId}`, turnId: `session-context:${sessionId}`,
+        committedVersion: control.version,
+        messages: (snapshot?.messages ?? []) as CanonicalModelMessage[], scope: { kind: 'session', sessionId }
+      })
+      return { ...control, generation, context, warm: false }
+    },
+    commitHostedContext: ({ sessionId, generation, scopeKey, context }) => {
+      const control = readSessionTranscriptControl(db, sessionId)
+      if (control.status !== 'ready' || control.generation !== generation || control.version !== context.committedVersion) return false
+      hostedContextBySession.set(sessionId, { generation, version: context.committedVersion, scopeKey, context })
+      return true
+    },
+    invalidateHostedContext: (sessionId) => { hostedContextBySession.delete(sessionId) },
     recoverExecutionTarget: (sessionId) => {
       if (hasActiveSessionExecutionOwner(sessionId)) {
         return { status: 'active-owner', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }

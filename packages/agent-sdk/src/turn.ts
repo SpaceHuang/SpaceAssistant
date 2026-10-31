@@ -4,7 +4,7 @@ import { type SafetyDenyReason, type SafetyGatePort } from './safetyGate'
 import { ToolExecutionAfterDispatchError, ToolExecutionRejectedError, type PermitBoundToolExecutionPort } from './toolExecutionPort'
 import { createHash } from 'node:crypto'
 import { surfaceItemIdentities, surfaceItemIdentity } from './contextIdentity'
-import { applyContextEvent, beginContextTurn, createApprovalSystemMessage, createContextSelectionIntent, restoreSessionContext, selectContextCommit, type SessionContextState } from './sessionContext'
+import { applyContextEvent, beginContextTurn, commitContextTurn, createApprovalSystemMessage, createContextSelectionIntent, restoreSessionContext, selectContextCommit, type SessionContextState } from './sessionContext'
 import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort, type HistorySnapshot, type SessionExecutionLease } from './history'
 import { createContextRegistrar, createInvocationContextPort, type ContextFrame, type ContextItem, type ContextProjectionCommitter, type ContextScope } from './context'
 import { ResourceLockRegistry } from './resourceLock'
@@ -211,6 +211,10 @@ export async function runHostedAgentTurn(input: {
   initialResponse?: HostCommittedModelResponse
   sessionTranscriptBaseVersion?: number
   sessionTranscriptCommitProtocol?: 2
+  sessionContext?: SessionContextState
+  sessionContextInputMessages?: readonly CanonicalTurnMessage[]
+  sessionContextFailureInputMessages?: readonly CanonicalTurnMessage[]
+  onSessionContextCommitted?(state: SessionContextState): void
   contextProjectionCommitter?: ContextProjectionCommitter
   sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]
   observer?: AgentTurnObserver
@@ -232,7 +236,7 @@ export async function runHostedAgentTurn(input: {
   if (ports.invocationId !== input.invocationId) throw new Error('host returned ports for a different invocation')
   if (input.turnId && ports.turnId !== input.turnId) throw new Error('host returned ports for a different turn')
   if (ports.routeId !== input.routeId) throw new Error('host returned ports for a different route')
-  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, assistantMessageId: input.assistantMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), ...(input.contextProjectionCommitter ?? ports.contextProjectionCommitter ? { contextProjectionCommitter: input.contextProjectionCommitter ?? ports.contextProjectionCommitter } : {}), maxToolRounds: ports.maxToolRounds, observer: input.observer ?? ports.observer })
+  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, assistantMessageId: input.assistantMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), ...(input.contextProjectionCommitter ?? ports.contextProjectionCommitter ? { contextProjectionCommitter: input.contextProjectionCommitter ?? ports.contextProjectionCommitter } : {}), ...(input.sessionContext ? { sessionContext: input.sessionContext } : {}), ...(input.sessionContextInputMessages ? { sessionContextInputMessages: input.sessionContextInputMessages } : {}), ...(input.sessionContextFailureInputMessages ? { sessionContextFailureInputMessages: input.sessionContextFailureInputMessages } : {}), ...(input.onSessionContextCommitted ? { onSessionContextCommitted: input.onSessionContextCommitted } : {}), maxToolRounds: ports.maxToolRounds, observer: input.observer ?? ports.observer })
 }
 
 export type { CanonicalContentBlock, CanonicalToolCall } from './model'
@@ -444,6 +448,10 @@ export type RunAgentTurnInput = {
   sessionLedgerForInvocationTerminal?(terminal: { status: 'completed' | 'failed' | 'interrupted'; turnId: string; sessionEventReason?: 'completed' | 'failed' | 'interrupted' | 'cancelled' }): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionTranscriptBaseVersion?: number
   sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]
+  sessionContext?: SessionContextState
+  sessionContextInputMessages?: readonly CanonicalTurnMessage[]
+  sessionContextFailureInputMessages?: readonly CanonicalTurnMessage[]
+  onSessionContextCommitted?(state: SessionContextState): void
   /** Internal isolated path; default product callers keep protocol 1 until P1-08. */
   sessionTranscriptCommitProtocol?: 2
   /** Internal isolated path; SQLite rechecks this identity with claim and queue in the terminal transaction. */
@@ -557,6 +565,9 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
                   messages: selectContextCommit(contextRef.current!, { kind: 'park' }).messages as readonly Readonly<Record<string, unknown>>[] }) }
         : undefined
       await appendTerminalHistory('invocation-parked', terminalPayload, undefined, transcriptCommit)
+      if (transcriptCommit && contextRef.current && input.onSessionContextCommitted) {
+        input.onSessionContextCommitted(commitContextTurn(contextRef.current, { kind: 'park' }, input.sessionTranscriptBaseVersion! + 1))
+      }
       return result
     }
     await projectTurnOutput(input.observer, result)
@@ -586,6 +597,9 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
           } } : {}) }
       : undefined
     await appendTerminalHistory('invocation-completed', terminalPayload, sessionLedger, transcriptCommit)
+    if (transcriptCommit && contextRef.current && input.onSessionContextCommitted) {
+      input.onSessionContextCommitted(commitContextTurn(contextRef.current, { kind: 'completed' }, input.sessionTranscriptBaseVersion! + 1))
+    }
     await observe(input.observer, 'turn-finished', () => input.observer?.onTurnFinished?.(result))
     return result
   } catch (error) {
@@ -715,6 +729,9 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
               } } : {}) }
           : undefined
         await appendTerminalHistory(terminalKind, terminalPayload, sessionLedger, transcriptCommit)
+        if (transcriptCommit && contextRef.current && input.onSessionContextCommitted && input.sessionTranscriptBaseVersion !== undefined) {
+          input.onSessionContextCommitted(commitContextTurn(contextRef.current, { kind: 'failed' }, input.sessionTranscriptBaseVersion + 1))
+        }
       } catch { /* Preserve the original turn failure when terminal persistence also fails. */ }
     }
     await observe(input.observer, 'turn-failed', () => input.observer?.onTurnFailed?.({ error, status }))
@@ -937,11 +954,17 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   if (!input.invocationId.trim()) throw new Error('invocationId is required')
   const invocationId = input.invocationId
   const messages: CanonicalTurnMessage[] = structuredClone([...input.request.messages])
-  let sessionContext: SessionContextState = restoreSessionContext({ committedVersion: input.sessionTranscriptBaseVersion ?? 0, events: [] })
+  let sessionContext: SessionContextState = input.sessionContext ?? restoreSessionContext({ committedVersion: input.sessionTranscriptBaseVersion ?? 0, events: [] })
   const setSessionContext = (next: SessionContextState) => { sessionContext = next; contextRef.current = next }
+  const contextInputMessages = input.sessionContext
+    ? input.sessionContextInputMessages ?? (input.requiredUserMessage ? [input.requiredUserMessage.message] : messages)
+    : messages
+  const contextFailureInputMessages = input.sessionContext
+    ? input.sessionContextFailureInputMessages ?? contextInputMessages
+    : input.sessionTranscriptFailureMessages ?? messages
   setSessionContext(beginContextTurn(sessionContext, {
     invocationId, baseVersion: input.sessionTranscriptBaseVersion ?? 0,
-    inputMessages: messages, failureInputMessages: input.sessionTranscriptFailureMessages ?? messages,
+    inputMessages: contextInputMessages, failureInputMessages: contextFailureInputMessages,
     ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}),
     requestSystem: ''
   }))

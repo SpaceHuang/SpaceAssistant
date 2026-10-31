@@ -6,6 +6,7 @@ import type { PersistedTurnRecord, TurnStarted, TurnStorage } from '../../../src
 import type { EnqueueResult, HostedTranscriptSnapshot, MessageEntry, ContinuationIntentAcceptance,
   ContinuationIntentReceipt, ContinuationSourceRef, SelectionFence, MessageSkeleton } from './model'
 import type { SessionHistoryPort } from './ports'
+import type { SessionContextState } from '../../../packages/agent-sdk/src/sessionContext'
 
 export type PreparedIdentity = Readonly<{
   sessionId: string; turnId: string; requestId: string; startToken: string; userMessage?: Pick<Message, 'id'>
@@ -77,6 +78,12 @@ export interface SessionExecutionStore {
   readAccepted(input: Readonly<{ sessionId: string; requestId: string }>): AcceptedTurn | undefined
   readTranscriptState(sessionId: string): Readonly<{ sessionId: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked' }>
   readHostedTranscript(sessionId: string): HostedTranscriptSnapshot
+  prepareHostedContext(input: Readonly<{ sessionId: string; scopeKey: string }>): Promise<Readonly<{
+    generation: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked'
+    context: SessionContextState; warm: boolean
+  }>>
+  commitHostedContext(input: Readonly<{ sessionId: string; generation: string; scopeKey: string; context: SessionContextState }>): boolean
+  invalidateHostedContext(sessionId: string): void
   recoverExecutionTarget(sessionId: string): { status: 'ready' | 'blocked' | 'active-owner'; releasedUnstarted: number; markedUncertain: number; reconciled: number }
   loadAcceptedContinuationTranscript(ref: Readonly<{ sessionId: string; turnId: string }>): ClaudeChatMessageWithBlocks[] | undefined
   claimExecution(input: Readonly<{ sessionId: string; turnId: string; ownerId: string }>): ExecutionClaimResult

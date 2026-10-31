@@ -41,6 +41,15 @@ const { mockRunHostedAgentTurn, mockRunHostedAgentTurnWithParticipant, mockSessi
           sessionId: String(input.sessionId), turnId: String(input.turnId), baseVersion: input.sessionTranscriptBaseVersion,
           outcome, messages: (messages ?? []).filter((message) => message.role !== 'system')
         })
+        const context = input.sessionContext as Record<string, unknown> | undefined
+        const publish = input.onSessionContextCommitted
+        if (outcome === 'completed' && context && typeof publish === 'function' && messages) {
+          const committedMessages = messages.filter((message) => message.role !== 'system')
+          publish({ ...context, committedVersion: input.sessionTranscriptBaseVersion + 1,
+            committed: committedMessages, working: committedMessages, failure: committedMessages, parkBaseline: committedMessages,
+            pendingTools: new Map(), completedToolResults: new Map(), approvedToolCallIds: new Set(),
+            requiredUserMessage: undefined, activeInvocationId: undefined })
+        }
       }
     }
     if (failure !== undefined) throw failure
@@ -88,6 +97,15 @@ function createHistoryOnlyDatabase(sessionId: string): AppDatabase {
 type HostedTurnHandoffFixtureInput = Omit<Parameters<typeof createComposedHostedTurnHandoff>[0], 'sessionDb'> & { sessionDb?: AppDatabase }
 function createHostedTurnHandoff(input: HostedTurnHandoffFixtureInput) {
   const { sessionDb, ...ports } = input
+  if (sessionDb && input.sessionId && !getDbConnection(sessionDb).prepare('SELECT 1 AS found FROM sessions WHERE id=?').get(input.sessionId)) {
+    const backing = createSession(sessionDb, { name: 'hosted handoff fixture', model: 'test' })
+    const conn = getDbConnection(sessionDb)
+    const row = conn.prepare('SELECT * FROM sessions WHERE id=?').get(backing.id) as Record<string, unknown>
+    row.id = input.sessionId
+    const columns = Object.keys(row)
+    conn.prepare(`INSERT INTO sessions (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`)
+      .run(...columns.map((column) => row[column]))
+  }
   if (sessionDb && input.sessionId) mockSessionParticipants.set(input.invocationId, { db: sessionDb, history: input.history })
   const storage = sessionDb ? createSqliteSessionStorage(sessionDb) : undefined
   return createComposedHostedTurnHandoff({
@@ -157,6 +175,49 @@ describe('createHostedTurnHandoff', () => {
     expect(recoverExecutionTarget).toHaveBeenCalledWith(session.id)
     expect(order).toEqual(['recover', 'claim'])
     expect(claimExecution).toHaveBeenCalledOnce()
+    db.close()
+  })
+
+  it('reuses the committed SDK context across turns without loading the transcript again', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'warm-session-context', model: 'test' })
+    const storage = createSqliteSessionStorage(db)
+    const prepareHostedContext = vi.fn(storage.execution.prepareHostedContext.bind(storage.execution))
+    const readHostedTranscript = vi.fn(storage.execution.readHostedTranscript.bind(storage.execution))
+    const sessionExecution = { ...storage.execution, prepareHostedContext, readHostedTranscript }
+    const history = {
+      read: async () => ({ events: [{ kind: 'invocation-completed', payload: { status: 'completed' } }] }),
+      readLatestInvocationForSession: async () => ({ kind: 'none' })
+    }
+    const userOne = { role: 'user' as const, content: 'first' }
+    const assistantOne = { role: 'assistant' as const, content: 'answer one' }
+    const userTwo = { role: 'user' as const, content: 'second' }
+    const assistantTwo = { role: 'assistant' as const, content: 'answer two' }
+    mockRunHostedAgentTurn.mockImplementationOnce(async () => ({ text: 'answer one', modelTurns: 1, finishReason: 'stop',
+      usage: { inputTokens: 1, outputTokens: 1 }, messages: [userOne, assistantOne] }))
+    mockRunHostedAgentTurn.mockImplementationOnce(async ({ request, sessionContext, sessionContextInputMessages }: {
+      request: { messages: readonly unknown[] }; sessionContext: { committed: readonly unknown[] }; sessionContextInputMessages: readonly unknown[]
+    }) => {
+      expect(request.messages).toEqual([userOne, assistantOne, userTwo])
+      expect(sessionContext.committed).toEqual([userOne, assistantOne])
+      expect(sessionContextInputMessages).toEqual([userTwo])
+      return { text: 'answer two', modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1 },
+        messages: [userOne, assistantOne, userTwo, assistantTwo] }
+    })
+    const run = (invocationId: string, turnId: string, user: typeof userOne) => createHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history: history as never, invocationId, turnId, routeId: 'route', sessionId: session.id,
+      sessionDb: db, sessionQueries: storage.queries, sessionExecution
+    })
+
+    await run('warm-invocation-1', 'warm-turn-1', userOne)({ request: { messages: [userOne] }, requiredUserMessage: { id: 'warm-u1', message: userOne } })
+    await run('warm-invocation-2', 'warm-turn-2', userTwo)({ request: { messages: [userTwo] }, requiredUserMessage: { id: 'warm-u2', message: userTwo } })
+
+    expect(prepareHostedContext.mock.results.map(({ value }) => (value as Promise<{ warm: boolean }>))).toHaveLength(2)
+    await expect(Promise.all(prepareHostedContext.mock.results.map(({ value }) => value))).resolves.toEqual([
+      expect.objectContaining({ warm: false }), expect.objectContaining({ warm: true })
+    ])
+    expect(readHostedTranscript).not.toHaveBeenCalled()
     db.close()
   })
 

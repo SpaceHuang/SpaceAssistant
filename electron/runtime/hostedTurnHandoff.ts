@@ -20,6 +20,7 @@ import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
 import { withSessionTurnAdmission } from '../sessionCompactionLock'
 import { registerActiveSessionExecutionOwner, releaseActiveSessionExecutionOwner } from './sessionExecutionOwnerRegistry'
+import { restoreLegacySessionContextSnapshot, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 import type { DynamicModelTool } from './dynamicToolRequest'
 
 function hasSessionHistoryQueries(history: HistoryPort): history is SessionHistoryPort {
@@ -186,6 +187,9 @@ export function createHostedTurnHandoff(input: {
     }
     let ownership: { sessionId: string; turnId: string; ownerId: string; generation: number } | undefined
     let queuedOwnership: { sessionId: string; turnId: string; ownerId: string } | undefined
+    let sessionContext: SessionContextState | undefined
+    let contextGeneration: string | undefined
+    let contextPublished = false
     let keepClaimedForReconciliation = false
     let executionStarted = false
     try {
@@ -211,7 +215,16 @@ export function createHostedTurnHandoff(input: {
         if (claim.reason === 'blocked' || Date.now() >= waitUntil) throw new Error(claim.reason === 'blocked' ? 'SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED' : 'SESSION_EXECUTION_QUEUE_TIMEOUT')
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
-      checkpoint = input.sessionExecution.readHostedTranscript(input.sessionId)
+      if (input.trackScopedModelInput) {
+        const state = input.sessionExecution.readTranscriptState(input.sessionId)
+        checkpoint = { ...state, messages: [] }
+      } else {
+        const preparedContext = await input.sessionExecution.prepareHostedContext({ sessionId: input.sessionId, scopeKey: 'session' })
+        checkpoint = { sessionId: input.sessionId, version: preparedContext.version, status: preparedContext.status,
+          ...(preparedContext.lastTurnId ? { lastTurnId: preparedContext.lastTurnId } : {}), messages: preparedContext.context.committed }
+        sessionContext = preparedContext.context
+        contextGeneration = preparedContext.generation
+      }
       if (checkpoint.status !== 'ready') throw new Error('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED')
       if (checkpoint.version > 0) {
         logAgentEvent('info', 'history.cutover', {
@@ -223,7 +236,7 @@ export function createHostedTurnHandoff(input: {
     let request = handoff.request
     if (!input.trackScopedModelInput && checkpoint && checkpoint.version > 0 && handoff.requiredUserMessage) {
       const systemMessages = handoff.request.messages.filter((message) => message.role === 'system')
-      request = { ...handoff.request, messages: [...systemMessages, ...committedTranscriptMessages(checkpoint.messages as CanonicalModelMessage[]), handoff.requiredUserMessage.message] }
+      request = { ...handoff.request, messages: [...systemMessages, ...committedTranscriptMessages((sessionContext?.committed ?? checkpoint.messages) as CanonicalModelMessage[]), handoff.requiredUserMessage.message] }
     } else if (!input.trackScopedModelInput && input.sessionId && handoff.requiredUserMessage && hasSessionHistoryQueries(input.history)) {
       // Existing streams must never silently fall back to legacy session messages.
       const sessionHistory = input.history
@@ -315,6 +328,18 @@ export function createHostedTurnHandoff(input: {
         }]
       }
     }
+    if (sessionContext && checkpoint?.version === 0 && handoff.requiredUserMessage) {
+      const required = JSON.stringify(handoff.requiredUserMessage.message)
+      let acceptedIndex = -1
+      for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+        if (JSON.stringify(request.messages[index]) === required) { acceptedIndex = index; break }
+      }
+      const legacySeed = acceptedIndex >= 0 ? request.messages.slice(0, acceptedIndex).filter((message) => message.role !== 'system') : []
+      sessionContext = restoreLegacySessionContextSnapshot({
+        invocationId: `legacy-session-context:${input.sessionId}`, turnId: `legacy-session-context:${input.sessionId}`,
+        committedVersion: 0, messages: legacySeed as CanonicalModelMessage[], scope: { kind: 'session', sessionId: input.sessionId! }
+      })
+    }
     const transcriptFailureMessages = ownership && checkpoint && handoff.requiredUserMessage
       ? (() => {
           const required = JSON.stringify(handoff.requiredUserMessage.message)
@@ -389,6 +414,11 @@ export function createHostedTurnHandoff(input: {
         requiredUserMessage: handoff.requiredUserMessage,
         routeId: input.routeId,
         request: handoff.signal ? { ...request, signal: handoff.signal } : request,
+        ...(sessionContext ? { sessionContext } : {}),
+        ...(sessionContext && handoff.requiredUserMessage ? { sessionContextInputMessages: [handoff.requiredUserMessage.message], sessionContextFailureInputMessages: [handoff.requiredUserMessage.message] } : {}),
+        ...(sessionContext && contextGeneration ? { onSessionContextCommitted: (context: SessionContextState) => {
+          contextPublished = input.sessionExecution!.commitHostedContext({ sessionId: input.sessionId!, generation: contextGeneration!, scopeKey: 'session', context })
+        } } : {}),
         ...(ownership && checkpoint ? { sessionTranscriptBaseVersion: checkpoint.version } : {}),
         ...(ownership && checkpoint ? { sessionTranscriptCommitProtocol: 2 as const } : {}),
         ...(transcriptFailureMessages ? { sessionTranscriptFailureMessages: transcriptFailureMessages } : {}),
@@ -404,8 +434,10 @@ export function createHostedTurnHandoff(input: {
         const todoId = typeof payload.todoId === 'string' ? payload.todoId : undefined
         if (!todoId || payload.status !== 'parked') throw new HostedTurnFinalizedError(new Error('Hosted parked terminal is invalid'), 'failed')
         if (ownership && checkpoint) {
-          const committed = input.sessionExecution!.readHostedTranscript(ownership.sessionId)
+          const committed = input.sessionExecution!.readTranscriptState(ownership.sessionId)
           if (committed.status !== 'ready' || committed.version !== checkpoint.version + 1 || committed.lastTurnId !== ownership.turnId) {
+            contextPublished = false
+            input.sessionExecution!.invalidateHostedContext(ownership.sessionId)
             input.sessionExecution!.markExecutionUncertain(ownership)
             keepClaimedForReconciliation = true
             throw new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:parked-terminal-participant-incomplete'), 'commit-uncertain')
@@ -428,8 +460,10 @@ export function createHostedTurnHandoff(input: {
         throw new HostedTurnFinalizedError(new Error(`Hosted invocation ended as ${terminal.kind}`), hostedFailureOutcome(terminal))
       }
       if (ownership && checkpoint) {
-        const committed = input.sessionExecution!.readHostedTranscript(ownership.sessionId)
+        const committed = input.sessionExecution!.readTranscriptState(ownership.sessionId)
         if (committed.status !== 'ready' || committed.version !== checkpoint.version + 1 || committed.lastTurnId !== ownership.turnId) {
+          contextPublished = false
+          input.sessionExecution!.invalidateHostedContext(ownership.sessionId)
           input.sessionExecution!.markExecutionUncertain(ownership)
           keepClaimedForReconciliation = true
           logAgentEvent('error', 'session.transcript.reconciliation', {
@@ -508,8 +542,10 @@ export function createHostedTurnHandoff(input: {
         throw new HostedTurnFinalizedError(error, 'commit-uncertain', terminalUsage(terminal))
       }
       if (terminal && terminal.kind !== 'invocation-completed' && ownership && checkpoint && transcriptFailureMessages) {
-        const committed = input.sessionExecution!.readHostedTranscript(ownership.sessionId)
+        const committed = input.sessionExecution!.readTranscriptState(ownership.sessionId)
         if (committed.status !== 'ready' || committed.version !== checkpoint.version + 1 || committed.lastTurnId !== ownership.turnId) {
+          contextPublished = false
+          input.sessionExecution!.invalidateHostedContext(ownership.sessionId)
           input.sessionExecution!.markExecutionUncertain(ownership)
           keepClaimedForReconciliation = true
           logAgentEvent('error', 'session.transcript.reconciliation', {
@@ -533,6 +569,7 @@ export function createHostedTurnHandoff(input: {
       }
     }
     } finally {
+      if (ownership && sessionContext && !contextPublished) input.sessionExecution!.invalidateHostedContext(ownership.sessionId)
       if (ownership) releaseActiveSessionExecutionOwner(ownership.sessionId)
       if (ownership && !keepClaimedForReconciliation) {
         input.sessionExecution!.releaseExecution(ownership)

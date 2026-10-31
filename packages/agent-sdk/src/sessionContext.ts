@@ -167,12 +167,12 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
 
 /** One-way adapter for legacy transcript snapshots; all later changes use the shared event reducer. */
 export function restoreLegacySessionContextSnapshot(input: Readonly<{
-  invocationId: string; turnId: string; committedVersion: number; messages: readonly CanonicalModelMessage[]
+  invocationId: string; turnId: string; committedVersion: number; messages: readonly CanonicalModelMessage[]; scope?: ContextScope
 }>): SessionContextState {
   return restoreSessionContext({ committedVersion: input.committedVersion, events: [{
     invocationId: input.invocationId, turnId: input.turnId, sequence: 1, schemaVersion: 1,
     eventId: `legacy-transcript-seed:${input.committedVersion}`, idempotencyKey: `legacy-transcript-seed:${input.committedVersion}`,
-    kind: 'session-input-committed', payload: { messages: input.messages }
+    kind: 'session-input-committed', payload: { messages: input.messages, ...(input.scope ? { scope: input.scope } : {}) }
   }] })
 }
 
@@ -269,6 +269,15 @@ export function selectContextCommit(state: SessionContextState, outcome: Context
   if (outcome.kind === 'park') return Object.freeze({ target: 'park-baseline', messages: freezeMessages(state.parkBaseline.filter((message) => message.role !== 'system')) })
   if (state.failure === null) throw new Error('CONTEXT_FAILURE_SELECTION_UNAVAILABLE')
   return Object.freeze({ target: 'failure', messages: freezeMessages(state.failure.filter((message) => message.role !== 'system')) })
+}
+
+/** Publish the selected immutable context only after its matching transcript commit is confirmed. */
+export function commitContextTurn(state: SessionContextState, outcome: ContextOutcome, committedVersion: number): SessionContextState {
+  if (!Number.isSafeInteger(committedVersion) || committedVersion !== state.committedVersion + 1) {
+    throw new Error('CONTEXT_COMMIT_VERSION_MISMATCH')
+  }
+  const selection = selectContextCommit(state, outcome)
+  return freezeState({ ...replaceCommitted(state, selection.messages), committedVersion })
 }
 
 /** Persist only the finite SDK decision; canonical messages remain recoverable from History. */

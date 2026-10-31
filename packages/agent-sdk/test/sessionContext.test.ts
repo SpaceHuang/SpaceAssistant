@@ -1,11 +1,29 @@
 import { describe, expect, it } from 'vitest'
-import { applyContextEvent, beginContextTurn, createApprovalSystemMessage, createContextSelectionIntent, restoreLegacySessionContextSnapshot, restoreLegacySessionContextEvents, restoreSessionContext, selectContextCommit } from '../src/sessionContext'
+import { applyContextEvent, beginContextTurn, commitContextTurn, createApprovalSystemMessage, createContextSelectionIntent, restoreLegacySessionContextSnapshot, restoreLegacySessionContextEvents, restoreSessionContext, selectContextCommit } from '../src/sessionContext'
 import type { CanonicalModelMessage } from '../src/model'
 
 const user = (id: string, content: string): CanonicalModelMessage => ({ role: 'user', id, content })
 const assistant = (id: string, content: string): CanonicalModelMessage => ({ role: 'assistant', id, content })
 
 describe('shared session context rules', () => {
+  it('promotes only the committed selection to the next immutable session context version', () => {
+    const prior = [user('prior-user', 'prior question'), assistant('prior-assistant', 'prior answer')]
+    const seed = restoreLegacySessionContextSnapshot({ invocationId: 'prior-invocation', turnId: 'prior-turn', committedVersion: 4, messages: prior })
+    const current = beginContextTurn(seed, { invocationId: 'current-invocation', baseVersion: 4,
+      inputMessages: [user('current-user', 'current question')], failureInputMessages: [], requestSystem: '' })
+    const withAnswer = applyContextEvent(current, { kind: 'model-response-committed', message: assistant('current-assistant', 'current answer') })
+
+    const committed = commitContextTurn(withAnswer, { kind: 'completed' }, 5)
+
+    expect(committed.committedVersion).toBe(5)
+    expect(committed.committed).toEqual([...prior, user('current-user', 'current question'), assistant('current-assistant', 'current answer')])
+    expect(committed.working).toEqual(committed.committed)
+    expect(committed.activeInvocationId).toBeUndefined()
+    const next = beginContextTurn(committed, { invocationId: 'next-invocation', baseVersion: 5,
+      inputMessages: [user('next-user', 'next question')], failureInputMessages: [], requestSystem: '' })
+    expect(selectContextCommit(next, { kind: 'completed' }).messages).toEqual([...committed.committed, user('next-user', 'next question')])
+  })
+
   it('adapts a legacy transcript seed once into committed shared context without changing message order or tool pairing', () => {
     const legacy = [user('legacy-user', 'question'), {
       role: 'assistant' as const, id: 'legacy-assistant', content: 'call',

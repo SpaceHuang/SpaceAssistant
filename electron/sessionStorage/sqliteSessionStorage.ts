@@ -972,6 +972,7 @@ export function createSqliteSessionStorageHost(db: AppDatabase, input: {
     } } : {}),
     commands: Object.freeze({ ...storage.commands, deleteSession: (sessionId: string) => {
       const result = storage.commands.deleteSession(sessionId)
+      storage.execution.invalidateHostedContext(sessionId)
       lifecycle.requestMaintenance({ reason: 'scope-changed', category: 'pending-reclamation' })
       return result
     } })

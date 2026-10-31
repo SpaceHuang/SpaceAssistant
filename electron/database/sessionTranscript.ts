@@ -13,6 +13,7 @@ import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorag
 
 export type TranscriptMessage = Readonly<Record<string, unknown>>
 export type SessionTranscript = Readonly<{ sessionId: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked'; messages: readonly TranscriptMessage[] }>
+export type SessionTranscriptControl = Readonly<{ sessionId: string; generation?: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked' }>
 
 function transcriptPayloadHash(outcome: string, messagesJson: string): string {
   return createHash('sha256').update(JSON.stringify({ outcome, messagesJson })).digest('hex')
@@ -349,6 +350,21 @@ export function markSessionExecutionUncertain(db: AppDatabase, input: { sessionI
   }
   if (changed) db.save()
   return changed
+}
+
+/** Read only session generation and transcript control state; never loads message bodies. */
+export function readSessionTranscriptControl(db: AppDatabase, sessionId: string): SessionTranscriptControl {
+  const row = getDbConnection(db).prepare(`SELECT sessions.generation,COALESCE(checkpoints.version,0) AS version,
+    checkpoints.last_turn_id AS last_turn_id,
+    CASE WHEN checkpoints.status IS NOT NULL THEN checkpoints.status
+      WHEN EXISTS(SELECT 1 FROM session_execution_claims WHERE session_id=sessions.id AND status='commit_uncertain') THEN 'commit_uncertain'
+      ELSE 'ready' END AS status
+    FROM sessions LEFT JOIN session_transcript_checkpoints AS checkpoints ON checkpoints.session_id=sessions.id
+    WHERE sessions.id=?`).get(sessionId) as { generation: string; version: number; last_turn_id: string | null; status: string } | undefined
+  if (!row) return { sessionId, version: 0, status: 'blocked' }
+  return { sessionId, generation: row.generation, version: row.version,
+    ...(row.last_turn_id ? { lastTurnId: row.last_turn_id } : {}),
+    status: row.status === 'ready' ? 'ready' : row.status === 'commit_uncertain' ? 'commit_uncertain' : 'blocked' }
 }
 
 /** Startup recovery for claims owned by the process that exited before recovery began. */
