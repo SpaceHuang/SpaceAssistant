@@ -3088,6 +3088,50 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('commits an SDK protocol 2 turn through SQLite under its durable execution lease', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'sdk-v2-lease-session'
+    const turnId = 'sdk-v2-lease-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'sdk-v2-lease-owner' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'sdk-v2-lease-owner', generation: owner.generation })
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const routeId = 'sdk-v2-lease-route'
+    const registry = new ModelProviderRegistry()
+    registry.register({ routeId, protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }, {
+      providerId: 'sdk-v2-lease-provider', stream: async function* () {
+        yield { type: 'text-delta', text: 'leased answer' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    })
+    const permits = new InMemorySafetyPermitStore()
+
+    await expect(runAgentTurn({
+      registry, routeId, invocationId: turnId, turnId, history, sessionId,
+      sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2,
+      sessionTranscriptExecutionLease: { sessionId, turnId, ownerId: 'sdk-v2-lease-owner', generation: owner.generation },
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits,
+        policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(),
+      toolExecution: createPermitBoundToolExecutionPort({ permits, admission: new InMemoryExecutionAdmissionCoordinator(),
+        resolveExpected: async () => { throw new Error('tool execution is not expected') }, execute: async () => ({ output: undefined }) })
+    })).resolves.toMatchObject({ text: 'leased answer' })
+
+    expect((await history.read(turnId)).events.at(-1)).toMatchObject({ kind: 'invocation-completed' })
+    expect(conn.prepare('SELECT base_version,next_version,event_end FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId))
+      .toMatchObject({ base_version: 0, next_version: 1 })
+    expect(readSessionTranscript(db, sessionId, { version: 1 })).toMatchObject({
+      version: 1, lastTurnId: turnId, status: 'ready', messages: [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'leased answer' }]
+    })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'transcript_committed' })
+    db.close()
+  })
+
   it('resolves requestId to the canonical turn stream from the durable AcceptedTurn ledger', async () => {
     const conn = createDb()
     const acceptedTurn = createAcceptedTurn({
