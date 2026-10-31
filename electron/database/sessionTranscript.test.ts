@@ -5,6 +5,8 @@ import { openDatabase } from './index'
 import { commitSessionTranscript, claimSessionExecution, releaseSessionExecution, readSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, reconcileCommittedSessionTranscripts, reconcileUncertainSessionTranscript } from './sessionTranscript'
 import { commitSessionTranscriptInTransaction } from './sessionTranscript'
 import { TransactionCommitUnknownError } from './transaction'
+import { createSession } from './operations'
+import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 
 describe('session transcript checkpoint and execution claim', () => {
   it('characterizes deterministic review source, repair turn, and receipt version bindings', () => {
@@ -402,46 +404,162 @@ describe('session transcript checkpoint and execution claim', () => {
     db.close()
   })
 
-  it('requires an explicit reviewed resolution before unblocking a missing transcript commit', () => {
-    const db = createMemoryAppDb()
-    const owner = claimSessionExecution(db, { sessionId: 'manual-session', turnId: 'manual-turn', ownerId: 'process-1' })
-    expect(owner).toMatchObject({ acquired: true })
-    expect(markSessionExecutionUncertain(db, { sessionId: 'manual-session', turnId: 'manual-turn', ownerId: 'process-1', generation: owner.generation })).toBe(true)
+  it('stores manual review as a deterministic protocol 2 fact stream and settles only its original uncertainty fence', async () => {
+    const temp = createTempDatabase('review-protocol-2-')
+    let db = temp.db
+    const session = createSession(db, { name: 'review-protocol-2', model: 'test' })
+    const owner = claimSessionExecution(db, { sessionId: session.id, turnId: 'review-source-turn', ownerId: 'review-source-owner' })
+    if (!owner.acquired) throw new Error('test setup could not claim the source turn')
+    expect(markSessionExecutionStarted(db, { sessionId: session.id, turnId: 'review-source-turn', ownerId: 'review-source-owner', generation: owner.generation })).toBe(true)
+    expect(markSessionExecutionUncertain(db, { sessionId: session.id, turnId: 'review-source-turn', ownerId: 'review-source-owner', generation: owner.generation })).toBe(true)
+    const sourceInvocationId = 'review-source-invocation'
+    const sourceHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await sourceHistory.appendBatch([
+      { invocationId: sourceInvocationId, turnId: 'review-source-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'review-source-context', idempotencyKey: 'review-source-context', kind: 'invocation-context-committed',
+        payload: { messages: [{ role: 'user', content: 'accepted request' }] } },
+      { invocationId: sourceInvocationId, turnId: 'review-source-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'review-source-terminal', idempotencyKey: 'review-source-terminal', kind: 'invocation-failed',
+        payload: { status: 'failed' } }
+    ], 0)
+    const reviewedMessages = [{ role: 'user', id: 'reviewed-user', content: 'operator-reviewed request' }]
+    const reviewInput = {
+      sessionId: session.id, turnId: 'review-source-turn', expectedVersion: 0, sessionGeneration: session.generation,
+      outcome: 'failed' as const, messages: reviewedMessages,
+      operatorId: 'operator-1', rationale: 'Reviewed the canonical History and retained the accepted request.', now: 42
+    }
 
-    expect(reconcileUncertainSessionTranscript(db, {
-      sessionId: 'manual-session', turnId: 'manual-turn', expectedVersion: 0,
-      outcome: 'failed', messages: [{ role: 'user', content: 'reviewed input' }],
-      operatorId: 'operator-1', rationale: 'Reviewed canonical History; retain the accepted user request only.', now: 42
-    })).toEqual({ reconciled: true, version: 1 })
-    expect(readSessionTranscript(db, 'manual-session')).toMatchObject({
-      version: 1, lastTurnId: 'manual-turn', status: 'ready',
-      messages: [{ role: 'user', content: 'reviewed input' }]
+    const scheduleSave = db.save
+    let loseCommitAcknowledgement = true
+    db.save = () => {
+      if (loseCommitAcknowledgement) {
+        loseCommitAcknowledgement = false
+        throw new Error('manual review acknowledgement lost after commit')
+      }
+      scheduleSave()
+    }
+    expect(() => reconcileUncertainSessionTranscript(db, reviewInput)).toThrow('manual review acknowledgement lost after commit')
+    db.close()
+    db = openDatabase(temp.dbPath)
+    const reopenedConn = getDbConnection(db)
+    const reopenedHistory = new SqliteAgentHistory(reopenedConn, 1, Date.now, session.id)
+    const receipt = getDbConnection(db).prepare('SELECT turn_id,payload_sha256,base_version,next_version,outcome,event_start,event_end FROM session_turn_commit_receipts WHERE session_id=?')
+      .get(session.id) as { turn_id: string; payload_sha256: string; base_version: number; next_version: number; outcome: string; event_start: number; event_end: number }
+    expect(receipt).toMatchObject({ base_version: 0, next_version: 1, outcome: 'failed' })
+    expect(receipt.turn_id).toMatch(/^session-review-turn:[a-f0-9]{64}$/)
+    expect(receipt.event_end - receipt.event_start).toBe(1)
+    const [reviewSeed, reviewTerminal] = await reopenedHistory.read(receipt.turn_id.replace('session-review-turn:', 'session-review-invocation:'))
+      .then(({ events }) => events)
+    expect(reviewSeed).toMatchObject({ kind: 'invocation-context-committed', payload: {
+      contextProtocol: 2, replacement: { reason: 'manual-review', messages: reviewedMessages },
+      review: { sourceTurnId: 'review-source-turn', sourceInvocationId, sourceTerminalEventId: 'review-source-terminal', sessionGeneration: session.generation }
+    } })
+    expect(receipt.payload_sha256).toBe((reviewSeed!.payload as { review: { reviewPayloadSha256: string } }).review.reviewPayloadSha256)
+    expect(reviewTerminal).toMatchObject({ kind: 'invocation-completed', payload: {
+      status: 'completed', contextSelection: { contextProtocol: 2, target: 'working', baseVersion: 0 }
+    } })
+    expect(readSessionTranscript(db, session.id, { version: 1 })).toMatchObject({
+      version: 1, lastTurnId: 'review-source-turn', status: 'ready', messages: reviewedMessages
     })
-    expect(getDbConnection(db).prepare('SELECT resolution, operator_id, rationale FROM session_transcript_reconciliations').get())
-      .toEqual({ resolution: 'commit-reviewed', operator_id: 'operator-1', rationale: 'Reviewed canonical History; retain the accepted user request only.' })
-    expect(claimSessionExecution(db, { sessionId: 'manual-session', turnId: 'next-turn', ownerId: 'process-2' })).toMatchObject({ acquired: true })
+    expect(getDbConnection(db).prepare('SELECT messages_json,context_selection_json FROM session_transcript_entries WHERE session_id=? AND version=1')
+      .get(session.id)).toEqual({ messages_json: '[]', context_selection_json: JSON.stringify({ contextProtocol: 2, target: 'working' }) })
+    expect(commitSessionTranscript(db, {
+      sessionId: session.id, turnId: 'later-turn', baseVersion: 1, outcome: 'completed', messages: [{ role: 'user', content: 'later version' }]
+    })).toEqual({ committed: true, version: 2 })
+    expect(readSessionTranscript(db, session.id, { version: 1 })).toMatchObject({ version: 1, messages: reviewedMessages })
+    expect(reconcileUncertainSessionTranscript(db, reviewInput)).toEqual({ reconciled: true, version: 1 })
+    expect(reconcileUncertainSessionTranscript(db, { ...reviewInput, messages: [{ role: 'user', content: 'conflicting review' }] }))
+      .toEqual({ reconciled: false, reason: 'idempotency-conflict' })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(session.id))
+      .toEqual({ count: 2 })
+    expect(getDbConnection(db).prepare('SELECT resolution_id,turn_id,resolved_version FROM session_transcript_reconciliations WHERE session_id=?').get(session.id))
+      .toMatchObject({ resolution_id: /^session-review:[a-f0-9]{64}$/, turn_id: 'review-source-turn', resolved_version: 1 })
+    expect(claimSessionExecution(db, { sessionId: session.id, turnId: 'next-reviewed-turn', ownerId: 'next-owner' }))
+      .toMatchObject({ acquired: true })
+    temp.cleanup(db)
+  })
+
+  it.each([
+    ['repair seed event', `CREATE TRIGGER fail_review_seed BEFORE INSERT ON agent_history_events
+      WHEN NEW.kind='invocation-context-committed' AND NEW.turn_id LIKE 'session-review-turn:%'
+      BEGIN SELECT RAISE(ABORT, 'injected review seed failure'); END`, 'injected review seed failure'],
+    ['repair terminal event', `CREATE TRIGGER fail_review_terminal BEFORE INSERT ON agent_history_events
+      WHEN NEW.kind='invocation-completed' AND NEW.turn_id LIKE 'session-review-turn:%'
+      BEGIN SELECT RAISE(ABORT, 'injected review terminal failure'); END`, 'injected review terminal failure'],
+    ['version entry', `CREATE TRIGGER fail_review_entry BEFORE INSERT ON session_transcript_entries
+      WHEN NEW.turn_id='review-fault-turn' BEGIN SELECT RAISE(ABORT, 'injected review entry failure'); END`, 'injected review entry failure'],
+    ['business receipt', `CREATE TRIGGER fail_review_receipt BEFORE INSERT ON session_turn_commit_receipts
+      WHEN NEW.turn_id LIKE 'session-review-turn:%' BEGIN SELECT RAISE(ABORT, 'injected review receipt failure'); END`, 'injected review receipt failure'],
+    ['operator audit', `CREATE TRIGGER fail_review_audit BEFORE INSERT ON session_transcript_reconciliations
+      BEGIN SELECT RAISE(ABORT, 'injected review audit failure'); END`, 'injected review audit failure'],
+    ['checkpoint CAS', `CREATE TRIGGER fail_review_checkpoint BEFORE UPDATE ON session_transcript_checkpoints
+      WHEN OLD.status='commit_uncertain' AND NEW.status='ready' BEGIN SELECT RAISE(ABORT, 'injected review checkpoint failure'); END`, 'injected review checkpoint failure'],
+    ['execution claim settlement', `CREATE TRIGGER fail_review_claim BEFORE UPDATE ON session_execution_claims
+      WHEN OLD.status='commit_uncertain' AND NEW.status='queued' BEGIN SELECT RAISE(ABORT, 'injected review claim failure'); END`, 'injected review claim failure'],
+    ['execution queue settlement', `CREATE TRIGGER fail_review_queue BEFORE DELETE ON session_execution_queue
+      WHEN OLD.status='commit_uncertain' BEGIN SELECT RAISE(ABORT, 'injected review queue failure'); END`, 'injected review queue failure']
+  ])('rolls back the complete manual review when %s fails', async (_stage, triggerSql, failure) => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const session = createSession(db, { name: 'review-fault', model: 'test' })
+    const owner = claimSessionExecution(db, { sessionId: session.id, turnId: 'review-fault-turn', ownerId: 'review-fault-owner' })
+    if (!owner.acquired) throw new Error('test setup could not claim source execution')
+    markSessionExecutionStarted(db, { sessionId: session.id, turnId: 'review-fault-turn', ownerId: 'review-fault-owner', generation: owner.generation })
+    markSessionExecutionUncertain(db, { sessionId: session.id, turnId: 'review-fault-turn', ownerId: 'review-fault-owner', generation: owner.generation })
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([
+      { invocationId: 'review-fault-invocation', turnId: 'review-fault-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'review-fault-context', idempotencyKey: 'review-fault-context', kind: 'invocation-context-committed',
+        payload: { messages: [{ role: 'user', content: 'source request' }] } },
+      { invocationId: 'review-fault-invocation', turnId: 'review-fault-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'review-fault-terminal', idempotencyKey: 'review-fault-terminal', kind: 'invocation-failed', payload: { status: 'failed' } }
+    ], 0)
+    const previousSeq = (conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(session.id) as { next_seq: number }).next_seq
+    conn.exec(triggerSql)
+
+    expect(() => reconcileUncertainSessionTranscript(db, {
+      sessionId: session.id, turnId: 'review-fault-turn', expectedVersion: 0, sessionGeneration: session.generation,
+      outcome: 'failed', messages: [{ role: 'user', content: 'reviewed request' }],
+      operatorId: 'operator-1', rationale: 'Reviewed source events.'
+    })).toThrow(failure)
+
+    expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 0, lastTurnId: 'review-fault-turn', status: 'commit_uncertain' })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(session.id)).toEqual({ status: 'commit_uncertain' })
+    expect(conn.prepare('SELECT status FROM session_execution_queue WHERE session_id=? AND turn_id=?').get(session.id, 'review-fault-turn'))
+      .toEqual({ status: 'commit_uncertain' })
+    expect(conn.prepare("SELECT COUNT(*) AS count FROM agent_history_streams WHERE invocation_id LIKE 'session-review-invocation:%'").get())
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get(session.id)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(session.id)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_reconciliations WHERE session_id=?').get(session.id)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(session.id)).toEqual({ next_seq: previousSeq })
     db.close()
   })
 
-  it('characterizes existing-terminal review as already committed while the uncertain fence remains closed', () => {
+  it('settles an existing matching commit receipt without creating a review replacement stream', () => {
     const db = createMemoryAppDb()
-    const owner = claimSessionExecution(db, { sessionId: 'review-existing-terminal', turnId: 'same-turn', ownerId: 'process-1' })
+    const session = createSession(db, { name: 'review-existing-terminal', model: 'test' })
+    const owner = claimSessionExecution(db, { sessionId: session.id, turnId: 'same-turn', ownerId: 'process-1' })
     if (!owner.acquired) throw new Error('test setup could not claim session')
     const messages = [{ role: 'user' as const, content: 'committed before review' }]
     expect(commitSessionTranscript(db, {
-      sessionId: 'review-existing-terminal', turnId: 'same-turn', baseVersion: 0, outcome: 'completed', messages
+      sessionId: session.id, turnId: 'same-turn', baseVersion: 0, outcome: 'completed', messages
     })).toEqual({ committed: true, version: 1 })
     expect(markSessionExecutionUncertain(db, {
-      sessionId: 'review-existing-terminal', turnId: 'same-turn', ownerId: 'process-1', generation: owner.generation
+      sessionId: session.id, turnId: 'same-turn', ownerId: 'process-1', generation: owner.generation
     })).toBe(true)
 
     expect(reconcileUncertainSessionTranscript(db, {
-      sessionId: 'review-existing-terminal', turnId: 'same-turn', expectedVersion: 1,
+      sessionId: session.id, turnId: 'same-turn', expectedVersion: 1, sessionGeneration: session.generation,
       outcome: 'completed', messages, operatorId: 'operator-1', rationale: 'Verify the committed terminal receipt.', now: 43
-    })).toEqual({ reconciled: false, reason: 'already-committed' })
-    expect(readSessionTranscript(db, 'review-existing-terminal')).toMatchObject({
-      version: 1, status: 'commit_uncertain', lastTurnId: 'same-turn', messages
+    })).toEqual({ reconciled: true, version: 1 })
+    expect(readSessionTranscript(db, session.id)).toMatchObject({
+      version: 1, status: 'ready', lastTurnId: 'same-turn', messages
     })
+    expect(getDbConnection(db).prepare('SELECT turn_id,status FROM session_execution_claims WHERE session_id=?').get(session.id))
+      .toEqual({ turn_id: '', status: 'queued' })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM agent_history_streams WHERE invocation_id LIKE \'session-review-invocation:%\'').get())
+      .toEqual({ count: 0 })
     expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_reconciliations').get())
       .toEqual({ count: 0 })
     db.close()
@@ -449,14 +567,15 @@ describe('session transcript checkpoint and execution claim', () => {
 
   it('retains interrupted as the audited reconciliation outcome', () => {
     const db = createMemoryAppDb()
-    const owner = claimSessionExecution(db, { sessionId: 'interrupted-review', turnId: 'interrupted-turn', ownerId: 'process-1' })
+    const session = createSession(db, { name: 'interrupted-review', model: 'test' })
+    const owner = claimSessionExecution(db, { sessionId: session.id, turnId: 'interrupted-turn', ownerId: 'process-1' })
     if (!owner.acquired) throw new Error('test setup could not claim session')
-    markSessionExecutionUncertain(db, { sessionId: 'interrupted-review', turnId: 'interrupted-turn', ownerId: 'process-1', generation: owner.generation })
+    markSessionExecutionUncertain(db, { sessionId: session.id, turnId: 'interrupted-turn', ownerId: 'process-1', generation: owner.generation })
     expect(reconcileUncertainSessionTranscript(db, {
-      sessionId: 'interrupted-review', turnId: 'interrupted-turn', expectedVersion: 0,
+      sessionId: session.id, turnId: 'interrupted-turn', expectedVersion: 0, sessionGeneration: session.generation,
       outcome: 'interrupted', messages: [], operatorId: 'operator-1', rationale: 'Reviewed process restart terminal.'
     })).toEqual({ reconciled: true, version: 1 })
-    expect(getDbConnection(db).prepare('SELECT outcome FROM session_transcript_entries WHERE session_id=?').get('interrupted-review')).toEqual({ outcome: 'interrupted' })
+    expect(getDbConnection(db).prepare('SELECT outcome FROM session_transcript_entries WHERE session_id=?').get(session.id)).toEqual({ outcome: 'interrupted' })
     db.close()
   })
 
@@ -471,7 +590,7 @@ describe('session transcript checkpoint and execution claim', () => {
     expect(owner).toMatchObject({ acquired: true })
     markSessionExecutionUncertain(db, { sessionId: 'manual-session', turnId: 'manual-turn', ownerId: 'process-1', generation: owner.generation })
     expect(reconcileUncertainSessionTranscript(db, {
-      sessionId: 'manual-session', turnId: override.turnId, expectedVersion: override.expectedVersion,
+      sessionId: 'manual-session', turnId: override.turnId, expectedVersion: override.expectedVersion, sessionGeneration: 'manual-generation',
       outcome: 'failed', messages: [], operatorId: override.operatorId, rationale: override.rationale
     })).toMatchObject({ reconciled: false })
     expect(readSessionTranscript(db, 'manual-session').status).toBe('commit_uncertain')
