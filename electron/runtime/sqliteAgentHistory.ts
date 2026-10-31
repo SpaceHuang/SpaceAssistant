@@ -427,6 +427,10 @@ export class SqliteAgentHistory implements HistoryPort {
     const result: CanonicalContextMeterEvent[] = []
     const projectedUsageRequestIds = new Set<string>()
     const add = (seq: number, type: CanonicalContextMeterEvent['type'], payload: Record<string, unknown>) => result.push({ seq, type, payload })
+    const sourceSequence = (source: unknown, fallback: number): number => {
+      if (!isRecord(source) || !Number.isSafeInteger(source.time) || !Number.isSafeInteger(source.seq)) return fallback
+      return Number(source.time) * 4096 + (Number(source.seq) % 4096)
+    }
     const addRequestUsage = (seq: number, usage: unknown) => {
       if (!isRecord(usage) || typeof usage.requestId !== 'string' || projectedUsageRequestIds.has(usage.requestId)) return
       projectedUsageRequestIds.add(usage.requestId)
@@ -437,7 +441,8 @@ export class SqliteAgentHistory implements HistoryPort {
       if (!isRecord(raw)) continue
       const ledger = raw.sessionLedger
       if (!isRecord(ledger)) continue
-      const baseSeq = row.session_seq * 4
+      const baseSeq = row.created_at * 4096 + (row.session_seq % 4096) * 4
+      const sourceFacts = isRecord(ledger.legacyMeterSources) ? ledger.legacyMeterSources : undefined
       if (row.kind === 'model-request-started') {
         const header = ledger.requestHeader
         const context = ledger.requestContext
@@ -445,14 +450,21 @@ export class SqliteAgentHistory implements HistoryPort {
         const requestId = header.requestId
         const attempt = header.attempt
         if (typeof requestId !== 'string' || !Number.isInteger(attempt) || context.requestId !== requestId || context.attempt !== attempt) continue
-        add(baseSeq + 1, 'request_header', header)
-        add(baseSeq + 2, 'request_context', context)
+        add(sourceSequence(sourceFacts?.requestHeader, baseSeq + 1), 'request_header', header)
+        add(sourceSequence(sourceFacts?.requestContext, baseSeq + 2), 'request_context', context)
       } else if (row.kind === 'provider-retry-scheduled') {
         const retry = ledger.requestRetry
-        if (isRecord(retry) && typeof retry.requestId === 'string' && Number.isInteger(retry.attempt)) add(baseSeq + 1, 'request_retry', retry)
+        if (isRecord(retry) && typeof retry.requestId === 'string' && Number.isInteger(retry.attempt)) {
+          add(sourceSequence(ledger.legacyMeterSource, baseSeq + 1), 'request_retry', retry)
+        }
       } else if (row.kind === 'provider-attempt-result' || row.kind === 'model-response-committed' || row.kind === 'model-attempt-discarded') {
         const usage = ledger.requestUsage
-        addRequestUsage(baseSeq + 1, usage)
+        addRequestUsage(sourceSequence(ledger.legacyMeterSource, baseSeq + 1), usage)
+        if (row.kind === 'provider-attempt-result' && isRecord(ledger.requestFinalContext) &&
+          typeof ledger.requestFinalContext.requestId === 'string' && Number.isInteger(ledger.requestFinalContext.attempt)) {
+          add(sourceSequence(ledger.legacyMeterSource, baseSeq + 2), 'request_context',
+            { ...ledger.requestFinalContext, projectionStage: 'final' })
+        }
         if (row.kind === 'model-response-committed' && isRecord(ledger.requestContext)) {
           const context = ledger.requestContext
           if (typeof context.requestId === 'string' && Number.isInteger(context.attempt)) {
@@ -461,7 +473,7 @@ export class SqliteAgentHistory implements HistoryPort {
         }
       }
     }
-    return result
+    return result.sort((left, right) => left.seq - right.seq)
   }
 
   /** Retention proof: unknown or malformed History ownership must never imply no ledger dependency. */
@@ -1382,7 +1394,7 @@ export class SqliteAgentHistory implements HistoryPort {
       SELECT streams.invocation_id
       FROM agent_history_streams AS streams
       JOIN agent_history_events AS events ON events.invocation_id = streams.invocation_id
-      WHERE streams.session_id = ?
+      WHERE streams.session_id = ? AND streams.invocation_id NOT LIKE 'legacy-meter-import:%'
       GROUP BY streams.invocation_id
       ORDER BY MIN(events.commit_order) IS NULL ASC, MIN(events.commit_order) ASC,
         MIN(events.session_seq) IS NULL ASC, MIN(events.session_seq) ASC,

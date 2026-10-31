@@ -8,12 +8,12 @@ import { getDbConnection } from '../database'
 import { appendMessage, createPersistedTurn, createSession } from '../database/operations'
 import { createSqliteSessionStorage, createSqliteSessionStorageHost } from './sqliteSessionStorage'
 import { createSqliteStartupHistoryRecoveryBindings } from './infrastructure/sqlite/sessionHistoryRecoveryHost'
-import { ensureLegacyLedgerReadiness, markMissingLegacyLedgerBlocked } from '../sessionLedgerReadiness'
+import { ensureLegacyLedgerReadiness, markLegacyLedgerMergeCompleted, markMissingLegacyLedgerBlocked } from '../sessionLedgerReadiness'
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSessionLedgerRecoveryBindings } from './infrastructure/sqlite/sessionLedgerRecoveryBindings'
 import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
-import { readSessionEvents, resolveSessionEventPaths } from '../sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readSessionEvents, resolveSessionEventPaths } from '../sessionEvents'
 import type { SessionHistoryRecoveryOptions } from './public/ports'
 
 describe('SessionRecoveryPort', () => {
@@ -70,6 +70,49 @@ describe('SessionRecoveryPort', () => {
       const events = await readSessionEvents(resolveSessionEventPaths(root, session.id, session.createdAt).eventsPath)
       expect(events.map(({ type }) => type)).toEqual(['compaction_start', 'compaction_summary', 'compaction_end', 'turn_start', 'turn_end'])
       expect(events[1]?.payload).toMatchObject({ candidate: { checkpointReplayIdentity: 'host-checkpoint-identity' } })
+    } finally {
+      temp.cleanup()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not reopen a completed ledger file during canonical History recovery', async () => {
+    const temp = createTempDatabase('session-history-host-completed-ledger-')
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-history-host-completed-ledger-'))
+    try {
+      const db = temp.db
+      const session = createSession(db, { name: 'completed startup ledger' })
+      const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+      const candidate = { kind: 'summary', checkpointMessage: { id: 'completed-checkpoint', role: 'user', content: 'checkpoint' },
+        checkpointReplayIdentity: 'completed-checkpoint', shadowedRanges: [{ start: 'before', end: 'before' }] }
+      const start = { compactionId: 'completed-recovery-compaction', windowId: 'completed-window',
+        inputSurfaceFingerprint: 'completed-input', surfaceBoundaryId: 'before' }
+      const summary = { compactionId: start.compactionId, windowId: start.windowId, summaryHash: computeCompactionSummaryHash(candidate),
+        outputSurfaceFingerprint: 'completed-output', shadowedRanges: candidate.shadowedRanges, candidate }
+      await new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).appendBatch([{
+        invocationId: 'completed-recovery-invocation', turnId: 'completed-recovery-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'completed-recovery-event', idempotencyKey: 'completed-recovery-event', kind: 'transcript-compacted',
+        payload: { messages: [candidate.checkpointMessage], sessionLedger: { location, start, summary } }
+      }], 0)
+      const sink = getSessionEventSink(root, session.id, session.createdAt)
+      await appendCompactionTransaction(sink, start, summary)
+      await sink.close()
+      const readiness = ensureLegacyLedgerReadiness(getDbConnection(db), location, session.generation)
+      getDbConnection(db).prepare(`UPDATE session_ledger_projection_state SET state='ready',canonical_watermark='session:-1'
+        WHERE ledger_location_key=?`).run(readiness.ledgerLocationKey)
+      getDbConnection(db).prepare("UPDATE session_ledger_projection_outbox SET status='acked',acked_at=1 WHERE ledger_location_key=?")
+        .run(readiness.ledgerLocationKey)
+      expect(markLegacyLedgerMergeCompleted(getDbConnection(db), location, session.generation)).toBe(true)
+      await fs.rm(resolveSessionEventPaths(root, session.id, session.createdAt).eventsPath)
+
+      const ledgerRecovery = createSessionLedgerRecoveryBindings()
+      const host = createSqliteStartupHistoryRecoveryBindings(db)
+      const result = await host.recoverInterruptedInvocationsWithLedger({ ledgerRecovery,
+        allowedRoots: ledgerRecovery.getAllowedRoots({ configuredWorkDir: root }), configuredWorkDir: root,
+        ensureSessionLedgerReady: async () => true })
+
+      expect(result).toMatchObject({ interruptedCount: 1, repairFailureCount: 0 })
+      await expect(fs.stat(resolveSessionEventPaths(root, session.id, session.createdAt).eventsPath)).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       temp.cleanup()
       await fs.rm(root, { recursive: true, force: true })

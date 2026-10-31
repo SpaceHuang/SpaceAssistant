@@ -2,6 +2,7 @@ import type { AppDatabase } from '../../../database/sqliteStore'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { getSession } from '../../../database/operations'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
+import { readCanonicalSessionLedgerReadVersion } from './sessionLedgerAvailabilityReader'
 import { ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent,
   ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent,
   getSessionEventSink, reconcileInterruptedSessionEventLedger } from '../../../sessionEvents'
@@ -36,7 +37,8 @@ export function createSqliteStartupHistoryRecoveryBindings(
       }
       const sessionIdForInvocation = (invocationId: string) =>
         (getDbConnection(db).prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id=?').get(invocationId) as { session_id: string | null } | undefined)?.session_id ?? null
-      const withAcceptedSessionLedger = async <T>(location: SessionHistoryLedgerLocation, operation: () => Promise<T>): Promise<T> => {
+      const withAcceptedSessionLedger = async <T>(location: SessionHistoryLedgerLocation,
+        operation: (readiness: { canonicalReadVersion: number | null }) => Promise<T>): Promise<T> => {
         if (!input.ledgerRecovery.isLocationAllowed({ location, allowedRoots: input.allowedRoots })) {
           throw new Error('canonical session ledger location does not match a configured workspace root')
         }
@@ -45,7 +47,8 @@ export function createSqliteStartupHistoryRecoveryBindings(
         if (!(await input.ensureSessionLedgerReady({ location, sessionGeneration: session.generation }))) {
           throw new Error('session ledger repair deferred because readiness is unavailable')
         }
-        return operation()
+        const canonicalReadVersion = readCanonicalSessionLedgerReadVersion(getDbConnection(db), location, session.generation)
+        return operation({ canonicalReadVersion })
       }
       const recordInvocationRepairFailure = (kind: string, error: unknown, invocationId: string) => {
         repairFailureCount += 1
@@ -62,7 +65,8 @@ export function createSqliteStartupHistoryRecoveryBindings(
         return location && input.ledgerRecovery.isLocationAllowed({ location, allowedRoots: input.allowedRoots }) ? location : undefined
       }
       const repair = async (location: SessionHistoryLedgerLocation, operation: (sink: ReturnType<typeof getSessionEventSink>) => Promise<unknown>) =>
-        withAcceptedSessionLedger(location, async () => {
+        withAcceptedSessionLedger(location, async ({ canonicalReadVersion }) => {
+          if (canonicalReadVersion === 1) return
           const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
           try { await operation(sink) }
           finally { await sink.close() }
@@ -87,7 +91,8 @@ export function createSqliteStartupHistoryRecoveryBindings(
         repairProviderRetryLedger: (location, retry) => repair(location, (sink) => ensureRequestRetryEvent(sink, retry)),
         repairUsageLedger: (location, requestUsage) => repair(location, (sink) => ensureRequestUsageEvent(sink, requestUsage)),
         repairFinalRequestContextLedger: (location, requestContext) => repair(location, (sink) => ensureFinalRequestContextEvent(sink, requestContext)),
-        repairInvocationTerminal: (location, terminal) => withAcceptedSessionLedger(location, async () => {
+        repairInvocationTerminal: (location, terminal) => withAcceptedSessionLedger(location, async ({ canonicalReadVersion }) => {
+          if (canonicalReadVersion === 1) return
           const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
           try {
             await ensureTurnStartEvent(sink, String(terminal.turnId))

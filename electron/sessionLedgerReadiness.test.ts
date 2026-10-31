@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { runMigrations } from './database/migrations'
-import { CREATE_TABLES_SQL } from './database/schema'
+import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './database/schema'
 import { createTempDatabase } from './database/testHelpers'
 import { getDbConnection } from './database/sqliteStore'
 import { openDatabase } from './database'
@@ -16,7 +16,9 @@ import {
   markMissingLegacyLedgerBlocked,
   recoverInterruptedSessionLedgerCheck,
   mapSessionLedgerPhysicalState,
-  refreshSessionLedgerReadyProof
+  refreshSessionLedgerReadyProof,
+  markLegacyLedgerMergeCompleted,
+  readSessionLedgerReadiness
 } from './sessionLedgerReadiness'
 
 function createDb(): DatabaseSync {
@@ -28,6 +30,57 @@ function createDb(): DatabaseSync {
 }
 
 describe('session ledger readiness state', () => {
+  it('adds the per-location legacy merge completion column when upgrading schema 119', () => {
+    const conn = createDb()
+    conn.exec('ALTER TABLE session_ledger_projection_state DROP COLUMN canonical_read_version')
+    conn.prepare('UPDATE schema_meta SET value=? WHERE key=?').run('119', SCHEMA_META_KEYS.schemaVersion)
+    runMigrations(conn)
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
+      .toEqual({ value: String(DB_SCHEMA_VERSION) })
+    expect((conn.prepare("PRAGMA table_info('session_ledger_projection_state')").all() as Array<{ name: string }>)
+      .some(({ name }) => name === 'canonical_read_version')).toBe(true)
+    conn.close()
+  })
+
+  it('marks only the exact, identity-matched legacy location complete after merge', () => {
+    const conn = createDb()
+    const location = { workDir: '/tmp/legacy-merge-a', sessionId: 'legacy-merge', createdAt: 51 }
+    conn.prepare(`INSERT INTO sessions(id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?,?,'test',0.7,4096,?,?, '{}','{}',1,'g')`).run(location.sessionId, 'legacy merge', location.createdAt, location.createdAt)
+    const state = ensureLegacyLedgerReadiness(conn, location, 'g', 1)
+    expect(markLegacyLedgerMergeCompleted(conn, location, 'g', 2)).toBe(false)
+    const token = beginSessionLedgerCheck(conn, state.ledgerLocationKey, 2)
+    expect(token).toBeTruthy()
+    expect(completeSessionLedgerCheck(conn, state.ledgerLocationKey, token!, { canonicalWatermark: 'session:-1', ledgerGeneration: 0 }, 3)).toBe(true)
+    conn.prepare(`INSERT INTO session_ledger_projection_outbox(target_id,ledger_location_key,session_id,session_generation,canonical_event_id,
+      canonical_sequence,projection_order,projection_kind,expected_events_json,expected_event_ids_json,payload_sha256,status,created_at)
+      VALUES('pending-target',?,?,?,'canonical-event',1,0,'request-usage','[]','[]','digest','pending',3)`)
+      .run(state.ledgerLocationKey, location.sessionId, 'g')
+    expect(markLegacyLedgerMergeCompleted(conn, location, 'g', 3)).toBe(false)
+    conn.prepare("UPDATE session_ledger_projection_outbox SET status='acked',acked_at=4 WHERE target_id='pending-target'").run()
+    expect(markLegacyLedgerMergeCompleted(conn, location, 'wrong-generation', 2)).toBe(false)
+    expect(markLegacyLedgerMergeCompleted(conn, { ...location, workDir: '/tmp/legacy-merge-b' }, 'g', 2)).toBe(false)
+    expect(ensureLegacyLedgerReadiness(conn, location, 'g', 3).canonicalReadVersion).toBeNull()
+    conn.prepare('UPDATE sessions SET generation=? WHERE id=?').run('advanced-generation', location.sessionId)
+    expect(markLegacyLedgerMergeCompleted(conn, location, 'g', 4)).toBe(false)
+    conn.prepare('UPDATE sessions SET generation=? WHERE id=?').run('g', location.sessionId)
+    expect(markLegacyLedgerMergeCompleted(conn, location, 'g', 4)).toBe(true)
+    expect(markLegacyLedgerMergeCompleted(conn, location, 'g', 5)).toBe(true)
+    expect(ensureLegacyLedgerReadiness(conn, location, 'g', 6).canonicalReadVersion).toBe(1)
+    expect(ensureLegacyLedgerReadiness(conn, { ...location, workDir: '/tmp/legacy-merge-b' }, 'g', 6).canonicalReadVersion).toBeNull()
+    conn.close()
+  })
+  it('rejects an unsupported canonical read version instead of guessing compatibility', () => {
+    const conn = createDb()
+    const location = { workDir: '/tmp/future-read-version', sessionId: 'future-read-version', createdAt: 52 }
+    const readiness = ensureLegacyLedgerReadiness(conn, location, 'g', 1)
+    conn.exec('PRAGMA ignore_check_constraints=ON')
+    conn.prepare('UPDATE session_ledger_projection_state SET canonical_read_version=2 WHERE ledger_location_key=?')
+      .run(readiness.ledgerLocationKey)
+    expect(() => readSessionLedgerReadiness(conn, readiness.ledgerLocationKey))
+      .toThrow('SESSION_LEDGER_CANONICAL_READ_VERSION_UNSUPPORTED')
+    conn.close()
+  })
   it('maps the physical seven-state schema to absent, usable, or stale without changing stored values', () => {
     expect(mapSessionLedgerPhysicalState(undefined)).toBe('absent')
     expect(mapSessionLedgerPhysicalState('ready')).toBe('usable')
@@ -69,7 +122,7 @@ describe('session ledger readiness state', () => {
   it('resumes only the original bootstrap id and recovers an interrupted check as unknown', () => {
     const base = {
       ledgerLocationKey: 'location', workDirIdentity: 'workdir-hash', sessionId: 's', sessionGeneration: 'g',
-      ledgerGeneration: 0, canonicalWatermark: null, proofFileIdentity: null, proofFileBytes: null, proofTailFrame: null,
+      ledgerGeneration: 0, canonicalWatermark: null, canonicalReadVersion: null, proofFileIdentity: null, proofFileBytes: null, proofTailFrame: null,
       proofIndexSeq: null, proofIndexEventCount: null, proofIndexBytes: null, proofIndexLastAt: null, checkToken: null,
       checkedAt: null, ownerReconciledProcessGeneration: 0,
       retryScope: null, failureClass: null

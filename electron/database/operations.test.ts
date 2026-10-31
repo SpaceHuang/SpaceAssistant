@@ -61,11 +61,12 @@ describe('appendMessage stored count', () => {
     setConfigValue(db, 'config.activeWorkDirProfileId', 'profile-a')
     const session = createSession(db, { name: 'bootstrap-ledger', workDirProfileId: 'profile-a' })
     const conn = getDbConnection(db)
-    const row = conn.prepare('SELECT work_dir_identity,created_at,session_generation,origin,state,bootstrap_id FROM session_ledger_projection_state WHERE session_id=?')
-      .get(session.id) as { work_dir_identity: string; created_at: number; session_generation: string; origin: string; state: string; bootstrap_id: string }
+    const row = conn.prepare('SELECT work_dir_identity,created_at,session_generation,origin,state,bootstrap_id,canonical_read_version FROM session_ledger_projection_state WHERE session_id=?')
+      .get(session.id) as { work_dir_identity: string; created_at: number; session_generation: string; origin: string; state: string; bootstrap_id: string; canonical_read_version: number }
     expect(row).toMatchObject({ created_at: session.createdAt, session_generation: session.generation, origin: 'new_location', state: 'uninitialized' })
     expect(row.work_dir_identity).toMatch(/^[a-f0-9]{64}$/)
     expect(row.bootstrap_id).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(row.canonical_read_version).toBe(1)
     expect(JSON.stringify(row)).not.toContain('/workspace/a')
     db.close()
   })

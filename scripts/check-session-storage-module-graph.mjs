@@ -393,7 +393,8 @@ export function findSessionStorageModuleViolations(filePath, source) {
         edge.resolved === 'electron/database' || edge.resolved.startsWith('electron/storage/') ||
         edge.resolved.startsWith('electron/runtime/') || edge.resolved.startsWith('electron/queue/') ||
         ['electron/sessionMetadataKeys', 'electron/chatMessageBuild', 'electron/sessionContextCompaction',
-          'electron/sessionEvents', 'electron/queueInputFingerprint', 'electron/turnRuntime'].includes(edge.resolved) ||
+          'electron/sessionEvents', 'electron/sessionLedgerIdentity', 'electron/sessionLedgerLifecycle',
+          'electron/sessionLedgerReadiness', 'electron/queueInputFingerprint', 'electron/turnRuntime'].includes(edge.resolved) ||
         edge.resolved.startsWith('src/shared/') || edge.resolved.startsWith('packages/agent-sdk/') || edge.resolved.startsWith('node:')
     }
     if (category === 'infrastructure/sqlite') {

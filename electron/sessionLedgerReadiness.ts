@@ -22,6 +22,7 @@ export type SessionLedgerReadiness = {
   bootstrapId: string | null
   ledgerGeneration: number
   canonicalWatermark: string | null
+  canonicalReadVersion: number | null
   proofFileIdentity: string | null
   proofFileBytes: number | null
   proofTailFrame: string | null
@@ -37,6 +38,8 @@ export type SessionLedgerReadiness = {
 }
 
 function rowToReadiness(row: Record<string, unknown>): SessionLedgerReadiness {
+  const canonicalReadVersion = row.canonical_read_version == null ? null : Number(row.canonical_read_version)
+  if (canonicalReadVersion !== null && canonicalReadVersion !== 1) throw new Error('SESSION_LEDGER_CANONICAL_READ_VERSION_UNSUPPORTED')
   return {
     ledgerLocationKey: row.ledger_location_key as string,
     workDirIdentity: row.work_dir_identity as string,
@@ -47,6 +50,7 @@ function rowToReadiness(row: Record<string, unknown>): SessionLedgerReadiness {
     bootstrapId: row.bootstrap_id as string | null,
     ledgerGeneration: row.ledger_generation as number,
     canonicalWatermark: row.canonical_watermark as string | null,
+    canonicalReadVersion,
     // Transitional shape only: all seven proof fields are retired and ignored.
     proofFileIdentity: null,
     proofFileBytes: null,
@@ -65,7 +69,7 @@ function rowToReadiness(row: Record<string, unknown>): SessionLedgerReadiness {
 
 export function readSessionLedgerReadiness(conn: DatabaseSync, ledgerLocationKey: string): SessionLedgerReadiness | undefined {
   const row = conn.prepare(`SELECT ledger_location_key,work_dir_identity,session_id,session_generation,origin,state,bootstrap_id,
-    ledger_generation,canonical_watermark,check_token,checked_at,owner_reconciled_process_generation,retry_scope,failure_class
+    ledger_generation,canonical_watermark,canonical_read_version,check_token,checked_at,owner_reconciled_process_generation,retry_scope,failure_class
     FROM session_ledger_projection_state WHERE ledger_location_key=?`).get(ledgerLocationKey) as Record<string, unknown> | undefined
   return row ? rowToReadiness(row) : undefined
 }
@@ -75,7 +79,7 @@ export function readUsableSessionLedgerAdmission(conn: DatabaseSync, location: S
   sessionGeneration: string, processGeneration: number): SessionLedgerReadiness | undefined {
   const identity = sessionLedgerLocationIdentity(location)
   const row = conn.prepare(`SELECT readiness.ledger_location_key,readiness.work_dir_identity,readiness.session_id,readiness.session_generation,
-      readiness.origin,readiness.state,readiness.bootstrap_id,readiness.ledger_generation,readiness.canonical_watermark,
+      readiness.origin,readiness.state,readiness.bootstrap_id,readiness.ledger_generation,readiness.canonical_watermark,readiness.canonical_read_version,
       readiness.check_token,readiness.checked_at,readiness.owner_reconciled_process_generation,readiness.retry_scope,readiness.failure_class,
       EXISTS(SELECT 1 FROM session_ledger_projection_outbox outbox
         WHERE outbox.ledger_location_key=readiness.ledger_location_key AND outbox.status='pending') AS has_pending
@@ -86,6 +90,22 @@ export function readUsableSessionLedgerAdmission(conn: DatabaseSync, location: S
       mapSessionLedgerPhysicalState(row.state as SessionLedgerReadinessState) !== 'usable' || Number(row.has_pending) !== 0 ||
       Number(row.owner_reconciled_process_generation) < processGeneration) return undefined
   return rowToReadiness(row)
+}
+
+/** Marks canonical read cutover only for the exact legacy location and session generation. */
+export function markLegacyLedgerMergeCompleted(conn: DatabaseSync, location: SessionLedgerLocationInput,
+  sessionGeneration: string, completedAt = Date.now()): boolean {
+  const identity = sessionLedgerLocationIdentity(location)
+  return runInTransaction(conn, () => {
+    const result = conn.prepare(`UPDATE session_ledger_projection_state
+      SET canonical_read_version=1,updated_at=?
+      WHERE ledger_location_key=? AND work_dir_identity=? AND session_id=? AND session_generation=? AND origin='legacy'
+        AND state='ready' AND EXISTS(SELECT 1 FROM sessions WHERE id=? AND generation=?) AND NOT EXISTS(
+          SELECT 1 FROM session_ledger_projection_outbox outbox
+          WHERE outbox.ledger_location_key=session_ledger_projection_state.ledger_location_key AND outbox.status='pending')`)
+      .run(completedAt, identity.key, identity.workDirIdentity, location.sessionId, sessionGeneration, location.sessionId, sessionGeneration)
+    return Number(result.changes) === 1
+  })
 }
 
 /** Creates only legacy unknown state. Existence or emptiness of a ledger can never mint bootstrap provenance. */

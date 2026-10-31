@@ -644,7 +644,7 @@ app.whenReady().then(async () => {
           generation: `${result.readiness.ledgerGeneration}:${result.readiness.canonicalWatermark ?? ''}:${result.readiness.failureClass ?? ''}`
         })
       }
-      return result.status === 'ready'
+      return { ready: result.status === 'ready', canonicalReadVersion: result.readiness.canonicalReadVersion }
     },
     getWorkDirForSession: (sessionId) => {
       if (!workDirManager) return recoveryWorkDir

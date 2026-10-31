@@ -10,7 +10,11 @@ import { createSessionQueries } from './queries'
 import { createSessionExecutionStore } from './execution'
 import { createSessionCommitService } from './host/sessionCommitService'
 import { createSessionStorageContextRouter } from './contextPortRegistry'
-import { getSessionEventSink, notifySessionEventLedgerFailure, readCompactionReplay, readSessionEvents } from '../sessionEvents'
+import { getSessionEventSink, notifySessionEventLedgerFailure, readCompactionReplay, readSessionEvents, replayCompactionEvents,
+  withSessionEventWriterDrain } from '../sessionEvents'
+import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
+import { markLegacyLedgerMergeCompleted, readSessionLedgerReadiness } from '../sessionLedgerReadiness'
+import { withSessionLedgerLifecycleLock } from '../sessionLedgerLifecycle'
 import type { CompactionReplay } from '../../src/shared/compactionEvents'
 import type { CanonicalContextMeterEvent, PreparedChatBodyView } from './public/model'
 import { createStorageSessionContextAdapter } from './contextAdapter'
@@ -43,6 +47,7 @@ import { checkpointSessionTranscriptProjection, startSessionProjectionRevalidati
 import { CHAT_BODY_PROJECTION_SPEC_VERSION, projectionScopeKind, projectionScopeSpecVersion } from './domain/scopeKey'
 import { createProjectionBuildLifecycleTask } from './host/projectionBuildTask'
 import { createEnsureView } from './application/ensureView'
+import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import { invalidatePreparedChatBodyView, preparedChatBodyViewFromSnapshot, readProjectionChatBodyCacheManifest } from './application/projectionChatBodyCacheReader'
 import { encodeProjectionScopeKey } from './domain/scopeKey'
 import type { LifecycleTaskRegistration } from './host/ports'
@@ -90,23 +95,55 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   getUserDataDir?: () => string
   getSessionEventSink?: typeof getSessionEventSink
   readCompactionReplay?: typeof readCompactionReplay
-  ensureSessionLedgerReady?: (input: { session: import('../../src/shared/domainTypes').Session; workDir: string; retryBlocked?: boolean }) => Promise<boolean>
+  ensureSessionLedgerReady?: (input: { session: import('../../src/shared/domainTypes').Session; workDir: string; retryBlocked?: boolean }) =>
+    Promise<boolean | { ready: boolean; canonicalReadVersion: number | null }>
   inspectMaintenance?: () => readonly MaintenanceState[]
   recoveryStages?: Partial<Pick<SessionRecoveryDependencies, 'history' | 'snapshots' | 'coordinator' | 'reconcile' | 'continuations' | 'ledgerRepairs'>>
 } = {}): SessionStorage {
-  const readCompactionReplayForLocation = async (sessionId: string, workDir: string): Promise<{
+  const ledgerCheckReady = (result: boolean | { ready: boolean; canonicalReadVersion: number | null }): boolean =>
+    typeof result === 'boolean' ? result : result.ready
+  const ledgerCheckReadVersion = (result: boolean | { ready: boolean; canonicalReadVersion: number | null }): number | null | undefined =>
+    typeof result === 'boolean' ? undefined : result.canonicalReadVersion
+  const isCanonicalReadLocation = (location: { workDir: string; sessionId: string; createdAt: number }, sessionGeneration: string): boolean => {
+    const identity = sessionLedgerLocationIdentity(location)
+    const readiness = readSessionLedgerReadiness(getDbConnection(db), identity.key)
+    return readiness?.canonicalReadVersion === 1 && readiness.workDirIdentity === identity.workDirIdentity &&
+      readiness.sessionId === location.sessionId && readiness.sessionGeneration === sessionGeneration
+  }
+  const readCompactionReplayForLocation = async (sessionId: string, workDir: string, sourceRetry = 0): Promise<{
     replay: CompactionReplay; sink?: ReturnType<typeof getSessionEventSink>; canPersist: boolean
   }> => {
     const session = queries.readSession(sessionId)
     if (!session) throw new Error('SESSION_NOT_FOUND')
+    const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
+    return withSessionLedgerLifecycleLock(sessionLedgerLocationIdentity(location).key, async () => {
     // Session-switch marker hydration is read-only: reuse a blocked verdict rather than rescanning
     // all canonical history on every switch. Write paths keep the default retry behavior.
-    const canPersist = !options.ensureSessionLedgerReady || await options.ensureSessionLedgerReady({ session, workDir, retryBlocked: false })
+    const readinessResult = options.ensureSessionLedgerReady
+      ? await options.ensureSessionLedgerReady({ session, workDir, retryBlocked: false }) : true
+    const canPersist = ledgerCheckReady(readinessResult)
     if (!canPersist) return { replay: queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }, canPersist: false }
+    const readVersion = ledgerCheckReadVersion(readinessResult)
+    if (readVersion === 1 || (readVersion === undefined && isCanonicalReadLocation(location, session.generation))) {
+      return { replay: queries.readCanonicalCompactionReplay(sessionId) ?? { committed: [], rejected: [] }, canPersist: true }
+    }
     const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
+    const conversion = await withSessionEventWriterDrain(workDir, session.id, async () => {
+    let sourceEvents: Awaited<ReturnType<typeof readSessionEvents>> = []
+    let sourceReadable = true
+    try { sourceEvents = await readSessionEvents(sink.eventsPath) }
+    catch (error) {
+      if (!options.readCompactionReplay) {
+        notifySessionEventLedgerFailure({ workDir, sessionId: session.id, createdAt: session.createdAt }, error)
+        throw error
+      }
+      sourceReadable = false
+    }
+    const sourceRevision = sessionLedgerSourceRevision(sourceEvents)
     let fileReplay: CompactionReplay
     try {
-      fileReplay = await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)
+      fileReplay = options.readCompactionReplay
+        ? await options.readCompactionReplay(sink.eventsPath) : replayCompactionEvents(sourceEvents)
     } catch (error) {
       notifySessionEventLedgerFailure({ workDir, sessionId: session.id, createdAt: session.createdAt }, error)
       throw error
@@ -117,35 +154,38 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     const collidesWithRejectedCanonical = fileReplay.committed.some(({ compactionId }) => rejectedIds.has(compactionId))
     const hasLegacyOnlyCompaction = fileReplay.committed.some(({ compactionId }) => !canonicalIds.has(compactionId) && !rejectedIds.has(compactionId))
     const backfillPrefix = `legacy-compaction-backfill:${sessionId}:`
-    const hasPartialCanonicalBackfill = Boolean(getDbConnection(db).prepare(`SELECT 1
-      FROM agent_history_streams streams
-      JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
-      WHERE streams.session_id=? AND streams.version=1 AND substr(streams.invocation_id,1,length(?))=?
-        AND events.kind='transcript-compacted' LIMIT 1`).get(sessionId, backfillPrefix, backfillPrefix))
-    const backfillEvents = getDbConnection(db).prepare(`SELECT streams.invocation_id,events.payload_json
-      FROM agent_history_streams streams
-      JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
-      WHERE streams.session_id=? AND events.kind='transcript-compacted' AND substr(streams.invocation_id,1,length(?))=?`)
-      .all(sessionId, backfillPrefix, backfillPrefix) as Array<{ invocation_id: string; payload_json: string }>
-    const versionedBackfills = new Set<string>()
-    const sessionSnapshotBackfills = new Set<string>()
-    for (const row of backfillEvents) {
-      try {
-        const payload = JSON.parse(row.payload_json) as { backfillSnapshotVersion?: unknown; sourceCompactionIds?: unknown }
-        if (payload.backfillSnapshotVersion !== 2) continue
-        versionedBackfills.add(row.invocation_id)
-        if (Array.isArray(payload.sourceCompactionIds)) {
-          for (const compactionId of payload.sourceCompactionIds) if (typeof compactionId === 'string') sessionSnapshotBackfills.add(compactionId)
-        }
-      } catch { /* Invalid snapshots are handled by canonical History validation when read. */ }
+    const readBackfillCompletionState = (committed: CompactionReplay['committed']) => {
+      const hasPartialCanonicalBackfill = Boolean(getDbConnection(db).prepare(`SELECT 1
+        FROM agent_history_streams streams
+        JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
+        WHERE streams.session_id=? AND streams.version=1 AND substr(streams.invocation_id,1,length(?))=?
+          AND events.kind='transcript-compacted' LIMIT 1`).get(sessionId, backfillPrefix, backfillPrefix))
+      const backfillEvents = getDbConnection(db).prepare(`SELECT streams.invocation_id,events.payload_json
+        FROM agent_history_streams streams
+        JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
+        WHERE streams.session_id=? AND events.kind='transcript-compacted' AND substr(streams.invocation_id,1,length(?))=?`)
+        .all(sessionId, backfillPrefix, backfillPrefix) as Array<{ invocation_id: string; payload_json: string }>
+      const versionedBackfills = new Set<string>()
+      const sessionSnapshotBackfills = new Set<string>()
+      for (const row of backfillEvents) {
+        try {
+          const payload = JSON.parse(row.payload_json) as { backfillSnapshotVersion?: unknown; sourceCompactionIds?: unknown }
+          if (payload.backfillSnapshotVersion !== 2) continue
+          versionedBackfills.add(row.invocation_id)
+          if (Array.isArray(payload.sourceCompactionIds)) {
+            for (const compactionId of payload.sourceCompactionIds) if (typeof compactionId === 'string') sessionSnapshotBackfills.add(compactionId)
+          }
+        } catch { /* Invalid snapshots are handled by canonical History validation when read. */ }
+      }
+      const hasBackfillWithoutCurrentSnapshot = committed.some(({ compactionId }) => {
+        const invocationId = `${backfillPrefix}${compactionId}`
+        if (!backfillEvents.some((row) => row.invocation_id === invocationId)) return false
+        return !sessionSnapshotBackfills.has(compactionId) && !versionedBackfills.has(invocationId) && !backfillEvents.some((row) =>
+          row.invocation_id.startsWith(`${invocationId}:transcript-snapshot:`) && versionedBackfills.has(row.invocation_id))
+      })
+      return { hasPartialCanonicalBackfill, hasBackfillWithoutCurrentSnapshot }
     }
-    const hasBackfillWithoutCurrentSnapshot = canonicalReplay.committed.some(({ compactionId }) => {
-      if (!canonicalIds.has(compactionId)) return false
-      const invocationId = `${backfillPrefix}${compactionId}`
-      if (!backfillEvents.some((row) => row.invocation_id === invocationId)) return false
-      return !sessionSnapshotBackfills.has(compactionId) && !versionedBackfills.has(invocationId) && !backfillEvents.some((row) =>
-        row.invocation_id.startsWith(`${invocationId}:transcript-snapshot:`) && versionedBackfills.has(row.invocation_id))
-    })
+    const { hasPartialCanonicalBackfill, hasBackfillWithoutCurrentSnapshot } = readBackfillCompletionState(canonicalReplay.committed)
     const backfillRecords = [...fileReplay.committed, ...canonicalReplay.committed.filter(({ compactionId }) =>
       !fileReplay.committed.some((record) => record.compactionId === compactionId))]
     if (collidesWithRejectedCanonical) throw new Error('CANONICAL_COMPACTION_REPLAY_INVALID')
@@ -288,6 +328,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       }
     }
     const refreshedCanonicalReplay = queries.readCanonicalCompactionReplay(sessionId) ?? canonicalReplay
+    const finalBackfillState = readBackfillCompletionState(refreshedCanonicalReplay.committed)
     const refreshedCanonicalIds = new Set(refreshedCanonicalReplay.committed.map(({ compactionId }) => compactionId))
     const stillHasLegacyOnlyCompaction = fileReplay.committed.some(({ compactionId }) => !refreshedCanonicalIds.has(compactionId) && !rejectedIds.has(compactionId))
     // Keep the file replay as the ordered compatibility source while it contains pre-canonical facts.
@@ -299,29 +340,102 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       if (rejected.compactionId && replayCommittedIds.has(rejected.compactionId)) throw new Error('CANONICAL_COMPACTION_REPLAY_INVALID')
       rejectedByIdentity.set(`${rejected.compactionId ?? ''}\u0000${rejected.reason}`, rejected)
     }
-    return { replay: { ...replay, rejected: [...rejectedByIdentity.values()] }, sink, canPersist: true }
+    const canonicalCompactions = new Map(refreshedCanonicalReplay.committed.map((record) => [record.compactionId, record]))
+    const compactionsCovered = fileReplay.committed.every((record) => {
+      const canonical = canonicalCompactions.get(record.compactionId)
+      return canonical !== undefined && stableLedgerJson(canonical.start.payload) === stableLedgerJson(record.start.payload) &&
+        stableLedgerJson(canonical.summary.payload) === stableLedgerJson(record.summary.payload)
+    })
+    let canCompleteMerge = false
+    let sourceDrift = false
+    if (!stillHasLegacyOnlyCompaction && !finalBackfillState.hasPartialCanonicalBackfill && !finalBackfillState.hasBackfillWithoutCurrentSnapshot &&
+      compactionsCovered && (fileReplay.rejected?.length ?? 0) === 0) {
+      const fileMeterEvents = sourceEvents.filter(({ type }) =>
+        type === 'request_header' || type === 'request_context' || type === 'request_usage' || type === 'request_retry')
+        .map(({ seq, type, payload }) => ({ seq, type, payload })) as CanonicalContextMeterEvent[]
+      const canonicalMeterEvents = queries.readCanonicalContextMeterEvents(sessionId) ?? []
+      const canonicalByIdentity = new Map(canonicalMeterEvents.map((event) => [contextMeterEventIdentity(event), event]))
+      const meterFactsCovered = fileMeterEvents.every((event) => {
+        const canonical = canonicalByIdentity.get(contextMeterEventIdentity(event))
+        return canonical !== undefined && stableLedgerJson(canonical.payload) === stableLedgerJson(event.payload)
+      })
+      const sourceStillSame = sourceReadable && sourceRevision === await readSessionLedgerSourceRevision(sink.eventsPath)
+      sourceDrift = sourceReadable && !sourceStillSame
+      canCompleteMerge = meterFactsCovered && sourceStillSame
+    }
+    return { replay: { ...replay, rejected: [...rejectedByIdentity.values()] }, sourceRevision, canCompleteMerge, sourceDrift }
+    })
+    if (conversion.sourceDrift && sourceRetry < 2) return readCompactionReplayForLocation(sessionId, workDir, sourceRetry + 1)
+    if (conversion.canCompleteMerge && options.ensureSessionLedgerReady) {
+      let mergeReady = false
+      try { mergeReady = ledgerCheckReady(await options.ensureSessionLedgerReady({ session, workDir })) }
+      catch { mergeReady = false }
+      let sourceStable = true
+      if (mergeReady) await withSessionEventWriterDrain(workDir, session.id, async () => {
+        sourceStable = conversion.sourceRevision === await readSessionLedgerSourceRevision(sink.eventsPath)
+        if (sourceStable) {
+          markLegacyLedgerMergeCompleted(getDbConnection(db), location, session.generation)
+        }
+      })
+      if (mergeReady && !sourceStable && sourceRetry < 2) return readCompactionReplayForLocation(sessionId, workDir, sourceRetry + 1)
+    }
+    return { replay: conversion.replay, sink, canPersist: true }
+    })
   }
   const readContextMeterEventsForLocation = async (sessionId: string, workDir: string): Promise<readonly CanonicalContextMeterEvent[]> => {
     const session = queries.readSession(sessionId)
     if (!session) throw new Error('SESSION_NOT_FOUND')
+    const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
+    return withSessionLedgerLifecycleLock(sessionLedgerLocationIdentity(location).key, async () => {
+    let readinessResult: boolean | { ready: boolean; canonicalReadVersion: number | null } = true
     if (options.ensureSessionLedgerReady) {
       try {
-        if (!(await options.ensureSessionLedgerReady({ session, workDir }))) {
+        readinessResult = await options.ensureSessionLedgerReady({ session, workDir })
+        if (!ledgerCheckReady(readinessResult)) {
           return queries.readCanonicalContextMeterEvents(sessionId) ?? []
         }
       } catch {
         return queries.readCanonicalContextMeterEvents(sessionId) ?? []
       }
     }
+    const readVersion = ledgerCheckReadVersion(readinessResult)
+    if (readVersion === 1 || (readVersion === undefined && isCanonicalReadLocation(location, session.generation))) {
+      return queries.readCanonicalContextMeterEvents(sessionId) ?? []
+    }
     const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
     const fileEvents = (await readSessionEvents(sink.eventsPath)).filter(({ type }) =>
       type === 'request_header' || type === 'request_context' || type === 'request_usage' || type === 'request_retry')
-      .map(({ seq, type, payload }) => ({ seq, type, payload })) as CanonicalContextMeterEvent[]
-    const canonicalEvents = queries.readCanonicalContextMeterEvents(sessionId)
-    if (!canonicalEvents) return fileEvents
-    const identities = new Set(canonicalEvents.map(contextMeterEventIdentity))
-    const hasLegacyOnlyFacts = fileEvents.some((event) => !identities.has(contextMeterEventIdentity(event)))
-    return hasLegacyOnlyFacts ? fileEvents : canonicalEvents
+      .map(({ seq, time, type, payload }) => ({ seq, time, type, payload })) as Array<CanonicalContextMeterEvent & { time: number }>
+    const canonicalEvents = queries.readCanonicalContextMeterEvents(sessionId) ?? []
+    const importPlan = buildLegacyMeterImportEvents(location, fileEvents, canonicalEvents)
+    if (!importPlan.complete) return fileEvents
+    if (importPlan.events.length > 0) {
+      const history = execution.historyFor({ sessionId })
+      const existing = await history.read(importPlan.invocationId)
+      if (existing.version === 0) await history.appendBatch(importPlan.events, 0)
+      else if (stableLedgerJson(existing.events) !== stableLedgerJson(importPlan.events)) {
+        throw new Error('SESSION_LEDGER_LEGACY_METER_IMPORT_CONFLICT')
+      }
+    }
+    const mergedEvents = queries.readCanonicalContextMeterEvents(sessionId)
+    if (!mergedEvents) return fileEvents
+    const mergedByIdentity = new Map(mergedEvents.map((event) => [contextMeterEventIdentity(event), event]))
+    const allFactsMerged = fileEvents.every((event) => {
+      const merged = mergedByIdentity.get(contextMeterEventIdentity(event))
+      return merged !== undefined && stableLedgerJson(merged.payload) === stableLedgerJson(event.payload)
+    })
+    if (allFactsMerged) {
+      // The replay path also imports any legacy-only compression record and is the single place
+      // that can certify the location-wide canonical read cutover.
+      await readCompactionReplayForLocation(sessionId, workDir)
+      if (isCanonicalReadLocation(location, session.generation)) return queries.readCanonicalContextMeterEvents(sessionId) ?? []
+      const currentFileEvents = await withSessionEventWriterDrain(workDir, session.id, () => readSessionEvents(sink.eventsPath))
+        .then((events) => events.filter(({ type }) => type === 'request_header' || type === 'request_context' || type === 'request_usage' || type === 'request_retry')
+          .map(({ seq, time, type, payload }) => ({ seq: time * 4096 + (seq % 4096), type, payload })) as CanonicalContextMeterEvent[])
+      return mergeCanonicalAndLegacyMeterEvents(queries.readCanonicalContextMeterEvents(sessionId) ?? [], currentFileEvents)
+    }
+    return fileEvents
+    })
   }
   const bodyScopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
   const cacheStore = createSqliteProjectionChatBodyCacheStore(db)
@@ -628,9 +742,9 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const ensureLedgerReady = async (sessionId: string): Promise<boolean> => {
     const session = queries.readSession(sessionId)
     const workDir = options.getWorkDirForSession?.(sessionId)
-    return session && workDir && options.ensureSessionLedgerReady
-      ? options.ensureSessionLedgerReady({ session, workDir })
-      : !options.ensureSessionLedgerReady
+    if (!session || !workDir || !options.ensureSessionLedgerReady) return !options.ensureSessionLedgerReady
+    const ready = await options.ensureSessionLedgerReady({ session, workDir })
+    return ledgerCheckReady(ready)
   }
   const readCompactionReplayForSession = async (input: Readonly<{ sessionId: string; workDir: string }>): Promise<CompactionReplay> =>
     (await readCompactionReplayForLocation(input.sessionId, input.workDir)).replay
@@ -692,6 +806,127 @@ function contextMeterEventIdentity(event: CanonicalContextMeterEvent): string {
   if (event.type === 'request_context') return `${event.type}:${requestId}:${String(event.payload.attempt ?? '')}:${event.payload.projectionStage === 'final' ? 'final' : 'request'}`
   if (event.type === 'request_header' || event.type === 'request_retry') return `${event.type}:${requestId}:${String(event.payload.attempt ?? '')}`
   return `${event.type}:${requestId}`
+}
+
+function mergeCanonicalAndLegacyMeterEvents(canonicalEvents: readonly CanonicalContextMeterEvent[],
+  fileEvents: readonly CanonicalContextMeterEvent[]): CanonicalContextMeterEvent[] {
+  const merged = new Map(canonicalEvents.map((event) => [contextMeterEventIdentity(event), event]))
+  for (const event of fileEvents) {
+    const identity = contextMeterEventIdentity(event)
+    const canonical = merged.get(identity)
+    if (canonical && stableLedgerJson(canonical.payload) !== stableLedgerJson(event.payload)) {
+      throw new Error('SESSION_LEDGER_LEGACY_METER_CONFLICT')
+    }
+    if (!canonical) merged.set(identity, event)
+  }
+  return [...merged.values()].sort((left, right) => left.seq - right.seq)
+}
+
+function stableLedgerJson(value: unknown): string {
+  const canonicalize = (item: unknown): unknown => Array.isArray(item) ? item.map(canonicalize)
+    : item && typeof item === 'object' ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, nested]) => [key, canonicalize(nested)])) : item
+  return JSON.stringify(canonicalize(value))
+}
+
+async function readSessionLedgerSourceRevision(eventsPath: string): Promise<string> {
+  const events = await readSessionEvents(eventsPath)
+  return sessionLedgerSourceRevision(events)
+}
+
+function sessionLedgerSourceRevision(events: readonly unknown[]): string {
+  return createHash('sha256').update(stableLedgerJson(events)).digest('hex')
+}
+
+function buildLegacyMeterImportEvents(location: { workDir: string; sessionId: string; createdAt: number },
+  fileEvents: readonly CanonicalContextMeterEvent[], canonicalEvents: readonly CanonicalContextMeterEvent[]):
+  { invocationId: string; events: HistoryEvent[]; complete: boolean } {
+  type Source = { seq: number; time: number }
+  type Fact = { kind: 'model-request-started' | 'provider-retry-scheduled' | 'provider-attempt-result';
+    requestId: string; attempt: number; source: Source; payload: Record<string, unknown> }
+  const invocationId = `legacy-meter-import:${sessionLedgerLocationIdentity(location).key}`
+  const facts: Fact[] = []
+  const headers = new Map<string, CanonicalContextMeterEvent>()
+  const contexts = new Map<string, CanonicalContextMeterEvent>()
+  const canonicalByIdentity = new Map(canonicalEvents.map((event) => [contextMeterEventIdentity(event), event]))
+  const fileByIdentity = new Map<string, CanonicalContextMeterEvent>()
+  for (const event of fileEvents) {
+    const identity = contextMeterEventIdentity(event)
+    const previous = fileByIdentity.get(identity)
+    if (previous && stableLedgerJson(previous.payload) !== stableLedgerJson(event.payload)) return { invocationId, events: [], complete: false }
+    fileByIdentity.set(identity, event)
+    const canonical = canonicalByIdentity.get(identity)
+    if (canonical && stableLedgerJson(canonical.payload) !== stableLedgerJson(event.payload)) {
+      throw new Error('SESSION_LEDGER_LEGACY_METER_CONFLICT')
+    }
+    const requestId = event.payload.requestId
+    const attempt = event.payload.attempt
+    if (event.type !== 'request_usage' && (typeof requestId !== 'string' || !requestId || !Number.isInteger(attempt) || Number(attempt) < 1)) {
+      return { invocationId, events: [], complete: false }
+    }
+    const key = `${String(requestId ?? '')}\u0000${String(attempt ?? 1)}`
+    if (event.type === 'request_header') headers.set(key, event)
+    else if (event.type === 'request_context' && event.payload.projectionStage !== 'final') contexts.set(key, event)
+  }
+  const source = (event: CanonicalContextMeterEvent): Source => {
+    const raw = event as CanonicalContextMeterEvent & { time?: unknown }
+    return { seq: event.seq, time: typeof raw.time === 'number' && Number.isSafeInteger(raw.time) ? raw.time : Date.now() }
+  }
+  const accounted = new Set<string>()
+  for (const [key, header] of headers) {
+    const context = contexts.get(key)
+    if (!context) return { invocationId, events: [], complete: false }
+    const headerCovered = canonicalByIdentity.has(contextMeterEventIdentity(header))
+    const contextCovered = canonicalByIdentity.has(contextMeterEventIdentity(context))
+    if (headerCovered !== contextCovered) return { invocationId, events: [], complete: false }
+    if (!headerCovered) {
+      const requestId = String(header.payload.requestId)
+      const attempt = Number(header.payload.attempt)
+      const contextSource = source(context)
+      facts.push({ kind: 'model-request-started', requestId, attempt,
+        source: source(header).seq <= contextSource.seq ? source(header) : contextSource,
+        payload: { requestId, modelTurn: 1, attempt, legacyMeterImport: true,
+          sessionLedger: { location, requestHeader: header.payload, requestContext: context.payload,
+            legacyMeterSources: { requestHeader: source(header), requestContext: contextSource } } } })
+    }
+    accounted.add(contextMeterEventIdentity(header))
+    accounted.add(contextMeterEventIdentity(context))
+  }
+  for (const event of fileEvents) {
+    const identity = contextMeterEventIdentity(event)
+    if (accounted.has(identity) || canonicalByIdentity.has(identity)) continue
+    const requestId = String(event.payload.requestId ?? '')
+    const attempt = Number(event.payload.attempt ?? 1)
+    if (!requestId) return { invocationId, events: [], complete: false }
+    if (event.type === 'request_retry') {
+      facts.push({ kind: 'provider-retry-scheduled', requestId, attempt, source: source(event),
+        payload: { requestId, modelTurn: 1, retryAttempt: attempt, legacyMeterImport: true,
+          sessionLedger: { location, requestRetry: event.payload, legacyMeterSource: source(event) } } })
+    } else if (event.type === 'request_usage') {
+      facts.push({ kind: 'provider-attempt-result', requestId, attempt, source: source(event),
+        payload: { requestId, modelTurn: 1, attempt, legacyMeterImport: true,
+          sessionLedger: { location, requestUsage: event.payload, legacyMeterSource: source(event) } } })
+    } else if (event.type === 'request_context' && event.payload.projectionStage === 'final') {
+      facts.push({ kind: 'provider-attempt-result', requestId, attempt, source: source(event),
+        payload: { requestId, modelTurn: 1, attempt, legacyMeterImport: true,
+          sessionLedger: { location, requestFinalContext: event.payload, legacyMeterSource: source(event) } } })
+    }
+  }
+  facts.sort((a, b) => a.source.seq - b.source.seq || a.source.time - b.source.time || a.kind.localeCompare(b.kind))
+  const events = facts.map((fact, index) => {
+    const sequence = index + 1
+    const eventId = `${invocationId}:fact:${createHash('sha256').update(stableLedgerJson({ fact, sequence })).digest('hex').slice(0, 24)}`
+    return { invocationId, turnId: invocationId, sequence, schemaVersion: 1,
+      eventId, idempotencyKey: eventId, kind: fact.kind, payload: fact.payload } as HistoryEvent
+  })
+  if (events.length > 0) {
+    const sequence = events.length + 1
+    const eventId = `${invocationId}:completed`
+    events.push({ invocationId, turnId: invocationId, sequence, schemaVersion: 1, eventId,
+      idempotencyKey: eventId, kind: 'invocation-completed', payload: { status: 'completed',
+        completedAt: facts.reduce((latest, fact) => Math.max(latest, fact.source.time), 0), legacyMeterImport: true } })
+  }
+  return { invocationId, events, complete: fileByIdentity.size === fileEvents.length }
 }
 
 /** Host composition additionally binds existing startup recovery owners without exposing them to business consumers. */

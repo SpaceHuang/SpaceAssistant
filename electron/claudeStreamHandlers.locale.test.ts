@@ -32,12 +32,17 @@ vi.mock('./toolChatLoop', () => ({
   DESKTOP_TOOL_LOOP_MAX_ROUNDS: 500
 }))
 
-vi.mock('./sessionEvents', () => ({
-  getSessionEventSink: (...args: unknown[]) => mockGetSessionEventSink(...args),
-  readCompactionMarkers: (...args: unknown[]) => mockReadCompactionMarkers(...args),
-  readCompactionReplay: (...args: unknown[]) => mockReadCompactionReplay(...args),
-  readSessionEvents: (...args: unknown[]) => mockReadSessionEvents(...args)
-}))
+vi.mock('./sessionEvents', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./sessionEvents')>()
+  return {
+    ...actual,
+    getSessionEventSink: (...args: unknown[]) => mockGetSessionEventSink(...args),
+    readCompactionMarkers: (...args: unknown[]) => mockReadCompactionMarkers(...args),
+    readCompactionReplay: (...args: unknown[]) => mockReadCompactionReplay(...args),
+    readSessionEvents: (...args: unknown[]) => mockReadSessionEvents(...args),
+    withSessionEventWriterDrain: async (_workDir: string, _sessionId: string, operation: () => unknown) => operation()
+  }
+})
 
 vi.mock('./agentLogger/agentLogger', () => ({
   logAgentEvent: vi.fn()

@@ -25,6 +25,8 @@ import { ToolRevocationRegistry } from './toolRevocationRegistry'
 import { createDesktopAnthropicRouteProfile } from './piAiAnthropicBridge'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { getDbConnection } from './database'
+import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
+import { ensureLegacyLedgerReadiness } from './sessionLedgerReadiness'
 import { runApprovalAgent } from './confirmation/approvalAgent'
 import { PolicyAuthorizationChangeRegistry } from './runtime/policyAuthorizationChangeRegistry'
 import { readPolicyPackages, writePolicyPackages } from './confirmation/policyRulesRuntime'
@@ -1155,6 +1157,11 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     runtime.modelProviders.register = (profile, provider) => profile.routeId === routeId ? routeId : register(profile, provider)
     setDefaultAgentRuntime(runtime)
     const session = createSession(db, { name: 'hosted-boundary-compaction', model: modelId, maxTokens: MODEL_BASELINE[modelId]!.maxTokens })
+    const legacyLocation = { workDir: '/tmp', sessionId: session.id, createdAt: session.createdAt }
+    const legacyIdentity = sessionLedgerLocationIdentity(legacyLocation)
+    ensureLegacyLedgerReadiness(getDbConnection(db), legacyLocation, session.generation)
+    getDbConnection(db).prepare(`UPDATE session_ledger_projection_state
+      SET origin='legacy',state='unknown',bootstrap_id=NULL,canonical_read_version=NULL WHERE ledger_location_key=?`).run(legacyIdentity.key)
     const priorUser = appendMessage(db, { id: 'boundary-prior-user', sessionId: session.id, role: 'user', content: 'older user context '.repeat(9000), timestamp: 0, status: 'sent' })
     appendMessage(db, { id: 'boundary-prior-assistant', sessionId: session.id, role: 'assistant', content: 'older assistant context '.repeat(9000), timestamp: 0.5, status: 'sent' })
     const user = appendMessage(db, { id: 'boundary-current-user', sessionId: session.id, role: 'user', content: 'current request must survive', timestamp: 1, status: 'sent' })
@@ -1176,6 +1183,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const repairTurnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn() }
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
+      sessionStorage: createSqliteSessionStorage(db, { readCompactionReplay: async () => injectedCompactionReplay ?? ({ committed: [], rejected: [] }) }),
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: ['read_file'] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),

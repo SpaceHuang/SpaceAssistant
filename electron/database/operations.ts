@@ -309,8 +309,8 @@ export function createSession(
     if (workDir) {
       const identity = sessionLedgerLocationIdentity({ workDir, sessionId: session.id, createdAt: session.createdAt })
       conn.prepare(`INSERT INTO session_ledger_projection_state(
-        ledger_location_key,work_dir_identity,created_at,session_id,session_generation,origin,state,bootstrap_id,updated_at)
-        VALUES(?,?,?, ?,?,'new_location','uninitialized',?,?)`).run(
+        ledger_location_key,work_dir_identity,created_at,session_id,session_generation,origin,state,bootstrap_id,canonical_read_version,updated_at)
+        VALUES(?,?,?, ?,?,'new_location','uninitialized',?,1,?)`).run(
         identity.key, identity.workDirIdentity, session.createdAt, session.id, session.generation, randomUUID(), now
       )
     }
