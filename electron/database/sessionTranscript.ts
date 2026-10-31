@@ -48,63 +48,102 @@ export function readSessionTranscript(db: AppDatabase, sessionId: string, option
   if (version === 0) return { sessionId, version: 0,
     ...(options.version === undefined && row?.last_turn_id ? { lastTurnId: row.last_turn_id } : {}),
     status: row?.status ?? 'ready', messages: [] }
-  const entry = conn.prepare('SELECT turn_id,messages_json FROM session_transcript_entries WHERE session_id=? AND version=?')
-    .get(sessionId, version) as { turn_id: string; messages_json: string } | undefined
-  if (!entry) throw new Error('SESSION_TRANSCRIPT_VERSION_NOT_FOUND')
-  let messages: TranscriptMessage[] = []
-  if (entry) {
-    const selection = conn.prepare('SELECT context_selection_json FROM session_transcript_entries WHERE session_id=? AND version=?')
-      .get(sessionId, version) as { context_selection_json: string | null } | undefined
-    let stored: unknown
-    if (selection?.context_selection_json) {
-      const intent = JSON.parse(selection.context_selection_json) as { contextProtocol?: unknown; target?: unknown }
-      if (intent.contextProtocol !== 2 || !['working', 'failure', 'park-baseline'].includes(String(intent.target))) {
-        throw new Error('SESSION_TRANSCRIPT_SELECTION_INVALID')
-      }
-      const receipt = conn.prepare('SELECT turn_id,event_end FROM session_turn_commit_receipts WHERE session_id=? AND next_version=?')
-        .get(sessionId, version) as { turn_id: string; event_end: number | null } | undefined
-      if (!receipt || !Number.isSafeInteger(receipt.event_end)) throw new Error('SESSION_TRANSCRIPT_SELECTION_RECEIPT_MISSING')
-      const eventRows = conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json
-        FROM agent_history_events WHERE session_id=? AND session_seq<=? ORDER BY session_seq ASC`)
-        .all(sessionId, receipt.event_end) as Array<{ invocation_id: string; sequence: number; event_id: string; idempotency_key: string; turn_id: string; schema_version: number; kind: HistoryEvent['kind']; payload_json: string }>
-      const events: HistoryEvent[] = eventRows.map((event) => ({ invocationId: event.invocation_id, sequence: event.sequence,
-        eventId: event.event_id, idempotencyKey: event.idempotency_key, turnId: event.turn_id, schemaVersion: event.schema_version,
-        kind: event.kind, payload: JSON.parse(event.payload_json) as unknown }))
-      const restored = restoreSessionContext({ committedVersion: version, events })
-      let terminal: HistoryEvent | undefined
-      for (let index = events.length - 1; index >= 0; index -= 1) {
-        const candidate = events[index]
-        if (candidate?.turnId === receipt.turn_id &&
-          ['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(candidate.kind)) {
-          terminal = candidate
-          break
-        }
-      }
-      const terminalSelection = terminal?.payload && typeof terminal.payload === 'object'
-        ? (terminal.payload as { contextSelection?: unknown }).contextSelection as { contextProtocol?: unknown; target?: unknown } | undefined
-        : undefined
-      if (!terminal || terminalSelection?.contextProtocol !== 2 || terminalSelection.target !== intent.target) {
-        throw new Error('SESSION_TRANSCRIPT_SELECTION_TERMINAL_MISMATCH')
-      }
-      messages = [...restored.committed] as unknown as TranscriptMessage[]
-      stored = undefined
-    } else stored = JSON.parse(entry.messages_json) as unknown
-    if (stored !== undefined && stored && typeof stored === 'object' && '__spaceassistant_session_transcript_spill_v1' in stored) {
-      const descriptor = (stored as { __spaceassistant_session_transcript_spill_v1: SpillDescriptor }).__spaceassistant_session_transcript_spill_v1
-      const main = conn.prepare('PRAGMA database_list').all().find((database) => (database as { name?: string }).name === 'main') as { file?: string } | undefined
-      if (!main?.file) throw new Error('session transcript spill requires a file-backed database')
-      messages = JSON.parse(readSourceTruthSpillSync(path.join(path.dirname(main.file), 'spill'), descriptor)) as TranscriptMessage[]
-    } else if (stored !== undefined) {
-      if (!Array.isArray(stored)) throw new Error('SESSION_TRANSCRIPT_LEGACY_SNAPSHOT_INVALID')
-      messages = stored as TranscriptMessage[]
-    }
-    if (!selection?.context_selection_json) {
-      const restored = restoreLegacySessionContextSnapshot({ invocationId: `legacy-transcript:${sessionId}`,
-        turnId: entry.turn_id, committedVersion: version, messages: messages as CanonicalModelMessage[] })
-      messages = [...restored.committed] as unknown as TranscriptMessage[]
+  const entry = conn.prepare(`SELECT turn_id,messages_json,base_version,version,outcome,context_selection_json
+    FROM session_transcript_entries WHERE session_id=? AND version=?`).get(sessionId, version) as
+    { turn_id: string; messages_json: string; base_version: number; version: number; outcome: string; context_selection_json: string | null } | undefined
+  const receipt = conn.prepare(`SELECT turn_id,payload_sha256,base_version,next_version,outcome,event_start,event_end
+    FROM session_turn_commit_receipts WHERE session_id=? AND next_version=?`).get(sessionId, version) as
+    { turn_id: string; payload_sha256: string; base_version: number; next_version: number; outcome: string; event_start: number | null; event_end: number | null } | undefined
+  if (!entry && !receipt) throw new Error('SESSION_TRANSCRIPT_VERSION_NOT_FOUND')
+
+  let entrySelection: { contextProtocol?: unknown; target?: unknown } | undefined
+  if (entry?.context_selection_json) {
+    entrySelection = JSON.parse(entry.context_selection_json) as { contextProtocol?: unknown; target?: unknown }
+    if (entrySelection.contextProtocol !== 2 || !['working', 'failure', 'park-baseline'].includes(String(entrySelection.target))) {
+      throw new Error('SESSION_TRANSCRIPT_SELECTION_INVALID')
     }
   }
-  return { sessionId, version, lastTurnId: entry.turn_id, status: row?.status ?? 'ready', messages }
+  const receiptTerminalRow = receipt && Number.isSafeInteger(receipt.event_end)
+    ? conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,session_seq
+        FROM agent_history_events WHERE session_id=? AND session_seq=?`).get(sessionId, receipt.event_end!) as
+      { invocation_id: string; sequence: number; event_id: string; idempotency_key: string; turn_id: string; schema_version: number; kind: HistoryEvent['kind']; payload_json: string; session_seq: number } | undefined
+    : undefined
+  const receiptTerminalPayload = receiptTerminalRow?.payload_json
+    ? JSON.parse(receiptTerminalRow.payload_json) as { contextSelection?: { contextProtocol?: unknown; target?: unknown }; review?: { sourceTurnId?: unknown } }
+    : undefined
+  const receiptSelection = receiptTerminalPayload?.contextSelection
+  const receiptSelectsProtocol2 = receiptSelection?.contextProtocol === 2
+  if (entrySelection && (!receipt || !receiptSelectsProtocol2)) throw new Error('SESSION_TRANSCRIPT_SELECTION_RECEIPT_MISSING')
+  const selection = entrySelection ?? (receiptSelectsProtocol2 ? receiptSelection : undefined)
+  if (selection) {
+    const isReviewReceipt = Boolean(receipt?.turn_id.startsWith('session-review-turn:'))
+    if (!receipt || !Number.isSafeInteger(receipt.event_start) || !Number.isSafeInteger(receipt.event_end) ||
+      receipt.event_start! > receipt.event_end! || !receiptTerminalRow || receiptTerminalRow.turn_id !== receipt.turn_id ||
+      !['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(receiptTerminalRow.kind) ||
+      selection.contextProtocol !== 2 || !['working', 'failure', 'park-baseline'].includes(String(selection.target)) ||
+      receiptSelection?.contextProtocol !== 2 || receiptSelection.target !== selection.target ||
+      (entry && (entry.version !== receipt.next_version || entry.base_version !== receipt.base_version || entry.outcome !== receipt.outcome))) {
+      throw new Error('SESSION_TRANSCRIPT_SELECTION_TERMINAL_MISMATCH')
+    }
+    const receiptFirstEvent = conn.prepare(`SELECT turn_id FROM agent_history_events WHERE session_id=? AND session_seq=?`)
+      .get(sessionId, receipt.event_start) as { turn_id: string } | undefined
+    if (!receiptFirstEvent || receiptFirstEvent.turn_id !== receipt.turn_id) throw new Error('SESSION_TRANSCRIPT_SELECTION_RECEIPT_RANGE_INVALID')
+    const eventRows = conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json
+      FROM agent_history_events WHERE session_id=? AND session_seq<=? ORDER BY session_seq ASC`)
+      .all(sessionId, receipt.event_end) as Array<{ invocation_id: string; sequence: number; event_id: string; idempotency_key: string; turn_id: string; schema_version: number; kind: HistoryEvent['kind']; payload_json: string }>
+    const events: HistoryEvent[] = eventRows.map((event) => ({ invocationId: event.invocation_id, sequence: event.sequence,
+      eventId: event.event_id, idempotencyKey: event.idempotency_key, turnId: event.turn_id, schemaVersion: event.schema_version,
+      kind: event.kind, payload: JSON.parse(event.payload_json) as unknown }))
+    const restored = restoreSessionContext({ committedVersion: version, events })
+    const terminal = events.find((event) => event.eventId === receiptTerminalRow!.event_id)
+    const terminalSelection = terminal?.payload && typeof terminal.payload === 'object'
+      ? (terminal.payload as { contextSelection?: { contextProtocol?: unknown; target?: unknown; baseVersion?: unknown } }).contextSelection
+      : undefined
+    if (!terminal || terminal.turnId !== receipt.turn_id || terminalSelection?.contextProtocol !== 2 ||
+      terminalSelection.target !== selection.target ||
+      (terminalSelection.baseVersion !== undefined && terminalSelection.baseVersion !== receipt.base_version)) {
+      throw new Error('SESSION_TRANSCRIPT_SELECTION_TERMINAL_MISMATCH')
+    }
+    const reviewSourceTurnId = receiptTerminalPayload?.review?.sourceTurnId
+    if (isReviewReceipt) {
+      const reviewSeed = events.find((event) => event.turnId === receipt.turn_id && event.kind === 'invocation-context-committed')
+      const reviewMetadata = reviewSeed?.payload && typeof reviewSeed.payload === 'object'
+        ? (reviewSeed.payload as { review?: { resolutionId?: unknown; sourceTurnId?: unknown; baseVersion?: unknown; reviewPayloadSha256?: unknown; outcome?: unknown } }).review
+        : undefined
+      const audit = typeof reviewMetadata?.resolutionId === 'string'
+        ? conn.prepare(`SELECT turn_id,resolved_version FROM session_transcript_reconciliations WHERE resolution_id=? AND session_id=?`)
+          .get(reviewMetadata.resolutionId, sessionId) as { turn_id: string; resolved_version: number } | undefined
+        : undefined
+      if (!reviewMetadata || typeof reviewSourceTurnId !== 'string' || reviewMetadata.sourceTurnId !== reviewSourceTurnId ||
+        (entry && reviewMetadata.sourceTurnId !== entry.turn_id) || reviewMetadata.outcome !== receipt.outcome ||
+        reviewMetadata.baseVersion !== receipt.base_version || reviewMetadata.reviewPayloadSha256 !== receipt.payload_sha256 ||
+        !audit || audit.turn_id !== reviewMetadata.sourceTurnId || audit.resolved_version !== version) {
+        throw new Error('SESSION_TRANSCRIPT_REVIEW_RECEIPT_MISMATCH')
+      }
+    } else if (entry && entry.turn_id !== receipt.turn_id) throw new Error('SESSION_TRANSCRIPT_SELECTION_TERMINAL_MISMATCH')
+    const outcomeMatches = isReviewReceipt ? receiptTerminalRow.kind === 'invocation-completed'
+      : receiptTerminalRow.kind === 'invocation-completed' ? receipt.outcome === 'completed'
+        : receiptTerminalRow.kind === 'invocation-failed' ? receipt.outcome === 'failed' || receipt.outcome === 'timed_out'
+          : receiptTerminalRow.kind === 'invocation-parked' ? receipt.outcome === 'interrupted'
+            : receipt.outcome === 'cancelled' || receipt.outcome === 'interrupted'
+    if (!outcomeMatches) throw new Error('SESSION_TRANSCRIPT_SELECTION_OUTCOME_MISMATCH')
+    return { sessionId, version, lastTurnId: isReviewReceipt ? reviewSourceTurnId as string : entry?.turn_id ?? receipt.turn_id,
+      status: row?.status ?? 'ready', messages: [...restored.committed] as unknown as TranscriptMessage[] }
+  }
+
+  if (!entry) throw new Error('SESSION_TRANSCRIPT_VERSION_NOT_FOUND')
+  let messages = JSON.parse(entry.messages_json) as unknown
+  if (messages && typeof messages === 'object' && '__spaceassistant_session_transcript_spill_v1' in messages) {
+    const descriptor = (messages as { __spaceassistant_session_transcript_spill_v1: SpillDescriptor }).__spaceassistant_session_transcript_spill_v1
+    const main = conn.prepare('PRAGMA database_list').all().find((database) => (database as { name?: string }).name === 'main') as { file?: string } | undefined
+    if (!main?.file) throw new Error('session transcript spill requires a file-backed database')
+    messages = JSON.parse(readSourceTruthSpillSync(path.join(path.dirname(main.file), 'spill'), descriptor)) as unknown
+  }
+  if (!Array.isArray(messages)) throw new Error('SESSION_TRANSCRIPT_LEGACY_SNAPSHOT_INVALID')
+  const restored = restoreLegacySessionContextSnapshot({ invocationId: `legacy-transcript:${sessionId}`,
+    turnId: entry.turn_id, committedVersion: version, messages: messages as CanonicalModelMessage[] })
+  return { sessionId, version, lastTurnId: entry.turn_id, status: row?.status ?? 'ready',
+    messages: [...restored.committed] as unknown as TranscriptMessage[] }
   })
 }
 

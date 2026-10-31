@@ -463,6 +463,10 @@ describe('session transcript checkpoint and execution claim', () => {
     })
     expect(getDbConnection(db).prepare('SELECT messages_json,context_selection_json FROM session_transcript_entries WHERE session_id=? AND version=1')
       .get(session.id)).toEqual({ messages_json: '[]', context_selection_json: JSON.stringify({ contextProtocol: 2, target: 'working' }) })
+    getDbConnection(db).prepare('DELETE FROM session_transcript_entries WHERE session_id=? AND version=1').run(session.id)
+    expect(readSessionTranscript(db, session.id, { version: 1 })).toMatchObject({
+      version: 1, lastTurnId: 'review-source-turn', status: 'ready', messages: reviewedMessages
+    })
     expect(commitSessionTranscript(db, {
       sessionId: session.id, turnId: 'later-turn', baseVersion: 1, outcome: 'completed', messages: [{ role: 'user', content: 'later version' }]
     })).toEqual({ committed: true, version: 2 })
@@ -471,7 +475,7 @@ describe('session transcript checkpoint and execution claim', () => {
     expect(reconcileUncertainSessionTranscript(db, { ...reviewInput, messages: [{ role: 'user', content: 'conflicting review' }] }))
       .toEqual({ reconciled: false, reason: 'idempotency-conflict' })
     expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(session.id))
-      .toEqual({ count: 2 })
+      .toEqual({ count: 1 })
     expect(getDbConnection(db).prepare('SELECT resolution_id,turn_id,resolved_version FROM session_transcript_reconciliations WHERE session_id=?').get(session.id))
       .toMatchObject({ resolution_id: /^session-review:[a-f0-9]{64}$/, turn_id: 'review-source-turn', resolved_version: 1 })
     expect(claimSessionExecution(db, { sessionId: session.id, turnId: 'next-reviewed-turn', ownerId: 'next-owner' }))

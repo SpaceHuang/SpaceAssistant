@@ -3132,6 +3132,10 @@ describe('SqliteAgentHistory', () => {
     expect(readSessionTranscript(db, sessionId, { version: 1 })).toMatchObject({
       version: 1, lastTurnId: turnId, status: 'ready', messages: [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'leased answer' }]
     })
+    conn.prepare('DELETE FROM session_transcript_entries WHERE session_id=? AND version=1').run(sessionId)
+    expect(readSessionTranscript(db, sessionId, { version: 1 })).toMatchObject({
+      version: 1, lastTurnId: turnId, status: 'ready', messages: [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'leased answer' }]
+    })
     expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'transcript_committed' })
     db.close()
   })
