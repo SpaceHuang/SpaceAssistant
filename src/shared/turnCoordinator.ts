@@ -1,5 +1,5 @@
 import type { Message } from './domainTypes'
-import { acceptedAssistantCheckpoint, reduceAssistantFact, type AssistantFactEvent, type TurnExecutionConfig, type TurnIntent, type TurnTerminal, type TurnOutcome } from './assistantFactAggregator'
+import { acceptedAssistantCheckpoint, assistantOutputCheckpoint, reduceAssistantFact, type AssistantFactEvent, type TurnExecutionConfig, type TurnIntent, type TurnTerminal, type TurnOutcome } from './assistantFactAggregator'
 import { canonicalQueueInput } from './queueInputFingerprint'
 import type { QueueScope } from './queueScope'
 import { CheckpointQueue } from './checkpointQueue'
@@ -24,11 +24,11 @@ export type TurnStorage = {
   update: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   updateIfStreaming: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   checkpoint: (turnId: string, version: number, message: Message) => boolean
-  listStreaming?: () => Message[]
-  listRecoverableResidues?: () => Array<{ message: Message; turnId?: string; turnOutcome?: string }>
+  listStreaming?: (sessionId?: string) => Message[]
+  listRecoverableResidues?: (sessionId?: string) => Array<{ message: Message; turnId?: string; turnOutcome?: string }>
   finalizeResidueMessage?: (messageId: string, targetStatus: 'completed' | 'cancelled' | 'failed') => boolean
   finalizeParkedResidueMessage?: (messageId: string) => boolean
-  listUnfinishedTurns: () => Array<{ turnId: string; assistantMessageId: string }>
+  listUnfinishedTurns: (sessionId?: string) => Array<{ turnId: string; assistantMessageId: string }>
   recoverTurn: (turnId: string, assistantMessageId: string) => boolean | Extract<TurnOutcome, 'completed' | 'parked' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'>
   saveTurn: (turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; userMessageId?: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => void
   updateTurnState: (turnId: string, state: string, patch?: { version?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string } }) => void
@@ -345,7 +345,7 @@ export class TurnCoordinator {
     const metricStart = typeof performance !== 'undefined' ? performance.now() : 0
     let result: boolean | void | Promise<boolean | void>
     try {
-      result = this.checkpointQueue.enqueue(turnId, () => this.checkpoint(turnId, turn.version, acceptedAssistantCheckpoint(turn.assistantMessage)))
+      result = this.checkpointQueue.enqueue(turnId, () => this.checkpoint(turnId, turn.version, assistantOutputCheckpoint(turn.assistantMessage)))
     } catch {
       result = false
     }
@@ -431,8 +431,8 @@ export class TurnCoordinator {
     this.terminals.set(turnId, { ...this.makeTerminal(finalized, outcome), ...(error ? { error } : {}) })
   }
 
-  recover(): number {
-    const unfinished = this.storage.listUnfinishedTurns()
+  recover(sessionId?: string): number {
+    const unfinished = this.storage.listUnfinishedTurns(sessionId)
     let recovered = 0
     for (const turn of unfinished) {
       if (this.recovered.has(turn.assistantMessageId)) continue
@@ -456,7 +456,7 @@ export class TurnCoordinator {
         recovered++
       }
     }
-    const residues: Array<{ message: Message; turnId?: string; turnOutcome?: string }> = this.storage.listRecoverableResidues?.() ?? (this.storage.listStreaming?.() ?? []).map((message) => ({ message }))
+    const residues: Array<{ message: Message; turnId?: string; turnOutcome?: string }> = this.storage.listRecoverableResidues?.(sessionId) ?? (this.storage.listStreaming?.(sessionId) ?? []).map((message) => ({ message }))
     for (const message of residues) {
       const residue = message
       const m = residue.message

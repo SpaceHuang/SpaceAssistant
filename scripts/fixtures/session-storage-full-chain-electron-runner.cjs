@@ -14,6 +14,7 @@ app.whenReady().then(async () => {
   try {
     const { openDatabase, getDbConnection } = require(path.join(root, 'dist-electron/electron/database/index.js'))
     const { createSession, appendMessage } = require(path.join(root, 'dist-electron/electron/database/operations.js'))
+    const { createSessionQueries } = require(path.join(root, 'dist-electron/electron/sessionStorage/queries.js'))
     const { SqliteAgentHistory } = require(path.join(root, 'dist-electron/electron/runtime/sqliteAgentHistory.js'))
     const { rebuildClaudeMessagesFromHistory } = require(path.join(root, 'dist-electron/electron/runtime/canonicalHistory.js'))
     const { InvocationHistoryWriter } = require(path.join(root, 'dist-electron/packages/agent-sdk/src/history.js'))
@@ -106,6 +107,52 @@ app.whenReady().then(async () => {
         const summarize = (values) => ({ ...quantiles(values), totalMs: +values.reduce((sum, value) => sum + value, 0).toFixed(3) })
         measurements.push({ ...scenario, samples: fixture.samples, descriptorJsonBytes: observedBytes, sourceTruthSpillBytes: scenario.bodyBytes, sqlRowRead: summarize(readMs), jsonParse: summarize(parseMs), sourceReadAndHydrate: summarize(hydrateMs),
           historyReduction: summarize(reduceMs), maxContiguousMainThreadBlock: quantiles(blockMs) })
+        continue
+      }
+      if (scenario.kind === 'context-summary') {
+        const coldMs = []; const hotMs = []; const concurrentMs = []; const dispatchBlockMs = []; const resultBytes = []
+        let totalBodyBytes = 0; let totalRows = 0; let totalSummaryEntries = 0
+        for (let sample = 0; sample < fixture.samples; sample += 1) {
+          const session = createSession(db, { name: `synthetic-context-summary-${scenario.count}-${sample}` })
+          const content = 'x'.repeat(scenario.bodyBytes)
+          runInTransaction(conn, () => {
+            for (let index = 0; index < scenario.count; index += 1) {
+              const hasImage = index % 10 === 0
+              appendMessage(db, { id: `summary-${scenario.count}-${sample}-${index}`, sessionId: session.id,
+                role: index % 2 === 0 ? 'user' : 'assistant', content, timestamp: index + 1,
+                status: index % 2 === 0 ? 'sent' : 'completed',
+                ...(hasImage ? { attachments: [{ id: `image-${sample}-${index}`, stagingKey: `chat-attachments/${sample}-${index}.png`,
+                  fileName: 'synthetic.png', mimeType: 'image/png', byteLength: 4096, width: 512, height: 512 }] } : {}),
+                ...(index % 20 === 1 ? { thinking: { content: 'synthetic thinking summary sample', isVisible: true } } : {}) })
+            }
+          })
+          totalRows += scenario.count
+          totalBodyBytes += scenario.count * scenario.bodyBytes
+          const queries = createSessionQueries(db)
+          let started = performance.now()
+          const coldPending = queries.readContextHistorySummaryBaseline(session.id)
+          dispatchBlockMs.push(performance.now() - started)
+          const cold = await coldPending
+          coldMs.push(performance.now() - started)
+          totalSummaryEntries += cold.entries.length
+          resultBytes.push(Buffer.byteLength(JSON.stringify(cold)))
+
+          started = performance.now()
+          await queries.readContextHistorySummaryBaseline(session.id)
+          hotMs.push(performance.now() - started)
+
+          const concurrentQueries = createSessionQueries(db)
+          started = performance.now()
+          const concurrentPending = Array.from({ length: 4 }, () => concurrentQueries.readContextHistorySummaryBaseline(session.id))
+          dispatchBlockMs.push(performance.now() - started)
+          await Promise.all(concurrentPending)
+          concurrentMs.push(performance.now() - started)
+        }
+        measurements.push({ ...scenario, samples: fixture.samples, totalRows, totalBodyBytes, totalSummaryEntries,
+          summaryResultBytes: byteQuantiles(resultBytes), dispatchSynchronousBlock: quantiles(dispatchBlockMs),
+          coldWorkerMiss: quantiles(coldMs), hotCacheHit: quantiles(hotMs), fourConcurrentMisses: quantiles(concurrentMs),
+          scope: 'production SessionQueries with file-backed SQLite and production summary worker',
+          limitations: ['does not include renderer page dispatch-to-paint', 'does not include IPC queue or contextBridge result-copy time', 'does not submit a model request'] })
         continue
       }
       for (let sample = 0; sample < fixture.samples; sample += 1) {

@@ -12,7 +12,6 @@ import {
   setChatStatus,
   setConfirmFocusToolUseId,
   setDisplayPage,
-  addCompactionMarker,
   setLoadingBefore,
   setMessages,
   setScrollToMessageId,
@@ -20,7 +19,6 @@ import {
 } from '../../store/chatSlice'
 import { openSettings } from '../../store/configSlice'
 import {
-  initLiveSessionFromStore,
   abortSessionRun,
   routeAddMessage,
 } from '../../services/chatRunnerService'
@@ -33,7 +31,9 @@ import {
 import {
   applyContextSummaryDbBaseline,
   beginContextSummarySession,
-  selectContextSummaryScalars
+  currentContextSummaryGeneration,
+  selectContextSummaryScalars,
+  subscribeContextSummaryUpdates
 } from '../../services/contextHistorySummaryService'
 import {
   ensureDisplayContainsMessage,
@@ -65,9 +65,9 @@ import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
 import type { SessionSkillsState } from '../../../shared/domainTypes'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatMessageList } from './ChatMessageList'
-import { CompactionMarker } from './CompactionMarker'
 import type { ChatMessageActions } from './ChatMessageActions'
 import { ChatMessageViewport, type ChatMessageViewportHandle } from './ChatMessageViewport'
+import { CompactionMarker } from './CompactionMarker'
 import { ChatRunningElapsed, resolveChatRunningLabels } from './ChatRunningStatus'
 import { MessageInput, type MessageInputHandle } from './MessageInput'
 import { throttle } from '../../utils/throttle'
@@ -106,17 +106,23 @@ export function ChatView() {
   const messages = useTypedSelector((s) => s.chat.messages)
   const displayEntries = useTypedSelector((s) => s.chat.displayEntries)
   const displayGeneration = useTypedSelector((s) => s.chat.displayGeneration)
-  const compactionMarkers = useTypedSelector((s) => s.chat.compactionMarkers)
   const [contextSummaryTick, setContextSummaryTick] = useState(0)
+  const [contextSummaryReady, setContextSummaryReady] = useState(false)
+  const [contextSummaryConsumed, setContextSummaryConsumed] = useState(false)
+  const [compactionMarkerCount, setCompactionMarkerCount] = useState(0)
   const [displayPageLoading, setDisplayPageLoading] = useState(false)
   const [displayPageLoadFailed, setDisplayPageLoadFailed] = useState(false)
   const [displayPageRetryRevision, setDisplayPageRetryRevision] = useState(0)
   const contextScalars = useMemo(() => {
     void contextSummaryTick
-    if (!sessionId) return { historyImageTokens: 0, thinkingTokensToExclude: 0 }
+    if (!sessionId || !contextSummaryReady) return { historyImageTokens: 0, thinkingTokensToExclude: 0 }
     return selectContextSummaryScalars(sessionId)
-  }, [sessionId, contextSummaryTick, messages])
+  }, [sessionId, contextSummaryTick, contextSummaryReady])
   const bumpContextSummary = useCallback(() => setContextSummaryTick((n) => n + 1), [])
+  const consumeContextSummary = useCallback(() => setContextSummaryConsumed(true), [])
+  useEffect(() => subscribeContextSummaryUpdates((updatedSessionId) => {
+    if (updatedSessionId === sessionId) bumpContextSummary()
+  }), [sessionId, bumpContextSummary])
   const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
   const confirmFocusToolUseId = useTypedSelector((s) => s.chat.confirmFocusToolUseId)
   const scrollToMessageId = useTypedSelector((s) => s.chat.scrollToMessageId)
@@ -204,15 +210,6 @@ export function ChatView() {
     setShowScrollToLatest(false)
   }, [sessionId])
 
-  useEffect(() => {
-    if (!sessionId || typeof window.api.chatGetSessionCompactionMarkers !== 'function') return
-    let current = true
-    void window.api.chatGetSessionCompactionMarkers(sessionId).then((markers) => {
-      if (current) markers.forEach((marker) => dispatch(addCompactionMarker(marker)))
-    }).catch(() => {})
-    return () => { current = false }
-  }, [sessionId, dispatch])
-
   const handleStickToBottomChange = useCallback((nearBottom: boolean) => {
     stickToBottomRef.current = nearBottom
     setShowScrollToLatest(!nearBottom)
@@ -277,6 +274,12 @@ export function ChatView() {
   }, [dispatch])
 
   useEffect(() => {
+    if (sessionId) beginContextSummarySession(sessionId)
+    setContextSummaryReady(false)
+    setCompactionMarkerCount(0)
+  }, [sessionId])
+
+  useEffect(() => {
     if (!sessionId) {
       setDisplayPageLoading(false)
       setDisplayPageLoadFailed(false)
@@ -284,7 +287,8 @@ export function ChatView() {
       return
     }
     let cancelled = false
-    const summaryGeneration = beginContextSummarySession(sessionId)
+    let markerFrame = 0
+    let markerTimer = 0
     const generation = nextDisplayRequestGeneration()
     const selectionToPageRequestMs = takeRendererSessionSelectionDuration(sessionId)
     setDisplayPageLoading(true)
@@ -317,21 +321,39 @@ export function ChatView() {
       if (renderTraceMetadata) pendingSessionSwitchRenderTraceRef.current = {
         metadata: renderTraceMetadata, pageSize: page.entries.length, storeCommitMs, dispatchCompletedAt: performance.now()
       }
-      initLiveSessionFromStore(sessionId)
       void hydratePageFailureReasons(page, sessionId, generation)
-      try {
-        const baseline = await window.api.chatGetContextHistorySummaryBaseline({ sessionId })
-        if (cancelled) return
-        applyContextSummaryDbBaseline(sessionId, summaryGeneration, baseline.entries)
-        bumpContextSummary()
-      } catch {
-        // 校准失败保留空 base + 后续 override
-      }
+      markerFrame = window.requestAnimationFrame(() => {
+        markerTimer = window.setTimeout(() => {
+          const readMarkers = window.api.chatGetSessionCompactionMarkers
+          if (typeof readMarkers !== 'function') return
+          void readMarkers(sessionId).then((markers) => {
+            if (!cancelled && store.getState().chat.currentSessionId === sessionId) setCompactionMarkerCount(markers.length)
+          }).catch(() => {})
+        }, 0)
+      })
     })()
     return () => {
       cancelled = true
+      window.cancelAnimationFrame(markerFrame)
+      window.clearTimeout(markerTimer)
     }
-  }, [sessionId, displayPageRetryRevision, dispatch, bumpContextSummary, fetchMessagePage, hydratePageFailureReasons, nextDisplayRequestGeneration])
+  }, [sessionId, displayPageRetryRevision, dispatch, fetchMessagePage, hydratePageFailureReasons, nextDisplayRequestGeneration])
+
+  useEffect(() => {
+    if (!sessionId || !contextSummaryConsumed || contextSummaryReady) return
+    let cancelled = false
+    const summaryGeneration = currentContextSummaryGeneration(sessionId)
+    if (summaryGeneration === undefined) return
+    const timer = window.setTimeout(() => {
+      void window.api.chatGetContextHistorySummaryBaseline({ sessionId }).then((baseline) => {
+        if (cancelled || store.getState().chat.currentSessionId !== sessionId) return
+        applyContextSummaryDbBaseline(sessionId, summaryGeneration, baseline.entries)
+        setContextSummaryReady(true)
+        bumpContextSummary()
+      }).catch(() => {})
+    }, 0)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [sessionId, contextSummaryConsumed, contextSummaryReady, bumpContextSummary])
 
   useLayoutEffect(() => {
     const pending = pendingSessionSwitchRenderTraceRef.current
@@ -721,11 +743,11 @@ export function ChatView() {
       for (const w of warnings ?? []) message.warning(formatUserFacingError(w))
       // 主进程代建会话（渲染端无会话发送）→ 切换当前会话视图
       if (sid !== sessionId) dispatch(setSession(sid))
+      if (sid !== sessionId) setContextSummaryReady(false)
       bumpContextSummary()
       stickToBottomRef.current = true
       dispatch(setChatStatus({ status: 'streaming', requestId: null, sessionId: sid, turnId }))
       routeAddMessage(sid, assistantMessage)
-      initLiveSessionFromStore(sid)
       const sequence = await window.api.chatGetMessageSequence({ sessionId: sid, messageId: assistantMessage.id })
       if (sequence != null) {
         ackApiContextMessagePersisted({ messageId: assistantMessage.id, sequence }, sid)
@@ -1253,7 +1275,6 @@ export function ChatView() {
       messages={visibleMessages}
       displayEntries={visibleDisplayEntries}
     >
-      {compactionMarkers.length > 0 ? <CompactionMarker count={compactionMarkers.length} /> : null}
       <ChatMessageViewport
         ref={viewportRef}
         sessionId={sessionId}
@@ -1275,12 +1296,15 @@ export function ChatView() {
 
   return (
     <div className="chat-view">
+      {compactionMarkerCount > 0 && <CompactionMarker count={compactionMarkerCount} />}
       {viewportBody}
       <MessageInput
         ref={composerRef}
         sessionId={sessionId ?? undefined}
-        historyImageTokens={contextScalars.historyImageTokens}
-        thinkingTokensToExclude={contextScalars.thinkingTokensToExclude}
+        historyImageTokens={contextSummaryReady ? contextScalars.historyImageTokens : 0}
+        thinkingTokensToExclude={contextSummaryReady ? contextScalars.thinkingTokensToExclude : 0}
+        contextSummaryReady={contextSummaryReady || !sessionId}
+        onContextSummaryConsumed={consumeContextSummary}
         running={running}
         queuedBarSlot={<QueuedTaskBar items={queuedMessages} editingId={editingMessageId} draft={editDraft} submitting={editSubmitting}
           onBeginEdit={handleBeginQueuedEdit} onDraftChange={setEditDraft} onSubmitEdit={() => void handleSubmitQueuedEdit()}

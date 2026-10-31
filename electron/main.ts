@@ -50,7 +50,7 @@ import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createTurnDisplayPublisher } from './turnDisplayPublisher'
 import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask,
-  createSqliteSessionStorage, createSqliteSessionStorageHost, createSqliteStartupHistoryRecoveryBindings,
+  createSqliteSessionStorage, createSqliteSessionStorageHost,
   createSessionBodySourceBackfillTask, startSessionProjectionRevalidationDrain } from './sessionStorage/sqliteSessionStorage'
 import { projectionBuildSliceLogFields } from './sessionStorage/host/projectionBuildSliceLog'
 import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
@@ -59,7 +59,6 @@ import type { SessionStorage } from './sessionStorage/host/ports'
 import { signalChatCancel } from './chatCancelRegistry'
 import { cancelAllToolConfirmsForRequest } from './toolConfirmRegistry'
 import type { AppDatabase } from './database'
-import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
 import { beginSessionEventShutdown, withSessionEventWriterDrain, flushAllSessionEventSinks, getSessionEventSink, hasActiveSessionEventSink, readCompactionReplay, retireSessionEventSink, setSessionEventCommitObserver, setSessionEventFailureObserver } from './sessionEvents'
 import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
@@ -74,9 +73,7 @@ import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageSt
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
 import { getDbConnection, getDbConnectionEpoch } from './database/sqliteStore'
-import { getMessageSkeleton } from './database/operations'
 import { advanceProcessGeneration, currentProcessGeneration } from './database/processGeneration'
-import { classifySessionHistoryRepairFailure } from './runtime/sessionHistoryRecoveryDiagnostics'
 import { SessionProjectionMigrationApplication } from './runtime/sessionProjectionMigrationApplication'
 import { DB_SCHEMA_VERSION } from './database/schema'
 import { createSessionStorageCleanupProductionBoundary } from './runtime/sessionStorageCleanupProduction'
@@ -85,8 +82,7 @@ import { scheduleSessionMessageContentCleanupMaintenance } from './storage/sessi
 import { scheduleSpillReferenceBackfill } from './storage/spillReferenceBackfillScheduler'
 import { ensureSessionLedgerAdmission, ensureSessionLedgerReady, runOutsideSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 import { createSessionLedgerRepairScheduler } from './sessionLedgerRepairScheduler'
-import { isSessionLedgerRecoveryRootAllowed, listManagedButlerSessionLedgerRoots } from './sessionLedgerRecoveryRoots'
-import { createSessionLedgerStartupMaintenance } from './sessionLedgerStartupMaintenance'
+import { isSessionLedgerRecoveryRootAllowed } from './sessionLedgerRecoveryRoots'
 import { createProductionSessionLedgerLifecycleDependencies } from './runtime/sessionLedgerLifecycleProduction'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
 import { withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
@@ -94,8 +90,6 @@ import { readSessionLedgerReadiness, refreshSessionLedgerReadyProof } from './se
 import { handleSessionLedgerEventFailure } from './runtime/sessionLedgerRepairFailure'
 import { SCHEMA_META_KEYS } from './database/schema'
 import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
-import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
-import { cleanupPersistedOrphansOnStartup } from './shell/startupOrphanCleanup'
 import { scriptParserService, runSelfCheck, setInitFailureListener, setNotReadyParseListener } from './shell/scriptParserService'
 import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
@@ -509,10 +503,6 @@ app.whenReady().then(async () => {
     console.error('[im-policy] startup snapshot migration failed; IM tool calls will remain blocked:', error instanceof Error ? error.message : String(error))
   }
   let turnRuntime!: TurnRuntime
-  let sessionHistoryRepairFailureCount = 0
-  let recoveredInvocationCount = 0
-  let sessionLedgerRepairFailureCount = 0
-  let performCanonicalHistoryRecovery: () => Promise<{ interruptedCount: number; repairFailureCount: number; sessionFailures?: readonly { sessionId: string; invocationId: string; capability: 'execution' | 'ledger'; failureClass: 'history-stream-corrupt' | 'ledger-repair-failed' | 'ledger-repair-pending' }[] }> = async () => ({ interruptedCount: 0, repairFailureCount: 0 })
   const logSessionLedgerGateTrace = (trace: import('./sessionLedgerLifecycle').SessionLedgerLifecycleTrace) => {
     logAgentEvent('info', 'session.history.recovery', {
       kind: 'session-ledger-gate', phase: trace.operation, status: trace.status, durationMs: trace.durationMs,
@@ -520,7 +510,6 @@ app.whenReady().then(async () => {
       ...(trace.failureClass ? { reasonCode: trace.failureClass } : {})
     })
   }
-  let sessionHistoryRecoverySucceeded = false
   const recoveryWorkDir = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
   const ledgerRecovery = createSessionLedgerRecoveryBindings()
   const userDataDir = app.getPath('userData')
@@ -528,44 +517,15 @@ app.whenReady().then(async () => {
     configuredWorkDir: getConfigValue(db, 'config.workDir') ?? recoveryWorkDir,
     profilesJson: getConfigValue(db, 'config.workDirProfiles')
   })
-  const getRecoveryWorkDirs = () => [...new Set([
-    ...getConfiguredRecoveryWorkDirs(),
-    ...listManagedButlerSessionLedgerRoots(userDataDir, ({ path: scanPath, operation, error }) => {
-      logAgentEvent('warn', 'session.history.recovery', {
-        kind: 'butler-ledger-root-scan-failed', operation, path: scanPath,
-        reasonCode: error instanceof Error ? error.name : 'unknown'
-      })
-    })
-  ])]
+  const recoveryWorkDirs = getConfiguredRecoveryWorkDirs()
   const isAuthorizedLedgerRoot = (workDir: string, sessionId: string): boolean => {
     return isSessionLedgerRecoveryRootAllowed({ userDataDir, workDir, sessionId,
       configuredRoots: getConfiguredRecoveryWorkDirs(),
       hasButlerTaskSessionLink: (taskId, ownerSessionId) => Boolean(getDbConnection(db).prepare(`SELECT 1 FROM automation_task_runs
         WHERE task_id=? AND session_id=? LIMIT 1`).get(taskId, ownerSessionId)) })
   }
-  const recoveryWorkDirs = getRecoveryWorkDirs()
   const sessionLedgerLifecycleDependencies = createProductionSessionLedgerLifecycleDependencies(getDbConnection(db))
   const processGeneration = currentProcessGeneration(getDbConnection(db))
-  const sessionLedgerStartupMaintenance = createSessionLedgerStartupMaintenance({
-    conn: getDbConnection(db),
-    resolve: (row) => {
-      const session = sessionStorage.queries.readSession(row.session_id)
-      if (!session || session.createdAt !== row.created_at || session.generation !== row.session_generation) return undefined
-      const workDir = getRecoveryWorkDirs().find((root) => isAuthorizedLedgerRoot(root, session.id) &&
-        sessionLedgerLocationIdentity({ workDir: root, sessionId: session.id, createdAt: session.createdAt }).workDirIdentity === row.work_dir_identity)
-      return workDir ? { location: { workDir, sessionId: session.id, createdAt: session.createdAt },
-        sessionGeneration: session.generation } : undefined
-    },
-    repair: async (location, sessionGeneration) => {
-      const result = await ensureSessionLedgerReady({ conn: getDbConnection(db), location, sessionGeneration,
-        processGeneration, retryBlocked: true, dependencies: sessionLedgerLifecycleDependencies,
-        onTrace: logSessionLedgerGateTrace })
-      return result.status === 'ready'
-    },
-    onAttempt: ({ location, status }) => logAgentEvent(status === 'repaired' ? 'info' : 'warn', 'session.history.recovery', {
-      kind: 'session-ledger-startup-maintenance', status, sessionId: location.sessionId
-    })
-  })
   let getSessionForLedgerRepair: ((sessionId: string) => { id: string; createdAt: number; generation: string } | undefined) | undefined
   let sessionLedgerRepairRequestGeneration = 0
   const sessionLedgerRepairScheduler = createSessionLedgerRepairScheduler({
@@ -635,7 +595,6 @@ app.whenReady().then(async () => {
         onTrace: logSessionLedgerGateTrace
       })
       if (result.status === 'blocked') {
-        sessionLedgerRepairFailureCount += 1
         logAgentEvent('warn', 'session.history.repair.failed', {
           kind: 'session-ledger-gate', reasonCode: result.readiness.failureClass ?? 'unknown'
         })
@@ -657,11 +616,8 @@ app.whenReady().then(async () => {
     }
     },
     startup: {
-      recoverHistory: () => performCanonicalHistoryRecovery(),
-      recoverSessionLedgers: async () => {
-        const result = await sessionLedgerStartupMaintenance.run()
-        return { repairFailureCount: result.repairFailureCount + sessionLedgerRepairFailureCount }
-      }
+      recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+      recoverSessionLedgers: async () => ({ repairFailureCount: 0 })
     },
     maintenanceTasks: [
       createSqliteProjectionBuildTask({ db, dbPath, blobRoot: path.join(app.getPath('userData'), 'session-projections'),
@@ -849,107 +805,6 @@ app.whenReady().then(async () => {
     artifactBuildId: getTelemetryArtifactBuildId(),
     mainDirname: __dirname
   })
-  const sessionHistoryRecoveryStartedAt = performance.now()
-  let pendingSessionHistoryRepairs = 0
-  const reportSessionHistoryRepairFailure = (kind: string, error: unknown) => {
-    sessionHistoryRepairFailureCount += 1
-    logAgentEvent('warn', 'session.history.repair.failed', {
-      kind,
-      reasonCode: classifySessionHistoryRepairFailure(error)
-    })
-  }
-  performCanonicalHistoryRecovery = async () => {
-    if (safeDbMaintenanceRequested) {
-      console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
-      return { interruptedCount: 0, repairFailureCount: 1 }
-    }
-    await showStartupStatus('正在加载，请稍候…')
-    let sessionFailures: readonly { sessionId: string; invocationId: string; capability: 'execution' | 'ledger'; failureClass: 'history-stream-corrupt' | 'ledger-repair-failed' | 'ledger-repair-pending' }[] = []
-    let historyRepairFailureCount = 0
-    try {
-      const startupHistory = createSqliteStartupHistoryRecoveryBindings(db, createSpillStore(path.join(app.getPath('userData'), 'spill')))
-      let recoveryStatusRequired = false
-      try {
-        const historyClassification = await measureStartupPhase('canonical-history.classification', () => startupHistory.classifyLegacyProjectionRepairs(100))
-        if (!historyClassification.complete) {
-          console.info('[agentHistory] legacy repair classification remains resumable', historyClassification)
-          recoveryStatusRequired = true
-        }
-      } catch (error) {
-        console.warn('[agentHistory] legacy repair classification failed; using exhaustive recovery', error instanceof Error ? error.message : String(error))
-        recoveryStatusRequired = true
-      }
-      if (recoveryStatusRequired || startupHistory.getStartupRecoveryWorkSummary().hasWork) {
-        await showStartupStatus('正在整理历史会话数据，请稍候…')
-      }
-      const profilesJson = getConfigValue(db, 'config.workDirProfiles')
-      const activeProfileId = getConfigValue(db, 'config.activeWorkDirProfileId')
-      const result = await measureStartupPhase('canonical-history.recovery', () => startupHistory.recoverInterruptedInvocationsWithLedger({
-        ledgerRecovery,
-        // Refresh the optional Butler roots at the point of recovery: a transient
-        // enumeration error must not suppress retry for the lifetime of this app.
-        allowedRoots: getRecoveryWorkDirs(),
-        configuredWorkDir: recoveryWorkDir,
-        activeProfileId,
-        profilesJson,
-        ensureSessionLedgerReady: async ({ location, sessionGeneration }) => {
-          const readiness = await ensureSessionLedgerReady({ conn: getDbConnection(db), location, sessionGeneration,
-            processGeneration, retryBlocked: true, dependencies: sessionLedgerLifecycleDependencies, onTrace: logSessionLedgerGateTrace })
-          if (readiness.status !== 'ready') {
-            sessionLedgerRepairScheduler.request(location, {
-              retireSink: readiness.readiness.failureClass === 'ledger_missing' || readiness.readiness.failureClass === 'physical_proof_mismatch',
-              generation: `${readiness.readiness.ledgerGeneration}:${readiness.readiness.canonicalWatermark ?? ''}:${readiness.readiness.failureClass ?? ''}`
-            })
-          }
-          return readiness.status === 'ready'
-        },
-        onLocationResolveError: (error, invocationId, sessionId) => {
-          sessionHistoryRepairFailureCount += 1
-          logAgentEvent('warn', 'tool.error', { requestId: invocationId, sessionId, toolName: 'history-session-location-recovery', message: error instanceof Error ? error.message : String(error) })
-        },
-        onRepairFailure: reportSessionHistoryRepairFailure
-      }))
-      recoveredInvocationCount = result.interruptedCount
-      pendingSessionHistoryRepairs = result.pendingRepairCount
-      sessionFailures = result.sessionFailures
-      historyRepairFailureCount = result.repairFailureCount
-      if (result.interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', result.interrupted.map(({ invocationId }) => invocationId))
-    } catch (error) {
-      sessionHistoryRepairFailureCount += 1
-      historyRepairFailureCount = sessionHistoryRepairFailureCount
-      console.warn('[agentHistory] startup recovery degraded:', error instanceof Error ? error.message : String(error))
-    }
-    sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0 && pendingSessionHistoryRepairs === 0 && sessionFailures.length === 0
-    return { interruptedCount: recoveredInvocationCount, repairFailureCount: historyRepairFailureCount + pendingSessionHistoryRepairs, sessionFailures }
-  }
-  const historyPhase = await sessionStorage.recovery.recoverHistory()
-  sessionHistoryRecoverySucceeded = historyPhase.history.succeeded
-  console.info('[startup]', JSON.stringify({
-    phase: 'canonical-history.total',
-    durationMs: Math.max(0, Math.round(performance.now() - sessionHistoryRecoveryStartedAt)),
-    outcome: sessionHistoryRepairFailureCount === 0 ? 'ok' : 'failed',
-    recoveredInvocationCount,
-    repairFailureCount: sessionHistoryRepairFailureCount
-  }))
-  if (!safeDbMaintenanceRequested) {
-    logAgentEvent(sessionHistoryRecoverySucceeded ? 'info' : 'warn', 'session.history.recovery', {
-      outcome: sessionHistoryRecoverySucceeded ? 'completed' : 'degraded',
-      reconciledCount: recoveredInvocationCount,
-      failed: sessionHistoryRepairFailureCount,
-      pendingRepairs: pendingSessionHistoryRepairs,
-      durationMs: Math.max(0, Math.round(performance.now() - sessionHistoryRecoveryStartedAt))
-    })
-  }
-  // 进程重启 cleanup 必须先于 Runtime recovery：仅对带 owner token 的本机 run_shell 执行校验，
-  // 无身份或不属于本应用的 PID 交给后续 turn recovery 收敛，绝不裸杀。
-  await measureStartupPhase('persisted-orphan-process-cleanup', () => cleanupPersistedOrphansOnStartup({
-    listTurns: () => sessionStorage.execution.listStartupOrphanTurns(),
-    // This recovery consumer reads only shell process identity from the authoritative message skeleton;
-    // the assistant body may still be streaming and is deliberately not resolved from canonical History.
-    getMessageSkeleton: (id) => getMessageSkeleton(db, id),
-    cleanup: cleanupOrphanProcess,
-    audit: ({ turnId, toolUseId, result }) => logAgentEvent('info', 'shell.orphan_cleanup', { turnId, toolUseId, result })
-  }))
   try {
     cleanupLegacyWorkspaceLayoutOnStartup(db)
   } catch (err) {
@@ -1130,26 +985,7 @@ app.whenReady().then(async () => {
       }
     }
   })
-  // Runtime 已建立后再处理无 turn 的孤儿消息，随后由 appIpc 的同一 recovery 装配继续恢复持久化 turn。
-  cleanupStreamingResiduesOnStartup(db)
-  try {
-    // History 恢复只访问 active invocation；其余 ledger 在具体会话消费者首次请求时按 location gate。
-    // 本阶段不枚举 sessions/，避免已完成历史规模影响窗口启动。
-    const spillRoot = path.join(app.getPath('userData'), 'spill')
-    await measureStartupPhase('spill-source-truth-gc', () => runSourceTruthSpillGcMaintenance(db, spillRoot))
-  } catch (error) {
-    console.warn('[sessionEvents] source-truth maintenance failed:', error instanceof Error ? error.message : String(error))
-  }
-  const sessionRecoveryReport = await measureStartupPhase('session-storage.recovery', () => sessionStorage.recovery.recover())
-  console.info('[sessionStorage] startup recovery report:', {
-    status: sessionRecoveryReport.status,
-    history: sessionRecoveryReport.history,
-    snapshots: sessionRecoveryReport.snapshots,
-    coordinator: sessionRecoveryReport.coordinator,
-    reconciliation: sessionRecoveryReport.reconciliation,
-    continuations: sessionRecoveryReport.continuations,
-    failures: sessionRecoveryReport.failures.map(({ stage, error }) => ({ stage, error: error.message }))
-  })
+  // 启动只建立数据库与当前进程写入围栏；历史恢复、孤儿处置与spill回收由目标访问或既有维护触发。
 
   // 用量统计启动维护（需求 §7.3.1 / §7.4 / §7.5）：
   // 一次性历史台账回填（机会不可逆，schema_meta 标记保证只跑一次）→ 崩溃 Turn 补齐 → 保留期清理（删除留痕）。

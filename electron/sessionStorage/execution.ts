@@ -1,10 +1,11 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import { Buffer } from 'node:buffer'
 import type { PersistedTurn } from '../database/operations'
-import { enqueueQueuedUserMessage, getNextQueuedMessage, getPersistedTurn, getTurnByRequestId, hasActiveTurn, listPersistedTurns, setPersistedTurnExecutionConfig, failConfiguringTurn } from '../database/operations'
+import { enqueueQueuedUserMessage, getMessageSkeleton, getNextQueuedMessage, getPersistedTurn, getTurnByRequestId, hasActiveTurn, listPersistedTurns, setPersistedTurnExecutionConfig, failConfiguringTurn } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { createHash } from 'node:crypto'
 import { appendMessage } from '../database/operations'
+import { cleanupStreamingResiduesForSession } from '../database/streamingCleanup'
 import type { Message } from '../../src/shared/domainTypes'
 import { createAcceptedTurn, type AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { TurnExecutionConfig } from '../../src/shared/assistantFactAggregator'
@@ -35,6 +36,7 @@ import { restoreLegacySessionContextSnapshot, type SessionContextState } from '.
 import type { CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
 
 const turnStorageByExecution = new WeakMap<SessionExecutionStore, TurnRuntimeOptions['storage']>()
+const turnRuntimeByExecution = new WeakMap<SessionExecutionStore, TurnRuntime>()
 
 type HostedContextCacheEntry = Readonly<{ generation: string; version: number; scopeKey: string; context: SessionContextState }>
 
@@ -43,7 +45,9 @@ export function createTurnRuntimeForSessionExecution(execution: SessionExecution
   options: Omit<TurnRuntimeOptions, 'storage'>): TurnRuntime {
   const storage = turnStorageByExecution.get(execution)
   if (!storage) throw new Error('SESSION_EXECUTION_TURN_RUNTIME_BINDING_MISSING')
-  return new TurnRuntime({ ...options, storage })
+  const runtime = new TurnRuntime({ ...options, storage })
+  turnRuntimeByExecution.set(execution, runtime)
+  return runtime
 }
 
 /** Narrow SQLite execution adapter for prepared acceptance and validated context loading. */
@@ -124,9 +128,15 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
     },
     readTurnByRequest: ({ sessionId, requestId }) => getTurnByRequestId(db, sessionId, requestId),
     hasActiveTurn: (sessionId) => hasActiveTurn(db, sessionId),
-    listStartupOrphanTurns: () => listPersistedTurns(db)
+    listStartupOrphanTurns: (sessionId) => listPersistedTurns(db, undefined, sessionId)
       .filter(({ state }) => state === 'prepared' || state === 'executing' || state === 'waiting-confirm')
       .map(({ turnId, state, assistantMessageId }) => ({ turnId, state, assistantMessageId })),
+    listOrphanProcessIdentities: (sessionId) => listPersistedTurns(db, undefined, sessionId)
+      .filter(({ state }) => state === 'prepared' || state === 'executing' || state === 'waiting-confirm')
+      .flatMap(({ turnId, assistantMessageId }) => (getMessageSkeleton(db, assistantMessageId)?.toolCalls ?? [])
+        .filter((tool) => tool.toolName === 'run_shell' && tool.status === 'executing' && Boolean(tool.processPid && tool.processOwnerToken))
+        .map((tool) => ({ turnId, toolUseId: tool.id, pid: tool.processPid!,
+          ...(tool.processGroupId ? { processGroupId: tool.processGroupId } : {}), ownerToken: tool.processOwnerToken! }))),
     getNextQueuedMessage: (sessionId) => getNextQueuedMessage(db, sessionId),
     readAccepted: ({ sessionId, requestId }) => readAcceptedTurn(db, sessionId, requestId),
     readTranscriptState: (sessionId) => {
@@ -162,6 +172,9 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       if (hasActiveSessionExecutionOwner(sessionId)) {
         return { status: 'active-owner', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }
       }
+      const turnRuntime = turnRuntimeByExecution.get(execution)
+      if (turnRuntime) turnRuntime.recoverSession(sessionId)
+      else cleanupStreamingResiduesForSession(db, sessionId)
       const recovered = transcriptRecovery.recoverTarget(sessionId)
       return { status: recovered.status, releasedUnstarted: recovered.releasedUnstarted,
         markedUncertain: recovered.markedUncertain, reconciled: recovered.reconciled }

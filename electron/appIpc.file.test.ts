@@ -339,6 +339,25 @@ describe('file IPC handlers', () => {
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
   })
 
+  it('session:list filters profile in its query and does not persist legacy metadata cleanup', () => {
+    const session = databaseOperations.createSession(ctx.db, { name: 'read-only session list', model: 'test',
+      workDirProfileId: 'default', ownership: 'user', visibility: 'visible', metadata: { plan: 'legacy', userNote: 'keep' } })
+    const listSessions = vi.fn(() => [session])
+    const stripLegacyPlanMetadata = vi.fn()
+    ctx.sessionStorage = { ...ctx.sessionStorage!, queries: { ...ctx.sessionStorage!.queries, listSessions },
+      commands: { ...ctx.sessionStorage!.commands, stripLegacyPlanMetadata } } as SessionStorage
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const flushSave = vi.spyOn(ctx.db, 'flushSave')
+
+    const listed = ipc.getHandler('session:list')!() as Session[]
+
+    expect(listSessions).toHaveBeenCalledWith({ view: 'user-visible', workDirProfileId: 'default' })
+    expect(listed[0]?.metadata).toEqual({ userNote: 'keep' })
+    expect(stripLegacyPlanMetadata).not.toHaveBeenCalled()
+    expect(flushSave).not.toHaveBeenCalled()
+    expect(databaseOperations.getSession(ctx.db, session.id)?.metadata).toEqual({ plan: 'legacy', userNote: 'keep' })
+  })
+
   it('auto backup reader resolves message bodies through the canonical-aware sequence page', async () => {
     const message = { id: 'backup-canonical-user', sessionId: 'backup-session', role: 'user' as const,
       content: 'canonical backup body', timestamp: 1, status: 'sent' as const, schemaVersion: 1 }

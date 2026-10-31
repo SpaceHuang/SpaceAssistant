@@ -1,0 +1,187 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "context-summary",
+        "count": 100,
+        "bodyBytes": 1024
+      },
+      {
+        "kind": "context-summary",
+        "count": 1000,
+        "bodyBytes": 1024
+      }
+    ],
+    "samples": 30,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "sqlite-transaction-boundary",
+        "samples": 30,
+        "work": "SELECT 1 inside production runInTransaction",
+        "p50Ms": 0.003,
+        "p95Ms": 0.005,
+        "maxMs": 0.011
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 1,
+        "samples": 30,
+        "inputBytes": {
+          "p50Bytes": 2993,
+          "p95Bytes": 2993,
+          "maxBytes": 2993
+        },
+        "resultBytes": {
+          "p50Bytes": 1680,
+          "p95Bytes": 1680,
+          "maxBytes": 1680
+        },
+        "roundTrip": {
+          "p50Ms": 15.578,
+          "p95Ms": 16.928,
+          "maxMs": 22.541
+        },
+        "workerDuration": {
+          "p50Ms": 0.697,
+          "p95Ms": 0.754,
+          "maxMs": 0.82
+        }
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 100,
+        "samples": 30,
+        "inputBytes": {
+          "p50Bytes": 233147,
+          "p95Bytes": 233147,
+          "maxBytes": 233147
+        },
+        "resultBytes": {
+          "p50Bytes": 111561,
+          "p95Bytes": 111561,
+          "maxBytes": 111561
+        },
+        "roundTrip": {
+          "p50Ms": 15.155,
+          "p95Ms": 15.66,
+          "maxMs": 17.303
+        },
+        "workerDuration": {
+          "p50Ms": 0.91,
+          "p95Ms": 0.963,
+          "maxMs": 1.225
+        }
+      },
+      {
+        "kind": "context-summary",
+        "count": 100,
+        "bodyBytes": 1024,
+        "samples": 30,
+        "totalRows": 3000,
+        "totalBodyBytes": 3072000,
+        "totalSummaryEntries": 450,
+        "summaryResultBytes": {
+          "p50Bytes": 1565,
+          "p95Bytes": 1565,
+          "maxBytes": 1565
+        },
+        "dispatchSynchronousBlock": {
+          "p50Ms": 0.044,
+          "p95Ms": 0.061,
+          "maxMs": 0.083
+        },
+        "coldWorkerMiss": {
+          "p50Ms": 15.181,
+          "p95Ms": 17.76,
+          "maxMs": 50.723
+        },
+        "hotCacheHit": {
+          "p50Ms": 0.015,
+          "p95Ms": 0.017,
+          "maxMs": 0.018
+        },
+        "fourConcurrentMisses": {
+          "p50Ms": 14.823,
+          "p95Ms": 15.666,
+          "maxMs": 16.578
+        },
+        "scope": "production SessionQueries with file-backed SQLite and production summary worker",
+        "limitations": [
+          "does not include renderer page dispatch-to-paint",
+          "does not include IPC queue or contextBridge result-copy time",
+          "does not submit a model request"
+        ]
+      },
+      {
+        "kind": "context-summary",
+        "count": 1000,
+        "bodyBytes": 1024,
+        "samples": 30,
+        "totalRows": 30000,
+        "totalBodyBytes": 30720000,
+        "totalSummaryEntries": 4500,
+        "summaryResultBytes": {
+          "p50Bytes": 15530,
+          "p95Bytes": 15530,
+          "maxBytes": 15530
+        },
+        "dispatchSynchronousBlock": {
+          "p50Ms": 0.043,
+          "p95Ms": 0.052,
+          "maxMs": 0.056
+        },
+        "coldWorkerMiss": {
+          "p50Ms": 17.626,
+          "p95Ms": 56.666,
+          "maxMs": 68.292
+        },
+        "hotCacheHit": {
+          "p50Ms": 0.016,
+          "p95Ms": 0.018,
+          "maxMs": 0.02
+        },
+        "fourConcurrentMisses": {
+          "p50Ms": 16.36,
+          "p95Ms": 18.169,
+          "maxMs": 20.261
+        },
+        "scope": "production SessionQueries with file-backed SQLite and production summary worker",
+        "limitations": [
+          "does not include renderer page dispatch-to-paint",
+          "does not include IPC queue or contextBridge result-copy time",
+          "does not submit a model request"
+        ]
+      }
+    ],
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "loadToDidFinishLoadMs": 280.371,
+      "consoleErrors": [],
+      "rootPresent": true,
+      "childCount": 1,
+      "nodeCount": 190,
+      "waitForRootMs": 2.600000023841858
+    }
+  },
+  "mode": "candidate",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}

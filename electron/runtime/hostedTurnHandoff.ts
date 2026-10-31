@@ -19,7 +19,8 @@ import { readChatMessageAfterPreparation } from '../sessionStorage/public/readMe
 import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
 import { withSessionTurnAdmission } from '../sessionCompactionLock'
-import { registerActiveSessionExecutionOwner, releaseActiveSessionExecutionOwner } from './sessionExecutionOwnerRegistry'
+import { hasActiveSessionExecutionOwner, registerActiveSessionExecutionOwner, releaseActiveSessionExecutionOwner } from './sessionExecutionOwnerRegistry'
+import { cleanupOrphanProcess } from '../shell/orphanProcessCleanup'
 import { restoreLegacySessionContextSnapshot, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 import type { DynamicModelTool } from './dynamicToolRequest'
 
@@ -201,9 +202,16 @@ export function createHostedTurnHandoff(input: {
       // Session ownership has its own queue budget, independent of the parent turn deadline.
       const waitUntil = Date.now() + 30_000
       for (;;) {
-        const claim = await withSessionTurnAdmission(sessionId, () => {
-          const recovery = input.sessionExecution!.recoverExecutionTarget(sessionId)
-          if (recovery?.status === 'blocked') return { acquired: false as const, reason: 'blocked' as const }
+        const claim = await withSessionTurnAdmission(sessionId, async () => {
+          const activeOwner = hasActiveSessionExecutionOwner(sessionId)
+          if (!activeOwner) {
+            for (const orphan of input.sessionExecution!.listOrphanProcessIdentities(sessionId)) {
+              const result = await cleanupOrphanProcess({ pid: orphan.pid, processGroupId: orphan.processGroupId, ownerToken: orphan.ownerToken })
+              logAgentEvent('info', 'shell.orphan_cleanup', { turnId: orphan.turnId, toolUseId: orphan.toolUseId, result })
+            }
+            const recovery = input.sessionExecution!.recoverExecutionTarget(sessionId)
+            if (recovery?.status === 'blocked') return { acquired: false as const, reason: 'blocked' as const }
+          }
           const result = input.sessionExecution!.claimExecution({ sessionId, turnId: input.turnId, ownerId })
           if (result.acquired) registerActiveSessionExecutionOwner(sessionId)
           return result

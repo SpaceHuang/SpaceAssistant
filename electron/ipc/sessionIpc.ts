@@ -5,7 +5,7 @@ import fs from 'fs/promises'
 import type { AppIpcContext } from '../appIpc'
 import type { IpcMain } from 'electron'
 import { dialog } from 'electron'
-import { CONFIG_KEYS, stripSessionMetadataAndPersist, stripAllSessionsAndPersist, scheduleBackup } from './ipcShared'
+import { CONFIG_KEYS, stripLegacyPlanMetadataFromSession, scheduleBackup } from './ipcShared'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { REMOTE_SESSION_BUSY_MESSAGE, REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessages'
 import { scheduleSessionTitleOpenBackfillIfNeeded } from '../sessionTitleSuggest'
@@ -184,10 +184,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('session:list', (): Session[] => {
     const profileId = ctx.workDirManager.getActiveProfileId()
     // 偏差 7：用户可见视图（排除 internal/hidden；section 分区行透传给渲染端分组）
-    return stripAllSessionsAndPersist(ctx.db, sessionCommands, sessionQueries, { view: 'user-visible' }).filter((s) => {
-      if (!s.workDirProfileId) return false
-      return s.workDirProfileId === profileId
-    })
+    return sessionQueries.listSessions({ view: 'user-visible', workDirProfileId: profileId }).map(stripLegacyPlanMetadataFromSession)
   })
 
   ipcMain.handle(
@@ -221,7 +218,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('session:get', (_e, sessionId: string): Session | undefined => {
     const session = sessionQueries.readSession(sessionId)
     if (!session) return undefined
-    return stripSessionMetadataAndPersist(sessionCommands, session)
+    return stripLegacyPlanMetadataFromSession(session)
   })
 
   ipcMain.handle(

@@ -785,6 +785,33 @@ describe('SQLite session storage public queries', () => {
     expect(getLedger).not.toHaveBeenCalled()
   })
 
+  it('uses canonical compaction replay for a ready database ledger without opening legacy files', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'canonical-marker-local' })
+    const workDir = '/tmp/canonical-marker-local'
+    const readiness = ensureLegacyLedgerReadiness(getDbConnection(db), { workDir, sessionId: session.id, createdAt: session.createdAt }, session.generation)
+    getDbConnection(db).prepare("UPDATE session_ledger_projection_state SET state='ready',canonical_watermark='session:-1' WHERE ledger_location_key=?")
+      .run(readiness.ledgerLocationKey)
+    expect(markLegacyLedgerMergeCompleted(getDbConnection(db), { workDir, sessionId: session.id, createdAt: session.createdAt }, session.generation)).toBe(true)
+    const ledger = getSessionEventSink(workDir, session.id, session.createdAt)
+    const sink = vi.fn(() => { throw new Error('canonical marker read must not open legacy source') })
+    const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir,
+      ensureSessionLedgerReady: async () => ({ ready: true, canonicalReadVersion: 1 }), getSessionEventSink: sink as never })
+    await new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).appendBatch([
+      { invocationId: 'canonical-marker-invocation', turnId: 'canonical-marker-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'canonical-marker-compacted', idempotencyKey: 'canonical-marker-compacted', kind: 'transcript-compacted', payload: {
+          compactionId: 'canonical-marker', messages: [], sessionLedger: { location: { workDir, sessionId: session.id, createdAt: session.createdAt },
+            start: { compactionId: 'canonical-marker', windowId: 'window' },
+            summary: { compactionId: 'canonical-marker', outputSurfaceFingerprint: 'fingerprint' } }
+        } },
+      { invocationId: 'canonical-marker-invocation', turnId: 'canonical-marker-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'canonical-marker-completed', idempotencyKey: 'canonical-marker-completed', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    await expect(storage.readCompactionReplay({ sessionId: session.id, workDir: '/tmp/canonical-marker-local' }))
+      .resolves.toMatchObject({ committed: [expect.objectContaining({ compactionId: 'canonical-marker' })] })
+    expect(sink).not.toHaveBeenCalled()
+  })
+
   it('rebuilds readCurrent from committed compaction shadow after recreating the session adapter', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'restart-context-shadow' })
@@ -1321,7 +1348,7 @@ describe('SQLite session storage public queries', () => {
   })
 
 
-  it('exposes the full-history context token summary through SessionQueries', () => {
+  it('exposes the full-history context token summary through the bounded projection worker', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'context-summary-query' })
     appendMessagesAtomically(db, [
@@ -1330,7 +1357,7 @@ describe('SQLite session storage public queries', () => {
       { id: 'summary-thinking', sessionId: session.id, role: 'assistant', content: 'assistant body omitted', timestamp: 3, status: 'completed', thinking: { content: 'private reasoning text', isVisible: true, startTime: 1, segments: [{ content: 'private reasoning text', startTime: 1, endTime: 2 }] } }
     ])
 
-    const baseline = createSqliteSessionStorage(db).queries.readContextHistorySummaryBaseline(session.id)
+    const baseline = await createSqliteSessionStorage(db).queries.readContextHistorySummaryBaseline(session.id)
 
     expect(baseline.sessionId).toBe(session.id)
     expect(baseline.entries.map(({ messageId }) => messageId)).toEqual(['summary-image', 'summary-thinking'])
@@ -1878,16 +1905,23 @@ describe('SQLite session storage execution query contracts', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
   afterEach(() => { db?.close(); db = undefined })
 
-  it('lists the narrow active turn identities needed by startup orphan cleanup', () => {
+  it('lists active orphan turn identities by target session without scanning unrelated sessions', () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'startup orphan turns' })
-    appendMessage(db, { id: 'startup-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    const other = createSession(db, { name: 'unrelated orphan turns' })
+    appendMessage(db, { id: 'startup-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming',
+      toolCalls: [{ id: 'orphan-shell', toolName: 'run_shell', input: {}, status: 'executing', riskLevel: 'high', processPid: 77, processGroupId: 78, processOwnerToken: 'owner-77' }] })
     appendMessage(db, { id: 'terminal-assistant', sessionId: session.id, role: 'assistant', content: 'done', timestamp: 2, status: 'completed' })
+    appendMessage(db, { id: 'unrelated-startup-assistant', sessionId: other.id, role: 'assistant', content: '', timestamp: 3, status: 'streaming' })
     createPersistedTurn(db, { turnId: 'startup-active', requestId: 'startup-request', sessionId: session.id, assistantMessageId: 'startup-assistant', state: 'executing' })
     createPersistedTurn(db, { turnId: 'startup-terminal', requestId: 'terminal-request', sessionId: session.id, assistantMessageId: 'terminal-assistant', state: 'terminal' })
+    createPersistedTurn(db, { turnId: 'unrelated-active', requestId: 'unrelated-request', sessionId: other.id, assistantMessageId: 'unrelated-startup-assistant', state: 'executing' })
 
-    expect(createSqliteSessionStorage(db).execution.listStartupOrphanTurns()).toEqual([
+    expect(createSqliteSessionStorage(db).execution.listStartupOrphanTurns(session.id)).toEqual([
       { turnId: 'startup-active', state: 'executing', assistantMessageId: 'startup-assistant' }
+    ])
+    expect(createSqliteSessionStorage(db).execution.listOrphanProcessIdentities(session.id)).toEqual([
+      { turnId: 'startup-active', toolUseId: 'orphan-shell', pid: 77, processGroupId: 78, ownerToken: 'owner-77' }
     ])
   })
 

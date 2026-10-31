@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Message } from './domainTypes'
-import { reduceAssistantFact, type AssistantFactEvent } from './assistantFactAggregator'
+import { assistantOutputCheckpoint, reduceAssistantFact, type AssistantFactEvent } from './assistantFactAggregator'
 import { buildAssistantActivityTimeline } from './assistantActivityTimeline'
 import { decodeProgressRawTail } from './terminalScrollback'
 
@@ -14,6 +14,25 @@ function apply(events: AssistantFactEvent[]) {
 }
 
 describe('AssistantFactAggregator', () => {
+  it('persist output checkpoint without committed tool results but retain unresolved process identity', () => {
+    const checkpoint = assistantOutputCheckpoint({ ...base, content: 'partial text', toolCalls: [
+      { id: 'done', toolName: 'read_file', input: {}, status: 'completed', riskLevel: 'low', result: { success: true, data: 'large result sentinel', executionOutcome: 'succeeded' } },
+      { id: 'known-failure', toolName: 'lookup', input: {}, status: 'failed', riskLevel: 'low', result: { success: false, error: 'failed', executionOutcome: 'known-failure' } },
+      { id: 'unknown', toolName: 'run_shell', input: {}, status: 'failed', riskLevel: 'high', processPid: 99, processOwnerToken: 'owner-99', result: { success: false, executionOutcome: 'unknown-after-dispatch' } },
+      { id: 'running', toolName: 'run_shell', input: {}, status: 'executing', riskLevel: 'high', processPid: 100, processOwnerToken: 'owner-100' }
+    ] })
+
+    expect(checkpoint.content).toBe('partial text')
+    expect(checkpoint.toolCalls?.map(({ id }) => id)).toEqual(['unknown', 'running'])
+    expect(JSON.stringify(checkpoint)).not.toContain('large result sentinel')
+    expect(checkpoint.toolCalls?.[0]).toMatchObject({ processPid: 99, processOwnerToken: 'owner-99' })
+    const terminal = assistantOutputCheckpoint({ ...base, status: 'completed', toolCalls: [
+      { id: 'terminal-result', toolName: 'read_file', input: {}, status: 'completed', riskLevel: 'low', result: { success: true, data: 'final display fact', executionOutcome: 'succeeded' } }
+    ] })
+    expect(terminal.toolCalls).toHaveLength(1)
+    expect(terminal.toolCalls?.[0]?.result?.data).toBe('final display fact')
+  })
+
   it('keeps one system-operation timeline item while updating its terminal state', () => {
     const running = { id: 'compact-1', kind: 'context-compaction' as const, status: 'running' as const, startedAt: 5 }
     const succeeded = { ...running, status: 'succeeded' as const, completedAt: 20, beforePercent: 82, afterPercent: 41 }

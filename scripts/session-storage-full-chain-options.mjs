@@ -20,8 +20,8 @@ export function createFixtureDefinition(args) {
   if (!Number.isSafeInteger(seed) || seed < 0 || seed > 0xffffffff) throw new Error('seed must be an unsigned 32-bit integer')
   if (!Number.isSafeInteger(samples) || samples < 1 || samples > 30) throw new Error('samples must be an integer from 1 to 30')
   if (!Number.isSafeInteger(runnerTimeoutMs) || runnerTimeoutMs < 10_000 || runnerTimeoutMs > 3_600_000) throw new Error('timeout must be from 10000 to 3600000 ms')
-  const counts = quick ? { events: [100], pending: [1], turns: [100], tools: [10], hugeTools: 1, coldHistory: [] } :
-    { events: [100, 400, 800], pending: [1, 16], turns: [100, 1000], tools: [10, 100, 1000], hugeTools: 100, coldHistory: [1, 10, 100] }
+  const counts = quick ? { events: [100], pending: [1], turns: [100], tools: [10], hugeTools: 1, coldHistory: [], contextSummary: [1000] } :
+    { events: [100, 400, 800], pending: [1, 16], turns: [100, 1000], tools: [10, 100, 1000], hugeTools: 100, coldHistory: [1, 10, 100], contextSummary: [100, 1000] }
   const rng = (() => { let x = seed >>> 0; return () => ((x = (x * 1664525 + 1013904223) >>> 0) / 0x100000000) })()
   const sizes = { eventBytes: 4096, messageBytes: 4096, toolBytes: 4096, hugeToolBytes: 1024 * 1024 }
   let scenarios = [
@@ -30,7 +30,8 @@ export function createFixtureDefinition(args) {
     ...counts.turns.map((n) => ({ kind: 'turns', count: n, bodyBytes: n * sizes.messageBytes, pageSize: 20 })),
     ...counts.tools.map((n) => ({ kind: 'tools', count: n, bodyBytes: n * sizes.toolBytes })),
     { kind: 'large-tool-results', count: counts.hugeTools, batchSize: 10, bodyBytes: counts.hugeTools * sizes.hugeToolBytes },
-    ...counts.coldHistory.map((mib) => ({ kind: 'cold-history', count: mib, bodyBytes: mib * 1024 * 1024 }))
+    ...counts.coldHistory.map((mib) => ({ kind: 'cold-history', count: mib, bodyBytes: mib * 1024 * 1024 })),
+    ...counts.contextSummary.map((count) => ({ kind: 'context-summary', count, bodyBytes: 1024 }))
   ]
   if (only) scenarios = scenarios.filter(({ kind }) => kind === only)
   if (!scenarios.length) throw new Error(`unknown or empty scenario selection: ${only}`)

@@ -200,10 +200,10 @@ describe('SessionRecoveryPort', () => {
         expect.objectContaining({ sessionId: failedSession.id, invocationId: 'host-failed-recovery-invocation', failureClass: 'ledger-repair-pending' })
       ]))
       expect(storageHost.storage.availability.inspect(failedSession.id)).toMatchObject({
-        globalFence: { state: 'degraded' }, content: { state: 'readable' }, execution: { state: 'ready' }, ledger: { state: 'degraded', readinessState: 'blocked', reasonCode: 'ledger-blocked' }
+        globalFence: { state: 'ready' }, content: { state: 'readable' }, execution: { state: 'ready' }, ledger: { state: 'degraded', readinessState: 'blocked', reasonCode: 'ledger-blocked' }
       })
       expect(storageHost.storage.availability.inspect(healthySession.id)).toMatchObject({
-        globalFence: { state: 'degraded' }, content: { state: 'readable' }, execution: { state: 'ready' }, ledger: { state: 'ready', readinessState: 'ready' }
+        globalFence: { state: 'ready' }, content: { state: 'readable' }, execution: { state: 'ready' }, ledger: { state: 'ready', readinessState: 'ready' }
       })
     } finally {
       temp.cleanup()
@@ -211,7 +211,7 @@ describe('SessionRecoveryPort', () => {
     }
   })
 
-  it('exposes SQLite readiness as pending before recovery and actual session readiness afterward', async () => {
+  it('reports SQLite readiness from the target session without waiting for global recovery', async () => {
     const db = createMemoryAppDb()
     try {
       const session = createSession(db, { name: 'recovery readiness', model: 'test' })
@@ -221,12 +221,42 @@ describe('SessionRecoveryPort', () => {
         snapshots: () => ({ restoredCount: 0, skippedCanonicalUnavailableCount: 0, missingAssistantCount: 0 }),
         coordinator: () => ({ recoveredCount: 0, succeeded: true }),
         reconcile: () => ({ releasedUnstarted: 0, markedUncertain: 0, repairedCheckpoints: 0, reconciled: 0 }),
-        continuations: () => ({ interrupted: 0, unknownSideEffect: 0, settled: 0 })
+        continuations: () => ({ interrupted: 0, unknownSideEffect: 0, settled: 0 }),
+        sessionLocalReadiness: false
       } })
 
-      expect(storage.recovery.inspectReadiness(session.id)).toEqual({ readable: false, executable: false, reason: 'recovery-pending' })
+      expect(storage.recovery.inspectReadiness(session.id)).toEqual({ readable: true, executable: true })
+      expect(storage.recovery.inspectRecoveryStatus()).toEqual({ state: 'ready' })
       await storage.recovery.recover()
       expect(storage.recovery.inspectReadiness(session.id)).toEqual({ readable: true, executable: true })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps startup recovery opt-in so list and page actions do not start global scans', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const first = createSession(db, { name: 'startup unselected one' })
+      const second = createSession(db, { name: 'startup unselected two' })
+      const history = vi.fn(async () => ({ interruptedCount: 0, repairFailureCount: 0 }))
+      const storage = createSqliteSessionStorage(db, { recoveryStages: {
+        history,
+        snapshots: () => ({ restoredCount: 0, skippedCanonicalUnavailableCount: 0, missingAssistantCount: 0 }),
+        coordinator: () => ({ recoveredCount: 0, succeeded: true }),
+        reconcile: () => ({ releasedUnstarted: 0, markedUncertain: 0, repairedCheckpoints: 0, reconciled: 0 }),
+        continuations: () => ({ interrupted: 0, unknownSideEffect: 0, settled: 0 }),
+        sessionLocalReadiness: false
+      } })
+
+      storage.queries.listSessions({ view: 'user-visible' })
+      storage.queries.readChatPage({ sessionId: first.id, limit: 20 })
+
+      expect(storage.availability.inspect(second.id).content.state).toBe('readable')
+      expect(history).not.toHaveBeenCalled()
+      expect(storage.recovery.inspectRecoveryStatus()).toEqual({ state: 'ready' })
+      await storage.recovery.recover()
+      expect(history).toHaveBeenCalledOnce()
     } finally {
       db.close()
     }
@@ -280,11 +310,11 @@ describe('SessionRecoveryPort', () => {
       const availability = storage.availability.inspect(session.id)
 
       expect(availability.content).toMatchObject({ state: 'readable', source: { sessionGeneration: session.generation } })
-      expect(availability.execution).toMatchObject({ state: 'pending-recovery', source: { sessionId: session.id, transcriptVersion: 0 } })
+      expect(availability.execution).toMatchObject({ state: 'ready', source: { sessionId: session.id, transcriptVersion: 0 } })
       expect(availability.ledger).toMatchObject({ state: 'degraded', readinessState: 'unknown', reasonCode: 'readiness-missing', source: { sessionId: session.id } })
       expect(availability.maintenance).toMatchObject({ state: 'paused', tasks: [{ taskId: 'projection-build', status: 'paused' }] })
-      expect(availability.globalFence.state).toBe('pending')
-      expect(availability.globalFence.source).toEqual({ recoveryState: 'pending' })
+      expect(availability.globalFence.state).toBe('ready')
+      expect(availability.globalFence.source).toEqual({ recoveryState: 'ready' })
       expect(availability.maintenance.source).toEqual([{ taskId: 'projection-build', status: 'paused' }])
       await storage.recovery.recover()
       expect(storage.availability.inspect(session.id)).toMatchObject({
@@ -349,7 +379,7 @@ describe('SessionRecoveryPort', () => {
       expect(continuations).toHaveBeenCalledWith(false)
       expect(host.storage.queries.readSession(session.id)).toBeTruthy()
       expect(host.storage.availability.inspect(session.id)).toMatchObject({
-        globalFence: { state: 'blocked' }, content: { state: 'readable' }, execution: { state: 'pending-recovery' }
+        globalFence: { state: 'ready' }, content: { state: 'readable' }, execution: { state: 'ready' }
       })
     } finally {
       db.close()
@@ -415,8 +445,8 @@ describe('SessionRecoveryPort', () => {
       expect(report.history).toMatchObject({ succeeded: true, sessionFailures: [{ sessionId: damagedSession.id, invocationId: 'damaged-invocation', failureClass: 'history-stream-corrupt' }] })
       expect(host.storage.recovery.inspectReadiness(damagedSession.id)).toMatchObject({ readable: true, executable: false, reason: 'recovery-pending' })
       expect(host.storage.recovery.inspectReadiness(healthySession.id)).toMatchObject({ readable: true, executable: true })
-      expect(host.storage.availability.inspect(healthySession.id)).toMatchObject({ globalFence: { state: 'degraded' }, content: { state: 'readable' }, execution: { state: 'ready' } })
-      expect(host.storage.availability.inspect(damagedSession.id)).toMatchObject({ globalFence: { state: 'degraded' }, execution: { state: 'pending-recovery' } })
+      expect(host.storage.availability.inspect(healthySession.id)).toMatchObject({ globalFence: { state: 'ready' }, content: { state: 'readable' }, execution: { state: 'ready' } })
+      expect(host.storage.availability.inspect(damagedSession.id)).toMatchObject({ globalFence: { state: 'ready' }, execution: { state: 'pending-recovery' } })
     } finally {
       db.close()
     }

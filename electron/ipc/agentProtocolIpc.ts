@@ -1295,7 +1295,24 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:delete-queued-message',
     async (_e, payload: { messageId: string; sessionId: string }) => {
-      const result = sessionCommands.deleteQueuedMessage(payload.messageId)
+      let previewCandidate: { messageId: string; content: string; source: { sessionGeneration: string; messageRevision: number; sequence: number; role: string; timestamp: number; status: string } } | undefined
+      const candidate = sessionQueries.readLatestMessagePreviewCandidate(payload.sessionId, payload.messageId)
+      if (candidate && candidate.id !== payload.messageId && candidate.status !== 'queued' &&
+        (candidate.role === 'user' || candidate.role === 'assistant')) {
+        try {
+          const prepared = await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
+          const message = await sessionQueries.readPreparedMessage?.({ sessionId: payload.sessionId, messageId: candidate.id, prepared: prepared as PreparedChatBodyView | undefined })
+          if (message?.id === candidate.id && message.sessionId === payload.sessionId && message.role === candidate.role &&
+            message.timestamp === candidate.timestamp && message.status === candidate.status) {
+            previewCandidate = { messageId: candidate.id, content: message.content,
+              source: { sessionGeneration: candidate.sessionGeneration, messageRevision: candidate.messageRevision,
+                sequence: candidate.sequence, role: candidate.role, timestamp: candidate.timestamp, status: candidate.status } }
+          }
+        } catch {
+          // Preparation is an optimization. The transactional command retains its canonical authority fallback.
+        }
+      }
+      const result = sessionCommands.deleteQueuedMessage(payload.messageId, previewCandidate)
       if (result.ok) {
         await flushBackup(ctx, result.sessionId)
       }

@@ -13,6 +13,7 @@ import {
   routeAddApiContextMessageOptimistic,
   routePatchApiContextMessage
 } from './apiContextService'
+import { removeContextSummaryMessage, summarizeContextMessage, upsertContextSummaryOverride } from './contextHistorySummaryService'
 
 /** @deprecated 使用 getMaxParallelChatSessions()；保留常量供测试/默认值引用 */
 export const MAX_PARALLEL_CHAT_SESSIONS = DEFAULT_MAX_PARALLEL_CHAT_SESSIONS
@@ -23,6 +24,13 @@ export function getMaxParallelChatSessions(): number {
 }
 
 const liveBySession = new Map<string, Message[]>()
+const contextSummaryOrdinalBySession = new Map<string, number>()
+
+function nextContextSummaryOrdinal(sessionId: string): number {
+  const next = (contextSummaryOrdinalBySession.get(sessionId) ?? 0) + 1
+  contextSummaryOrdinalBySession.set(sessionId, next)
+  return next
+}
 
 function cloneMessages(msgs: Message[]): Message[] {
   return msgs.map((m) => ({
@@ -53,17 +61,16 @@ export function mergeMessagesByTimestamp(db: Message[], live?: Message[] | null)
 }
 
 export function initLiveSessionFromStore(sessionId: string): void {
-  const fromStore = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
-  const existing = liveBySession.get(sessionId)
-  liveBySession.set(sessionId, cloneMessages(mergeDbAndLive(fromStore, existing)))
+  // Historical rows belong to the display/query store. The live map tracks only
+  // events that arrive during or after a turn, so session selection stays O(1).
+  if (!liveBySession.has(sessionId)) liveBySession.set(sessionId, [])
 }
 
-/** live 快照缺失时从 Redux 当前会话消息种子化，避免 clearLiveSession 后只剩新消息。 */
+/** live 快照缺失时只创建增量列表，不再从 Redux 克隆整段历史。 */
 function ensureLiveSession(sessionId: string): Message[] {
   let arr = liveBySession.get(sessionId)
   if (!arr) {
-    const fromStore = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
-    arr = cloneMessages(fromStore)
+    arr = []
     liveBySession.set(sessionId, arr)
   }
   return arr
@@ -72,9 +79,8 @@ function ensureLiveSession(sessionId: string): Message[] {
 /** 合并 DB + Redux + live，供发送 LLM 请求时构建完整上下文。 */
 export async function resolveSessionMessagesForApi(sessionId: string): Promise<Message[]> {
   const dbRows = await window.api.chatGetMessages({ sessionId })
-  const fromStore = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
   const live = getLiveMessages(sessionId)
-  return mergeDbAndLive(mergeDbAndLive(dbRows, fromStore), live)
+  return mergeDbAndLive(dbRows, live)
 }
 
 /** 追加 live 快照；仅当用户正在查看该会话时同步 Redux；同步 API overlay。 */
@@ -86,6 +92,8 @@ export function routeAddMessage(sessionId: string, message: Message): void {
     skillHints: message.skillHints ? message.skillHints.map((h) => ({ ...h })) : undefined
   })
   liveBySession.set(sessionId, arr)
+  upsertContextSummaryOverride(sessionId, summarizeContextMessage(message,
+    { kind: 'optimistic', ordinal: nextContextSummaryOrdinal(sessionId) }))
   if (store.getState().chat.currentSessionId === sessionId) {
     store.dispatch(addMessage(message))
   }
@@ -94,7 +102,11 @@ export function routeAddMessage(sessionId: string, message: Message): void {
 }
 
 export function resetLiveSessionMessages(sessionId: string, messages: Message[]): void {
-  liveBySession.set(sessionId, cloneMessages(messages))
+  // Compatibility helper for callers that explicitly reset live data; history is no longer seeded.
+  const live = messages.filter((message) => message.status === 'streaming' || message.status === 'queued')
+  liveBySession.set(sessionId, cloneMessages(live))
+  for (const message of live) upsertContextSummaryOverride(sessionId, summarizeContextMessage(message,
+    { kind: 'optimistic', ordinal: nextContextSummaryOrdinal(sessionId) }))
 }
 
 export function getLiveMessages(sessionId: string): Message[] | undefined {
@@ -111,6 +123,7 @@ export function patchLiveMessage(sessionId: string, messageId: string, patch: Pa
 }
 
 export function removeLiveMessage(sessionId: string, messageId: string): void {
+  removeContextSummaryMessage(sessionId, messageId)
   const arr = liveBySession.get(sessionId)
   if (!arr) return
   const idx = arr.findIndex((m) => m.id === messageId)
@@ -127,6 +140,12 @@ function dispatchPatchToRedux(sessionId: string, messageId: string, patch: Parti
 export function routePatchMessage(sessionId: string, messageId: string, patch: Partial<Message>): void {
   patchLiveMessage(sessionId, messageId, patch)
   dispatchPatchToRedux(sessionId, messageId, patch)
+  if ('thinking' in patch || 'attachments' in patch || 'role' in patch) {
+    const message = liveBySession.get(sessionId)?.find((item) => item.id === messageId) ??
+      store.getState().chat.messages.find((item) => item.id === messageId)
+    if (message) upsertContextSummaryOverride(sessionId, summarizeContextMessage(message,
+      { kind: 'optimistic', ordinal: nextContextSummaryOrdinal(sessionId) }))
+  }
   try {
     routePatchApiContextMessage(sessionId, messageId, patch)
   } catch {

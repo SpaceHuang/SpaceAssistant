@@ -1822,15 +1822,16 @@ export class SqliteAgentHistory implements HistoryPort {
     }
   }
 
-  /** Rebuilds completed UI tool records only from a valid, fully settled canonical invocation. */
-  readCompletedToolCallsForSession(invocationId: string, sessionId: string, expectedTurnId: string): import('../../src/shared/domainTypes').ToolCallRecord[] | undefined {
+  /** Rebuilds tool records only from a valid canonical stream. */
+  readCompletedToolCallsForSession(invocationId: string, sessionId: string, expectedTurnId: string,
+    options: Readonly<{ allowIncomplete?: boolean }> = {}): import('../../src/shared/domainTypes').ToolCallRecord[] | undefined {
     try {
       const snapshot = this.readSync(invocationId)
       const stream = this.conn.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get(snapshot.invocationId) as { session_id: string | null } | undefined
       const terminal = snapshot.events.at(-1)
       if (!stream || (stream.session_id !== null && stream.session_id !== sessionId) ||
-        terminal?.kind !== 'invocation-completed' || !terminal.payload || typeof terminal.payload !== 'object' ||
-        (terminal.payload as { status?: unknown }).status !== 'completed' || snapshot.events.some((event) => event.turnId !== expectedTurnId)) return undefined
+        (!options.allowIncomplete && (terminal?.kind !== 'invocation-completed' || !terminal.payload || typeof terminal.payload !== 'object' ||
+          (terminal.payload as { status?: unknown }).status !== 'completed')) || snapshot.events.some((event) => event.turnId !== expectedTurnId)) return undefined
       const calls = new Map<string, import('../../src/shared/domainTypes').ToolCallRecord>()
       const approvalWaits = new Map<string, { approval: NonNullable<import('../../src/shared/domainTypes').ToolCallRecord['approval']>; reasonCode: string }>()
       for (const event of snapshot.events) {
@@ -1899,6 +1900,10 @@ export class SqliteAgentHistory implements HistoryPort {
             const rawResult = payload.result
             const result = rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult) ? structuredClone(rawResult as Record<string, unknown>) : undefined
             if (result && 'success' in result && (typeof result.success !== 'boolean' || result.success !== payload.success)) return undefined
+            const executionOutcome = ['succeeded', 'known-failure', 'unknown-after-dispatch', 'not-dispatched'].includes(String(payload.executionOutcome))
+              ? payload.executionOutcome as 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched'
+              : undefined
+            if (result && executionOutcome && result.executionOutcome === undefined) result.executionOutcome = executionOutcome
             existing.status = payload.success === true ? 'completed' : 'failed'
             existing.result = result && typeof result.success === 'boolean'
               ? result as unknown as import('../../src/shared/domainTypes').ToolCallResultPersisted
@@ -1919,12 +1924,16 @@ export class SqliteAgentHistory implements HistoryPort {
           }
         }
       }
-      return [...calls.values()].every((call) => call.status === 'completed' || call.status === 'failed' || call.status === 'rejected')
-        ? [...calls.values()]
-        : undefined
+      const recovered = [...calls.values()]
+      return options.allowIncomplete || recovered.every((call) => call.status === 'completed' || call.status === 'failed' || call.status === 'rejected')
+        ? recovered : undefined
     } catch {
       return undefined
     }
+  }
+
+  readRecoverableToolCallsForSession(invocationId: string, sessionId: string, expectedTurnId: string): import('../../src/shared/domainTypes').ToolCallRecord[] | undefined {
+    return this.readCompletedToolCallsForSession(invocationId, sessionId, expectedTurnId, { allowIncomplete: true })
   }
 
   /** Persist fail-safe interruption markers for non-terminal invocation streams after process restart. */

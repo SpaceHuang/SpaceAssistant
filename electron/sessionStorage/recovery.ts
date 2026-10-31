@@ -16,6 +16,7 @@ export type SessionRecoveryDependencies = Readonly<{
   reconcile(): Readonly<{ releasedUnstarted: number; markedUncertain: number; repairedCheckpoints: number; reconciled: number }>
   continuations(recoveryReady: boolean): Readonly<{ interrupted: number; unknownSideEffect: number; settled: number }>
   inspectReadiness(sessionId: string): SessionRecoveryReadiness
+  sessionLocalReadiness?: boolean
   ledgerRepairs?(): Promise<number>
 }>
 
@@ -139,8 +140,13 @@ export function createSessionRecoveryPort(dependencies: SessionRecoveryDependenc
   return Object.freeze({
     recoverHistory,
     recover,
-    inspectRecoveryStatus: () => Object.freeze({ state: completed?.status ?? 'pending' }),
+    inspectRecoveryStatus: () => Object.freeze({ state: dependencies.sessionLocalReadiness ? 'ready' as const : completed?.status ?? 'pending' }),
     inspectReadiness: (sessionId: string) => {
+      if (dependencies.sessionLocalReadiness) {
+        const targetFailure = completed?.history.sessionFailures.find((failure) => failure.sessionId === sessionId && failure.capability === 'execution')
+        const readiness = dependencies.inspectReadiness(sessionId)
+        return targetFailure ? { ...readiness, executable: false, reason: 'recovery-pending' as const } : readiness
+      }
       if (!completed) return { readable: false, executable: false, reason: 'recovery-pending' as const }
       if (completed.history.sessionFailures.some((failure) => failure.sessionId === sessionId && failure.capability === 'execution')) {
         const readiness = dependencies.inspectReadiness(sessionId)
@@ -196,6 +202,7 @@ export function createSqliteSessionRecoveryPort(input: Readonly<{
     reconcile: input.stages?.reconcile ?? defaultReconcile,
     continuations: input.stages?.continuations ?? defaultContinuations,
     ledgerRepairs: input.stages?.ledgerRepairs,
-    inspectReadiness
+    inspectReadiness,
+    sessionLocalReadiness: true
   })
 }

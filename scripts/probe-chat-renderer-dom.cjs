@@ -43,7 +43,9 @@ function waitForRenderer() {
 async function main() {
   let app
   let originalMainSource
+  let originalProtocolSource
   const mainPath = path.join(root, 'dist-electron/electron/main.js')
+  const protocolPath = path.join(root, 'dist-electron/electron/ipc/agentProtocolIpc.js')
   const mockProvider = http.createServer((_request, response) => { setTimeout(() => { response.writeHead(500, { 'content-type': 'text/plain' }); response.end('probe provider failure') }, 100) })
   await new Promise((resolve) => mockProvider.listen(0, '127.0.0.1', resolve))
   const mockProviderUrl = `http://127.0.0.1:${mockProvider.address().port}`
@@ -54,18 +56,32 @@ async function main() {
     const dispatchExpression = "send('chat:turn-display', { display })"
     if (!originalMainSource.includes(dispatchExpression)) throw new Error('could not locate the compiled turn-display dispatch for diagnostic instrumentation')
     fs.writeFileSync(mainPath, originalMainSource.replace(dispatchExpression, "send('chat:turn-display', { display, __probeDispatchAt: Date.now() })"), 'utf8')
+    originalProtocolSource = fs.readFileSync(protocolPath, 'utf8')
+    const summaryHandler = "ipcMain.handle('chat:get-context-history-summary-baseline', (_e, payload) => sessionQueries.readContextHistorySummaryBaseline(payload.sessionId));"
+    const delayedSummaryHandler = "ipcMain.handle('chat:get-context-history-summary-baseline', async (_e, payload) => { const result = await sessionQueries.readContextHistorySummaryBaseline(payload.sessionId); if (Number.isSafeInteger(payload.__probeDelayMs) && payload.__probeDelayMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(payload.__probeDelayMs, 1000))); return result; });"
+    if (!originalProtocolSource.includes(summaryHandler)) throw new Error('could not locate the compiled summary IPC handler for diagnostic instrumentation')
+    fs.writeFileSync(protocolPath, originalProtocolSource.replace(summaryHandler, delayedSummaryHandler), 'utf8')
     app = await electron.launch({
       args: [`--user-data-dir=${userDataDir}`, mainPath],
       cwd: root,
       env: { ...process.env, SPACEASSISTANT_DEV: '1', SPACEASSISTANT_DEV_USER_DATA_DIR: userDataDir, FORCE_COLOR: '0' }
     })
     let page = await waitForAppRenderer(app)
+    const sessionSwitchTraceLines = []
+    page.on('console', (message) => {
+      const text = message.text()
+      const prefix = '[session.switch.trace.renderer] '
+      if (!text.startsWith(prefix)) return
+      try { sessionSwitchTraceLines.push(JSON.parse(text.slice(prefix.length))) } catch { /* Ignore unrelated malformed diagnostics. */ }
+    })
     const session = await page.evaluate(() => window.api.sessionCreate({ name: 'DOM projection probe' }))
     if (!session?.id) throw new Error('session:create did not return an isolated session')
     const sessionButton = page.locator('.session-item-select').filter({ hasText: 'DOM projection probe' }).last()
     await sessionButton.waitFor({ state: 'visible', timeout: 10_000 })
     await sessionButton.click()
     const sessionId = session.id
+    const diagnosticSampleCount = Number(process.env.SPACEASSISTANT_DOM_PROBE_SAMPLES)
+    const sampleCount = Number.isInteger(diagnosticSampleCount) && diagnosticSampleCount > 0 ? diagnosticSampleCount : 30
     await page.evaluate(async ({ mockProviderUrl }) => {
       await window.api.configSet({
         models: [{ id: 'probe-model', name: 'probe-model', maximumContext: 100000, maxTokens: 4096, isDefault: true, isFast: false, isVision: false, enabled: true }],
@@ -74,6 +90,27 @@ async function main() {
         activeLlmServiceId: 'probe-service', llmServiceKeys: { 'probe-service': 'probe-only-not-a-secret' }
       })
     }, { mockProviderUrl })
+    const contextSummaryProbe = await page.evaluate(async ({ sessionId, sampleCount }) => {
+      const roundTrips = []
+      let entryCount = 0
+      let resultBytes = 0
+      for (let sample = 0; sample < sampleCount; sample += 1) {
+        const startedAt = performance.now()
+        const result = await window.api.chatGetContextHistorySummaryBaseline({ sessionId })
+        roundTrips.push(performance.now() - startedAt)
+        entryCount = result.entries.length
+        resultBytes = new TextEncoder().encode(JSON.stringify(result)).byteLength
+      }
+      const sorted = [...roundTrips].sort((a, b) => a - b)
+      const quantile = (q) => sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * q) - 1)]
+      return { samples: roundTrips.length, rendererIpcRoundTripMs: { p50: quantile(.5), p95: quantile(.95), max: sorted.at(-1) }, entryCount, resultBytes }
+    }, { sessionId, sampleCount })
+    await page.evaluate((sessionId) => {
+      window.__probePendingSummarySettled = false
+      window.__probePendingSummary = window.api.chatGetContextHistorySummaryBaseline({ sessionId, __probeDelayMs: 300 })
+        .finally(() => { window.__probePendingSummarySettled = true })
+    }, sessionId)
+    await page.waitForTimeout(20)
     await page.evaluate(() => {
       window.__turnDisplayFrameSamples = []
       window.__turnDisplayPaintSamples = []
@@ -131,8 +168,7 @@ async function main() {
     })
     const submitReplySamplesMs = []
     const acceptedToDomSamplesMs = []
-    const diagnosticSampleCount = Number(process.env.SPACEASSISTANT_DOM_PROBE_SAMPLES)
-    const sampleCount = Number.isInteger(diagnosticSampleCount) && diagnosticSampleCount > 0 ? diagnosticSampleCount : 30
+    let submitWhileContextSummaryPendingMs
     let lastContent = ''
     let lastAssistantMessageId = ''
     for (let sample = 0; sample < sampleCount; sample += 1) {
@@ -140,7 +176,12 @@ async function main() {
       const requestId = `dom-request-${sample}-${Date.now()}`
       const submittedAt = Date.now()
       const accepted = await page.evaluate(async ({ sessionId, content, requestId }) => {
+        const start = performance.now()
         const result = await window.api.chatSubmitOutbound({ sessionId, text: content, requestId })
+        if (window.__probePendingSummary) {
+          window.__submitWhileContextSummaryPendingMs = performance.now() - start
+          window.__summaryWasPendingAtSubmitReply = !window.__probePendingSummarySettled
+        }
         if (result?.accepted === 'turn-started' && result.assistantMessage?.id) {
           window.__acceptedAssistantIdsByRequestId.set(requestId, result.assistantMessage.id)
         }
@@ -148,6 +189,17 @@ async function main() {
       }, { sessionId, content, requestId })
       const acceptedAt = Date.now()
       submitReplySamplesMs.push(acceptedAt - submittedAt)
+      if (sample === 0) submitWhileContextSummaryPendingMs = await page.evaluate(() => window.__submitWhileContextSummaryPendingMs)
+      if (sample === 0) {
+        const pendingState = await page.evaluate(async () => {
+          const wasPendingAtSubmitReply = window.__summaryWasPendingAtSubmitReply
+          await window.__probePendingSummary
+          return { wasPendingAtSubmitReply, settledAfterward: window.__probePendingSummarySettled }
+        })
+        if (!pendingState.wasPendingAtSubmitReply || !pendingState.settledAfterward) {
+          throw new Error('submit did not complete independently while the delayed summary IPC was pending')
+        }
+      }
       if (accepted?.accepted !== 'turn-started' || !accepted.assistantMessage?.id) {
         throw new Error(`production outbound acceptance failed: ${accepted?.rejected?.reason ?? accepted?.accepted}`)
       }
@@ -195,8 +247,27 @@ async function main() {
       await main.createMainWindow()
     }, mainPath)
     const reconnectedPage = await waitForAppRenderer(app)
+    reconnectedPage.on('console', (message) => {
+      const text = message.text()
+      const prefix = '[session.switch.trace.renderer] '
+      if (!text.startsWith(prefix)) return
+      try { sessionSwitchTraceLines.push(JSON.parse(text.slice(prefix.length))) } catch { /* Ignore unrelated malformed diagnostics. */ }
+    })
     await reconnectedPage.waitForFunction(({ content, assistantMessageId }) => document.body.innerText.includes(content) && Boolean(document.querySelector(`[data-message-id="${assistantMessageId}"]`)), { content: lastContent, assistantMessageId: lastAssistantMessageId }, { timeout: 15_000 })
     const reconnectedPersistence = true
+    const alternateSession = await reconnectedPage.evaluate(() => window.api.sessionCreate({ name: 'DOM projection probe alternate' }))
+    const alternateSessionButton = reconnectedPage.locator('.session-item-select').filter({ hasText: 'DOM projection probe alternate' }).last()
+    const populatedSessionButton = reconnectedPage.locator('.session-item-select').filter({ hasText: /^DOM projection probe$/ }).last()
+    await alternateSessionButton.waitFor({ state: 'visible', timeout: 10_000 })
+    for (let sample = 0; sample < 30; sample += 1) {
+      await alternateSessionButton.click()
+      await reconnectedPage.waitForFunction(() => Boolean(document.querySelector('.chat-empty')), null, { timeout: 10_000 })
+      await reconnectedPage.waitForTimeout(20)
+      await populatedSessionButton.click()
+      await reconnectedPage.waitForFunction((content) => document.body.innerText.includes(content) && document.querySelectorAll('[data-message-id]').length > 0,
+        lastContent, { timeout: 10_000 })
+      await reconnectedPage.waitForTimeout(40)
+    }
     const queuedEditSamplesMs = []
     for (let sample = 0; sample < sampleCount; sample += 1) {
       const requestId = `dom-edit-request-${sample}-${Date.now()}`
@@ -223,7 +294,7 @@ async function main() {
     const queuedEditP50Ms = sortedEdit[Math.min(sortedEdit.length - 1, Math.ceil(sortedEdit.length * 0.5) - 1)]
     const queuedEditP95Ms = sortedEdit[Math.min(sortedEdit.length - 1, Math.ceil(sortedEdit.length * 0.95) - 1)]
     const queuedEditMaxMs = sortedEdit.at(-1)
-    const result = await reconnectedPage.evaluate(({ content, persistedAfterReload, reconnectedPersistence, submitReplySamplesMs, acceptedToDomSamplesMs, queuedEditSamplesMs, queuedEditP50Ms, queuedEditP95Ms, queuedEditMaxMs, turnDisplayFrameSamples, turnDisplayPaintSamples, dispatchToTargetPaintP50Ms, dispatchToTargetPaintP95Ms, rendererReceiveToTwoFramesP50Ms, rendererReceiveToTwoFramesP95Ms, rendererReceiveToTwoFramesMaxMs, submitReplyP50Ms, submitReplyP95Ms, acceptedToDomP50Ms, acceptedToDomP95Ms, acceptedToDomMaxMs }) => ({
+    const result = await reconnectedPage.evaluate(({ content, persistedAfterReload, reconnectedPersistence, submitReplySamplesMs, acceptedToDomSamplesMs, queuedEditSamplesMs, queuedEditP50Ms, queuedEditP95Ms, queuedEditMaxMs, turnDisplayFrameSamples, turnDisplayPaintSamples, dispatchToTargetPaintP50Ms, dispatchToTargetPaintP95Ms, rendererReceiveToTwoFramesP50Ms, rendererReceiveToTwoFramesP95Ms, rendererReceiveToTwoFramesMaxMs, submitReplyP50Ms, submitReplyP95Ms, acceptedToDomP50Ms, acceptedToDomP95Ms, acceptedToDomMaxMs, contextSummaryProbe, submitWhileContextSummaryPendingMs, sessionSwitchTraceLines }) => ({
       title: document.title,
       messageCount: document.querySelectorAll('[data-message-id], [class*="message"]').length,
       hasComposer: Boolean(document.querySelector('textarea, input[placeholder*="输入消息"]')),
@@ -250,6 +321,9 @@ async function main() {
       turnDisplayTargetRowChangedCount: turnDisplayPaintSamples.filter(({ targetRowChanged }) => targetRowChanged).length,
       dispatchToTargetPaintP50Ms,
       dispatchToTargetPaintP95Ms,
+      contextSummary: contextSummaryProbe,
+      submitWhileContextSummaryPendingMs,
+      sessionSwitchTraceLines,
       turnDisplayPaintDiagnostic: turnDisplayPaintSamples,
       displayAssistantBubblePresentAtFrameCount: turnDisplayFrameSamples.filter(({ displayAssistantBubblePresent }) => displayAssistantBubblePresent).length,
       acceptedAssistantBubblePresentAtFrameCount: turnDisplayFrameSamples.filter(({ acceptedAssistantBubblePresent }) => acceptedAssistantBubblePresent).length,
@@ -257,7 +331,7 @@ async function main() {
       turnDisplayFrameDiagnostic: turnDisplayFrameSamples,
       submitReplySamplesMs,
       acceptedToDomSamplesMs
-    }), { content: lastContent, persistedAfterReload, reconnectedPersistence, submitReplySamplesMs, acceptedToDomSamplesMs, queuedEditSamplesMs, queuedEditP50Ms, queuedEditP95Ms, queuedEditMaxMs, turnDisplayFrameSamples, turnDisplayPaintSamples, dispatchToTargetPaintP50Ms, dispatchToTargetPaintP95Ms, rendererReceiveToTwoFramesP50Ms, rendererReceiveToTwoFramesP95Ms, rendererReceiveToTwoFramesMaxMs, submitReplyP50Ms, submitReplyP95Ms, acceptedToDomP50Ms, acceptedToDomP95Ms, acceptedToDomMaxMs })
+    }), { content: lastContent, persistedAfterReload, reconnectedPersistence, submitReplySamplesMs, acceptedToDomSamplesMs, queuedEditSamplesMs, queuedEditP50Ms, queuedEditP95Ms, queuedEditMaxMs, turnDisplayFrameSamples, turnDisplayPaintSamples, dispatchToTargetPaintP50Ms, dispatchToTargetPaintP95Ms, rendererReceiveToTwoFramesP50Ms, rendererReceiveToTwoFramesP95Ms, rendererReceiveToTwoFramesMaxMs, submitReplyP50Ms, submitReplyP95Ms, acceptedToDomP50Ms, acceptedToDomP95Ms, acceptedToDomMaxMs, contextSummaryProbe, submitWhileContextSummaryPendingMs, sessionSwitchTraceLines })
     console.log(`[chat-renderer-dom] ${JSON.stringify(result)}`)
     const outputPath = process.env.SPACEASSISTANT_DOM_PROBE_OUTPUT?.trim()
     if (outputPath) {
@@ -268,6 +342,7 @@ async function main() {
   } finally {
     if (app) await app.close().catch(() => {})
     if (originalMainSource !== undefined) fs.writeFileSync(mainPath, originalMainSource, 'utf8')
+    if (originalProtocolSource !== undefined) fs.writeFileSync(protocolPath, originalProtocolSource, 'utf8')
     renderer.kill('SIGTERM')
     mockProvider.close()
   }

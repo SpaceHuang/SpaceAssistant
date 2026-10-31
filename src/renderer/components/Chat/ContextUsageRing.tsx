@@ -32,6 +32,8 @@ type Props = {
   pendingImageAttachments?: ChatImageAttachment[]
   historyImageTokens?: number
   thinkingTokensToExclude?: number
+  contextSummaryReady?: boolean
+  onContextSummaryConsumed?: () => void
 }
 
 /** 在同一圆环上按顺序拼接：已用 | 输出预留 | 剩余（由底色轨道表示） */
@@ -57,7 +59,9 @@ export function buildContextRingSegments(
 export function ContextUsageRing({
   pendingImageAttachments,
   historyImageTokens = 0,
-  thinkingTokensToExclude = 0
+  thinkingTokensToExclude = 0,
+  contextSummaryReady = true,
+  onContextSummaryConsumed
 }: Props) {
   const { t } = useTypedTranslation('contextUsage')
   const { i18n } = useTranslation()
@@ -67,6 +71,10 @@ export function ContextUsageRing({
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const currentSession = useTypedSelector((s) => s.session.list.find((session) => session.id === sessionId))
   const [latestAttribution, setLatestAttribution] = useState<UsageLatestAttribution | null>(null)
+
+  useEffect(() => {
+    if (onContextSummaryConsumed) onContextSummaryConsumed()
+  }, [sessionId, onContextSummaryConsumed])
 
   useEffect(() => {
     let active = true
@@ -103,6 +111,7 @@ export function ContextUsageRing({
       : contextProjection ? 0 : undefined
 
   const hasData =
+    contextSummaryReady &&
     (lastUsage != null || contextProjection != null) &&
     maximumContext != null &&
     maximumContext > 0 &&

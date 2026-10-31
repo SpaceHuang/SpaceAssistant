@@ -73,7 +73,8 @@ export interface SessionExecutionStore {
   readTurn(ref: Readonly<{ sessionId: string; turnId: string }>): PersistedTurnRecord | undefined
   readTurnByRequest(ref: Readonly<{ sessionId: string; requestId: string }>): PersistedTurnRecord | undefined
   hasActiveTurn(sessionId: string): boolean
-  listStartupOrphanTurns(): readonly Readonly<{ turnId: string; state: string; assistantMessageId: string }>[]
+  listStartupOrphanTurns(sessionId?: string): readonly Readonly<{ turnId: string; state: string; assistantMessageId: string }>[]
+  listOrphanProcessIdentities(sessionId: string): readonly Readonly<{ turnId: string; toolUseId: string; pid: number; processGroupId?: number; ownerToken: string }>[]
   getNextQueuedMessage(sessionId: string): import('./model').QueuedSessionMessage | null
   readAccepted(input: Readonly<{ sessionId: string; requestId: string }>): AcceptedTurn | undefined
   readTranscriptState(sessionId: string): Readonly<{ sessionId: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked' }>

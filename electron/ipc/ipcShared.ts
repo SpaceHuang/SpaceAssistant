@@ -27,7 +27,6 @@ import { recordSystemManagedCacheEntry } from '../confirmation/decisionCacheWrit
 import { type Dirent } from 'fs'
 import { type MessagePageReader } from '../sessionBackupManager'
 import type { AuditSink } from '../confirmation/channels'
-import type { SessionCommands, SessionQueries } from '../sessionStorage/public/ports'
 import { readExportPageAfterPreparation } from '../sessionStorage/public/readMessages'
 
 export async function searchFilesUnder(
@@ -141,20 +140,10 @@ export function readAppLocale(db: AppDatabase): AppConfig['locale'] {
 }
 
 
-export function stripSessionMetadataAndPersist(commands: SessionCommands, session: Session): Session {
-  return hasPlanMetadataKeys(session.metadata) ? commands.stripLegacyPlanMetadata(session.id) ?? session : session
-}
-
-export function stripAllSessionsAndPersist(db: AppDatabase, commands: SessionCommands, queries: SessionQueries, options?: { view?: 'all' | 'user-visible' }): Session[] {
-  const sessions = queries.listSessions(options)
-  let changed = false
-  const result = sessions.map((s) => {
-    if (!hasPlanMetadataKeys(s.metadata)) return s
-    changed = true
-    return commands.stripLegacyPlanMetadata(s.id) ?? { ...s, metadata: stripPlanFieldsFromSessionMetadata(s.metadata ?? {}) }
-  })
-  if (changed) db.flushSave()
-  return result
+export function stripLegacyPlanMetadataFromSession(session: Session): Session {
+  return hasPlanMetadataKeys(session.metadata)
+    ? { ...session, metadata: stripPlanFieldsFromSessionMetadata(session.metadata ?? {}) }
+    : session
 }
 
 export function stripPlanConfigFromDbIfNeeded(db: AppDatabase): void {
