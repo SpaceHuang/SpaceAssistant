@@ -147,6 +147,28 @@ describe('shared session context rules', () => {
     })
   })
 
+  it.each([
+    ['forward', ['a', 'b']],
+    ['reverse', ['b', 'a']],
+    ['three forward', ['a', 'b', 'c']],
+    ['three mixed', ['b', 'c', 'a']],
+    ['three reverse', ['c', 'b', 'a']]
+  ])('reduces every declared tool result exactly once in %s completion order', (_label, completionOrder) => {
+    const calls = ['a', 'b', 'c'].slice(0, completionOrder.length).map((id) => ({ id, name: `tool-${id}`, input: {} }))
+    let next = beginContextTurn(restoreSessionContext({ committedVersion: 0, events: [] }), {
+      invocationId: 'inv-multi-tools', baseVersion: 0, inputMessages: [user('u-tools', 'run tools')], failureInputMessages: [], requestSystem: ''
+    })
+    next = applyContextEvent(next, { kind: 'model-response-committed', message: { role: 'assistant', id: 'assistant-tools', content: '', toolCalls: calls } })
+    for (const toolCall of calls) next = applyContextEvent(next, { kind: 'tool-call-started', toolCall })
+    for (const id of completionOrder) next = applyContextEvent(next, { kind: 'tool-call-finished', toolCallId: id,
+      message: { role: 'tool', toolCallId: id, content: `result-${id}`, isError: false } })
+    const selected = selectContextCommit(next, { kind: 'completed' }).messages
+    expect(selected.filter((message) => message.role === 'tool').map((message) => message.role === 'tool' ? message.toolCallId : null))
+      .toEqual(calls.map(({ id }) => id))
+    expect(next.pendingTools.size).toBe(0)
+    expect(next.completedToolResults.size).toBe(0)
+  })
+
   it('adds the trusted approval note through the same pure message rule', () => {
     let state = beginContextTurn(restoreSessionContext({ committedVersion: 0, events: [] }), {
       invocationId: 'inv-approval', baseVersion: 0, inputMessages: [user('u1', 'run')], failureInputMessages: [], requestSystem: ''
@@ -216,6 +238,42 @@ describe('shared session context rules', () => {
     expect(state.committed).toEqual(prior)
     expect(state.working).toEqual([...prior, current])
     expect(state.failure).toEqual([...prior, current])
+  })
+
+  it('replays legacy protocol 2 full request snapshots as replacement baselines', () => {
+    const prior = [user('prior-v2', 'first'), assistant('answer-v2', 'first answer')]
+    const fullRequest = [...prior, user('next-v2', 'second')]
+    const restored = restoreSessionContext({ committedVersion: 2, events: [
+      { eventId: 'legacy-seed', idempotencyKey: 'legacy-seed', invocationId: 'legacy-1', turnId: 'legacy-1', sequence: 1,
+        schemaVersion: 1, kind: 'session-input-committed', payload: { messages: prior, scope: { kind: 'session', sessionId: 's-v2' } } },
+      { eventId: 'legacy-context', idempotencyKey: 'legacy-context', invocationId: 'legacy-2', turnId: 'legacy-2', sequence: 2,
+        schemaVersion: 1, kind: 'invocation-context-committed', payload: { contextProtocol: 2, baseVersion: 1,
+          inputMessages: fullRequest, failureInputMessages: fullRequest, messages: fullRequest,
+          scope: { kind: 'session', sessionId: 's-v2' } } },
+      { eventId: 'legacy-answer', idempotencyKey: 'legacy-answer', invocationId: 'legacy-2', turnId: 'legacy-2', sequence: 3,
+        schemaVersion: 1, kind: 'model-response-committed', payload: { message: assistant('answer-2', 'second answer') } },
+      { eventId: 'legacy-terminal', idempotencyKey: 'legacy-terminal', invocationId: 'legacy-2', turnId: 'legacy-2', sequence: 4,
+        schemaVersion: 1, kind: 'invocation-completed', payload: { status: 'completed' } }
+    ] })
+    expect(restored.committed).toEqual([...fullRequest, assistant('answer-2', 'second answer')])
+  })
+
+  it('replays legacy protocol 2 failure snapshots without duplicating prior messages', () => {
+    const prior = [user('prior-failure-v2', 'first'), assistant('answer-failure-v2', 'first answer')]
+    const fullFailure = [...prior, user('failure-v2', 'second'), assistant('partial-v2', 'partial')]
+    const restored = restoreSessionContext({ committedVersion: 2, events: [
+      { eventId: 'failure-seed', idempotencyKey: 'failure-seed', invocationId: 'failure-1', turnId: 'failure-1', sequence: 1,
+        schemaVersion: 1, kind: 'session-input-committed', payload: { messages: prior, scope: { kind: 'session', sessionId: 's-failure-v2' } } },
+      { eventId: 'failure-context', idempotencyKey: 'failure-context', invocationId: 'failure-2', turnId: 'failure-2', sequence: 2,
+        schemaVersion: 1, kind: 'invocation-context-committed', payload: { contextProtocol: 2, baseVersion: 1,
+          inputMessages: [...prior, user('failure-v2', 'second')], failureInputMessages: fullFailure,
+          messages: [...prior, user('failure-v2', 'second')], scope: { kind: 'session', sessionId: 's-failure-v2' } } },
+      { eventId: 'failure-partial', idempotencyKey: 'failure-partial', invocationId: 'failure-2', turnId: 'failure-2', sequence: 3,
+        schemaVersion: 1, kind: 'model-response-committed', payload: { message: assistant('partial-v2', 'partial') } },
+      { eventId: 'failure-terminal', idempotencyKey: 'failure-terminal', invocationId: 'failure-2', turnId: 'failure-2', sequence: 4,
+        schemaVersion: 1, kind: 'invocation-failed', payload: { status: 'failed' } }
+    ] })
+    expect(restored.committed).toEqual(fullFailure)
   })
 
   it('rejects unknown context protocol and scope drift', () => {

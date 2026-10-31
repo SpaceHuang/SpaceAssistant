@@ -90,19 +90,30 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
       if (payload?.scope && typeof payload.scope === 'object') state = freezeState({ ...state, scope: deepFreeze(structuredClone(payload.scope as ContextScope)) })
       if (typeof payload?.system === 'string') state = freezeState({ ...state, requestSystem: payload.system })
     } else if (event.kind === 'invocation-context-committed') {
-      const payload = event.payload as { contextProtocol?: unknown; baseVersion?: unknown; inputMessages?: unknown; failureInputMessages?: unknown; scope?: unknown; messages?: unknown; replacement?: unknown; invocationId?: unknown; requiredUserMessage?: unknown; system?: unknown }
+      const payload = event.payload as { contextProtocol?: unknown; baseVersion?: unknown; inputMode?: unknown; inputMessages?: unknown; failureInputMessages?: unknown; scope?: unknown; messages?: unknown; replacement?: unknown; invocationId?: unknown; requiredUserMessage?: unknown; system?: unknown }
       if (payload?.contextProtocol !== undefined && payload.contextProtocol !== 2) throw new Error('CONTEXT_PROTOCOL_UNKNOWN')
       if (payload?.contextProtocol === 2 && payload.inputMessages !== undefined) {
         if (!Array.isArray(payload.inputMessages) || !Array.isArray(payload.failureInputMessages) || !payload.scope || typeof payload.scope !== 'object') throw new Error('CONTEXT_INPUT_INVALID')
         const scope = payload.scope as ContextScope
         if (state.scope && JSON.stringify(state.scope) !== JSON.stringify(scope)) throw new Error('CONTEXT_SCOPE_MISMATCH')
-        const additions = payload.inputMessages as CanonicalModelMessage[]
+        const explicitMode = payload.inputMode
+        if (explicitMode !== undefined && explicitMode !== 'baseline' && explicitMode !== 'delta') throw new Error('CONTEXT_INPUT_MODE_INVALID')
+        // Protocol 2 entries written before inputMode stored the complete request in both
+        // fields (and also carried `messages`). Preserve that historical snapshot meaning.
+        const inputMode = explicitMode ?? (Array.isArray(payload.messages) ? 'baseline' : 'delta')
+        const additions = (inputMode === 'baseline' && Array.isArray(payload.messages)
+          ? payload.messages : payload.inputMessages) as CanonicalModelMessage[]
         const failureAdditions = payload.failureInputMessages as CanonicalModelMessage[]
+        const failureMessages = failureAdditions.length
+          ? inputMode === 'baseline' ? failureAdditions : [...state.committed, ...failureAdditions]
+          : state.failure
+        const parkBaseline = failureAdditions.length
+          ? inputMode === 'baseline' ? failureAdditions : [...state.committed, ...failureAdditions]
+          : state.parkBaseline
         state = freezeState({ ...state,
-          committed: state.scope ? state.committed : freezeMessages([]),
-          working: [...(state.scope ? state.committed : []), ...additions],
-          failure: failureAdditions.length ? [...(state.scope ? state.committed : []), ...failureAdditions] : state.failure,
-          parkBaseline: failureAdditions.length ? [...(state.scope ? state.committed : []), ...failureAdditions] : state.parkBaseline,
+          working: inputMode === 'baseline' ? additions : [...state.committed, ...additions],
+          failure: failureMessages,
+          parkBaseline,
           scope: deepFreeze(structuredClone(scope)),
           ...(typeof payload.invocationId === 'string' ? { activeInvocationId: payload.invocationId } : {}),
           ...(payload.requiredUserMessage && typeof payload.requiredUserMessage === 'object' ? { requiredUserMessage: payload.requiredUserMessage as { id: string; message: CanonicalModelMessage } } : {}),
@@ -247,15 +258,22 @@ export function applyContextEvent(state: SessionContextState, event: SessionCont
   if (index < 0 || !pendingTools.has(event.toolCallId)) throw new Error('CONTEXT_TOOL_RESULT_WITHOUT_CALL')
   const assistantMessage = state.working[index]!
   const orderedCalls = assistantMessage.role === 'assistant' ? assistantMessage.toolCalls ?? [] : []
+  const alreadyReduced = new Set<string>()
+  for (let cursor = index + 1; cursor < state.working.length; cursor += 1) {
+    const message = state.working[cursor]
+    if (message?.role !== 'tool') break
+    if (orderedCalls.some((call) => call.id === message.toolCallId)) alreadyReduced.add(message.toolCallId)
+  }
   const resultMessages: CanonicalModelMessage[] = []
   for (const call of orderedCalls) {
+    if (alreadyReduced.has(call.id)) continue
     const result = completedToolResults.get(call.id)
     if (!result) break
     resultMessages.push(result)
     pendingTools.delete(call.id)
     completedToolResults.delete(call.id)
   }
-  const working = resultMessages.length ? [...state.working.slice(0, index + 1), ...resultMessages, ...state.working.slice(index + 1).filter((message) => message.role !== 'tool')] : state.working
+  const working = resultMessages.length ? [...state.working.slice(0, index + 1), ...state.working.slice(index + 1), ...resultMessages] : state.working
   return freezeState({ ...state, working, pendingTools, completedToolResults })
 }
 

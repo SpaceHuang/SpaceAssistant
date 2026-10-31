@@ -770,15 +770,18 @@ async function ensureInitialHistoryContext(input: RunAgentTurnInput, call: Prepa
     !input.request.messages.some((message) => JSON.stringify(message) === JSON.stringify(requiredUserMessage.message)))) {
       throw new Error('required user message must exactly match a message in the history base')
   }
+  const contextInputs = resolvePersistedContextInputs(input, call.request.messages)
   await appendHistory([{
     kind: 'invocation-context-committed',
     payload: {
       contextProtocol: 2,
       baseVersion: input.sessionTranscriptBaseVersion ?? 0,
-      inputMessages: structuredClone(call.request.messages),
-      failureInputMessages: structuredClone(input.sessionTranscriptFailureMessages ?? call.request.messages),
+      inputMode: contextInputs.mode,
+      inputMessages: structuredClone(contextInputs.inputMessages),
+      failureInputMessages: structuredClone(contextInputs.failureInputMessages),
       scope: { kind: 'session', sessionId: input.sessionId ?? input.invocationId },
-      messages: structuredClone(call.request.messages),
+      // Keep the legacy field useful to old readers without persisting a second full request on delta turns.
+      messages: structuredClone(contextInputs.inputMessages),
       requestSnapshot: canonicalRequestSnapshot(call),
       ...(requiredUserMessage
         ? { requiredUserMessage: structuredClone(requiredUserMessage) }
@@ -786,6 +789,25 @@ async function ensureInitialHistoryContext(input: RunAgentTurnInput, call: Prepa
     }
   }])
   return []
+}
+
+function startsWithMessages(messages: readonly CanonicalTurnMessage[], prefix: readonly CanonicalTurnMessage[]): boolean {
+  return prefix.length <= messages.length && prefix.every((message, index) => JSON.stringify(message) === JSON.stringify(messages[index]))
+}
+
+function stripCommittedPrefix(messages: readonly CanonicalTurnMessage[], committed: readonly CanonicalTurnMessage[]): readonly CanonicalTurnMessage[] {
+  return startsWithMessages(messages, committed) ? messages.slice(committed.length) : messages
+}
+
+function resolvePersistedContextInputs(input: RunAgentTurnInput, requestMessages: readonly CanonicalTurnMessage[]): {
+  mode: 'baseline' | 'delta'; inputMessages: readonly CanonicalTurnMessage[]; failureInputMessages: readonly CanonicalTurnMessage[]
+} {
+  if (!input.sessionContext) return { mode: 'baseline', inputMessages: requestMessages,
+    failureInputMessages: input.sessionTranscriptFailureMessages ?? requestMessages }
+  const rawInput = input.sessionContextInputMessages ?? (input.requiredUserMessage ? [input.requiredUserMessage.message] : requestMessages)
+  const rawFailure = input.sessionContextFailureInputMessages ?? rawInput
+  return { mode: 'delta', inputMessages: stripCommittedPrefix(rawInput, input.sessionContext.committed),
+    failureInputMessages: stripCommittedPrefix(rawFailure, input.sessionContext.committed) }
 }
 
 function assertHistoryRequestCompatibility(events: readonly HistoryEvent[], call: PreparedModelCall, allowDynamicTools = false): void {
@@ -957,12 +979,9 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   const messages: CanonicalTurnMessage[] = structuredClone([...input.request.messages])
   let sessionContext: SessionContextState = input.sessionContext ?? restoreSessionContext({ committedVersion: input.sessionTranscriptBaseVersion ?? 0, events: [] })
   const setSessionContext = (next: SessionContextState) => { sessionContext = next; contextRef.current = next }
-  const contextInputMessages = input.sessionContext
-    ? input.sessionContextInputMessages ?? (input.requiredUserMessage ? [input.requiredUserMessage.message] : messages)
-    : messages
-  const contextFailureInputMessages = input.sessionContext
-    ? input.sessionContextFailureInputMessages ?? contextInputMessages
-    : input.sessionTranscriptFailureMessages ?? messages
+  const resolvedContextInputs = resolvePersistedContextInputs(input, messages)
+  const contextInputMessages = resolvedContextInputs.inputMessages
+  const contextFailureInputMessages = resolvedContextInputs.failureInputMessages
   setSessionContext(beginContextTurn(sessionContext, {
     invocationId, baseVersion: input.sessionTranscriptBaseVersion ?? 0,
     inputMessages: contextInputMessages, failureInputMessages: contextFailureInputMessages,
