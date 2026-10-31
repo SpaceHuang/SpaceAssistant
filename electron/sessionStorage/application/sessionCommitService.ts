@@ -96,7 +96,13 @@ export function createSessionCommitService(input: Readonly<{
     read: async (invocationId) => {
       if (invocationId !== input.invocationId) throw new Error('SESSION_COMMIT_INVOCATION_MISMATCH')
       return await input.history.read(invocationId)
-    }
+    },
+    ...(input.history.prepareTransitionState ? { prepareTransitionState: (snapshot: import('../../../packages/agent-sdk/src/history').HistorySnapshot) =>
+      input.history.prepareTransitionState!(snapshot) } : {}),
+    ...(input.history.findByIdempotencyKey ? { findByIdempotencyKey: async (invocationId: string, idempotencyKey: string) => {
+      if (invocationId !== input.invocationId) throw new Error('SESSION_COMMIT_INVOCATION_MISMATCH')
+      return await input.history.findByIdempotencyKey!(invocationId, idempotencyKey)
+    } } : {})
   }
   return Object.freeze({ historyPort, commitHistory, commitTerminal, reviseCanonicalMessage, acceptTurn, prepareTurn, claimQueuedTurn })
 }

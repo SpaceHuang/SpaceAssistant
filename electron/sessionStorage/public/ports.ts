@@ -34,7 +34,7 @@ export type SessionHistoryPort = HistoryPort & Readonly<{
 }>
 
 /** SDK-derived commit protocol aliases keep the History contract owned by agent-sdk. */
-export type SessionCommitPort = Pick<SessionHistoryPort, 'appendBatch' | 'read'>
+export type SessionCommitPort = Pick<SessionHistoryPort, 'appendBatch' | 'read' | 'findByIdempotencyKey' | 'prepareTransitionState'>
 export type SessionCommitEvent = Parameters<SessionHistoryPort['appendBatch']>[0][number]
 export type SessionCommitResult = Awaited<ReturnType<SessionHistoryPort['appendBatch']>>
 export type SessionCommitIntent = NonNullable<Parameters<SessionHistoryPort['appendBatch']>[2]>

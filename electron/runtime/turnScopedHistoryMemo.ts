@@ -21,6 +21,8 @@ export function createTurnScopedHistoryMemo(history: HistoryPort): HistoryPort {
       const result = await history.appendBatch(events, expectedVersion, transcriptCommit)
       memo = new Map()
       return result
-    }
+    },
+    ...(history.prepareTransitionState ? { prepareTransitionState: (snapshot: Awaited<ReturnType<HistoryPort['read']>>) => history.prepareTransitionState!(snapshot) } : {}),
+    ...(history.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, idempotencyKey: string) => history.findByIdempotencyKey!(invocationId, idempotencyKey) } : {})
   }
 }

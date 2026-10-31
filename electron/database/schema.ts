@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 117
+export const DB_SCHEMA_VERSION = 119
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -404,7 +404,9 @@ export const MIGRATION_V19_AGENT_HISTORY_SQL = `
 CREATE TABLE IF NOT EXISTS agent_history_streams (
   invocation_id TEXT PRIMARY KEY NOT NULL,
   version INTEGER NOT NULL DEFAULT 0 CHECK(version >= 0),
-  schema_version INTEGER NOT NULL CHECK(schema_version > 0)
+  schema_version INTEGER NOT NULL CHECK(schema_version > 0),
+  transition_state_version INTEGER,
+  transition_state_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS agent_history_events (
@@ -522,6 +524,7 @@ CREATE TABLE IF NOT EXISTS session_transcript_entries (
   version INTEGER NOT NULL,
   outcome TEXT NOT NULL,
   messages_json TEXT NOT NULL,
+  context_selection_json TEXT,
   created_at INTEGER NOT NULL,
   PRIMARY KEY(session_id, turn_id),
   UNIQUE(session_id, version)

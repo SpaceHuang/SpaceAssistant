@@ -1,0 +1,505 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "turns",
+        "count": 100,
+        "bodyBytes": 409600,
+        "pageSize": 20
+      },
+      {
+        "kind": "turns",
+        "count": 1000,
+        "bodyBytes": 4096000,
+        "pageSize": 20
+      }
+    ],
+    "samples": 30,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 0,
+        "durationMs": 29.888,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 1,
+        "durationMs": 19.033,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 2,
+        "durationMs": 18.825,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 3,
+        "durationMs": 20.175,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 4,
+        "durationMs": 28.787,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 5,
+        "durationMs": 20.963,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 6,
+        "durationMs": 19.223,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 7,
+        "durationMs": 33.115,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 8,
+        "durationMs": 18.054,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 9,
+        "durationMs": 17.997,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 10,
+        "durationMs": 20.577,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 11,
+        "durationMs": 19.673,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 12,
+        "durationMs": 39.499,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 13,
+        "durationMs": 21.098,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 14,
+        "durationMs": 34.44,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 15,
+        "durationMs": 19.132,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 16,
+        "durationMs": 21.482,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 17,
+        "durationMs": 19.068,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 18,
+        "durationMs": 19.91,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 19,
+        "durationMs": 20.775,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 20,
+        "durationMs": 40.272,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 21,
+        "durationMs": 31.07,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 22,
+        "durationMs": 21.142,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 23,
+        "durationMs": 21.023,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 24,
+        "durationMs": 18.649,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 25,
+        "durationMs": 20.271,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 26,
+        "durationMs": 20.104,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 27,
+        "durationMs": 19.145,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 28,
+        "durationMs": 58.623,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 29,
+        "durationMs": 21.087,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns",
+        "count": 100,
+        "bodyBytes": 409600,
+        "pageSize": 20,
+        "samples": 30,
+        "historyReadCalls": 0,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0,
+        "historyAppendCalls": 0,
+        "historyAppendDurationMs": 0,
+        "historyBytesWritten": 0,
+        "p50Ms": 0.227,
+        "p95Ms": 0.312,
+        "maxMs": 0.349
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 0,
+        "durationMs": 256.002,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 1,
+        "durationMs": 251.389,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 2,
+        "durationMs": 256.919,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 3,
+        "durationMs": 272.557,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 4,
+        "durationMs": 265.809,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 5,
+        "durationMs": 258.91,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 6,
+        "durationMs": 252.018,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 7,
+        "durationMs": 262.713,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 8,
+        "durationMs": 262.733,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 9,
+        "durationMs": 257.572,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 10,
+        "durationMs": 257.539,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 11,
+        "durationMs": 254.125,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 12,
+        "durationMs": 252.667,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 13,
+        "durationMs": 262.511,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 14,
+        "durationMs": 252.274,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 15,
+        "durationMs": 259.304,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 16,
+        "durationMs": 255.057,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 17,
+        "durationMs": 254.289,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 18,
+        "durationMs": 256.447,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 19,
+        "durationMs": 261.098,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 20,
+        "durationMs": 257.875,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 21,
+        "durationMs": 263.898,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 22,
+        "durationMs": 266.191,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 23,
+        "durationMs": 262.891,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 24,
+        "durationMs": 263.39,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 25,
+        "durationMs": 260.385,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 26,
+        "durationMs": 266.596,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 27,
+        "durationMs": 262.789,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 28,
+        "durationMs": 264.51,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 29,
+        "durationMs": 255.083,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns",
+        "count": 1000,
+        "bodyBytes": 4096000,
+        "pageSize": 20,
+        "samples": 30,
+        "historyReadCalls": 0,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0,
+        "historyAppendCalls": 0,
+        "historyAppendDurationMs": 0,
+        "historyBytesWritten": 0,
+        "p50Ms": 3.124,
+        "p95Ms": 3.519,
+        "maxMs": 3.735
+      }
+    ],
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "loadToDidFinishLoadMs": 152.074,
+      "consoleErrors": [],
+      "rootPresent": true,
+      "childCount": 1,
+      "nodeCount": 190,
+      "waitForRootMs": 0.8999999761581421
+    }
+  },
+  "mode": "baseline",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}

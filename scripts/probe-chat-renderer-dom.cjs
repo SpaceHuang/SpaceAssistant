@@ -7,6 +7,19 @@ const { _electron: electron } = require('playwright')
 const root = path.resolve(__dirname, '..')
 const renderer = spawn('npm', ['run', 'dev:renderer'], { cwd: root, stdio: 'ignore', env: { ...process.env, FORCE_COLOR: '0' } })
 
+async function waitForAppRenderer(app) {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const page = app.windows().find((candidate) => candidate.url().startsWith('http://127.0.0.1:9240/'))
+    if (page) {
+      await page.waitForFunction(() => (document.querySelector('#root')?.childElementCount ?? 0) > 0, { timeout: 15_000 })
+      return page
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error('main renderer window did not become ready')
+}
+
 function waitForRenderer() {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + 15_000
@@ -29,130 +42,234 @@ function waitForRenderer() {
 
 async function main() {
   let app
+  let originalMainSource
+  const mainPath = path.join(root, 'dist-electron/electron/main.js')
+  const mockProvider = http.createServer((_request, response) => { setTimeout(() => { response.writeHead(500, { 'content-type': 'text/plain' }); response.end('probe provider failure') }, 100) })
+  await new Promise((resolve) => mockProvider.listen(0, '127.0.0.1', resolve))
+  const mockProviderUrl = `http://127.0.0.1:${mockProvider.address().port}`
   const userDataDir = fs.mkdtempSync('/tmp/spaceassistant-dom-probe-')
   try {
     await waitForRenderer()
+    originalMainSource = fs.readFileSync(mainPath, 'utf8')
+    const dispatchExpression = "send('chat:turn-display', { display })"
+    if (!originalMainSource.includes(dispatchExpression)) throw new Error('could not locate the compiled turn-display dispatch for diagnostic instrumentation')
+    fs.writeFileSync(mainPath, originalMainSource.replace(dispatchExpression, "send('chat:turn-display', { display, __probeDispatchAt: Date.now() })"), 'utf8')
     app = await electron.launch({
-      args: [`--user-data-dir=${userDataDir}`, path.join(root, 'dist-electron/electron/main.js')],
+      args: [`--user-data-dir=${userDataDir}`, mainPath],
       cwd: root,
-      env: { ...process.env, SPACEASSISTANT_DEV: '1', FORCE_COLOR: '0' }
+      env: { ...process.env, SPACEASSISTANT_DEV: '1', SPACEASSISTANT_DEV_USER_DATA_DIR: userDataDir, FORCE_COLOR: '0' }
     })
-    const page = await app.firstWindow()
-    await page.waitForLoadState('domcontentloaded')
-    await page.getByText('会话', { exact: true }).first().waitFor({ state: 'visible', timeout: 15_000 })
-    const sessionId = await page.evaluate(async () => {
-      const sessions = await window.api.sessionList()
-      if (sessions[0]?.id) return sessions[0].id
-      const created = await window.api.sessionCreate({ name: 'DOM projection probe' })
-      if (!created?.id) throw new Error('session:create did not return a session')
-      return created.id
+    let page = await waitForAppRenderer(app)
+    const session = await page.evaluate(() => window.api.sessionCreate({ name: 'DOM projection probe' }))
+    if (!session?.id) throw new Error('session:create did not return an isolated session')
+    const sessionButton = page.locator('.session-item-select').filter({ hasText: 'DOM projection probe' }).last()
+    await sessionButton.waitFor({ state: 'visible', timeout: 10_000 })
+    await sessionButton.click()
+    const sessionId = session.id
+    await page.evaluate(async ({ mockProviderUrl }) => {
+      await window.api.configSet({
+        models: [{ id: 'probe-model', name: 'probe-model', maximumContext: 100000, maxTokens: 4096, isDefault: true, isFast: false, isVision: false, enabled: true }],
+        preferredLanguageModelId: 'probe-model',
+        llmServices: [{ id: 'probe-service', name: 'Probe Service', baseUrl: mockProviderUrl, apiKeyPresent: true, supportedModelIds: ['probe-model'] }],
+        activeLlmServiceId: 'probe-service', llmServiceKeys: { 'probe-service': 'probe-only-not-a-secret' }
+      })
+    }, { mockProviderUrl })
+    await page.evaluate(() => {
+      window.__turnDisplayFrameSamples = []
+      window.__turnDisplayPaintSamples = []
+      window.__submitStartedAt = new Map()
+      window.__acceptedAssistantIdsByRequestId = new Map()
+      const seenTurnIds = new Set()
+      window.api.chatOnTurnDisplay((envelope) => {
+        const { display } = envelope
+        if (display.lifecycle !== 'failed' && display.lifecycle !== 'completed') return
+        if (seenTurnIds.has(display.turnId)) return
+        seenTurnIds.add(display.turnId)
+        const receivedAt = performance.now()
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          window.__turnDisplayFrameSamples.push({
+            turnId: display.turnId,
+            lifecycle: display.lifecycle,
+            displayMessageId: display.message.id,
+            acceptedAssistantMessageId: window.__acceptedAssistantIdsByRequestId.get(display.requestId) ?? null,
+            rendererReceiveToTwoFramesMs: performance.now() - receivedAt,
+            displayMessageMatchesAccepted: window.__acceptedAssistantIdsByRequestId.get(display.requestId) === display.message.id,
+            displayAssistantBubblePresent: Boolean(document.querySelector(`[data-message-id="${display.message.id}"]`)),
+            acceptedAssistantBubblePresent: Boolean(window.__acceptedAssistantIdsByRequestId.get(display.requestId) &&
+              document.querySelector(`[data-message-id="${window.__acceptedAssistantIdsByRequestId.get(display.requestId)}"]`))
+          })
+        }))
+        const dispatchAt = envelope.__probeDispatchAt
+        const rowSelector = `[data-message-id="${display.message.id}"]`
+        const rowSignature = () => {
+          const row = document.querySelector(rowSelector)
+          return row ? `${row.className}\n${row.innerText}\n${row.innerHTML}` : ''
+        }
+        const before = rowSignature()
+        let finished = false
+        const observer = new MutationObserver(() => {
+          const after = rowSignature()
+          if (finished || !after || after === before) return
+          finished = true
+          observer.disconnect()
+          requestAnimationFrame(() => requestAnimationFrame(() => window.__turnDisplayPaintSamples.push({
+            turnId: display.turnId,
+            requestId: display.requestId,
+            targetMessageId: display.message.id,
+            targetRowChanged: true,
+            dispatchToNextPaintMs: typeof dispatchAt === 'number' ? Date.now() - dispatchAt : undefined
+          })))
+        })
+        observer.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true })
+        window.setTimeout(() => {
+          if (finished) return
+          finished = true
+          observer.disconnect()
+          window.__turnDisplayPaintSamples.push({ turnId: display.turnId, requestId: display.requestId, targetMessageId: display.message.id, targetRowChanged: false })
+        }, 5000)
+      })
     })
-    const content = `dom-probe-${Date.now()}`
-    const prepared = await page.evaluate(async ({ sessionId, content }) => window.api.chatPrepareTurn({
-      mode: 'create-user',
-      requestId: `dom-request-${Date.now()}`,
-      sessionId,
-      input: { text: content },
-      config: {}
-    }), { sessionId, content })
-    if (!prepared?.assistantMessage?.id) throw new Error('chat:prepare-turn did not return assistant snapshot')
-    await page.reload()
-    await page.getByText('会话', { exact: true }).first().waitFor({ state: 'visible', timeout: 15_000 })
-    await page.getByText(content, { exact: true }).waitFor({ state: 'visible', timeout: 15_000 })
-    const recoveredActiveTurn = await page.evaluate(async ({ sessionId, turnId }) => {
-      const activeTurns = await window.api.chatListActiveTurns({ sessionId })
-      return activeTurns.find((turn) => turn.turnId === turnId) ?? null
-    }, { sessionId, turnId: prepared.turnId })
-    if (!recoveredActiveTurn || recoveredActiveTurn.assistantMessage.id !== prepared.assistantMessage.id) {
-      throw new Error('reload did not recover the prepared active turn snapshot')
+    const submitReplySamplesMs = []
+    const acceptedToDomSamplesMs = []
+    const diagnosticSampleCount = Number(process.env.SPACEASSISTANT_DOM_PROBE_SAMPLES)
+    const sampleCount = Number.isInteger(diagnosticSampleCount) && diagnosticSampleCount > 0 ? diagnosticSampleCount : 30
+    let lastContent = ''
+    let lastAssistantMessageId = ''
+    for (let sample = 0; sample < sampleCount; sample += 1) {
+      const content = `dom-probe-${sample}-${Date.now()}`
+      const requestId = `dom-request-${sample}-${Date.now()}`
+      const submittedAt = Date.now()
+      const accepted = await page.evaluate(async ({ sessionId, content, requestId }) => {
+        const result = await window.api.chatSubmitOutbound({ sessionId, text: content, requestId })
+        if (result?.accepted === 'turn-started' && result.assistantMessage?.id) {
+          window.__acceptedAssistantIdsByRequestId.set(requestId, result.assistantMessage.id)
+        }
+        return result
+      }, { sessionId, content, requestId })
+      const acceptedAt = Date.now()
+      submitReplySamplesMs.push(acceptedAt - submittedAt)
+      if (accepted?.accepted !== 'turn-started' || !accepted.assistantMessage?.id) {
+        throw new Error(`production outbound acceptance failed: ${accepted?.rejected?.reason ?? accepted?.accepted}`)
+      }
+      await page.waitForFunction(({ content, assistantMessageId }) => document.body.innerText.includes(content) && Boolean(document.querySelector(`[data-message-id="${assistantMessageId}"]`)), {
+        content, assistantMessageId: accepted.assistantMessage.id
+      }, { timeout: 15_000 })
+      acceptedToDomSamplesMs.push(Date.now() - acceptedAt)
+      await page.waitForFunction(async ({ sessionId, turnId }) => {
+        const active = await window.api.chatListActiveTurns({ sessionId })
+        return !active.some((turn) => turn.turnId === turnId)
+      }, { sessionId, turnId: accepted.turnId }, { timeout: 30_000 })
+      lastContent = content
+      lastAssistantMessageId = accepted.assistantMessage.id
     }
+    await page.waitForFunction((count) => (window.__turnDisplayFrameSamples ?? []).length >= count, sampleCount, { timeout: 15_000 })
+    await page.waitForFunction((count) => (window.__turnDisplayPaintSamples ?? []).length >= count, sampleCount, { timeout: 15_000 })
+    const turnDisplayFrameSamples = await page.evaluate(() => window.__turnDisplayFrameSamples)
+    const turnDisplayPaintSamples = await page.evaluate(() => window.__turnDisplayPaintSamples.map((sample) => {
+      const acceptedAssistantMessageId = window.__acceptedAssistantIdsByRequestId.get(sample.requestId) ?? null
+      return { ...sample, acceptedAssistantMessageId, displayMessageMatchesAccepted: acceptedAssistantMessageId === sample.targetMessageId }
+    }))
+    const successfulPaintSamples = turnDisplayPaintSamples.filter(({ targetRowChanged, dispatchToNextPaintMs }) => targetRowChanged && typeof dispatchToNextPaintMs === 'number').map(({ dispatchToNextPaintMs }) => dispatchToNextPaintMs).sort((a, b) => a - b)
+    const dispatchToTargetPaintP50Ms = successfulPaintSamples.length ? successfulPaintSamples[Math.ceil(successfulPaintSamples.length * 0.5) - 1] : undefined
+    const dispatchToTargetPaintP95Ms = successfulPaintSamples.length ? successfulPaintSamples[Math.ceil(successfulPaintSamples.length * 0.95) - 1] : undefined
+    const sortedRendererFrame = turnDisplayFrameSamples.map(({ rendererReceiveToTwoFramesMs }) => rendererReceiveToTwoFramesMs).sort((a, b) => a - b)
+    const rendererReceiveToTwoFramesP50Ms = sortedRendererFrame[Math.min(sortedRendererFrame.length - 1, Math.ceil(sortedRendererFrame.length * 0.5) - 1)]
+    const rendererReceiveToTwoFramesP95Ms = sortedRendererFrame[Math.min(sortedRendererFrame.length - 1, Math.ceil(sortedRendererFrame.length * 0.95) - 1)]
+    const rendererReceiveToTwoFramesMaxMs = sortedRendererFrame.at(-1)
+    const sortedReply = [...submitReplySamplesMs].sort((a, b) => a - b)
+    const sortedDom = [...acceptedToDomSamplesMs].sort((a, b) => a - b)
+    const submitReplyP50Ms = sortedReply[Math.min(sortedReply.length - 1, Math.ceil(sortedReply.length * 0.5) - 1)]
+    const submitReplyP95Ms = sortedReply[Math.min(sortedReply.length - 1, Math.ceil(sortedReply.length * 0.95) - 1)]
+    const acceptedToDomP50Ms = sortedDom[Math.min(sortedDom.length - 1, Math.ceil(sortedDom.length * 0.5) - 1)]
+    const acceptedToDomP95Ms = sortedDom[Math.min(sortedDom.length - 1, Math.ceil(sortedDom.length * 0.95) - 1)]
+    const acceptedToDomMaxMs = sortedDom.at(-1)
+    await page.reload()
+    page = await waitForAppRenderer(app)
+    await page.waitForFunction(({ content, assistantMessageId }) => document.body.innerText.includes(content) && Boolean(document.querySelector(`[data-message-id="${assistantMessageId}"]`)), { content: lastContent, assistantMessageId: lastAssistantMessageId }, { timeout: 15_000 })
+    const persistedAfterReload = true
     const oldPage = page
     await oldPage.evaluate(() => window.close())
     await app.evaluate(async (_electron, mainPath) => {
       const createRequire = process.getBuiltinModule('module').createRequire
       const main = createRequire(mainPath)(mainPath)
       await main.createMainWindow()
-    }, path.join(root, 'dist-electron/electron/main.js'))
-    const reconnectedPage = await app.firstWindow()
-    await reconnectedPage.waitForLoadState('domcontentloaded')
-    await reconnectedPage.getByText('会话', { exact: true }).first().waitFor({ state: 'visible', timeout: 15_000 })
-    const reconnectedActiveTurn = await reconnectedPage.evaluate(async ({ sessionId, turnId }) => {
-      const activeTurns = await window.api.chatListActiveTurns({ sessionId })
-      return activeTurns.find((turn) => turn.turnId === turnId) ?? null
-    }, { sessionId, turnId: prepared.turnId })
-    if (!reconnectedActiveTurn || reconnectedActiveTurn.assistantMessage.id !== prepared.assistantMessage.id) {
-      throw new Error('reconnected window did not recover the prepared active turn snapshot')
+    }, mainPath)
+    const reconnectedPage = await waitForAppRenderer(app)
+    await reconnectedPage.waitForFunction(({ content, assistantMessageId }) => document.body.innerText.includes(content) && Boolean(document.querySelector(`[data-message-id="${assistantMessageId}"]`)), { content: lastContent, assistantMessageId: lastAssistantMessageId }, { timeout: 15_000 })
+    const reconnectedPersistence = true
+    const queuedEditSamplesMs = []
+    for (let sample = 0; sample < sampleCount; sample += 1) {
+      const requestId = `dom-edit-request-${sample}-${Date.now()}`
+      const queued = await reconnectedPage.evaluate(async ({ sessionId, requestId, content }) => window.api.chatEnqueueQueuedMessage({ sessionId, requestId, content }), {
+        sessionId, requestId, content: `queued-before-${sample}`
+      })
+      if (!queued?.persisted?.message?.id) throw new Error('queued message fixture did not persist')
+      const originalContent = `queued-before-${sample}`
+      const editedContent = `queued-after-${sample}`
+      await reconnectedPage.getByRole('button', { name: `编辑排队消息：${originalContent}` }).click()
+      const editor = reconnectedPage.getByRole('textbox', { name: `编辑排队消息：${originalContent}` })
+      await editor.fill(editedContent)
+      const editStartedAt = Date.now()
+      await reconnectedPage.locator('.queued-task-bar__save').click()
+      await reconnectedPage.getByRole('button', { name: `编辑排队消息：${editedContent}` }).waitFor({ state: 'visible', timeout: 5_000 })
+      queuedEditSamplesMs.push(Date.now() - editStartedAt)
+      const persistedEdit = await reconnectedPage.evaluate(async ({ sessionId, messageId }) => {
+        const page = await window.api.chatGetMessagePage({ sessionId, limit: 60 })
+        return page.entries.find((entry) => entry.message.id === messageId)?.message.content
+      }, { sessionId, messageId: queued.persisted.message.id })
+      if (persistedEdit !== editedContent) throw new Error('visible generic message edit did not round-trip through the canonical message page')
     }
-    await reconnectedPage.getByText(content, { exact: true }).waitFor({ state: 'visible', timeout: 15_000 })
-    const sentAt = Date.now()
-    await app.evaluate(({ BrowserWindow }, payload) => {
-      const window = BrowserWindow.getAllWindows()[0]
-      window?.webContents.send('chat:turn-projection', payload)
-    }, {
-      turn: {
-        turnId: `dom-turn-${Date.now()}`,
-        requestId: `dom-request-${Date.now()}`,
-        sessionId,
-        version: 1,
-        assistantMessage: {
-          id: prepared.assistantMessage.id,
-          sessionId,
-          role: 'assistant',
-          content,
-          timestamp: Date.now(),
-          status: 'streaming',
-          schemaVersion: 1
-        }
-      },
-      event: { type: 'content-delta' }
-    })
-    await reconnectedPage.getByLabel('助手回复').getByText(content, { exact: true }).waitFor({ state: 'visible', timeout: 5_000 })
-    const thinking = `dom-thinking-${Date.now()}`
-    const toolName = `dom-tool-${Date.now()}`
-    const assistant = {
-      ...prepared.assistantMessage,
-      content,
-      thinking: { content: thinking, isVisible: true, startTime: Date.now() },
-      toolCalls: [{ id: toolName, toolName: 'run_shell', input: { command: 'echo probe' }, status: 'completed', riskLevel: 'low', result: { success: true, data: 'probe-result' } }]
-    }
-    await app.evaluate(({ BrowserWindow }, payload) => BrowserWindow.getAllWindows()[0]?.webContents.send('chat:turn-projection', payload), {
-      turn: { turnId: prepared.turnId, requestId: prepared.requestId, sessionId, version: 2, assistantMessage: assistant }, event: { type: 'thinking-delta' }
-    })
-    await reconnectedPage.locator('.tool-row__main').last().click()
-    const thinkingToggle = reconnectedPage.getByRole('button', { name: '展开思考过程' }).last()
-    if (await thinkingToggle.count()) {
-      await thinkingToggle.click()
-    } else {
-      const thinkingText = reconnectedPage.getByText('展开思考过程', { exact: true }).last()
-      if (await thinkingText.count()) await thinkingText.click()
-    }
-    await app.evaluate(({ BrowserWindow }, payload) => BrowserWindow.getAllWindows()[0]?.webContents.send('chat:turn-projection', payload), {
-      turn: { turnId: prepared.turnId, requestId: prepared.requestId, sessionId, version: 3, assistantMessage: assistant }, event: { type: 'tool-result' }
-    })
-    await reconnectedPage.waitForTimeout(100)
-    await app.evaluate(({ BrowserWindow }, payload) => BrowserWindow.getAllWindows()[0]?.webContents.send('chat:turn-projection', payload), {
-      turn: { turnId: prepared.turnId, requestId: prepared.requestId, sessionId, version: 4, assistantMessage: { ...assistant, status: 'completed' } },
-      event: { type: 'source-completed' }
-    })
-    await reconnectedPage.waitForTimeout(100)
-    const result = await reconnectedPage.evaluate(({ sentAt, content, thinking, reloadRecoveredActiveTurn }) => ({
+    const sortedEdit = [...queuedEditSamplesMs].sort((a, b) => a - b)
+    const queuedEditP50Ms = sortedEdit[Math.min(sortedEdit.length - 1, Math.ceil(sortedEdit.length * 0.5) - 1)]
+    const queuedEditP95Ms = sortedEdit[Math.min(sortedEdit.length - 1, Math.ceil(sortedEdit.length * 0.95) - 1)]
+    const queuedEditMaxMs = sortedEdit.at(-1)
+    const result = await reconnectedPage.evaluate(({ content, persistedAfterReload, reconnectedPersistence, submitReplySamplesMs, acceptedToDomSamplesMs, queuedEditSamplesMs, queuedEditP50Ms, queuedEditP95Ms, queuedEditMaxMs, turnDisplayFrameSamples, turnDisplayPaintSamples, dispatchToTargetPaintP50Ms, dispatchToTargetPaintP95Ms, rendererReceiveToTwoFramesP50Ms, rendererReceiveToTwoFramesP95Ms, rendererReceiveToTwoFramesMaxMs, submitReplyP50Ms, submitReplyP95Ms, acceptedToDomP50Ms, acceptedToDomP95Ms, acceptedToDomMaxMs }) => ({
       title: document.title,
       messageCount: document.querySelectorAll('[data-message-id], [class*="message"]').length,
       hasComposer: Boolean(document.querySelector('textarea, input[placeholder*="输入消息"]')),
       hasModelSelector: Boolean(document.querySelector('[aria-label*="模型"], [title*="模型"]')),
       bodyTextLength: document.body.innerText.length,
-      projectedContentVisible: document.body.innerText.includes(content),
-      projectionToDomMs: Date.now() - sentAt,
-      thinkingVisible: document.body.innerText.includes(thinking),
-      toolResultVisible: document.body.innerText.includes('probe-result'),
-      reloadRecoveredActiveTurn,
-      windowReconnectedActiveTurn: true,
-      terminalProjectionApplied: !document.body.innerText.includes('执行中')
-    }), { sentAt, content, thinking, reloadRecoveredActiveTurn: Boolean(recoveredActiveTurn) })
+      persistedContentVisible: document.body.innerText.includes(content),
+      reloadPersistenceVerified: persistedAfterReload,
+      windowReconnectionPersistenceVerified: reconnectedPersistence,
+      sampleCount: submitReplySamplesMs.length,
+      submitReplyP50Ms,
+      submitReplyP95Ms,
+      acceptedToDomP50Ms,
+      acceptedToDomP95Ms,
+      acceptedToDomMaxMs,
+      queuedEditSamples: queuedEditSamplesMs.length,
+      queuedEditP50Ms,
+      queuedEditP95Ms,
+      queuedEditMaxMs,
+      queuedEditSamplesMs,
+      turnDisplayFrameSamples: turnDisplayFrameSamples.length,
+      rendererReceiveToTwoFramesP50Ms,
+      rendererReceiveToTwoFramesP95Ms,
+      rendererReceiveToTwoFramesMaxMs,
+      turnDisplayTargetRowChangedCount: turnDisplayPaintSamples.filter(({ targetRowChanged }) => targetRowChanged).length,
+      dispatchToTargetPaintP50Ms,
+      dispatchToTargetPaintP95Ms,
+      turnDisplayPaintDiagnostic: turnDisplayPaintSamples,
+      displayAssistantBubblePresentAtFrameCount: turnDisplayFrameSamples.filter(({ displayAssistantBubblePresent }) => displayAssistantBubblePresent).length,
+      acceptedAssistantBubblePresentAtFrameCount: turnDisplayFrameSamples.filter(({ acceptedAssistantBubblePresent }) => acceptedAssistantBubblePresent).length,
+      displayMessageMatchesAcceptedCount: turnDisplayFrameSamples.filter(({ displayMessageMatchesAccepted }) => displayMessageMatchesAccepted).length,
+      turnDisplayFrameDiagnostic: turnDisplayFrameSamples,
+      submitReplySamplesMs,
+      acceptedToDomSamplesMs
+    }), { content: lastContent, persistedAfterReload, reconnectedPersistence, submitReplySamplesMs, acceptedToDomSamplesMs, queuedEditSamplesMs, queuedEditP50Ms, queuedEditP95Ms, queuedEditMaxMs, turnDisplayFrameSamples, turnDisplayPaintSamples, dispatchToTargetPaintP50Ms, dispatchToTargetPaintP95Ms, rendererReceiveToTwoFramesP50Ms, rendererReceiveToTwoFramesP95Ms, rendererReceiveToTwoFramesMaxMs, submitReplyP50Ms, submitReplyP95Ms, acceptedToDomP50Ms, acceptedToDomP95Ms, acceptedToDomMaxMs })
     console.log(`[chat-renderer-dom] ${JSON.stringify(result)}`)
+    const outputPath = process.env.SPACEASSISTANT_DOM_PROBE_OUTPUT?.trim()
+    if (outputPath) {
+      const resolvedOutputPath = path.resolve(root, outputPath)
+      fs.mkdirSync(path.dirname(resolvedOutputPath), { recursive: true })
+      fs.writeFileSync(resolvedOutputPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8')
+    }
   } finally {
     if (app) await app.close().catch(() => {})
+    if (originalMainSource !== undefined) fs.writeFileSync(mainPath, originalMainSource, 'utf8')
     renderer.kill('SIGTERM')
+    mockProvider.close()
   }
 }
 

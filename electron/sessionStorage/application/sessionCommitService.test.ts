@@ -129,7 +129,8 @@ describe('SessionCommitService', () => {
   it('delegates valid history and terminal commits through the same bound port', async () => {
     const history = fakeHistory()
     const service = createSessionCommitService({ sessionId: 'session-1', invocationId: 'inv-1', turnId: 'turn-1', history })
-    const intent: SessionTranscriptCommitIntent = { sessionId: 'session-1', baseVersion: 0, outcome: 'completed', messages: [],
+    const intent: SessionTranscriptCommitIntent = { sessionId: 'session-1', baseVersion: 0, outcome: 'completed', protocol: 2,
+      contextSelection: { contextProtocol: 2, target: 'working' },
       executionLease: { sessionId: 'session-1', turnId: 'turn-1', ownerId: 'owner-1', generation: 1 } }
 
     await expect(service.commitHistory([event()], 0)).resolves.toEqual({ version: 1, duplicate: false })

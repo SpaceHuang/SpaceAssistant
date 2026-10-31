@@ -73,7 +73,8 @@
     "bench:spill-reference-index": "node --import tsx scripts/bench-spill-reference-index.mjs",
     "bench:session-ledger-admission": "node --import tsx scripts/bench-session-ledger-admission.ts",
     "bench:startup-maintenance": "node --import tsx scripts/bench-startup-maintenance.mjs",
-    "storage-profile:local-readonly": "npm run build:electron && cross-env NODE_OPTIONS=--import=tsx electron scripts/storage-profile-local-readonly.ts"
+    "storage-profile:local-readonly": "npm run build:electron && cross-env NODE_OPTIONS=--import=tsx electron scripts/storage-profile-local-readonly.ts",
+    "bench:session-storage-full-chain": "node scripts/session-storage-full-chain-bench.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",

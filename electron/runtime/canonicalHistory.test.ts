@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { commitCompactionAcrossStores, createCanonicalHistoryReductionState, foldCanonicalHistoryChunk,
-  applyCanonicalHistoryOutputOperations, finalizeCanonicalHistoryReduction, foldClaudeSessionSnapshots,
+  applyCanonicalHistoryOutputOperations, finalizeCanonicalHistoryReduction, foldClaudeSessionSnapshots, restoreLegacyCanonicalSessionSnapshots,
   foldCanonicalSessionSnapshot, createCanonicalSessionSnapshotFoldState, parseCanonicalSessionSnapshotFoldState,
   createCanonicalSessionSnapshotFoldSession, parseCanonicalSessionSnapshotExternalIndex,
   applyCanonicalSessionSnapshotOperations, isCanonicalProjectionWatermarkValid, parseCanonicalHistoryReductionState, toCanonicalModelMessages } from './canonicalHistory'
@@ -484,6 +484,8 @@ describe('foldClaudeSessionSnapshots', () => {
       { role: 'assistant', id: 'a1', content: 'answer revised' },
       { role: 'user', id: 'u2', content: 'next turn' }
     ])
+    expect(restoreLegacyCanonicalSessionSnapshots(snapshots as never, 2).context.committed)
+      .toEqual(toCanonicalModelMessages(messages))
   })
 
   it('retains omitted older IDs and rejects incremental order, identity, and cursor corruption', () => {

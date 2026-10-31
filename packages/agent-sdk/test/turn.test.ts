@@ -11,6 +11,8 @@ import { InvocationHistoryWriter, MemoryHistory, rebuildInvocationStates, type H
 import { ResourceLockRegistry } from '../src/resourceLock'
 import { createAgentSdkSafetyPolicy, markAgentSdkSafetyDecisionConfirmed } from '../../../electron/confirmation/agentSdkSafetyPolicy'
 import { createAgentSdkProviderRecovery } from '../../../electron/runtime/agentSdkProviderRecovery'
+import { restoreSessionContext, selectContextCommit } from '../src/sessionContext'
+import { TransactionCommitUnknownError } from '../../../electron/database/transaction'
 
 const route = { routeId: 'test', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
 const toolBinding = { requestId: 'req', turnId: 'turn', invocationId: 'inv', toolCallId: 'tc1', capabilityId: 'lookup', inputSnapshotHash: 'input-hash', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth-v1', phase: 'initial-compat' as const }
@@ -125,7 +127,7 @@ describe('runAgentTurn', () => {
     const permits = new InMemorySafetyPermitStore()
     await runAgentTurn({
       registry, routeId: route.routeId, invocationId, turnId: invocationId, sessionId: 'thinking-session',
-      sessionTranscriptBaseVersion: 0, assistantMessageId: 'thinking-assistant', history,
+      sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2, assistantMessageId: 'thinking-assistant', history,
       request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 },
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'auth-v1' }) } }),
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
@@ -137,6 +139,16 @@ describe('runAgentTurn', () => {
       messageId: 'thinking-assistant', status: 'completed', content: 'answer',
       thinking: { content: 'first thoughtsecond thought', isVisible: true }
     })
+    expect(transcriptCommit).toEqual(expect.objectContaining({
+      protocol: 2, contextSelection: { contextProtocol: 2, target: 'working' }
+    }))
+    expect(transcriptCommit).not.toHaveProperty('messages')
+    const terminal = (await backing.read(invocationId)).events.at(-1)
+    expect(terminal?.payload).toMatchObject({ contextSelection: { contextProtocol: 2, target: 'working' } })
+    const snapshot = await backing.read(invocationId)
+    const restored = restoreSessionContext({ committedVersion: snapshot.version, events: snapshot.events })
+    expect(selectContextCommit(restored, { kind: 'completed' }).messages.map((message) => message.role)).toEqual(['user', 'assistant', 'tool', 'assistant'])
+    expect(selectContextCommit(restored, { kind: 'completed' }).messages.at(-1)).toMatchObject({ role: 'assistant', id: 'thinking-assistant' })
   })
 
   it('freezes request patches and metadata across provider retry, then refreshes them for the next model turn', async () => {
@@ -578,7 +590,17 @@ describe('runAgentTurn', () => {
     capabilities.define(invocationId, ['lookup'])
     const permits = new InMemorySafetyPermitStore()
     const admission = new InMemoryExecutionAdmissionCoordinator()
-    const history = new MemoryHistory()
+    const transcriptIntents: import('../src/history').SessionTranscriptCommitIntent[] = []
+    const backingHistory = new MemoryHistory()
+    const history = {
+      appendBatch: vi.fn(async (events: readonly HistoryEvent[], expectedVersion: number, intent?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (intent) transcriptIntents.push(intent)
+        return backingHistory.appendBatch(events, expectedVersion)
+      }),
+      read: (targetInvocationId: string) => backingHistory.read(targetInvocationId)
+    }
+    const appendHistory = history.appendBatch
+    const transcriptLease = { sessionId: `session-${invocationId}`, turnId: invocationId, ownerId: 'lease-owner', generation: 3 }
     const controller = new AbortController()
     let revoke!: () => void
     let authorizationChanged!: () => void
@@ -604,7 +626,8 @@ describe('runAgentTurn', () => {
     })
 
     await expect(runAgentTurn({
-      registry, routeId: route.routeId, invocationId, history,
+      registry, routeId: route.routeId, invocationId, history, sessionId: `session-${invocationId}`,
+      sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2, sessionTranscriptExecutionLease: transcriptLease,
       request: { messages: [{ role: 'user', content: 'query' }], maxTokens: 32, signal: controller.signal },
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
@@ -621,6 +644,13 @@ describe('runAgentTurn', () => {
       kind: 'invocation-interrupted',
       payload: scenario === 'timeout' ? { status: 'interrupted', reason: 'timeout' } : { status: 'interrupted' }
     })
+    expect(transcriptIntents).toHaveLength(1)
+    expect(transcriptIntents[0]).toMatchObject({ outcome: expect.stringMatching(/^(interrupted|cancelled|timed_out)$/),
+      protocol: 2, contextSelection: { contextProtocol: 2, target: 'failure' } })
+    expect(transcriptIntents[0]).not.toHaveProperty('messages')
+    expect(transcriptIntents[0]?.executionLease).toEqual(transcriptLease)
+    expect(events.at(-1)?.kind).not.toBe('invocation-completed')
+    expect(appendHistory).toHaveBeenCalled()
   })
 
   it('adds transient system loop-check messages every 20 completed model turns without persisting them', async () => {
@@ -1416,8 +1446,10 @@ describe('runAgentTurn', () => {
 
   it('does not report success when terminal History was preserved but transcript and message mirror commit failed', async () => {
     const backing = new MemoryHistory()
+    const intents: import('../src/history').SessionTranscriptCommitIntent[] = []
     const history = {
       appendBatch: (events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (transcriptCommit) intents.push(transcriptCommit)
         if (transcriptCommit && events.some((event) => event.kind === 'invocation-completed')) return Promise.reject(new Error('injected message mirror failure'))
         return backing.appendBatch(events, expectedVersion)
       },
@@ -1428,14 +1460,62 @@ describe('runAgentTurn', () => {
       { type: 'text-delta', text: 'answer' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
     ) })
     const permits = new InMemorySafetyPermitStore()
+    const onTurnFinished = vi.fn()
     await expect(runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'mirror-failure-invocation', turnId: 'mirror-failure-turn',
-      sessionId: 'mirror-failure-session', sessionTranscriptBaseVersion: 0, assistantMessageId: 'mirror-failure-assistant',
+      sessionId: 'mirror-failure-session', sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2,
+      assistantMessageId: 'mirror-failure-assistant',
       request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 },
+      observer: { onTurnFinished },
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
       prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn()), history, maxModelTurns: 1
     })).rejects.toThrow('injected message mirror failure')
+    expect(intents.length).toBeGreaterThan(0)
+    expect(intents[0]).toMatchObject({ protocol: 2, contextSelection: { contextProtocol: 2, target: 'working' } })
+    for (const intent of intents) {
+      expect(intent.protocol).toBe(2)
+      expect(intent).not.toHaveProperty('messages')
+    }
+    expect(onTurnFinished).not.toHaveBeenCalled()
     expect((await backing.read('mirror-failure-invocation')).events.map(({ kind }) => kind)).toContain('invocation-completed')
+  })
+
+  it('does not publish turn success when a V2 terminal commit acknowledgement is unknown after durable History append', async () => {
+    const delegate = new MemoryHistory()
+    const intents: import('../src/history').SessionTranscriptCommitIntent[] = []
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], expectedVersion: number, intent?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (intent) intents.push(intent)
+        const result = await delegate.appendBatch(events, expectedVersion)
+        if (intent && events.some((event) => event.kind === 'invocation-completed')) {
+          throw new TransactionCommitUnknownError(new Error('durable V2 COMMIT acknowledgement lost'))
+        }
+        return result
+      },
+      read: (invocationId: string) => delegate.read(invocationId)
+    }
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'v2-terminal-unknown', stream: () => stream(
+      { type: 'text-delta', text: 'durably written' },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+    ) })
+    const permits = new InMemorySafetyPermitStore()
+    const onTurnFinished = vi.fn()
+
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'v2-terminal-unknown', sessionId: 'v2-terminal-unknown-session',
+      sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2, history,
+      request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 16 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits,
+        policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn()), observer: { onTurnFinished }
+    })).rejects.toMatchObject({ name: 'AgentTurnHistoryAppendError', originalError: expect.any(TransactionCommitUnknownError) })
+
+    expect(intents[0]).toMatchObject({ protocol: 2, contextSelection: { contextProtocol: 2, target: 'working' } })
+    expect(intents[0]).not.toHaveProperty('messages')
+    expect(onTurnFinished).not.toHaveBeenCalled()
+    expect((await delegate.read('v2-terminal-unknown')).events.filter((event) => event.kind === 'invocation-completed'))
+      .toHaveLength(1)
   })
 
   it('commits the accepted user transcript atomically with a deferred parked terminal', async () => {
@@ -1460,23 +1540,36 @@ describe('runAgentTurn', () => {
     const result = await runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'parked-transcript-invocation', turnId: 'parked-transcript-turn',
       sessionId: 'parked-transcript-session', currentUserMessageId: 'parked-user', requiredUserMessage: { id: 'parked-user', message: userMessage },
-      sessionTranscriptBaseVersion: 4, assistantMessageId: 'parked-assistant', sessionTranscriptFailureMessages: [userMessage],
+      sessionTranscriptBaseVersion: 4, sessionTranscriptCommitProtocol: 2, assistantMessageId: 'parked-assistant', sessionTranscriptFailureMessages: [userMessage],
       request: { messages: [userMessage], maxTokens: 32 }, history, maxModelTurns: 2,
       safetyGate: new SafetyGate({ capabilities, permitStore: permits,
         policy: { evaluate: async (binding) => ({ kind: 'ask' as const, confirmationId: `confirm-${binding.toolCallId}`, answerer: 'user' as const, reasonCode: 'USER_APPROVAL' as const }) } }),
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
         capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
       toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'done' }))),
+      contextProjectionCommitter: async () => {},
       confirmation: async ({ call }) => ({ kind: 'deferred' as const, todoId: 'park-todo', invocationId: call.invocationId,
-        checkpointRef: { checkpointId: 'park-checkpoint', workflowRevision: 5 } })
+        checkpointRef: { checkpointId: 'park-checkpoint', workflowRevision: 5 } }),
+      planContextReplacement: async ({ phase, messages }) => phase === 'turn-boundary' ? ({
+        messages,
+        historyPayload: {
+          checkpoint: { compactionId: 'park-compaction', replayIdentity: 'park-compaction-identity' },
+          sessionLedger: { location: { workDir: '/workspace', sessionId: 'parked-transcript-session', createdAt: 1 },
+            start: { compactionId: 'park-compaction' }, summary: { compactionId: 'park-compaction' } }
+        }
+      }) : undefined
     })
 
     expect(result).toMatchObject({ parked: true, parkedTodoId: 'park-todo' })
     expect(transcriptCommits).toHaveLength(1)
     expect(transcriptCommits[0]).toMatchObject({ sessionId: 'parked-transcript-session', baseVersion: 4, outcome: 'interrupted',
-      messages: [userMessage] })
+      protocol: 2, contextSelection: { contextProtocol: 2, target: 'park-baseline' } })
+    expect(transcriptCommits[0]).not.toHaveProperty('messages')
     expect(transcriptCommits[0]).not.toHaveProperty('messageMirror')
-    expect((await backing.read('parked-transcript-invocation')).events.at(-1)).toMatchObject({ kind: 'invocation-parked' })
+    const parkedEvents = (await backing.read('parked-transcript-invocation')).events
+    expect(parkedEvents.map(({ kind }) => kind)).toContain('transcript-compacted')
+    expect(parkedEvents.findIndex(({ kind }) => kind === 'transcript-compacted')).toBeLessThan(parkedEvents.findIndex(({ kind }) => kind === 'invocation-parked'))
+    expect(parkedEvents.at(-1)).toMatchObject({ kind: 'invocation-parked' })
   })
 
   it('parks in a fresh human todo when final recheck raises a human-required decision', async () => {
@@ -1633,7 +1726,7 @@ describe('runAgentTurn', () => {
 
     await expect(runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'cancelled-message-mirror', turnId: 'cancelled-message-turn',
-      sessionId: 'cancelled-message-session', sessionTranscriptBaseVersion: 0, assistantMessageId: 'cancelled-message-assistant',
+      sessionId: 'cancelled-message-session', sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2, assistantMessageId: 'cancelled-message-assistant',
       sessionTranscriptFailureMessages: [
         { role: 'user', content: 'question' },
         { role: 'assistant', id: 'cancelled-message-assistant', content: [
@@ -1645,9 +1738,10 @@ describe('runAgentTurn', () => {
     })).rejects.toMatchObject({ code: 'TURN_CANCELLED' })
 
     expect(transcriptCommits).toHaveLength(1)
-    expect(transcriptCommits[0]).toMatchObject({ outcome: 'cancelled', messageMirror: {
+    expect(transcriptCommits[0]).toMatchObject({ protocol: 2, contextSelection: { contextProtocol: 2, target: 'failure' }, outcome: 'cancelled', messageMirror: {
       messageId: 'cancelled-message-assistant', status: 'cancelled', content: 'cancelled answer'
     } })
+    expect(transcriptCommits[0]).not.toHaveProperty('messages')
   })
 
   it('maps a critical response projection failure to interrupted outcome and failed message status', async () => {
@@ -1668,7 +1762,8 @@ describe('runAgentTurn', () => {
 
     await expect(runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'interrupted-message-mirror', turnId: 'interrupted-message-turn',
-      sessionId: 'interrupted-message-session', sessionTranscriptBaseVersion: 0, assistantMessageId: 'interrupted-message-assistant',
+      sessionId: 'interrupted-message-session', sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2,
+      assistantMessageId: 'interrupted-message-assistant',
       sessionTranscriptFailureMessages: [
         { role: 'user', content: 'question' },
         { role: 'assistant', id: 'interrupted-message-assistant', content: [
@@ -1681,9 +1776,10 @@ describe('runAgentTurn', () => {
     })).rejects.toMatchObject({ name: 'AgentTurnHostProjectionError' })
 
     expect(transcriptCommits).toHaveLength(1)
-    expect(transcriptCommits[0]).toMatchObject({ outcome: 'interrupted', messageMirror: {
+    expect(transcriptCommits[0]).toMatchObject({ protocol: 2, contextSelection: { contextProtocol: 2, target: 'failure' }, outcome: 'interrupted', messageMirror: {
       messageId: 'interrupted-message-assistant', status: 'failed', content: 'canonical interrupted answer'
     } })
+    expect(transcriptCommits[0]).not.toHaveProperty('messages')
   })
 
   it('rejects a session input marker owned by another session before provider dispatch', async () => {
@@ -3357,6 +3453,41 @@ describe('runAgentTurn', () => {
       planContextReplacement: async ({ phase }) => phase === 'turn-boundary' ? ({ messages: [{ role: 'user', content: 'compacted without the tool call' }] }) : undefined
     })).rejects.toThrow(/pending tool proposal/i)
     expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('keeps a committed compaction before an ordinary provider failure', async () => {
+    const backing = new MemoryHistory()
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'compact-then-fail', stream: () => {
+      providerCalls += 1
+      if (providerCalls > 1) throw new Error('provider disconnected after compaction')
+      return stream(
+        { type: 'tool-call', toolCallId: 'tc-compact-then-fail', toolName: 'lookup', input: { query: 'q' } },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+      )
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('compact-then-fail', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'compact-then-fail', history: backing,
+      request: { messages: [{ role: 'user', content: 'find' }], maxTokens: 100 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'done' }))), maxModelTurns: 3,
+      contextProjectionCommitter: async () => {},
+      planContextReplacement: async ({ phase, messages }) => phase === 'turn-boundary' ? ({
+        messages,
+        historyPayload: { checkpoint: { compactionId: 'failure-compaction', replayIdentity: 'failure-compaction-identity' } }
+      }) : undefined
+    })).rejects.toThrow('provider disconnected after compaction')
+
+    const events = (await backing.read('compact-then-fail')).events
+    expect(events.map(({ kind }) => kind)).toContain('transcript-compacted')
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-failed' })
+    expect(events.findIndex(({ kind }) => kind === 'transcript-compacted')).toBeLessThan(events.findIndex(({ kind }) => kind === 'invocation-failed'))
   })
 
   it('does not dispatch tools when compacted transcript persistence fails', async () => {

@@ -152,7 +152,9 @@ function createHostedInvocationHistory(
       const appended = await writer.append(events, transcriptCommit)
       return { version: appended.version, duplicate: appended.duplicate }
     },
-    read: (invocationId) => history.read(invocationId)
+    read: (invocationId) => history.read(invocationId),
+    ...(history.prepareTransitionState ? { prepareTransitionState: (snapshot: import('../packages/agent-sdk/src/history').HistorySnapshot) => history.prepareTransitionState!(snapshot) } : {}),
+    ...(history.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, key: string) => history.findByIdempotencyKey!(invocationId, key) } : {})
   }
 }
 

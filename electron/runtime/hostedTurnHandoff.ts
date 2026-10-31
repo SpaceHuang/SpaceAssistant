@@ -2,7 +2,7 @@ import type { CanonicalModelMessage, PreparedModelCall } from '../../packages/ag
 import type { HostCommittedModelResponse } from '../../packages/agent-sdk/src/turn'
 import { runHostedAgentTurn } from '../../packages/agent-sdk/src/turn'
 import { ToolLoopRoundLimitError } from '../../packages/agent-sdk/src/turn'
-import type { HistoryPort } from '../../packages/agent-sdk/src/history'
+import type { HistoryPort, HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import type { RunToolChatSessionArgs, RunToolChatSessionResult } from '../toolChatLoop'
 import type { SessionExecutionStore } from '../sessionStorage/public/execution'
 import { createSessionCommitService } from '../sessionStorage/host/sessionCommitService'
@@ -71,7 +71,9 @@ function bindAssistantMessageIdentity(history: HistoryPort, assistantMessageId: 
       if (message.role !== 'assistant') return event
       return { ...event, payload: { ...payload, message: { ...message, id: assistantMessageId } } }
     }), expectedVersion, transcriptCommit),
-    read: (invocationId) => history.read(invocationId)
+    read: (invocationId) => history.read(invocationId),
+    ...(history.prepareTransitionState ? { prepareTransitionState: (snapshot: HistorySnapshot) => history.prepareTransitionState!(snapshot) } : {}),
+    ...(history.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, key: string) => history.findByIdempotencyKey!(invocationId, key) } : {})
   }
 }
 
@@ -316,7 +318,9 @@ export function createHostedTurnHandoff(input: {
       : undefined
     const historyFacade: HistoryPort = {
       appendBatch: (events, expectedVersion, transcriptCommit) => input.history.appendBatch(events, expectedVersion, transcriptCommit),
-      read: (invocationId) => input.history.read(invocationId)
+      read: (invocationId) => input.history.read(invocationId),
+      ...(input.history.prepareTransitionState ? { prepareTransitionState: (snapshot: HistorySnapshot) => input.history.prepareTransitionState!(snapshot) } : {}),
+      ...(input.history.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, key: string) => input.history.findByIdempotencyKey!(invocationId, key) } : {})
     }
     // The terminal participant may mirror an assistant message only when the accepted turn
     // owner has a matching persisted target. Session-only Hosted requests still commit their
@@ -337,7 +341,9 @@ export function createHostedTurnHandoff(input: {
     const leaseBoundHostHistory: HistoryPort = ownership ? {
       appendBatch: (events, expectedVersion, transcriptCommit) => commitBoundHostHistory.appendBatch(events, expectedVersion,
         transcriptCommit ? { ...transcriptCommit, executionLease: ownership } : undefined),
-      read: (invocationId) => commitBoundHostHistory.read(invocationId)
+      read: (invocationId) => commitBoundHostHistory.read(invocationId),
+      ...(commitBoundHostHistory.prepareTransitionState ? { prepareTransitionState: (snapshot: HistorySnapshot) => commitBoundHostHistory.prepareTransitionState!(snapshot) } : {}),
+      ...(commitBoundHostHistory.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, key: string) => commitBoundHostHistory.findByIdempotencyKey!(invocationId, key) } : {})
     } : commitBoundHostHistory
     const runtime = await input.agentSdk.createHostedTurnRuntime({
       ...(input.confirmationAdapter ? { confirmationAdapter: input.confirmationAdapter } : {}),

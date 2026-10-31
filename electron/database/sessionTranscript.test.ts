@@ -7,6 +7,25 @@ import { commitSessionTranscriptInTransaction } from './sessionTranscript'
 import { TransactionCommitUnknownError } from './transaction'
 
 describe('session transcript checkpoint and execution claim', () => {
+  it('characterizes deterministic review source, repair turn, and receipt version bindings', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const reviewKey = 'a'.repeat(64)
+    const repairTurnId = `session-review-turn:${reviewKey}`
+    const payload = [{ role: 'user', content: 'reviewed' }]
+    const first = commitSessionTranscript(db, { sessionId: 'review-prototype', turnId: repairTurnId,
+      baseVersion: 0, outcome: 'completed', messages: payload })
+    expect(first).toEqual({ committed: true, version: 1 })
+    expect(commitSessionTranscript(db, { sessionId: 'review-prototype', turnId: repairTurnId,
+      baseVersion: 0, outcome: 'completed', messages: payload })).toEqual(first)
+    expect(commitSessionTranscript(db, { sessionId: 'review-prototype', turnId: repairTurnId,
+      baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'different review' }] }))
+      .toEqual({ committed: false, reason: 'idempotency-conflict', version: 1 })
+    expect(conn.prepare('SELECT turn_id,base_version,next_version FROM session_turn_commit_receipts WHERE session_id=?')
+      .get('review-prototype')).toEqual({ turn_id: repairTurnId, base_version: 0, next_version: 1 })
+    db.close()
+  })
+
   it('commits by session/turn idempotently and rejects stale base versions', () => {
     const db = createMemoryAppDb()
     const first = commitSessionTranscript(db, { sessionId: 's', turnId: 't1', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'a' }] })
@@ -14,6 +33,41 @@ describe('session transcript checkpoint and execution claim', () => {
     expect(commitSessionTranscript(db, { sessionId: 's', turnId: 't1', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'a' }] })).toEqual(first)
     expect(commitSessionTranscript(db, { sessionId: 's', turnId: 't2', baseVersion: 0, outcome: 'completed', messages: [] })).toEqual({ committed: false, reason: 'version-conflict', version: 1 })
     expect(readSessionTranscript(db, 's')).toMatchObject({ version: 1, messages: [{ role: 'user', content: 'a' }] })
+    db.close()
+  })
+
+  it('reads an explicitly selected prior transcript version instead of the latest checkpoint', () => {
+    const db = createMemoryAppDb()
+    commitSessionTranscript(db, { sessionId: 'versioned-read', turnId: 'first', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'first snapshot' }] })
+    commitSessionTranscript(db, { sessionId: 'versioned-read', turnId: 'second', baseVersion: 1, outcome: 'completed', messages: [{ role: 'user', content: 'second snapshot' }] })
+    expect(readSessionTranscript(db, 'versioned-read', { version: 1 })).toMatchObject({
+      version: 1, lastTurnId: 'first', messages: [{ role: 'user', content: 'first snapshot' }]
+    })
+    expect(() => readSessionTranscript(db, 'versioned-read', { version: 3 })).toThrow('SESSION_TRANSCRIPT_VERSION_NOT_FOUND')
+    expect(() => readSessionTranscript(db, 'versioned-read', { version: 1.5 })).toThrow('SESSION_TRANSCRIPT_VERSION_NOT_FOUND')
+    db.close()
+  })
+
+  it('commits protocol 2 selection metadata without persisting selected message bodies', () => {
+    const db = createMemoryAppDb()
+    const input = { sessionId: 'selection-v2', turnId: 'selection-turn', baseVersion: 0, outcome: 'completed' as const, protocol: 2 as const,
+      contextSelection: { contextProtocol: 2 as const, target: 'working' as const } }
+    expect(commitSessionTranscript(db, input)).toEqual({ committed: true, version: 1 })
+    expect(commitSessionTranscript(db, input)).toEqual({ committed: true, version: 1 })
+    const row = getDbConnection(db).prepare('SELECT messages_json,context_selection_json FROM session_transcript_entries WHERE session_id=?')
+      .get(input.sessionId) as { messages_json: string; context_selection_json: string | null }
+    expect(row).toEqual({ messages_json: '[]', context_selection_json: '{"contextProtocol":2,"target":"working"}' })
+    expect(() => readSessionTranscript(db, input.sessionId)).toThrow('SESSION_TRANSCRIPT_SELECTION_RECEIPT_MISSING')
+    db.close()
+  })
+
+  it('requires the explicit protocol discriminator for selection-only transcript commits', () => {
+    const db = createMemoryAppDb()
+    expect(() => commitSessionTranscript(db, { sessionId: 'selection-discriminator', turnId: 'turn', baseVersion: 0,
+      outcome: 'completed', contextSelection: { contextProtocol: 2, target: 'working' } }))
+      .toThrow('session transcript commit intent does not match its protocol')
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?')
+      .get('selection-discriminator')).toEqual({ count: 0 })
     db.close()
   })
 
@@ -229,6 +283,35 @@ describe('session transcript checkpoint and execution claim', () => {
     db.close()
   })
 
+  it.each([
+    ['transcript entry', `BEFORE INSERT ON session_transcript_entries WHEN NEW.session_id='commit-owner-v2-atomic'`],
+    ['receipt', `BEFORE INSERT ON session_turn_commit_receipts WHEN NEW.session_id='commit-owner-v2-atomic'`],
+    ['checkpoint', `BEFORE INSERT ON session_transcript_checkpoints WHEN NEW.session_id='commit-owner-v2-atomic'`],
+    ['claim settlement', `BEFORE UPDATE ON session_execution_claims WHEN OLD.session_id='commit-owner-v2-atomic' AND NEW.status='transcript_committed'`],
+    ['queue settlement', `BEFORE UPDATE ON session_execution_queue WHEN OLD.session_id='commit-owner-v2-atomic' AND NEW.status='transcript_committed'`]
+  ])('atomically rolls back a protocol 2 lease commit when %s fails', (_stage, trigger) => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'commit-owner-v2-atomic'
+    const turnId = 'turn-v2'
+    const owner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'process-v2' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'process-v2', generation: owner.generation })
+    conn.exec(`CREATE TRIGGER fail_v2_commit_participant ${trigger} BEGIN SELECT RAISE(ABORT, 'injected V2 commit participant failure'); END`)
+
+    expect(() => commitSessionTranscript(db, {
+      sessionId, turnId, baseVersion: 0, outcome: 'completed', protocol: 2,
+      contextSelection: { contextProtocol: 2, target: 'working' },
+      executionLease: { sessionId, turnId, ownerId: 'process-v2', generation: owner.generation }
+    })).toThrow('injected V2 commit participant failure')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_checkpoints WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'executing' })
+    expect(conn.prepare('SELECT status FROM session_execution_queue WHERE session_id=? AND turn_id=?').get(sessionId, turnId)).toEqual({ status: 'executing' })
+    db.close()
+  })
+
   it('allows only one cross-process session owner and fences stale releases', () => {
     const db = createMemoryAppDb()
     const first = claimSessionExecution(db, { sessionId: 's', turnId: 't1', ownerId: 'p1', now: 1 })
@@ -337,6 +420,30 @@ describe('session transcript checkpoint and execution claim', () => {
     expect(getDbConnection(db).prepare('SELECT resolution, operator_id, rationale FROM session_transcript_reconciliations').get())
       .toEqual({ resolution: 'commit-reviewed', operator_id: 'operator-1', rationale: 'Reviewed canonical History; retain the accepted user request only.' })
     expect(claimSessionExecution(db, { sessionId: 'manual-session', turnId: 'next-turn', ownerId: 'process-2' })).toMatchObject({ acquired: true })
+    db.close()
+  })
+
+  it('characterizes existing-terminal review as already committed while the uncertain fence remains closed', () => {
+    const db = createMemoryAppDb()
+    const owner = claimSessionExecution(db, { sessionId: 'review-existing-terminal', turnId: 'same-turn', ownerId: 'process-1' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    const messages = [{ role: 'user' as const, content: 'committed before review' }]
+    expect(commitSessionTranscript(db, {
+      sessionId: 'review-existing-terminal', turnId: 'same-turn', baseVersion: 0, outcome: 'completed', messages
+    })).toEqual({ committed: true, version: 1 })
+    expect(markSessionExecutionUncertain(db, {
+      sessionId: 'review-existing-terminal', turnId: 'same-turn', ownerId: 'process-1', generation: owner.generation
+    })).toBe(true)
+
+    expect(reconcileUncertainSessionTranscript(db, {
+      sessionId: 'review-existing-terminal', turnId: 'same-turn', expectedVersion: 1,
+      outcome: 'completed', messages, operatorId: 'operator-1', rationale: 'Verify the committed terminal receipt.', now: 43
+    })).toEqual({ reconciled: false, reason: 'already-committed' })
+    expect(readSessionTranscript(db, 'review-existing-terminal')).toMatchObject({
+      version: 1, status: 'commit_uncertain', lastTurnId: 'same-turn', messages
+    })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_reconciliations').get())
+      .toEqual({ count: 0 })
     db.close()
   })
 

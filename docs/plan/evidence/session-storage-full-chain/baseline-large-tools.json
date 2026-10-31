@@ -1,0 +1,62 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "large-tool-results",
+        "count": 100,
+        "batchSize": 10,
+        "bodyBytes": 104857600
+      }
+    ],
+    "samples": 30,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "large-tool-results",
+        "count": 100,
+        "batchSize": 10,
+        "bodyBytes": 104857600,
+        "samples": 30,
+        "historyReadCalls": 300,
+        "historyRowsRead": 13500,
+        "historyBytesRead": 14159703840,
+        "historyReadDurationMs": 26460.196,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 29641.388,
+        "historyBytesWritten": 3146602280,
+        "p50Ms": 2049.028,
+        "p95Ms": 2194.16,
+        "maxMs": 2317.121
+      }
+    ],
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "loadToDidFinishLoadMs": 273.971,
+      "consoleErrors": [],
+      "rootPresent": true,
+      "childCount": 1,
+      "nodeCount": 190,
+      "waitForRootMs": 1.5
+    }
+  },
+  "mode": "baseline",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}

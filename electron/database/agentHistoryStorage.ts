@@ -6,14 +6,16 @@ import {
   HistoryIdempotencyConflict,
   HistorySequenceConflict,
   HistoryVersionConflict,
+  advanceHistoryTransitionState,
+  createHistoryTransitionState,
   historyEventsEqual,
   validateHistoryBatch,
-  validateHistoryTransition,
   type HistoryAppendResult,
-  type HistoryEvent
+  type HistoryEvent,
+  type HistoryTransitionState
 } from '../../packages/agent-sdk/src/history'
 
-type StreamRow = { invocation_id: string; version: number; schema_version: number; session_id: string | null }
+type StreamRow = { invocation_id: string; version: number; schema_version: number; session_id: string | null; transition_state_version: number | null; transition_state_json: string | null }
 type EventRow = {
   invocation_id: string; sequence: number; event_id: string; idempotency_key: string; turn_id: string
   schema_version: number; kind: HistoryEvent['kind']; payload_json: string
@@ -54,7 +56,7 @@ export function appendSqliteAgentHistoryBatchInTransaction(
     if (!owner || owner.current_generation !== options.processGeneration) throw new HistoryBatchError('HISTORY_PROCESS_GENERATION_FENCED')
   }
   for (const payloadJson of serialized) assertSpillReferencePayloadStrict(payloadJson)
-  const stream = conn.prepare('SELECT invocation_id, version, schema_version, session_id FROM agent_history_streams WHERE invocation_id = ?').get(invocationId) as StreamRow | undefined
+  const stream = conn.prepare('SELECT invocation_id, version, schema_version, session_id, transition_state_version, transition_state_json FROM agent_history_streams WHERE invocation_id = ?').get(invocationId) as StreamRow | undefined
   if (stream?.session_id && options.sessionId && stream.session_id !== options.sessionId) {
     throw new HistoryBatchError(`history invocation ${invocationId} belongs to ${stream.session_id}, not ${options.sessionId}`)
   }
@@ -85,11 +87,17 @@ export function appendSqliteAgentHistoryBatchInTransaction(
     const expectedSequence = actualVersion + index + 1
     if (events[index].sequence !== expectedSequence) throw new HistorySequenceConflict(expectedSequence, events[index].sequence)
   }
-  const previousEvents = conn.prepare(`
-    SELECT invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json
-    FROM agent_history_events WHERE invocation_id = ? ORDER BY sequence ASC
-  `).all(invocationId).map((row) => fromRow(row as EventRow))
-  validateHistoryTransition(previousEvents, events)
+  let transitionState: HistoryTransitionState
+  if (stream && stream.version > 0 && stream.transition_state_version === 1 && stream.transition_state_json !== null) {
+    transitionState = decodeTransitionState(stream.transition_state_json, invocationId)
+  } else if (stream && (stream.transition_state_version !== null || stream.transition_state_json !== null)) {
+    throw new HistoryBatchError('HISTORY_TRANSITION_STATE_UNSUPPORTED')
+  } else if (stream && stream.version > 0) {
+    throw new HistoryBatchError('HISTORY_TRANSITION_STATE_REQUIRES_PREPARE')
+  } else {
+    transitionState = createHistoryTransitionState([])
+  }
+  const nextTransitionState = advanceHistoryTransitionState(transitionState, events)
 
   const sessionId = options.sessionId ?? stream?.session_id ?? null
   const sessionSequences = new Array<number | null>(events.length).fill(null)
@@ -110,10 +118,10 @@ export function appendSqliteAgentHistoryBatchInTransaction(
   })
 
   conn.prepare(`
-    INSERT INTO agent_history_streams(invocation_id, version, schema_version, session_id)
-    VALUES(?, ?, ?, ?)
+    INSERT INTO agent_history_streams(invocation_id, version, schema_version, session_id, transition_state_version, transition_state_json)
+    VALUES(?, ?, ?, ?, 1, ?)
     ON CONFLICT(invocation_id) DO NOTHING
-  `).run(invocationId, actualVersion, events[0].schemaVersion, sessionId)
+  `).run(invocationId, actualVersion, events[0].schemaVersion, sessionId, JSON.stringify(transitionState))
   if (options.sessionId && !stream?.session_id) {
     conn.prepare('UPDATE agent_history_streams SET session_id = ? WHERE invocation_id = ? AND session_id IS NULL').run(options.sessionId, invocationId)
   }
@@ -147,7 +155,8 @@ export function appendSqliteAgentHistoryBatchInTransaction(
     )
   }
   const version = actualVersion + events.length
-  conn.prepare('UPDATE agent_history_streams SET version = ? WHERE invocation_id = ?').run(version, invocationId)
+  conn.prepare('UPDATE agent_history_streams SET version = ?, transition_state_version = 1, transition_state_json = ? WHERE invocation_id = ?')
+    .run(version, JSON.stringify(nextTransitionState), invocationId)
   for (const target of options.projectionTargets ?? []) {
     if (!options.sessionId || target.sessionId !== options.sessionId || !events.some((event) => event.eventId === target.canonicalEventId)) {
       throw new HistoryBatchError('projection target must be coupled to this session and an event in the canonical batch')
@@ -159,4 +168,49 @@ export function appendSqliteAgentHistoryBatchInTransaction(
       .run(options.processGeneration, invocationId)
   }
   return { version, duplicate: false }
+}
+
+function decodeTransitionState(json: string, invocationId: string): HistoryTransitionState {
+  let value: unknown
+  try { value = JSON.parse(json) } catch { throw new HistoryBatchError('HISTORY_TRANSITION_STATE_CORRUPT') }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HistoryBatchError('HISTORY_TRANSITION_STATE_CORRUPT')
+  const state = value as HistoryTransitionState
+  const keys = Object.keys(value).sort()
+  const expectedKeys = ['approvalIdentityByPendingId', 'deferredTodoIds', 'invocationId', 'pendingApprovals', 'pendingToolCalls', 'terminalKind', 'turnId', 'unconsumedRetryApprovals'].sort()
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index]) ||
+    JSON.stringify(state) !== json || state.invocationId !== invocationId || typeof state.turnId !== 'string' || !state.turnId ||
+    !Array.isArray(state.pendingToolCalls) || !Array.isArray(state.pendingApprovals) ||
+    !Array.isArray(state.approvalIdentityByPendingId) || !Array.isArray(state.deferredTodoIds) ||
+    !Array.isArray(state.unconsumedRetryApprovals) ||
+    !isSortedUniqueStrings(state.pendingToolCalls) || !isSortedUniqueStrings(state.pendingApprovals) ||
+    !isSortedUniqueStrings(state.deferredTodoIds) ||
+    !Array.isArray(state.approvalIdentityByPendingId) || state.approvalIdentityByPendingId.some((entry) =>
+      !Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' || !entry[0] || typeof entry[1] !== 'string' || !entry[1]) ||
+    !isSortedUniquePairs(state.approvalIdentityByPendingId) ||
+    state.approvalIdentityByPendingId.some(([pendingId]) => !state.pendingApprovals.includes(pendingId)) ||
+    !Array.isArray(state.unconsumedRetryApprovals) || state.unconsumedRetryApprovals.some((entry) =>
+      !Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' || !entry[0] ||
+      !entry[1] || typeof entry[1] !== 'object' || Array.isArray(entry[1]) ||
+      Object.keys(entry[1]).sort().join(',') !== 'inputHash,toolName' || typeof entry[1].toolName !== 'string' || !entry[1].toolName.trim() ||
+      typeof entry[1].inputHash !== 'string' || !/^[a-f0-9]{64}$/i.test(entry[1].inputHash)) ||
+    !isSortedUniquePairs(state.unconsumedRetryApprovals) ||
+    (state.terminalKind !== null && !['invocation-parked', 'invocation-interrupted', 'invocation-completed', 'invocation-failed'].includes(state.terminalKind)) ||
+    ((state.terminalKind === 'invocation-completed' || state.terminalKind === 'invocation-failed') &&
+      (state.pendingToolCalls.length > 0 || state.pendingApprovals.length > 0))) {
+    throw new HistoryBatchError('HISTORY_TRANSITION_STATE_CORRUPT')
+  }
+  return state
+}
+
+function isSortedUniqueStrings(values: readonly unknown[]): values is readonly string[] {
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index]
+    const previous = values[index - 1]
+    if (typeof value !== 'string' || !value || (index > 0 && typeof previous === 'string' && previous >= value)) return false
+  }
+  return true
+}
+
+function isSortedUniquePairs<T>(values: readonly (readonly [string, T])[]): boolean {
+  return values.every((value, index) => index === 0 || values[index - 1][0] < value[0])
 }

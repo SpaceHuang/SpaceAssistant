@@ -9,16 +9,25 @@ export type HistoryEvent = {
   payload: unknown
 }
 
-export type HistorySnapshot = { invocationId: string; version: number; schemaVersion: number; events: HistoryEvent[] }
+export type HistorySnapshot = { invocationId: string; version: number; schemaVersion: number; events: HistoryEvent[]; sessionGeneration?: string }
+export type HistoryTransitionState = Readonly<{
+  invocationId: string
+  turnId: string
+  terminalKind: HistoryEvent['kind'] | null
+  pendingToolCalls: readonly string[]
+  pendingApprovals: readonly string[]
+  approvalIdentityByPendingId: readonly (readonly [string, string])[]
+  deferredTodoIds: readonly string[]
+  unconsumedRetryApprovals: readonly (readonly [string, Readonly<{ toolName: string; inputHash: string }>])[]
+}>
 export type RebuiltInvocationState = { invocationId: string; state: 'interrupted' | 'completed' | 'failed' | 'denied' | 'cancelled'; lastEventId: string }
 export type HistoryAppendResult = { version: number; duplicate: boolean }
 export type InvocationHistoryAppendResult = HistoryAppendResult & { events: readonly HistoryEvent[] }
 export type SessionExecutionLease = Readonly<{ sessionId: string; turnId: string; ownerId: string; generation: number }>
-export type SessionTranscriptCommitIntent = Readonly<{
+type SessionTranscriptCommitIntentBase = Readonly<{
   sessionId: string
   baseVersion: number
   outcome: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
-  messages: readonly Readonly<Record<string, unknown>>[]
   /** Present when the terminal commit must prove the live execution owner in the same SQLite transaction. */
   executionLease?: SessionExecutionLease
   /** Atomic mirror into the authoritative desktop message skeleton, when this turn owns one. */
@@ -29,16 +38,26 @@ export type SessionTranscriptCommitIntent = Readonly<{
     thinking?: unknown
   }>
 }>
+export type SessionTranscriptContextSelection = Readonly<{ contextProtocol: 2; target: 'working' | 'failure' | 'park-baseline' }>
+/** Protocol 1 retains snapshot writes; protocol 2 records only the SDK's finite terminal selection. */
+export type SessionTranscriptCommitIntent = SessionTranscriptCommitIntentBase & (
+  | Readonly<{ protocol?: 1; messages: readonly Readonly<Record<string, unknown>>[]; contextSelection?: SessionTranscriptContextSelection }>
+  | Readonly<{ protocol: 2; contextSelection: SessionTranscriptContextSelection; messages?: never }>
+)
 
 export interface HistoryPort {
   appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult>
   read(invocationId: string): Promise<HistorySnapshot>
+  prepareTransitionState?(snapshot: HistorySnapshot): Promise<void>
+  findByIdempotencyKey?(invocationId: string, idempotencyKey: string): Promise<HistoryEvent | undefined>
 }
 
 /** Serializes concurrent event producers for one invocation into a contiguous append stream. */
 export class InvocationHistoryWriter {
   private tail: Promise<void> = Promise.resolve()
   private version?: number
+  private schemaVersion?: number
+  private initialized = false
 
   get currentVersion(): number | undefined { return this.version }
   async currentOrPersistedVersion(): Promise<number> {
@@ -73,20 +92,26 @@ export class InvocationHistoryWriter {
   ): Promise<InvocationHistoryAppendResult> {
     if (!events.length) return Promise.reject(new HistoryBatchError('history append must not be empty'))
     const operation = this.tail.then(async () => {
-      const snapshot = await this.history.read(this.identity.invocationId)
-      const writerVersion = this.version ?? snapshot.version
+      const snapshot = !this.initialized ? await this.history.read(this.identity.invocationId) : undefined
+      if (snapshot) {
+        await this.history.prepareTransitionState?.(snapshot)
+        if (this.version === undefined) this.version = snapshot.version
+        if (this.schemaVersion === undefined) this.schemaVersion = snapshot.schemaVersion
+        this.initialized = true
+      }
+      const writerVersion = this.version ?? snapshot!.version
       if (requiredVersion !== undefined && writerVersion !== requiredVersion) throw new HistoryVersionConflict(requiredVersion, writerVersion)
       const expectedVersion = requiredVersion ?? writerVersion
-      if (snapshot.version !== expectedVersion) throw new HistoryVersionConflict(expectedVersion, snapshot.version)
+      if (snapshot && snapshot.version !== expectedVersion) throw new HistoryVersionConflict(expectedVersion, snapshot.version)
       if (events.length === 1 && events[0]?.kind === 'provider-attempt-result') {
         const payload = events[0].payload as { requestId?: unknown; attempt?: unknown }
         if (typeof payload.requestId === 'string' && Number.isInteger(payload.attempt)) {
           const key = `${this.identity.invocationId}:provider-attempt:${payload.requestId}:${payload.attempt}`
-          const previous = snapshot.events.find((event) => event.idempotencyKey === key)
+          const previous = snapshot?.events.find((event) => event.idempotencyKey === key) ?? await this.history.findByIdempotencyKey?.(this.identity.invocationId, key)
           if (previous) {
             if (previous.kind !== 'provider-attempt-result' || stable(previous.payload) !== stable(events[0].payload)) throw new HistoryIdempotencyConflict(key)
-            this.version = snapshot.version
-            return { version: snapshot.version, duplicate: true, events: [previous] }
+            if (snapshot) this.version = snapshot.version
+            return { version: this.version!, duplicate: true, events: [previous] }
           }
         }
       }
@@ -100,7 +125,7 @@ export class InvocationHistoryWriter {
           invocationId: this.identity.invocationId,
           turnId: this.identity.turnId,
           sequence,
-          schemaVersion: this.identity.schemaVersion ?? snapshot.schemaVersion,
+          schemaVersion: this.identity.schemaVersion ?? this.schemaVersion!,
           eventId: `${this.identity.invocationId}:history:${sequence}`,
           idempotencyKey: attemptPayload && typeof attemptPayload.requestId === 'string' && Number.isInteger(attemptPayload.attempt)
             ? `${this.identity.invocationId}:provider-attempt:${attemptPayload.requestId}:${attemptPayload.attempt}`
@@ -111,9 +136,16 @@ export class InvocationHistoryWriter {
       })
       const result = await this.history.appendBatch(batch, expectedVersion, transcriptCommit)
       this.version = result.version
+      this.initialized = true
       return { ...result, events: batch }
     })
-    this.tail = operation.then(() => undefined, () => undefined)
+    this.tail = operation.then(() => undefined, () => {
+      // A rejected append may have committed despite a lost response; force a narrow cold read
+      // before another append so a locally cached version never skips an external write.
+      this.version = undefined
+      this.schemaVersion = undefined
+      this.initialized = false
+    })
     return operation
   }
 }
@@ -217,6 +249,10 @@ export function validateHistoryBatch(events: readonly HistoryEvent[]): void {
       throw new HistoryBatchError('history sequence and schema version must be positive integers')
     }
     try {
+      if ((event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted') && event.payload && typeof event.payload === 'object') {
+        const protocol = (event.payload as { contextProtocol?: unknown }).contextProtocol
+        if (protocol !== undefined && protocol !== 2) throw new Error('unsupported context protocol')
+      }
       const invalidPath = firstNonCanonicalPath(event.payload)
       if (invalidPath) throw new Error(`payload contains a non-canonical value at ${invalidPath}`)
       const serializedPayload = JSON.stringify(event.payload)
@@ -275,7 +311,14 @@ export function validateHistoryTransition(previous: readonly HistoryEvent[], inc
       checkpointId?: unknown; workflowRevision?: unknown; checkpointRef?: unknown; message?: { toolCalls?: readonly { id?: unknown }[] }
       targetInvocationId?: unknown; unresolvedEffectIds?: unknown; acceptedAt?: unknown; unknownEffectId?: unknown; toolName?: unknown; inputHash?: unknown
       approvedAt?: unknown; approvalEventId?: unknown; consumedAt?: unknown; trustedResolution?: unknown; evidence?: unknown
+      contextProtocol?: unknown
     } : undefined
+    if (event.kind === 'invocation-context-committed' && payload?.contextProtocol !== undefined) {
+      if (payload.contextProtocol !== 2) throw new HistoryBatchError('unsupported context protocol')
+    }
+    if (event.kind === 'transcript-compacted' && payload?.contextProtocol !== undefined && payload.contextProtocol !== 2) {
+      throw new HistoryBatchError('unsupported context protocol')
+    }
     if (pendingUnknownRetryStart && (event.kind !== 'tool-call-started' || payload?.toolName !== pendingUnknownRetryStart.toolName || payload?.inputHash !== pendingUnknownRetryStart.inputHash)) {
       throw new HistoryBatchError('unknown effect retry consumption must be atomically followed by its matching tool start')
     }
@@ -394,6 +437,117 @@ export function validateHistoryTransition(previous: readonly HistoryEvent[], inc
   }
 }
 
+/** Build the compact transition state after validating a cold history prefix once. */
+export function createHistoryTransitionState(previous: readonly HistoryEvent[]): HistoryTransitionState {
+  if (previous.length) validateHistoryTransition([], previous)
+  return reduceTransitionState({
+    invocationId: previous[0]?.invocationId ?? '', turnId: previous[0]?.turnId ?? '', terminalKind: null,
+    pendingToolCalls: [], pendingApprovals: [], approvalIdentityByPendingId: [], deferredTodoIds: [], unconsumedRetryApprovals: []
+  }, previous)
+}
+
+/** Validate and summarize only the current batch; the input state is never mutated. */
+export function advanceHistoryTransitionState(state: HistoryTransitionState, incoming: readonly HistoryEvent[]): HistoryTransitionState {
+  if (incoming.length === 0) return cloneTransitionState(state)
+  if (state.terminalKind) throw new HistoryBatchError('cannot append after a terminal invocation event')
+  const prior = syntheticTransitionPrefix(state)
+  validateHistoryTransition(prior, incoming)
+  return reduceTransitionState(state, incoming)
+}
+
+function cloneTransitionState(state: HistoryTransitionState): HistoryTransitionState {
+  return {
+    invocationId: state.invocationId, turnId: state.turnId, terminalKind: state.terminalKind,
+    pendingToolCalls: [...state.pendingToolCalls], pendingApprovals: [...state.pendingApprovals],
+    approvalIdentityByPendingId: state.approvalIdentityByPendingId.map(([id, identity]) => [id, identity] as const),
+    deferredTodoIds: [...state.deferredTodoIds],
+    unconsumedRetryApprovals: state.unconsumedRetryApprovals.map(([id, approval]) => [id, { ...approval }] as const)
+  }
+}
+
+function syntheticTransitionPrefix(state: HistoryTransitionState): HistoryEvent[] {
+  if (!state.invocationId || !state.turnId) return []
+  let sequence = 0
+  const base = (kind: HistoryEvent['kind'], payload: unknown, eventId = `transition-state:${sequence + 1}`): HistoryEvent => ({
+    eventId, idempotencyKey: `transition-state:idem:${sequence + 1}`, invocationId: state.invocationId,
+    turnId: state.turnId, sequence: ++sequence, schemaVersion: 1, kind, payload
+  })
+  const events: HistoryEvent[] = []
+  // Preserve stream ownership even when the transition state has no pending obligations.
+  events.push(base('approval-updated', { transitionStateAnchor: true }))
+  for (const todoId of state.deferredTodoIds) {
+    const pendingId = `deferred:${todoId}`
+    events.push(base('approval-waiting', { toolCallId: pendingId }))
+    events.push(base('approval-deferred', {
+      toolCallId: pendingId, todoId, invocationId: state.invocationId,
+      checkpointId: `transition-state:${todoId}`, workflowRevision: 1
+    }))
+  }
+  const identities = new Map(state.approvalIdentityByPendingId)
+  for (const pendingId of state.pendingApprovals) {
+    const identity = identities.get(pendingId)
+    events.push(base('approval-waiting', identity
+      ? { toolCallId: pendingId, approvalId: identity, answerer: 'user', reasonCode: 'transition-state', requestedAt: 0 }
+      : { approvalId: pendingId }))
+  }
+  for (const toolCallId of state.pendingToolCalls) events.push(base('tool-call-started', { toolCallId }))
+  for (const [approvalEventId, approval] of state.unconsumedRetryApprovals) {
+    events.push(base('unknown-effect-retry-approved', {
+      targetInvocationId: state.invocationId, unknownEffectId: `transition-state:${approvalEventId}`,
+      toolName: approval.toolName, inputHash: approval.inputHash, approvedAt: 0
+    }, approvalEventId))
+  }
+  return events
+}
+
+function reduceTransitionState(state: HistoryTransitionState, events: readonly HistoryEvent[]): HistoryTransitionState {
+  const pendingToolCalls = new Set(state.pendingToolCalls)
+  const pendingApprovals = new Set(state.pendingApprovals)
+  const approvalIdentityByPendingId = new Map(state.approvalIdentityByPendingId)
+  const deferredTodoIds = new Set(state.deferredTodoIds)
+  const unconsumedRetryApprovals = new Map(state.unconsumedRetryApprovals.map(([id, approval]) => [id, { ...approval }]))
+  let terminalKind = state.terminalKind
+  for (const event of events) {
+    const payload = event.payload && typeof event.payload === 'object' ? event.payload as Record<string, any> : {}
+    if (event.kind === 'model-response-committed') {
+      for (const call of payload.message?.toolCalls ?? []) if (typeof call.id === 'string' && call.id.trim()) pendingToolCalls.add(call.id)
+    }
+    if (event.kind === 'tool-call-started' && typeof payload.toolCallId === 'string' && payload.toolCallId.trim()) pendingToolCalls.add(payload.toolCallId)
+    if (['tool-call-finished', 'tool-call-not-dispatched', 'tool-call-deferred'].includes(event.kind) && typeof payload.toolCallId === 'string') pendingToolCalls.delete(payload.toolCallId)
+    const pendingId = typeof payload.toolCallId === 'string' ? payload.toolCallId
+      : typeof payload.approvalId === 'string' ? payload.approvalId : event.eventId
+    if (event.kind === 'approval-waiting') {
+      pendingApprovals.add(pendingId)
+      if (typeof payload.approvalId === 'string' && ['answerer', 'reasonCode', 'requestedAt'].some((key) => key in payload)) {
+        approvalIdentityByPendingId.set(pendingId, payload.approvalId)
+      }
+    }
+    if (event.kind === 'approval-resolved') {
+      const id = typeof payload.toolCallId === 'string' ? payload.toolCallId : payload.approvalId
+      if (typeof id === 'string') { pendingApprovals.delete(id); approvalIdentityByPendingId.delete(id) }
+    }
+    if (event.kind === 'approval-deferred' && typeof payload.toolCallId === 'string') {
+      pendingApprovals.delete(payload.toolCallId); approvalIdentityByPendingId.delete(payload.toolCallId)
+      pendingToolCalls.delete(payload.toolCallId)
+      if (typeof payload.todoId === 'string') deferredTodoIds.add(payload.todoId)
+    }
+    if (event.kind === 'unknown-effect-retry-approved' && typeof payload.toolName === 'string' && typeof payload.inputHash === 'string') {
+      unconsumedRetryApprovals.set(event.eventId, { toolName: payload.toolName, inputHash: payload.inputHash })
+    }
+    if (event.kind === 'unknown-effect-retry-consumed' && typeof payload.approvalEventId === 'string') unconsumedRetryApprovals.delete(payload.approvalEventId)
+    if (TERMINAL_INVOCATION_EVENTS.has(event.kind)) terminalKind = event.kind
+  }
+  const byId = [...approvalIdentityByPendingId].sort(([a], [b]) => a.localeCompare(b))
+  const retryApprovals = [...unconsumedRetryApprovals].sort(([a], [b]) => a.localeCompare(b))
+  return {
+    invocationId: state.invocationId || events[0]?.invocationId || '',
+    turnId: state.turnId || events[0]?.turnId || '', terminalKind,
+    pendingToolCalls: [...pendingToolCalls].sort(), pendingApprovals: [...pendingApprovals].sort(),
+    approvalIdentityByPendingId: byId, deferredTodoIds: [...deferredTodoIds].sort(),
+    unconsumedRetryApprovals: retryApprovals
+  }
+}
+
 /** Parked or in-flight work is never resumed as executable after a process restart. */
 export function rebuildInvocationStates(snapshot: HistorySnapshot): Map<string, RebuiltInvocationState> {
   let state: RebuiltInvocationState | undefined
@@ -479,5 +633,10 @@ export class MemoryHistory implements HistoryPort {
   async read(invocationId: string): Promise<HistorySnapshot> {
     const stream = this.streams.get(invocationId) ?? { schemaVersion: this.schemaVersion, events: [] }
     return { invocationId, version: stream.events.length, schemaVersion: stream.schemaVersion, events: structuredClone(stream.events) }
+  }
+
+  async findByIdempotencyKey(invocationId: string, idempotencyKey: string): Promise<HistoryEvent | undefined> {
+    const event = this.streams.get(invocationId)?.events.find((item) => item.idempotencyKey === idempotencyKey)
+    return event ? structuredClone(event) : undefined
   }
 }

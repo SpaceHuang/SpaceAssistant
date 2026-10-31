@@ -5,6 +5,7 @@ import {
   HistoryCorruptionError,
   invocationTerminalStatusMatches,
   rebuildInvocationStates,
+  createHistoryTransitionState,
   validateHistoryTransition,
   validateHistoryBatch,
   type HistoryAppendResult,
@@ -27,7 +28,7 @@ import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibilit
 import { decodeTerminalOutcome } from './terminalOutcome'
 import { classifySessionHistoryRepairFailure } from './sessionHistoryRecoveryDiagnostics'
 import { logAgentEvent } from '../agentLogger/agentLogger'
-import { canonicalSessionTranscriptEvents, foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
+import { canonicalSessionTranscriptEvents, restoreLegacyCanonicalSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
@@ -532,6 +533,15 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   async appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult> {
+    validateHistoryBatch(events)
+    const invocationId = events[0].invocationId
+    const streamState = this.conn.prepare(`SELECT version,transition_state_version,transition_state_json
+      FROM agent_history_streams WHERE invocation_id=?`).get(invocationId) as {
+        version: number; transition_state_version: number | null; transition_state_json: string | null
+      } | undefined
+    if (streamState && streamState.version > 0 && streamState.transition_state_version === null && streamState.transition_state_json === null) {
+      await this.prepareTransitionState(this.readSync(invocationId))
+    }
     const locationKeys = [...new Set(events.flatMap((event) => {
       const sidecar = isRecord(event.payload) ? event.payload.sessionLedger : undefined
       const location = isRecord(sidecar) ? sidecar.location : undefined
@@ -565,7 +575,7 @@ export class SqliteAgentHistory implements HistoryPort {
       : undefined
     const storedEvents = this.spillStore ? await Promise.all(events.map((event) => this.spillLargeCanonicalPayload(event))) : events
     let storedTranscriptJson: string | undefined
-    if (this.spillStore && transcriptCommit) {
+    if (this.spillStore && transcriptCommit && transcriptCommit.protocol !== 2) {
       const transcriptJson = JSON.stringify(transcriptCommit.messages)
       if (Buffer.byteLength(transcriptJson, 'utf8') > 64 * 1024) {
         try {
@@ -761,9 +771,27 @@ export class SqliteAgentHistory implements HistoryPort {
         return appended
       }
       if (!this.sessionId || transcriptCommit.sessionId !== this.sessionId) throw new HistoryBatchError('terminal transcript commit session identity mismatch')
+      if (transcriptCommit.protocol === 2 && (!transcriptCommit.contextSelection || transcriptCommit.messages !== undefined)) {
+        throw new HistoryBatchError('protocol 2 transcript intent must contain only a finite context selection')
+      }
       const terminal = events.length === 1 ? events[0] : undefined
       if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(terminal.kind)) {
         throw new HistoryBatchError('session transcript commit intent requires one terminal History event')
+      }
+      if (transcriptCommit.contextSelection) {
+        const payload = terminal.payload && typeof terminal.payload === 'object'
+          ? terminal.payload as { contextSelection?: unknown }
+          : undefined
+        const selection = payload?.contextSelection && typeof payload.contextSelection === 'object'
+          ? payload.contextSelection as { contextProtocol?: unknown; target?: unknown }
+          : undefined
+        const expectedTarget = terminal.kind === 'invocation-completed' ? 'working'
+          : terminal.kind === 'invocation-parked' ? 'park-baseline' : 'failure'
+        if (transcriptCommit.contextSelection.contextProtocol !== 2 ||
+          transcriptCommit.contextSelection.target !== expectedTarget ||
+          selection?.contextProtocol !== 2 || selection.target !== expectedTarget) {
+          throw new HistoryBatchError('terminal context selection does not match the atomic transcript intent')
+        }
       }
       const outcomeMatchesTerminal = terminal.kind === 'invocation-completed' ? transcriptCommit.outcome === 'completed'
         : terminal.kind === 'invocation-failed' ? transcriptCommit.outcome === 'failed' || transcriptCommit.outcome === 'timed_out'
@@ -782,7 +810,10 @@ export class SqliteAgentHistory implements HistoryPort {
       }
       const committed = commitSessionTranscriptInTransaction(this.conn, {
         sessionId: transcriptCommit.sessionId, turnId: terminal.turnId, baseVersion: transcriptCommit.baseVersion,
-        outcome: transcriptCommit.outcome, messages: transcriptCommit.messages,
+        outcome: transcriptCommit.outcome,
+        ...(transcriptCommit.protocol === 2
+          ? { protocol: 2 as const, contextSelection: transcriptCommit.contextSelection }
+          : { messages: transcriptCommit.messages }),
         ...(transcriptCommit.executionLease ? { executionLease: transcriptCommit.executionLease } : {}),
         ...(storedTranscriptJson ? { storedMessagesJson: storedTranscriptJson } : {}), now: this.now()
       })
@@ -875,8 +906,9 @@ export class SqliteAgentHistory implements HistoryPort {
         const last = streamRows.at(-1)!
         snapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq, commitOrder: last.commit_order, messages })
       }
-      const folded = foldClaudeSessionSnapshots(snapshots)
-      const canonical = toCanonicalModelMessages(folded)
+      const restored = restoreLegacyCanonicalSessionSnapshots(snapshots, snapshots.length)
+      const folded = restored.messages
+      const canonical = [...restored.context.committed]
       if (JSON.stringify(projectChatBodyV1(canonical as never)) !== JSON.stringify(projectChatBodyV1(legacyMessages as never))) return { kind: 'unavailable', reason: 'legacy-mismatch' }
       const watermark = rows.at(-1)!
       const anchor = this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id
@@ -937,7 +969,7 @@ export class SqliteAgentHistory implements HistoryPort {
         const last = streamRows.at(-1)!
         snapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq, commitOrder: last.commit_order, messages })
       }
-      const folded = foldClaudeSessionSnapshots(snapshots)
+      const folded = restoreLegacyCanonicalSessionSnapshots(snapshots, snapshots.length).messages
       const watermark = rows.at(-1)!
       const anchor = this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id FROM agent_history_events
         WHERE session_id=? AND session_seq=?`).get(sessionId, watermark.session_seq) as
@@ -1406,8 +1438,73 @@ export class SqliteAgentHistory implements HistoryPort {
     return this.readSync(invocationId)
   }
 
+  async prepareTransitionState(snapshot: HistorySnapshot): Promise<void> {
+    let candidate = snapshot
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const current = this.conn.prepare(`SELECT version,schema_version,session_id,transition_state_version,transition_state_json
+        FROM agent_history_streams WHERE invocation_id=?`).get(candidate.invocationId) as {
+          version: number; schema_version: number; session_id: string | null
+          transition_state_version: number | null; transition_state_json: string | null
+        } | undefined
+      const observedGeneration = this.sessionId
+        ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
+        : undefined
+      if (current && current.version === candidate.version && current.schema_version === candidate.schemaVersion &&
+        (!this.sessionId || current.session_id === this.sessionId) &&
+        (candidate.sessionGeneration === undefined || candidate.sessionGeneration === observedGeneration) &&
+        current.transition_state_version === 1 && current.transition_state_json !== null) return
+      if (current && (current.transition_state_version !== null || current.transition_state_json !== null) &&
+        !(current.transition_state_version === 1 && current.transition_state_json !== null)) {
+        throw new HistoryBatchError('HISTORY_TRANSITION_STATE_UNSUPPORTED')
+      }
+      const state = createHistoryTransitionState(candidate.events)
+      const stale = runInTransaction(this.conn, () => {
+        const stream = this.conn.prepare(`SELECT invocation_id,version,schema_version,session_id,transition_state_version,transition_state_json
+          FROM agent_history_streams WHERE invocation_id=?`).get(candidate.invocationId) as {
+            invocation_id: string; version: number; schema_version: number; session_id: string | null
+            transition_state_version: number | null; transition_state_json: string | null
+          } | undefined
+        if (candidate.version === 0 && !stream) return false
+        const liveGeneration = this.sessionId
+          ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
+          : undefined
+        if (!stream || stream.version !== candidate.version || stream.schema_version !== candidate.schemaVersion ||
+          (this.sessionId && stream.session_id !== this.sessionId) ||
+          (candidate.sessionGeneration !== undefined && candidate.sessionGeneration !== liveGeneration)) return true
+        if (stream.transition_state_version === 1 && stream.transition_state_json !== null) return false
+        if (stream.transition_state_version !== null || stream.transition_state_json !== null) {
+          throw new HistoryBatchError('HISTORY_TRANSITION_STATE_UNSUPPORTED')
+        }
+        const updated = this.conn.prepare(`UPDATE agent_history_streams SET transition_state_version=1,transition_state_json=?
+          WHERE invocation_id=? AND version=? AND transition_state_version IS NULL AND transition_state_json IS NULL`)
+          .run(JSON.stringify(state), candidate.invocationId, candidate.version) as { changes: number | bigint }
+        return Number(updated.changes) !== 1
+      })
+      if (!stale) return
+      if (attempt === 0) {
+        candidate = this.readSync(snapshot.invocationId)
+        continue
+      }
+    }
+    throw new HistoryBatchError('HISTORY_TRANSITION_STATE_PREPARE_STALE')
+  }
+
+  async findByIdempotencyKey(invocationId: string, idempotencyKey: string): Promise<HistoryEvent | undefined> {
+    const row = this.conn.prepare(`SELECT e.event_id,e.idempotency_key,e.invocation_id,e.turn_id,e.sequence,e.schema_version,e.kind,e.payload_json
+      FROM agent_history_events e JOIN agent_history_streams s ON s.invocation_id=e.invocation_id
+      WHERE e.invocation_id=? AND e.idempotency_key=?${this.sessionId ? ' AND s.session_id=?' : ''}`)
+      .get(...(this.sessionId ? [invocationId, idempotencyKey, this.sessionId] : [invocationId, idempotencyKey])) as {
+        event_id: string; idempotency_key: string; invocation_id: string; turn_id: string; sequence: number; schema_version: number; kind: HistoryEvent['kind']; payload_json: string
+      } | undefined
+    return row ? { eventId: row.event_id, idempotencyKey: row.idempotency_key, invocationId: row.invocation_id, turnId: row.turn_id,
+      sequence: row.sequence, schemaVersion: row.schema_version, kind: row.kind, payload: JSON.parse(row.payload_json) } : undefined
+  }
+
   /** Synchronous read for startup coordinators whose recovery contract is intentionally synchronous. */
   readSync(invocationId: string): HistorySnapshot {
+    const readGeneration = this.sessionId
+      ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
+      : undefined
     // Compatibility adapter: callers holding an accepted requestId can still read its
     // canonical turn stream. Exact stream IDs always win for legacy records.
     const exactStream = this.conn.prepare('SELECT invocation_id, version, schema_version, session_id FROM agent_history_streams WHERE invocation_id = ?').get(invocationId) as StreamRow | undefined
@@ -1470,7 +1567,12 @@ export class SqliteAgentHistory implements HistoryPort {
     }
     try { validateHistoryTransition([], events) }
     catch (error) { throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error)) }
-    return { invocationId: stream?.invocation_id ?? invocationId, version: stream?.version ?? 0, schemaVersion: stream?.schema_version ?? this.schemaVersion, events }
+    const sessionGeneration = this.sessionId
+      ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
+      : undefined
+    if (readGeneration !== sessionGeneration) throw new HistoryBatchError('HISTORY_SESSION_GENERATION_CHANGED_DURING_READ')
+    return { invocationId: stream?.invocation_id ?? invocationId, version: stream?.version ?? 0, schemaVersion: stream?.schema_version ?? this.schemaVersion,
+      events, ...(sessionGeneration ? { sessionGeneration } : {}) }
   }
 
   /** Reads one committed, session-owned event without hydrating its containing invocation. */

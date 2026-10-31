@@ -35,6 +35,7 @@ export * from './scheduler'
 export * from './resourceLock'
 export * from './confirmationCommit'
 export * from './history'
+export { applyContextEvent, beginContextTurn, createContextSelectionIntent, restoreLegacySessionContextSnapshot, restoreSessionContext, selectContextCommit, type ContextOutcome, type ContextSelection, type ContextSelectionIntent, type SessionContextEvent, type SessionContextState } from './sessionContext'
 export type {
   JsonValue,
   ContextScope,

@@ -15,14 +15,14 @@ import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src
 import { runMigrations } from '../database/migrations'
 import { advanceProcessGeneration } from '../database/processGeneration'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
-import { runInTransaction } from '../database/transaction'
+import { runInTransaction, TransactionCommitUnknownError } from '../database/transaction'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { reconcileTerminalContentSegments, SqliteAgentHistory } from './sqliteAgentHistory'
 import { toCanonicalModelMessages } from './canonicalHistory'
 import { createCanonicalSessionSnapshotFoldSession } from './canonicalHistory'
 import { CREATE_TABLES_SQL } from '../database/schema'
 import { ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from '../sessionEvents'
-import { claimSessionExecution, markSessionExecutionStarted, releaseSessionExecution } from '../database/sessionTranscript'
+import { claimSessionExecution, markSessionExecutionStarted, readSessionTranscript, releaseSessionExecution } from '../database/sessionTranscript'
 import { createMemoryAppDb, createTempDatabase, seedValidProjectionScope } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
@@ -57,6 +57,79 @@ function expectApiRouteScopesInvalid(db: ReturnType<typeof createMemoryAppDb>, s
 }
 
 describe('SqliteAgentHistory', () => {
+  it('persists and advances transition state without replaying old event rows on a hot append', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    await history.appendBatch([{
+      invocationId: 'incremental-state', turnId: 'incremental-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'state-started', idempotencyKey: 'state-started', kind: 'tool-call-started', payload: { toolCallId: 'tool-a' }
+    }], 0)
+    const stored = conn.prepare('SELECT transition_state_version,transition_state_json FROM agent_history_streams WHERE invocation_id=?')
+      .get('incremental-state') as { transition_state_version: number; transition_state_json: string }
+    expect(stored.transition_state_version).toBe(1)
+    expect(JSON.parse(stored.transition_state_json)).toMatchObject({ pendingToolCalls: ['tool-a'], turnId: 'incremental-turn' })
+
+    let legacyReplayQueries = 0
+    const originalPrepare = conn.prepare.bind(conn)
+    vi.spyOn(conn, 'prepare').mockImplementation((sql, ...args) => {
+      if (typeof sql === 'string' && sql.includes('FROM agent_history_events WHERE invocation_id = ? ORDER BY sequence ASC')) legacyReplayQueries += 1
+      return originalPrepare(sql, ...args)
+    })
+    await history.appendBatch([{
+      invocationId: 'incremental-state', turnId: 'incremental-turn', sequence: 2, schemaVersion: 1,
+      eventId: 'state-finished', idempotencyKey: 'state-finished', kind: 'tool-call-finished', payload: { toolCallId: 'tool-a' }
+    }], 1)
+
+    expect(legacyReplayQueries).toBe(0)
+    const updatedState = conn.prepare('SELECT transition_state_json FROM agent_history_streams WHERE invocation_id=?')
+      .get('incremental-state') as { transition_state_json: string }
+    expect(JSON.parse(updatedState.transition_state_json)).toMatchObject({ pendingToolCalls: [] })
+    conn.close()
+  })
+
+  it('rejects a non-canonical transition state instead of silently trusting it', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    await history.appendBatch([{
+      invocationId: 'corrupt-transition-state', turnId: 'corrupt-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'corrupt-started', idempotencyKey: 'corrupt-started', kind: 'tool-call-started', payload: { toolCallId: 'tool-a' }
+    }], 0)
+    const row = conn.prepare('SELECT transition_state_json FROM agent_history_streams WHERE invocation_id=?')
+      .get('corrupt-transition-state') as { transition_state_json: string }
+    const corrupt = JSON.parse(row.transition_state_json) as { pendingToolCalls: string[] }
+    corrupt.pendingToolCalls.push('tool-a')
+    conn.prepare('UPDATE agent_history_streams SET transition_state_json=? WHERE invocation_id=?')
+      .run(JSON.stringify(corrupt), 'corrupt-transition-state')
+
+    await expect(history.appendBatch([{
+      invocationId: 'corrupt-transition-state', turnId: 'corrupt-turn', sequence: 2, schemaVersion: 1,
+      eventId: 'corrupt-finished', idempotencyKey: 'corrupt-finished', kind: 'tool-call-finished', payload: { toolCallId: 'tool-a' }
+    }], 1)).rejects.toThrow('HISTORY_TRANSITION_STATE_CORRUPT')
+    expect(conn.prepare('SELECT version FROM agent_history_streams WHERE invocation_id=?').get('corrupt-transition-state'))
+      .toEqual({ version: 1 })
+    conn.close()
+  })
+
+  it('rebuilds a legacy stream state from a cold snapshot and rechecks session generation', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'transition-state-prepare', model: 'test' })
+    const conn = getDbConnection(db)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([event('legacy-state-start', 1)], 0)
+    conn.prepare('UPDATE agent_history_streams SET transition_state_version=NULL,transition_state_json=NULL WHERE invocation_id=?').run('inv-1')
+    const staleSnapshot = await history.read('inv-1')
+    conn.prepare('UPDATE sessions SET generation=? WHERE id=?').run('generation-after-read', session.id)
+
+    await history.prepareTransitionState(staleSnapshot)
+
+    expect(conn.prepare('SELECT transition_state_version FROM agent_history_streams WHERE invocation_id=?').get('inv-1'))
+      .toEqual({ transition_state_version: 1 })
+    const prepared = JSON.parse((conn.prepare('SELECT transition_state_json FROM agent_history_streams WHERE invocation_id=?')
+      .get('inv-1') as { transition_state_json: string }).transition_state_json)
+    expect(prepared).toMatchObject({ invocationId: 'inv-1', turnId: 'turn-1' })
+    db.close()
+  })
+
   it('retires the legacy transcript cache reader and writer from History', () => {
     const db = createMemoryAppDb()
     const history = new SqliteAgentHistory(getDbConnection(db))
@@ -1662,6 +1735,52 @@ describe('SqliteAgentHistory', () => {
     temp.cleanup()
   })
 
+  it.each([
+    ['receipt insert', `CREATE TRIGGER fail_v2_terminal_receipt BEFORE INSERT ON session_turn_commit_receipts
+      WHEN NEW.session_id='atomic-terminal-v2-receipt-failure' BEGIN SELECT RAISE(ABORT, 'injected protocol 2 receipt failure'); END`, 'injected protocol 2 receipt failure'],
+    ['message mirror update', `CREATE TRIGGER fail_v2_terminal_mirror BEFORE UPDATE ON messages
+      WHEN OLD.id='atomic-v2-assistant' AND NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'injected protocol 2 mirror failure'); END`, 'injected protocol 2 mirror failure']
+  ])('rolls back a protocol 2 canonical terminal, selection, lease and mirror when %s fails', async (_stage, triggerSql, failure) => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-terminal-v2-receipt-failure'
+    const turnId = 'atomic-terminal-v2-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'atomic-v2-owner' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'atomic-v2-owner', generation: owner.generation })
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-v2-assistant',?,'assistant','legacy checkpoint','streaming',1,10,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?, 'atomic-v2-request', ?, 'atomic-v2-assistant','executing',1,1,0)`).run(turnId, sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const invocationId = 'atomic-terminal-v2-invocation'
+    const acceptedUser = { role: 'user', id: 'atomic-v2-user', content: 'accepted' }
+    await history.appendBatch([{ ...event('atomic-v2-context', 1), invocationId, turnId, kind: 'invocation-context-committed', payload: {
+      contextProtocol: 2, baseVersion: 0, inputMessages: [acceptedUser], failureInputMessages: [acceptedUser],
+      messages: [acceptedUser], scope: { kind: 'session', sessionId }, system: ''
+    } }], 0)
+    conn.exec(triggerSql)
+    const terminal: HistoryEvent = { ...event('atomic-v2-terminal', 2), invocationId, turnId,
+      kind: 'invocation-completed', payload: { status: 'completed', contextSelection: { contextProtocol: 2, target: 'working' } } }
+
+    await expect(history.appendBatch([terminal], 1, { sessionId, baseVersion: 0, outcome: 'completed', protocol: 2,
+      contextSelection: { contextProtocol: 2, target: 'working' },
+      executionLease: { sessionId, turnId, ownerId: 'atomic-v2-owner', generation: owner.generation },
+      messageMirror: { messageId: 'atomic-v2-assistant', status: 'completed', content: 'canonical answer' }
+    })).rejects.toThrow(failure)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get(terminal.eventId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT version,status FROM session_transcript_checkpoints WHERE session_id=?').get(sessionId)).toBeUndefined()
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'executing' })
+    expect(conn.prepare('SELECT status FROM session_execution_queue WHERE session_id=? AND turn_id=?').get(sessionId, turnId)).toEqual({ status: 'executing' })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('atomic-v2-assistant'))
+      .toEqual({ content: 'legacy checkpoint', status: 'streaming' })
+    db.close()
+  })
+
   it('rolls back the canonical terminal event if its atomic transcript receipt fails', async () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
@@ -1769,6 +1888,158 @@ describe('SqliteAgentHistory', () => {
     expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('outcome-mismatch-terminal')).toEqual({ count: 0 })
     expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('outcome-mismatch-assistant'))
       .toEqual({ content: 'answer', status: 'streaming' })
+    db.close()
+  })
+
+  it('rejects a protocol 2 context selection that disagrees with the atomic intent before publishing any participant', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'terminal-context-selection-mismatch'
+    const turnId = 'terminal-context-selection-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'process' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'process', generation: owner.generation })
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const terminal: HistoryEvent = { ...event('selection-mismatch-terminal-event', 1), invocationId: 'selection-mismatch-invocation', turnId,
+      kind: 'invocation-completed', payload: { status: 'completed', contextSelection: { contextProtocol: 2, target: 'failure' } } }
+
+    await expect(history.appendBatch([terminal], 0, {
+      sessionId, baseVersion: 0, outcome: 'completed', contextSelection: { contextProtocol: 2, target: 'working' },
+      messages: [{ role: 'assistant', content: 'done' }]
+    })).rejects.toThrow('terminal context selection does not match the atomic transcript intent')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('selection-mismatch-terminal-event')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'executing' })
+    expect(conn.prepare('SELECT status FROM session_execution_queue WHERE session_id=?').get(sessionId)).toEqual({ status: 'executing' })
+    db.close()
+  })
+
+  it('atomically accepts a protocol 2 terminal intent without carrying transcript messages', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'terminal-context-selection-v2'
+    const turnId = 'terminal-context-selection-v2-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'process' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'process', generation: owner.generation })
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const selection = { contextProtocol: 2 as const, target: 'working' as const }
+    const acceptedUser = { role: 'user' as const, id: 'selection-v2-user', content: 'accepted question' }
+    const context: HistoryEvent = { ...event('selection-v2-context-event', 1), invocationId: 'selection-v2-invocation', turnId,
+      kind: 'invocation-context-committed', payload: { contextProtocol: 2, baseVersion: 0, invocationId: 'selection-v2-invocation',
+        inputMessages: [acceptedUser], failureInputMessages: [acceptedUser], messages: [acceptedUser],
+        scope: { kind: 'session', sessionId }, system: '' } }
+    const terminal: HistoryEvent = { ...event('selection-v2-terminal-event', 2), invocationId: 'selection-v2-invocation', turnId,
+      kind: 'invocation-completed', payload: { status: 'completed', contextSelection: selection } }
+
+    await history.appendBatch([context], 0)
+    await expect(history.appendBatch([terminal], 1, {
+      sessionId, baseVersion: 0, outcome: 'completed', protocol: 2, contextSelection: selection
+    })).resolves.toMatchObject({ version: 2 })
+    expect(conn.prepare('SELECT messages_json,context_selection_json FROM session_transcript_entries WHERE session_id=?')
+      .get(sessionId)).toEqual({ messages_json: '[]', context_selection_json: '{"contextProtocol":2,"target":"working"}' })
+    expect(conn.prepare('SELECT payload_sha256,next_version FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId))
+      .toMatchObject({ next_version: 1, payload_sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'transcript_committed' })
+    expect(readSessionTranscript(db, sessionId)).toMatchObject({ version: 1, lastTurnId: turnId, status: 'ready', messages: [acceptedUser] })
+
+    const secondUser = { role: 'user' as const, id: 'selection-v2-second-user', content: 'follow-up question' }
+    const secondHistory = new SqliteAgentHistory(conn, 1, () => 200, sessionId)
+    const secondContext: HistoryEvent = { ...event('selection-v2-second-context', 1), invocationId: 'selection-v2-second-invocation',
+      turnId: 'selection-v2-second-turn', kind: 'invocation-context-committed', payload: {
+        contextProtocol: 2, baseVersion: 1, invocationId: 'selection-v2-second-invocation',
+        inputMessages: [secondUser], failureInputMessages: [secondUser], messages: [acceptedUser, secondUser],
+        scope: { kind: 'session', sessionId }, system: ''
+      } }
+    const secondTerminal: HistoryEvent = { ...event('selection-v2-second-terminal', 2), invocationId: 'selection-v2-second-invocation',
+      turnId: 'selection-v2-second-turn', kind: 'invocation-completed', payload: { status: 'completed', contextSelection: selection } }
+    await secondHistory.appendBatch([secondContext], 0)
+    await secondHistory.appendBatch([secondTerminal], 1, {
+      sessionId, baseVersion: 1, outcome: 'completed', protocol: 2, contextSelection: selection
+    })
+    expect(readSessionTranscript(db, sessionId, { version: 1 })).toMatchObject({ version: 1, lastTurnId: turnId, messages: [acceptedUser] })
+    expect(readSessionTranscript(db, sessionId, { version: 2 })).toMatchObject({ version: 2, lastTurnId: 'selection-v2-second-turn', messages: [acceptedUser, secondUser] })
+    db.close()
+  })
+
+  it('reads a protocol 2 manual-review replacement by its exact receipt version', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'reviewed-v2-version-reader'
+    const turnId = 'reviewed-v2-repair-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const reviewed = [{ role: 'user' as const, id: 'reviewed-user', content: 'operator-reviewed input' }]
+    const selection = { contextProtocol: 2 as const, target: 'working' as const }
+    const seed: HistoryEvent = { ...event('reviewed-v2-seed', 1), invocationId: 'reviewed-v2-invocation', turnId,
+      kind: 'invocation-context-committed', payload: { messages: reviewed, replacement: { reason: 'manual-review', messages: reviewed } } }
+    const terminal: HistoryEvent = { ...event('reviewed-v2-terminal', 2), invocationId: 'reviewed-v2-invocation', turnId,
+      kind: 'invocation-completed', payload: { status: 'completed', contextSelection: selection } }
+    await history.appendBatch([seed], 0)
+    await history.appendBatch([terminal], 1, { sessionId, baseVersion: 0, outcome: 'completed', protocol: 2, contextSelection: selection })
+
+    expect(readSessionTranscript(db, sessionId, { version: 1 })).toMatchObject({
+      version: 1, lastTurnId: turnId, status: 'ready', messages: reviewed
+    })
+    db.close()
+  })
+
+  it('reconciles a V2 terminal COMMIT acknowledgement loss from its receipt and exact idempotent retry', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'terminal-context-selection-unknown'
+    const turnId = 'terminal-context-selection-unknown-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const executionOwner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'terminal-unknown-owner' })
+    if (!executionOwner.acquired) throw new Error('test setup could not claim execution')
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'terminal-unknown-owner', generation: executionOwner.generation })
+    const durableHistory = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const acceptedUser = { role: 'user', id: 'selection-unknown-user', content: 'question' }
+    const context: HistoryEvent = { ...event('selection-unknown-context', 1), invocationId: 'selection-unknown-invocation', turnId,
+      kind: 'invocation-context-committed', payload: { contextProtocol: 2, baseVersion: 0,
+        inputMessages: [acceptedUser], failureInputMessages: [acceptedUser], messages: [acceptedUser],
+        scope: { kind: 'session', sessionId }, system: '' } }
+    await durableHistory.appendBatch([context], 0)
+    const selection = { contextProtocol: 2 as const, target: 'working' as const }
+    const terminal: HistoryEvent = { ...event('selection-unknown-terminal', 2), invocationId: 'selection-unknown-invocation', turnId,
+      kind: 'invocation-completed', payload: { status: 'completed', contextSelection: selection } }
+    const intent = { sessionId, baseVersion: 0, outcome: 'completed' as const, protocol: 2 as const, contextSelection: selection,
+      executionLease: { sessionId, turnId, ownerId: 'terminal-unknown-owner', generation: executionOwner.generation } }
+    let loseCommitAck = true
+    const uncertainConn = {
+      prepare: conn.prepare.bind(conn),
+      exec(sql: string) {
+        conn.exec(sql)
+        if (sql === 'COMMIT' && loseCommitAck) {
+          loseCommitAck = false
+          throw new Error('V2 terminal commit acknowledgement lost after durable commit')
+        }
+      }
+    } as unknown as DatabaseSync
+    const uncertainHistory = new SqliteAgentHistory(uncertainConn, 1, () => 100, sessionId)
+
+    await expect(uncertainHistory.appendBatch([terminal], 1, intent)).rejects.toBeInstanceOf(TransactionCommitUnknownError)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get(terminal.eventId)).toEqual({ count: 1 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?').get(sessionId, turnId))
+      .toEqual({ count: 1 })
+    expect(readSessionTranscript(db, sessionId)).toMatchObject({ version: 1, lastTurnId: turnId, messages: [acceptedUser] })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'transcript_committed' })
+    expect(conn.prepare('SELECT status FROM session_execution_queue WHERE session_id=? AND turn_id=?').get(sessionId, turnId))
+      .toEqual({ status: 'transcript_committed' })
+
+    await expect(durableHistory.appendBatch([terminal], 1, intent)).resolves.toMatchObject({ version: 2, duplicate: true })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get(terminal.eventId)).toEqual({ count: 1 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?').get(sessionId, turnId))
+      .toEqual({ count: 1 })
+    expect(conn.prepare('SELECT version,last_turn_id,status FROM session_transcript_checkpoints WHERE session_id=?').get(sessionId))
+      .toEqual({ version: 1, last_turn_id: turnId, status: 'ready' })
     db.close()
   })
 

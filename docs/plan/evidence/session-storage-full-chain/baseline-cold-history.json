@@ -1,0 +1,165 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "cold-history",
+        "count": 1,
+        "bodyBytes": 1048576
+      },
+      {
+        "kind": "cold-history",
+        "count": 10,
+        "bodyBytes": 10485760
+      },
+      {
+        "kind": "cold-history",
+        "count": 100,
+        "bodyBytes": 104857600
+      }
+    ],
+    "samples": 30,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "cold-history",
+        "count": 1,
+        "bodyBytes": 1048576,
+        "samples": 30,
+        "descriptorJsonBytes": 25380,
+        "sourceTruthSpillBytes": 1048576,
+        "sqlRowRead": {
+          "p50Ms": 0.022,
+          "p95Ms": 0.033,
+          "maxMs": 0.055,
+          "totalMs": 0.751
+        },
+        "jsonParse": {
+          "p50Ms": 0.001,
+          "p95Ms": 0.004,
+          "maxMs": 0.004,
+          "totalMs": 0.051
+        },
+        "sourceReadAndHydrate": {
+          "p50Ms": 1.81,
+          "p95Ms": 2.566,
+          "maxMs": 3.693,
+          "totalMs": 57.44
+        },
+        "historyReduction": {
+          "p50Ms": 0.007,
+          "p95Ms": 0.018,
+          "maxMs": 0.317,
+          "totalMs": 0.588
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 1.843,
+          "p95Ms": 2.608,
+          "maxMs": 4.059
+        }
+      },
+      {
+        "kind": "cold-history",
+        "count": 10,
+        "bodyBytes": 10485760,
+        "samples": 30,
+        "descriptorJsonBytes": 25410,
+        "sourceTruthSpillBytes": 10485760,
+        "sqlRowRead": {
+          "p50Ms": 0.071,
+          "p95Ms": 0.093,
+          "maxMs": 0.098,
+          "totalMs": 2.148
+        },
+        "jsonParse": {
+          "p50Ms": 0.007,
+          "p95Ms": 0.009,
+          "maxMs": 0.01,
+          "totalMs": 0.205
+        },
+        "sourceReadAndHydrate": {
+          "p50Ms": 23.563,
+          "p95Ms": 27.9,
+          "maxMs": 31.254,
+          "totalMs": 715.96
+        },
+        "historyReduction": {
+          "p50Ms": 0.017,
+          "p95Ms": 0.024,
+          "maxMs": 0.031,
+          "totalMs": 0.543
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 23.653,
+          "p95Ms": 28.008,
+          "maxMs": 31.378
+        }
+      },
+      {
+        "kind": "cold-history",
+        "count": 100,
+        "bodyBytes": 104857600,
+        "samples": 30,
+        "descriptorJsonBytes": 25440,
+        "sourceTruthSpillBytes": 104857600,
+        "sqlRowRead": {
+          "p50Ms": 0.101,
+          "p95Ms": 0.146,
+          "maxMs": 0.148,
+          "totalMs": 3.208
+        },
+        "jsonParse": {
+          "p50Ms": 0.009,
+          "p95Ms": 0.011,
+          "maxMs": 0.016,
+          "totalMs": 0.292
+        },
+        "sourceReadAndHydrate": {
+          "p50Ms": 261.4,
+          "p95Ms": 342.848,
+          "maxMs": 355.121,
+          "totalMs": 8232.912
+        },
+        "historyReduction": {
+          "p50Ms": 0.02,
+          "p95Ms": 0.038,
+          "maxMs": 0.043,
+          "totalMs": 0.733
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 261.57,
+          "p95Ms": 342.929,
+          "maxMs": 355.276
+        }
+      }
+    ],
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "loadToDidFinishLoadMs": 182.741,
+      "consoleErrors": [],
+      "rootPresent": true,
+      "childCount": 1,
+      "nodeCount": 190,
+      "waitForRootMs": 1
+    }
+  },
+  "mode": "baseline",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}

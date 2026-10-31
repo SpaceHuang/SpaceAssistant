@@ -1,0 +1,102 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "tools",
+        "count": 10,
+        "bodyBytes": 40960
+      },
+      {
+        "kind": "tools",
+        "count": 100,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "tools",
+        "count": 1000,
+        "bodyBytes": 4096000
+      }
+    ],
+    "samples": 30,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "tools",
+        "count": 10,
+        "bodyBytes": 40960,
+        "samples": 30,
+        "historyReadCalls": 300,
+        "historyRowsRead": 1350,
+        "historyBytesRead": 5861580,
+        "historyReadDurationMs": 26.106,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 223.018,
+        "historyBytesWritten": 1302890,
+        "p50Ms": 7.441,
+        "p95Ms": 9.97,
+        "maxMs": 25.415
+      },
+      {
+        "kind": "tools",
+        "count": 100,
+        "bodyBytes": 409600,
+        "samples": 30,
+        "historyReadCalls": 3000,
+        "historyRowsRead": 148500,
+        "historyBytesRead": 645674730,
+        "historyReadDurationMs": 1070.347,
+        "historyAppendCalls": 3000,
+        "historyAppendDurationMs": 2746.009,
+        "historyBytesWritten": 13047980,
+        "p50Ms": 132.976,
+        "p95Ms": 139.783,
+        "maxMs": 142.265
+      },
+      {
+        "kind": "tools",
+        "count": 1000,
+        "bodyBytes": 4096000,
+        "samples": 30,
+        "historyReadCalls": 30000,
+        "historyRowsRead": 14985000,
+        "historyBytesRead": 65257277730,
+        "historyReadDurationMs": 107814.06,
+        "historyAppendCalls": 30000,
+        "historyAppendDurationMs": 74922.798,
+        "historyBytesWritten": 130687070,
+        "p50Ms": 7479.495,
+        "p95Ms": 7984.872,
+        "maxMs": 8399.487
+      }
+    ],
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "loadToDidFinishLoadMs": 186.059,
+      "consoleErrors": [],
+      "rootPresent": true,
+      "childCount": 1,
+      "nodeCount": 190,
+      "waitForRootMs": 3
+    }
+  },
+  "mode": "baseline",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}

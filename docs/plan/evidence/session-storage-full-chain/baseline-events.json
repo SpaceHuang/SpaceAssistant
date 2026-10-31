@@ -1,0 +1,189 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "events",
+        "count": 100,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "events",
+        "count": 100,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "events",
+        "count": 400,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 1638400
+      },
+      {
+        "kind": "events",
+        "count": 400,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 1638400
+      },
+      {
+        "kind": "events",
+        "count": 800,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 3276800
+      },
+      {
+        "kind": "events",
+        "count": 800,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 3276800
+      }
+    ],
+    "samples": 30,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "events",
+        "count": 100,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 409600,
+        "samples": 30,
+        "historyReadCalls": 300,
+        "historyRowsRead": 13500,
+        "historyBytesRead": 58724790,
+        "historyReadDurationMs": 105.619,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 660.181,
+        "historyBytesWritten": 13049830,
+        "p50Ms": 24.384,
+        "p95Ms": 32.022,
+        "maxMs": 42.746
+      },
+      {
+        "kind": "events",
+        "count": 100,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 409600,
+        "samples": 30,
+        "historyReadCalls": 300,
+        "historyRowsRead": 43500,
+        "historyBytesRead": 189430810,
+        "historyReadDurationMs": 286.1,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 764.06,
+        "historyBytesWritten": 13078510,
+        "p50Ms": 36.369,
+        "p95Ms": 46.195,
+        "maxMs": 49.934
+      },
+      {
+        "kind": "events",
+        "count": 400,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 1638400,
+        "samples": 30,
+        "historyReadCalls": 1200,
+        "historyRowsRead": 234000,
+        "historyBytesRead": 1018234590,
+        "historyReadDurationMs": 1517.278,
+        "historyAppendCalls": 1200,
+        "historyAppendDurationMs": 3115.698,
+        "historyBytesWritten": 52224730,
+        "p50Ms": 171.945,
+        "p95Ms": 179.496,
+        "maxMs": 183.349
+      },
+      {
+        "kind": "events",
+        "count": 400,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 1638400,
+        "samples": 30,
+        "historyReadCalls": 1200,
+        "historyRowsRead": 714000,
+        "historyBytesRead": 3108246910,
+        "historyReadDurationMs": 4964.976,
+        "historyAppendCalls": 1200,
+        "historyAppendDurationMs": 4753.91,
+        "historyBytesWritten": 52253410,
+        "p50Ms": 393.467,
+        "p95Ms": 406.654,
+        "maxMs": 438.481
+      },
+      {
+        "kind": "events",
+        "count": 800,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 3276800,
+        "samples": 30,
+        "historyReadCalls": 2400,
+        "historyRowsRead": 948000,
+        "historyBytesRead": 4125700990,
+        "historyReadDurationMs": 6341.247,
+        "historyAppendCalls": 2400,
+        "historyAppendDurationMs": 7733.337,
+        "historyBytesWritten": 104457930,
+        "p50Ms": 556.566,
+        "p95Ms": 581.984,
+        "maxMs": 594.825
+      },
+      {
+        "kind": "events",
+        "count": 800,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 3276800,
+        "samples": 30,
+        "historyReadCalls": 2400,
+        "historyRowsRead": 2868000,
+        "historyBytesRead": 12485960110,
+        "historyReadDurationMs": 22507.285,
+        "historyAppendCalls": 2400,
+        "historyAppendDurationMs": 15523.563,
+        "historyBytesWritten": 104540700,
+        "p50Ms": 1579.963,
+        "p95Ms": 1706.004,
+        "maxMs": 1789.522
+      }
+    ],
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "loadToDidFinishLoadMs": 207.559,
+      "consoleErrors": [],
+      "rootPresent": true,
+      "childCount": 1,
+      "nodeCount": 190,
+      "waitForRootMs": 4.0999999940395355
+    }
+  },
+  "mode": "baseline",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}

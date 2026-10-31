@@ -4,7 +4,8 @@ import { type SafetyDenyReason, type SafetyGatePort } from './safetyGate'
 import { ToolExecutionAfterDispatchError, ToolExecutionRejectedError, type PermitBoundToolExecutionPort } from './toolExecutionPort'
 import { createHash } from 'node:crypto'
 import { surfaceItemIdentities, surfaceItemIdentity } from './contextIdentity'
-import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort, type HistorySnapshot } from './history'
+import { applyContextEvent, beginContextTurn, createApprovalSystemMessage, createContextSelectionIntent, restoreSessionContext, selectContextCommit, type SessionContextState } from './sessionContext'
+import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort, type HistorySnapshot, type SessionExecutionLease } from './history'
 import { createContextRegistrar, createInvocationContextPort, type ContextFrame, type ContextItem, type ContextProjectionCommitter, type ContextScope } from './context'
 import { ResourceLockRegistry } from './resourceLock'
 import { CapacityLedger, type CapacityReservation } from './capacity'
@@ -339,26 +340,6 @@ function isTurnTimeoutSignal(signal?: AbortSignal): boolean {
   return signal?.aborted === true && signal.reason === AGENT_TURN_TIMEOUT_ABORT_REASON
 }
 
-async function sessionTranscriptMessagesForFailure(input: RunAgentTurnInput): Promise<readonly CanonicalTurnMessage[] | undefined> {
-  const baseline = input.sessionTranscriptFailureMessages
-  if (!baseline || !input.history) return baseline
-  let snapshot: HistorySnapshot
-  try { snapshot = await input.history.read(input.invocationId) }
-  catch { return undefined }
-  const compacted = [...snapshot.events].reverse().find((event) => event.kind === 'transcript-compacted')
-  if (!compacted) return baseline
-  const payload = compacted.payload && typeof compacted.payload === 'object' ? compacted.payload as { messages?: unknown } : undefined
-  if (!Array.isArray(payload?.messages) || !payload.messages.every((message) => message && typeof message === 'object' && !Array.isArray(message))) return undefined
-  const messages = payload.messages as CanonicalTurnMessage[]
-  if (!input.requiredUserMessage) return undefined
-  const required = JSON.stringify(input.requiredUserMessage.message)
-  let acceptedIndex = -1
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (JSON.stringify(messages[index]) === required) { acceptedIndex = index; break }
-  }
-  return acceptedIndex >= 0 ? messages.slice(0, acceptedIndex + 1) : undefined
-}
-
 function abortErrorForSignal(signal?: AbortSignal): AgentTurnCancelledError | AgentTurnTimedOutError {
   return isTurnTimeoutSignal(signal) ? new AgentTurnTimedOutError() : new AgentTurnCancelledError()
 }
@@ -462,6 +443,10 @@ export type RunAgentTurnInput = {
   sessionLedgerForInvocationTerminal?(terminal: { status: 'completed' | 'failed' | 'interrupted'; turnId: string; sessionEventReason?: 'completed' | 'failed' | 'interrupted' | 'cancelled' }): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionTranscriptBaseVersion?: number
   sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]
+  /** Internal isolated path; default product callers keep protocol 1 until P1-08. */
+  sessionTranscriptCommitProtocol?: 2
+  /** Internal isolated path; SQLite rechecks this identity with claim and queue in the terminal transaction. */
+  sessionTranscriptExecutionLease?: SessionExecutionLease
   planContextReplacement?(input: Parameters<NonNullable<AgentTurnPorts['planContextReplacement']>>[0]): ReturnType<NonNullable<AgentTurnPorts['planContextReplacement']>>
   recoverProviderAttempt?(input: Parameters<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>[0]): ReturnType<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>
   recoverOutputLimit?(input: Parameters<NonNullable<AgentTurnPorts['recoverOutputLimit']>>[0]): ReturnType<NonNullable<AgentTurnPorts['recoverOutputLimit']>>
@@ -527,7 +512,9 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     }
   }
   const appendTerminalHistory = async (kind: HistoryEvent['kind'], payload: unknown, sessionLedger?: Record<string, unknown>, transcriptCommit?: import('./history').SessionTranscriptCommitIntent): Promise<void> => {
-    const persistedPayload = sessionLedger ? { ...(payload as Record<string, unknown>), sessionLedger } : payload
+    const persistedPayload = transcriptCommit?.contextSelection
+      ? { ...(payload as Record<string, unknown>), contextSelection: transcriptCommit.contextSelection, ...(sessionLedger ? { sessionLedger } : {}) }
+      : sessionLedger ? { ...(payload as Record<string, unknown>), sessionLedger } : payload
     try {
       await appendHistory([{ kind, payload: persistedPayload }], transcriptCommit)
     } catch (error) {
@@ -554,13 +541,19 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     }
   }
   let lastValidUsage: Extract<StreamChunk, { type: 'usage' }> | undefined
+  const contextRef: { current?: SessionContextState } = {}
   try {
-    const result = await runAgentTurnLoop(input, appendHistory, writer, (usage) => { lastValidUsage = usage })
+    const result = await runAgentTurnLoop(input, appendHistory, writer, (usage) => { lastValidUsage = usage }, contextRef)
     if (result.parked) {
       const terminalPayload = { status: 'parked' as const, reason: 'deferred-approval', todoId: result.parkedTodoId, outputText: result.text, usage: result.usage }
-      const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined && input.sessionTranscriptFailureMessages
+      const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined &&
+        (input.sessionTranscriptCommitProtocol === 2 || input.sessionTranscriptFailureMessages)
         ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: 'interrupted' as const,
-            messages: input.sessionTranscriptFailureMessages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[] }
+            ...(input.sessionTranscriptExecutionLease ? { executionLease: input.sessionTranscriptExecutionLease } : {}),
+            ...(input.sessionTranscriptCommitProtocol === 2
+              ? { protocol: 2 as const, contextSelection: createContextSelectionIntent({ kind: 'park' }) }
+              : { contextSelection: createContextSelectionIntent({ kind: 'park' }),
+                  messages: selectContextCommit(contextRef.current!, { kind: 'park' }).messages as readonly Readonly<Record<string, unknown>>[] }) }
         : undefined
       await appendTerminalHistory('invocation-parked', terminalPayload, undefined, transcriptCommit)
       return result
@@ -581,7 +574,11 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
       : undefined
     const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined
       ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: 'completed' as const,
-          messages: result.messages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[],
+          ...(input.sessionTranscriptExecutionLease ? { executionLease: input.sessionTranscriptExecutionLease } : {}),
+          ...(input.sessionTranscriptCommitProtocol === 2
+            ? { protocol: 2 as const, contextSelection: createContextSelectionIntent({ kind: 'completed' }) }
+            : { contextSelection: createContextSelectionIntent({ kind: 'completed' }),
+                messages: selectContextCommit(contextRef.current!, { kind: 'completed' }).messages as readonly Readonly<Record<string, unknown>>[] }),
           ...(input.assistantMessageId ? { messageMirror: {
             messageId: input.assistantMessageId, status: 'completed' as const, content: result.text,
             ...(completedThinkingContent ? { thinking: { content: completedThinkingContent, isVisible: true, startTime: Date.now() } } : {})
@@ -686,7 +683,10 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
         const transcriptOutcome: import('./history').SessionTranscriptCommitIntent['outcome'] = error instanceof AgentTurnCancelledError ? 'cancelled'
           : error instanceof AgentTurnTimedOutError ? 'timed_out'
           : status === 'interrupted' ? 'interrupted' : 'failed'
-        const failureMessages = await sessionTranscriptMessagesForFailure(input)
+        const failureMessages = contextRef.current ? (() => {
+          try { return selectContextCommit(contextRef.current!, { kind: 'failed' }).messages as readonly CanonicalTurnMessage[] }
+          catch { return undefined }
+        })() : input.sessionTranscriptFailureMessages
         const mirroredFailureMessage = input.assistantMessageId
           ? failureMessages?.find((message) => message.role === 'assistant' && message.id === input.assistantMessageId)
           : undefined
@@ -701,7 +701,11 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
           : ''
         const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined && failureMessages
           ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: transcriptOutcome,
-              messages: failureMessages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[],
+              ...(input.sessionTranscriptExecutionLease ? { executionLease: input.sessionTranscriptExecutionLease } : {}),
+              ...(input.sessionTranscriptCommitProtocol === 2
+                ? { protocol: 2 as const, contextSelection: createContextSelectionIntent({ kind: 'failed' }) }
+                : { contextSelection: createContextSelectionIntent({ kind: 'failed' }),
+                    messages: failureMessages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[] }),
               ...(input.assistantMessageId ? { messageMirror: {
                 messageId: input.assistantMessageId,
                 status: error instanceof AgentTurnCancelledError ? 'cancelled' as const : 'failed' as const,
@@ -750,6 +754,11 @@ async function ensureInitialHistoryContext(input: RunAgentTurnInput, call: Prepa
   await appendHistory([{
     kind: 'invocation-context-committed',
     payload: {
+      contextProtocol: 2,
+      baseVersion: input.sessionTranscriptBaseVersion ?? 0,
+      inputMessages: structuredClone(call.request.messages),
+      failureInputMessages: structuredClone(input.sessionTranscriptFailureMessages ?? call.request.messages),
+      scope: { kind: 'session', sessionId: input.sessionId ?? input.invocationId },
       messages: structuredClone(call.request.messages),
       requestSnapshot: canonicalRequestSnapshot(call),
       ...(requiredUserMessage
@@ -922,11 +931,32 @@ function checkpointIdentityFromPayload(payload: Record<string, unknown> | undefi
   return typeof messageId === 'string' && typeof replayIdentity === 'string' ? { messageId, replayIdentity } : undefined
 }
 
-async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendTurnHistory, writer: InvocationHistoryWriter | undefined, onAcceptedUsage: (usage: Extract<StreamChunk, { type: 'usage' }>) => void): Promise<AgentTurnResult> {
+async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendTurnHistory, writer: InvocationHistoryWriter | undefined, onAcceptedUsage: (usage: Extract<StreamChunk, { type: 'usage' }>) => void, contextRef: { current?: SessionContextState }): Promise<AgentTurnResult> {
   if (!Number.isInteger(input.maxModelTurns) || input.maxModelTurns <= 0) throw new Error('maxModelTurns must be a positive integer')
   if (!input.invocationId.trim()) throw new Error('invocationId is required')
   const invocationId = input.invocationId
   const messages: CanonicalTurnMessage[] = structuredClone([...input.request.messages])
+  let sessionContext: SessionContextState = restoreSessionContext({ committedVersion: input.sessionTranscriptBaseVersion ?? 0, events: [] })
+  const setSessionContext = (next: SessionContextState) => { sessionContext = next; contextRef.current = next }
+  setSessionContext(beginContextTurn(sessionContext, {
+    invocationId, baseVersion: input.sessionTranscriptBaseVersion ?? 0,
+    inputMessages: messages, failureInputMessages: input.sessionTranscriptFailureMessages ?? messages,
+    ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}),
+    requestSystem: ''
+  }))
+  const commitCompactedRuntimeMessages = (next: readonly CanonicalTurnMessage[]) => {
+    const failureCut = input.requiredUserMessage ? next.findIndex((message) => JSON.stringify(message) === JSON.stringify(input.requiredUserMessage!.message)) : undefined
+    setSessionContext(applyContextEvent(sessionContext, { kind: 'transcript-compacted', messages: next, ...(failureCut !== undefined ? { failureCut } : {}) }))
+    messages.splice(0, messages.length, ...next.map((message) => structuredClone(message)))
+  }
+  const appendRuntimeMessage = (message: CanonicalTurnMessage) => {
+    messages.push(message)
+    if (message.role === 'tool') {
+      setSessionContext(applyContextEvent(sessionContext, { kind: 'tool-call-finished', toolCallId: message.toolCallId, message: message as Extract<CanonicalModelMessage, { role: 'tool' }> }))
+    } else {
+      setSessionContext(applyContextEvent(sessionContext, { kind: message.role === 'user' ? 'replay-message-committed' : 'model-response-committed', message }))
+    }
+  }
   const resourceLocks = input.resourceLocks ?? new ResourceLockRegistry()
   let text = ''
   let inputTokens = 0
@@ -963,7 +993,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       }
     },
     applyCommitted: ({ frame, epoch }) => {
-      messages.splice(0, messages.length, ...frame.items.map(({ message }) => structuredClone(message)))
+      commitCompactedRuntimeMessages(frame.items.map(({ message }) => message))
       activeWindowId = frame.windowId
       contextEpoch = epoch
     }
@@ -1274,12 +1304,15 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           }
         }] : []
         const compactedPayload = {
+          contextProtocol: 2,
           messages: recoveredMessages,
+          failureCut: input.requiredUserMessage ? recoveredMessages.findIndex((message) => JSON.stringify(message) === JSON.stringify(input.requiredUserMessage!.message)) : -1,
           inputFingerprint: createHash('sha256').update(JSON.stringify(messages)).digest('hex'),
           outputFingerprint: createHash('sha256').update(JSON.stringify(recoveredMessages)).digest('hex'),
           recoveryReason: recovery.reasonCode,
           ...(input.requiredUserMessage ? { requiredUserMessage: structuredClone(input.requiredUserMessage) } : {})
         }
+        if (input.requiredUserMessage && (compactedPayload.failureCut < 0 || recoveredMessages[compactedPayload.failureCut] === undefined)) throw new InvalidTurnBoundaryError('provider recovery did not preserve the required user message exactly')
         if (input.contextProjectionCommitter) {
           if (discarded.length) await appendHistory(discarded)
           const base = await invocationContextPort.readCurrent(contextScope)
@@ -1303,6 +1336,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           if (committed.status === 'commit-uncertain') throw new AgentTurnBoundaryProjectionError(committed.error)
           if (committed.status !== 'committed' && committed.status !== 'no-op') throw new InvalidTurnBoundaryError(`provider recovery context replacement ${committed.status}`)
         } else await appendHistory([...discarded, { kind: 'transcript-compacted', payload: compactedPayload }])
+        commitCompactedRuntimeMessages(recoveredMessages)
       }
       if (recovery.retryEvent) {
         if (input.observer?.criticalModelRequestProjection && !input.observer.onProviderRetry) {
@@ -1373,7 +1407,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         throw abortErrorForSignal(input.request.signal)
       }
       throwIfAborted(input.request.signal)
-      messages.splice(0, messages.length, ...recoveredMessages)
+      messages.splice(0, messages.length, ...recoveredMessages.map((message) => structuredClone(message)))
       requestTemplate = { ...requestTemplate, ...(recovery.requestPatch ?? {}) }
       baseRequestTemplate = { ...baseRequestTemplate, ...(recovery.requestPatch ?? {}) }
         providerAttempt += 1
@@ -1732,8 +1766,9 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         ? committedContent.length > 0
         : Array.isArray(committedContent) && committedContent.length > 0
       const hasCommittedToolCalls = committedMessage.role === 'assistant' && Boolean(committedMessage.toolCalls?.length)
-      if (hasCommittedAssistantContent || hasCommittedToolCalls) messages.push(committedMessage)
-      messages.push(...failedToolMessages, ...(recoveryMessage ? [structuredClone(recoveryMessage)] : []))
+      if (hasCommittedAssistantContent || hasCommittedToolCalls) appendRuntimeMessage(committedMessage)
+      for (const failedMessage of failedToolMessages) appendRuntimeMessage(failedMessage)
+      if (recoveryMessage) appendRuntimeMessage(structuredClone(recoveryMessage))
       outputRecoveryAttempts = recoveryAttempt
       const recoveryNotice = { attempt: recoveryAttempt, modelTurn: modelTurns, requestId: `${invocationId}:round:${modelTurns}`, toolCalls: toolCalls.map((tool) => ({ invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName, input: structuredClone(tool.input) })), willRetry: Boolean(recoveryMessage), toolCallErrorContent }
       const sessionLedgerEvents = committedRecoveryEvents.filter((event) => event.kind === 'tool-call-not-dispatched' && toolCalls.some((tool) => tool.toolCallId === (event.payload as { toolCallId?: unknown }).toolCallId) || event.kind === 'provider-retry-scheduled' && (event.payload as { requestId?: unknown }).requestId === recoveryNotice.requestId)
@@ -1815,10 +1850,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           if (result.status === 'commit-uncertain') throw new AgentTurnBoundaryProjectionError(result.error)
           if (result.status === 'committed') boundaryReplacedTranscript = true
         } else if (!input.history) {
-          messages.splice(0, messages.length, ...compacted)
+          commitCompactedRuntimeMessages(compacted)
           if (boundary.windowId) activeWindowId = boundary.windowId
         } else if (input.history && boundary.messages) {
-          messages.splice(0, messages.length, ...compacted)
+          commitCompactedRuntimeMessages(compacted)
           if (boundary.windowId) activeWindowId = boundary.windowId
           boundaryReplacedTranscript = true
         }
@@ -1828,7 +1863,13 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       contextPendingTools = priorCapture.pendingTools
     }
 
-    if (!boundaryReplacedTranscript) messages.push(committedMessage)
+    if (!boundaryReplacedTranscript) {
+      appendRuntimeMessage(committedMessage)
+    } else {
+      // A committed replacement already contains this model response in its complete output.
+      // commitCompactedRuntimeMessages already placed the replacement (including the response)
+      // in the shared state; do not replay the response a second time.
+    }
 
     if (toolCalls.length === 0) {
       const result = { text, messages, modelTurns, finishReason: collected.finish.reason, usage: { inputTokens, outputTokens, ...(cacheReadInputTokens ? { cacheReadInputTokens } : {}), ...(cacheCreationInputTokens ? { cacheCreationInputTokens } : {}) } }
@@ -2055,7 +2096,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           approvalId: activeDecision.confirmationId,
           approved,
           outcome: approvalOutcome,
-          ...(result.answerer ? { answerer: result.answerer } : {}),
+          answerer: result.answerer ?? activeDecision.answerer,
           ...(result.cause ? { cause: result.cause } : {}),
           ...(result.promptSendFailure ? { promptSendFailure: result.promptSendFailure } : {}),
           settledAt: Date.now()
@@ -2075,7 +2116,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           throwIfAborted(input.request.signal)
         }
         confirmation = { receipt: result.receipt, answerer: result.answerer ?? activeDecision.answerer }
-        if (confirmation.answerer === 'user') userApprovedToolCalls.add(tool.toolCallId)
+        if (confirmation.answerer === 'user') {
+          userApprovedToolCalls.add(tool.toolCallId)
+          setSessionContext(applyContextEvent(sessionContext, { kind: 'approval-resolved', toolCallId: tool.toolCallId, approved: true }))
+        }
         activeApprovalId = activeDecision.confirmationId
         }
       }
@@ -2223,7 +2267,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             throw new ToolDeniedError(reason, freshConfirmation.userMessage)
           }
           confirmation = { receipt: freshConfirmation.receipt, answerer: freshConfirmation.answerer ?? 'user' }
-          if (confirmation.answerer === 'user') userApprovedToolCalls.add(tool.toolCallId)
+          if (confirmation.answerer === 'user') {
+            userApprovedToolCalls.add(tool.toolCallId)
+            setSessionContext(applyContextEvent(sessionContext, { kind: 'approval-resolved', toolCallId: tool.toolCallId, approved: true }))
+          }
           activeApprovalId = authorization.confirmationId
           try {
             // The first recheck asked again because the previous approval no longer covered current facts.
@@ -2547,12 +2594,9 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       const result = settled!.status === 'fulfilled'
         ? settled!.value
         : deniedToolResults.get(tool?.toolCallId ?? '')!
-      messages.push(result)
+      appendRuntimeMessage(result)
       if (tool && userApprovedToolCalls.has(tool.toolCallId)) {
-        messages.push({
-          role: 'system',
-          content: 'Trusted approval record: the user approved the immediately preceding tool call through the confirmation flow before dispatch. Do not describe that call as unconfirmed or as having bypassed confirmation.'
-        })
+        appendRuntimeMessage(createApprovalSystemMessage())
       }
     }
     dispatchedToolRounds += 1

@@ -1,6 +1,7 @@
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import type { CanonicalContentBlock, CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
+import { restoreLegacySessionContextSnapshot, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 
 type UnknownRecord = Record<string, unknown>
 
@@ -285,6 +286,19 @@ export function foldClaudeSessionSnapshots(snapshots: readonly CanonicalSessionS
     session.fold(snapshot)
   }
   return session.messages()
+}
+
+/** Convert legacy full snapshots at the storage boundary, then hand state ownership to the shared reducer. */
+export function restoreLegacyCanonicalSessionSnapshots(snapshots: readonly CanonicalSessionSnapshot[], committedVersion: number):
+  Readonly<{ messages: ClaudeChatMessageWithBlocks[]; context: SessionContextState }> {
+  const messages = foldClaudeSessionSnapshots(snapshots)
+  const context = restoreLegacySessionContextSnapshot({
+    invocationId: `legacy-canonical-session:${snapshots.at(-1)?.sessionId ?? 'empty'}`,
+    turnId: `legacy-canonical-version:${committedVersion}`,
+    committedVersion,
+    messages: toCanonicalModelMessages(messages)
+  })
+  return { messages, context }
 }
 
 export type CanonicalSessionSnapshotFoldSession = Readonly<{

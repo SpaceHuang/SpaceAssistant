@@ -2370,6 +2370,28 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 117
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  // v117 → v118: reserve nullable per-stream transition-state columns. Existing streams
+  // remain explicitly unprepared until the bounded recovery helper validates their history.
+  if (version === 117) runInTransaction(conn, () => {
+    if (hasTable(conn, 'agent_history_streams')) {
+      if (!hasColumn(conn, 'agent_history_streams', 'transition_state_version')) {
+        conn.exec('ALTER TABLE agent_history_streams ADD COLUMN transition_state_version INTEGER')
+      }
+      if (!hasColumn(conn, 'agent_history_streams', 'transition_state_json')) {
+        conn.exec('ALTER TABLE agent_history_streams ADD COLUMN transition_state_json TEXT')
+      }
+    }
+    version = 118
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v118 → v119: store protocol 2 context selection separately from legacy full snapshots.
+  if (version === 118) runInTransaction(conn, () => {
+    if (hasTable(conn, 'session_transcript_entries') && !hasColumn(conn, 'session_transcript_entries', 'context_selection_json')) {
+      conn.exec('ALTER TABLE session_transcript_entries ADD COLUMN context_selection_json TEXT')
+    }
+    version = 119
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {
