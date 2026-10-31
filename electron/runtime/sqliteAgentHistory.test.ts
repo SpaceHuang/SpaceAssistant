@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
+import { InvocationHistoryWriter } from '../../packages/agent-sdk/src/history'
 import { runAgentTurn } from '../../packages/agent-sdk/src/turn'
 import { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
 import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
@@ -57,6 +58,27 @@ function expectApiRouteScopesInvalid(db: ReturnType<typeof createMemoryAppDb>, s
 }
 
 describe('SqliteAgentHistory', () => {
+  // This regression exercises the production SQLite port without a remote model.
+  it('uses the real SQLite history port for cached hot appends and keyed provider replay', async () => {
+    const temp = createTempDatabase('sqlite-history-writer-count-')
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, () => 100)
+    const read = vi.spyOn(history, 'read')
+    const findByIdempotencyKey = vi.spyOn(history, 'findByIdempotencyKey')
+    const writer = new InvocationHistoryWriter(history, { invocationId: 'sqlite-writer-count', turnId: 'sqlite-writer-turn' })
+    await writer.append([{ kind: 'approval-updated', payload: { revision: 1 } }])
+    await writer.append([{ kind: 'approval-updated', payload: { revision: 2 } }])
+    const providerAttempt = { requestId: 'sqlite-writer-count:round:3', attempt: 1, physical: true,
+      attemptSource: { kind: 'initial' }, outcome: 'failed', errorClass: 'PROVIDER_NETWORK_ERROR', usage: { status: 'unreported' } }
+    await writer.append([{ kind: 'provider-attempt-result', payload: providerAttempt }])
+    const replay = await writer.append([{ kind: 'provider-attempt-result', payload: providerAttempt }])
+
+    expect(replay).toMatchObject({ duplicate: true, version: 3 })
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(findByIdempotencyKey).toHaveBeenCalledTimes(2)
+    expect(findByIdempotencyKey).toHaveBeenCalledWith('sqlite-writer-count', 'sqlite-writer-count:provider-attempt:sqlite-writer-count:round:3:1')
+    temp.cleanup()
+  })
+
   it('persists and advances transition state without replaying old event rows on a hot append', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
