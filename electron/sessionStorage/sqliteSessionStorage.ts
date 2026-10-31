@@ -8,7 +8,7 @@ import type { SessionStorage, SessionStorageHost, SessionStorageStartupCoordinat
 import { createSessionCommands } from './commands'
 import { createSessionQueries } from './queries'
 import { createSessionExecutionStore } from './execution'
-import { createSessionCommitService } from './application/sessionCommitService'
+import { createSessionCommitService } from './host/sessionCommitService'
 import { createSessionStorageContextRouter } from './contextPortRegistry'
 import { getSessionEventSink, notifySessionEventLedgerFailure, readCompactionReplay, readSessionEvents } from '../sessionEvents'
 import type { CompactionReplay } from '../../src/shared/compactionEvents'

@@ -1120,8 +1120,13 @@ describe('runImRemoteAgent', () => {
       const canonical = await new SqliteAgentHistory(getDbConnection(db)).read(turnId)
       expect(canonical.events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)))
         .toEqual([expect.objectContaining({ kind: 'invocation-failed' })])
-      expect(getDbConnection(db).prepare('SELECT outcome FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
-        .get(session.id, turnId)).toEqual({ outcome: 'failed' })
+      const receipt = getDbConnection(db).prepare('SELECT outcome,next_version FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+        .get(session.id, turnId) as { outcome: string; next_version: number }
+      expect(receipt.outcome).toBe('failed')
+      expect(readSessionTranscript(db, session.id, { version: receipt.next_version }))
+        .toMatchObject({ lastTurnId: turnId, status: 'ready', messages: expect.any(Array) })
+      expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+        .get(session.id, turnId)).toEqual({ count: 0 })
     } finally {
       db.close()
       setDefaultAgentRuntime(previousRuntime)

@@ -26,7 +26,7 @@ import type { HistoryEvent, HistoryPort } from '../../packages/agent-sdk/src/his
 import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
 import { createTurnCoordinatorStorage } from './coordinator'
-import { createSessionCommitService } from './application/sessionCommitService'
+import { createSessionCommitService } from './host/sessionCommitService'
 import { TurnRuntime, type TurnRuntimeOptions } from '../turnRuntime'
 import { cancelPendingAgentContinuation, claimAgentContinuation, createOrGetAgentContinuation, readAgentContinuationByRequest, readAgentContinuationByTarget, readAwaitingAgentContinuationBySource, readCancelledAgentContinuationBySource, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
 

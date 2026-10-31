@@ -44,6 +44,7 @@ vi.mock('../database', async (importOriginal) => {
 
 import { getDbConnection, openDatabase } from '../database'
 import { readAcceptedTurn } from '../database/acceptedTurnStorage'
+import { readSessionTranscript } from '../database/sessionTranscript'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { decodeTerminalOutcome } from '../runtime/terminalOutcome'
@@ -469,8 +470,13 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
         expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get('sess-approval-1'))
           .toEqual({ status: 'commit_uncertain' })
       } else {
-        expect(conn.prepare('SELECT outcome FROM session_transcript_entries WHERE session_id=? AND turn_id=?').get('sess-approval-1', accepted.turnId))
-          .toEqual({ outcome: 'failed' })
+        const receipt = conn.prepare('SELECT outcome,next_version FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+          .get('sess-approval-1', accepted.turnId) as { outcome: string; next_version: number }
+        expect(receipt.outcome).toBe('failed')
+        expect(readSessionTranscript(testDb, 'sess-approval-1', { version: receipt.next_version }))
+          .toMatchObject({ lastTurnId: accepted.turnId, status: 'ready', messages: expect.any(Array) })
+        expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+          .get('sess-approval-1', accepted.turnId)).toEqual({ count: 0 })
       }
     } finally {
       conn.exec('DROP TRIGGER fail_approval_injected')
