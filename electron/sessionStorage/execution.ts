@@ -461,6 +461,7 @@ function createSessionHistoryPort(db: AppDatabase, sessionId: string, requestBod
       return result
     },
     read: (invocationId: string) => history.read(invocationId),
+    readLatestEvent: (invocationId: string) => history.readLatestEvent(invocationId),
     findByIdempotencyKey: (invocationId: string, idempotencyKey: string) => history.findByIdempotencyKey(invocationId, idempotencyKey),
     prepareTransitionState: (snapshot: import('../../packages/agent-sdk/src/history').HistorySnapshot) => history.prepareTransitionState(snapshot),
     readLatestInvocationForSession: async (requestedSessionId: string, options?: { excludeInvocationId?: string; excludeInvocationIds?: readonly string[] }) => {

@@ -1,14 +1,12 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest'
+import { describe, expect, it, beforeEach } from 'vitest'
 import {
   getMaxParallelChatSessions,
-  mergeDbAndLive,
   routeAddMessage,
   routePatchMessage,
   removeLiveMessage,
   initLiveSessionFromStore,
   getLiveMessages,
-  clearLiveSession,
-  resolveSessionMessagesForApi
+  clearLiveSession
 } from './chatRunnerService'
 import { store } from '../store'
 import { setConfig } from '../store/configSlice'
@@ -77,37 +75,6 @@ describe('getMaxParallelChatSessions', () => {
   })
 })
 
-describe('mergeDbAndLive', () => {
-  it('returns db when live empty', () => {
-    const db = [baseMsg({ id: 'a', timestamp: 1 })]
-    expect(mergeDbAndLive(db, null)).toEqual(db)
-    expect(mergeDbAndLive(db, [])).toEqual(db)
-  })
-
-  it('overrides same id with live version', () => {
-    const db = [baseMsg({ id: 'a', content: 'db', timestamp: 1 })]
-    const live = [baseMsg({ id: 'a', content: 'live', timestamp: 1 })]
-    const merged = mergeDbAndLive(db, live)
-    expect(merged).toHaveLength(1)
-    expect(merged[0]?.content).toBe('live')
-  })
-
-  it('includes ids only in live', () => {
-    const db = [baseMsg({ id: 'a', timestamp: 1 })]
-    const live = [baseMsg({ id: 'a', timestamp: 1 }), baseMsg({ id: 'b', timestamp: 2 })]
-    const merged = mergeDbAndLive(db, live)
-    expect(merged.map((m) => m.id).sort()).toEqual(['a', 'b'])
-  })
-
-  it('sorts by timestamp', () => {
-    const db = [baseMsg({ id: 'late', timestamp: 10 })]
-    const live = [baseMsg({ id: 'early', timestamp: 2 })]
-    const merged = mergeDbAndLive(db, live)
-    expect(merged[0]?.id).toBe('early')
-    expect(merged[1]?.id).toBe('late')
-  })
-})
-
 describe('live context summary deltas', () => {
   beforeEach(() => resetContextHistorySummaryForTest())
 
@@ -167,27 +134,5 @@ describe('routeAddMessage parallel isolation', () => {
     clearLiveSession('s1')
     routeAddMessage('s1', baseMsg({ id: 'u2', sessionId: 's1', role: 'user', content: 'second', timestamp: 3 }))
     expect(getLiveMessages('s1')?.map((m) => m.id)).toEqual(['u2'])
-  })
-})
-
-describe('resolveSessionMessagesForApi', () => {
-  beforeEach(() => {
-    clearLiveSession('s1')
-    window.api = {
-      ...(window.api ?? {}),
-      chatGetMessages: vi.fn().mockResolvedValue([
-        baseMsg({ id: 'db-u1', sessionId: 's1', role: 'user', content: 'db', timestamp: 1 }),
-        baseMsg({ id: 'db-a1', sessionId: 's1', role: 'assistant', content: 'db-reply', timestamp: 2 })
-      ])
-    } as typeof window.api
-    store.dispatch(setSession('s1'))
-    store.dispatch(setMessages([]))
-  })
-
-  it('uses the canonical read and current live delta without merging Redux history', async () => {
-    clearLiveSession('s1')
-    routeAddMessage('s1', baseMsg({ id: 'live-u2', sessionId: 's1', role: 'user', content: 'live', timestamp: 3 }))
-    const rows = await resolveSessionMessagesForApi('s1')
-    expect(rows.map((m) => m.id)).toEqual(['db-u1', 'db-a1', 'live-u2'])
   })
 })

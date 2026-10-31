@@ -20,7 +20,7 @@ import { sendWeChatTextToUser } from './wechat/weChatReplyService'
 import { ButlerTaskScheduler } from './butler/taskScheduler'
 import { runButlerTask, type ButlerInvokerDeps } from './butler/butlerInvoker'
 import { syncAutomationTaskRunDeliveryStatuses } from './butler/taskStore'
-import { stagehandService } from './browser/stagehandService'
+import { createDeferredStagehandClose } from './startupDeferredModules'
 import { createRemoteAuthorizationEpochStore } from './remote/remoteAuthorizationEpochStore'
 import { remoteAuthorizationRegistry } from './remote/remoteAuthorizationRegistry'
 import { createDeferredTodoStore } from './confirmation/deferredTodoStore'
@@ -54,7 +54,6 @@ import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSq
   createSessionBodySourceBackfillTask, startSessionProjectionRevalidationDrain } from './sessionStorage/sqliteSessionStorage'
 import { projectionBuildSliceLogFields } from './sessionStorage/host/projectionBuildSliceLog'
 import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
-import { flushPendingSessionBackups } from './sessionBackupShutdown'
 import type { SessionStorage } from './sessionStorage/host/ports'
 import { signalChatCancel } from './chatCancelRegistry'
 import { cancelAllToolConfirmsForRequest } from './toolConfirmRegistry'
@@ -92,7 +91,7 @@ import { SCHEMA_META_KEYS } from './database/schema'
 import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
 import { scriptParserService, runSelfCheck, setInitFailureListener, setNotReadyParseListener } from './shell/scriptParserService'
 import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
-import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
+import { SessionBackupLifecycle } from './sessionBackupLifecycle'
 import { SessionBackupManager } from './sessionBackupManager'
 import { installProcessSafetyNet } from './processSafetyNet'
 import { setupAppMenu } from './menu'
@@ -100,6 +99,7 @@ import { createHostTranslator } from './i18n/hostTranslate'
 import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { measureStartupPhase } from './startupTiming'
+import { createStartupTaskBarrier } from './startupTaskBarrier'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
 import { projectRendererLongTaskMessage, projectRendererSessionSwitchTraceMessage } from './agentLogger/agentLogProjection'
 import { extractWebContentsConsoleMessage } from './consoleMessage'
@@ -211,6 +211,7 @@ let mainIpcReady = false
 let startupStatusWindow: BrowserWindow | null = null
 const processStartupStartedAt = performance.now()
 let initialRendererLoadReported = false
+const closeStagehandOnShutdown = createDeferredStagehandClose()
 
 async function showStartupStatus(message: string): Promise<void> {
   try {
@@ -277,8 +278,6 @@ function getTelemetryArtifactBuildId(): string | undefined {
     return undefined
   }
 }
-/** 模块级持有防抖备份管理器：退出流程 flush 挂起备份用（评审 2.2）。 */
-let sessionBackupManager: DebouncedSessionBackupManager | null = null
 /** Explicit process-level host reference used by shutdown tasks; cleared after shutdown settles. */
 let appSessionStorage: SessionStorage | null = null
 
@@ -306,18 +305,7 @@ export async function runShutdownCleanup(pendingTasks?: Set<string>): Promise<Sh
   beginSessionEventShutdown()
   const tasks: Array<[string, () => Promise<unknown>]> = [
     ['session-event-flush', flushAllSessionEventSinks],
-    ['session-backup-flush', async () => {
-      // 评审 2.2：退出前 flush 3s 防抖窗口内挂起的备份，并在数据库关闭前为临时写盘故障重试。
-      // 有界重试耗尽后记录失败，不让辅助备份阻止应用退出。
-      const mgr = sessionBackupManager
-      const db = appDb
-      const storage = appSessionStorage
-      if (!mgr || !db || !storage) return
-      await flushPendingSessionBackups(mgr, storage).catch((error) => {
-        console.warn('[sessionBackup] flush on quit failed:', error instanceof Error ? error.message : String(error))
-      })
-    }],
-    ['stagehand-close', () => stagehandService.closeAll()],
+    ['stagehand-close', closeStagehandOnShutdown],
     ['feishu-shutdown', shutdownFeishuServices],
     ['wechat-shutdown', shutdownWeChatServices]
   ]
@@ -472,9 +460,12 @@ app.whenReady().then(async () => {
   })
 
   await showStartupStatus('正在清理上次启动留下的临时文件…')
-  await cleanupMcpArtifactsOnStartup(app.getPath('userData')).catch((error) => {
+  const waitForMcpArtifactCleanup = createStartupTaskBarrier(
+    () => cleanupMcpArtifactsOnStartup(app.getPath('userData')),
+    (error) => {
     console.warn('[mcp] startup artifact cleanup failed:', error instanceof Error ? error.message : String(error))
-  })
+    }
+  )
 
   const dbPath = getDefaultDbPath(app.getPath('userData'))
   let db: ReturnType<typeof openDatabase>
@@ -486,6 +477,7 @@ app.whenReady().then(async () => {
     await measureStartupPhase('database.process-generation-fence', () => advanceProcessGeneration(getDbConnection(db)))
     remoteAuthorizationRegistry.bindPersistentEpochStore(createRemoteAuthorizationEpochStore(db))
   } catch (e) {
+    await waitForMcpArtifactCleanup()
     const msg = e instanceof Error ? e.message : String(e)
     closeStartupStatus()
     dialog.showErrorBox(
@@ -495,6 +487,7 @@ app.whenReady().then(async () => {
     app.quit()
     return
   }
+  await waitForMcpArtifactCleanup()
   appDb = db
   try {
     ensureImPolicySnapshotAtStartup(db)
@@ -940,19 +933,9 @@ app.whenReady().then(async () => {
   runShellDefaultEnableMigrationOnce(db)
   runStartupDecisionCacheCleanup(db)
 
-  const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState), (error, sessionId) => {
-    // 评审 1.2：防抖备份链失败只记日志——备份是辅助导出渠道，Windows 杀软/OneDrive 锁文件等
-    // 写盘失败不允许以 unhandledRejection 崩溃主进程。
-    console.warn(`[sessionBackup] scheduled backup failed for ${sessionId}:`, error instanceof Error ? error.message : String(error))
-  })
-  sessionBackupManager = backup
+  const backup = new SessionBackupLifecycle(new SessionBackupManager(workDirState))
   const activeSessionIds = new Set(sessionStorage.queries.listSessions().map((session) => session.id))
-  // 删除任务可能在切换 profile 前启动；启动恢复必须覆盖所有仍配置的根目录。
-  const cleanupRoots = Array.from(new Set(workDirManager.listProfiles().map((profile) => profile.path)))
   const isSessionActive = (sessionId: string) => Boolean(sessionStorage.queries.readSession(sessionId))
-  void Promise.all(cleanupRoots.map((root) => new SessionBackupManager(root).cleanupOrphanedBackups(activeSessionIds, isSessionActive))).catch((error) => {
-    console.warn('[sessionBackup] orphan cleanup failed:', error instanceof Error ? error.message : String(error))
-  })
   void cleanupOrphanedChatAttachments(app.getPath('userData'), activeSessionIds, isSessionActive).catch((error) => {
     console.warn('[chatAttachment] orphan cleanup failed:', error instanceof Error ? error.message : String(error))
   })

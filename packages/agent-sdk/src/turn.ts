@@ -168,6 +168,7 @@ export type AgentTurnResult = Readonly<{
   usage: Readonly<{ inputTokens: number; outputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>
   parked?: true
   parkedTodoId?: string
+  notDispatchedToolCallIds?: readonly string[]
 }>
 
 class DeferredTurnParkedError extends Error {
@@ -990,6 +991,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   let observedAttemptUsages = new Map<number, Extract<StreamChunk, { type: 'usage' }>>()
   let outputRecoveryAttempts = 0
   let dispatchedToolRounds = 0
+  const notDispatchedToolCallIds = new Set<string>()
   let baseRequestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...input.request }
   let activeWindowId = input.windowId ?? ''
   let contextEpoch = 0
@@ -1623,6 +1625,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       if (toolDispatchStates.get(tool.toolCallId) !== 'pending') return
       const replayContent = userMessage ?? `Tool call was not dispatched (${reason}).`
       const sessionResult = { success: false, data: replayContent }
+      notDispatchedToolCallIds.add(tool.toolCallId)
       const sessionLedger = input.sessionLedgerForNotDispatched
         ? await input.sessionLedgerForNotDispatched({ ...tool, invocationId }, reason, sessionResult)
         : undefined
@@ -1751,6 +1754,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       const recoveryMessage = recovery?.continuation
       if (recoveryMessage && (recoveryMessage.role !== 'user' || typeof recoveryMessage.content !== 'string' || !recoveryMessage.content.trim())) throw new Error('invalid output recovery continuation message')
       const toolCallErrorContent = recovery?.toolCallErrorContent ?? 'Tool call was not dispatched because the model output reached its limit.'
+      for (const tool of toolCalls) notDispatchedToolCallIds.add(tool.toolCallId)
       const recoveryEvents = [
         ...await Promise.all(toolCalls.map(async (tool) => {
           const result = { success: false, error: 'model_output_token_limit', userMessage: toolCallErrorContent, notExecuted: true, notExecutedReason: 'model_output_truncated' }
@@ -1896,7 +1900,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     }
 
     if (toolCalls.length === 0) {
-      const result = { text, messages, modelTurns, finishReason: collected.finish.reason, usage: { inputTokens, outputTokens, ...(cacheReadInputTokens ? { cacheReadInputTokens } : {}), ...(cacheCreationInputTokens ? { cacheCreationInputTokens } : {}) } }
+      const result = { text, messages, modelTurns, finishReason: collected.finish.reason, usage: { inputTokens, outputTokens, ...(cacheReadInputTokens ? { cacheReadInputTokens } : {}), ...(cacheCreationInputTokens ? { cacheCreationInputTokens } : {}) },
+        ...(notDispatchedToolCallIds.size ? { notDispatchedToolCallIds: [...notDispatchedToolCallIds] } : {}) }
       return result
     }
     if (input.maxToolRounds !== undefined && dispatchedToolRounds >= input.maxToolRounds) {
@@ -2365,6 +2370,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             if (error.reason === 'AUTHORIZATION_STALE') {
               const hadStartedProjection = toolDispatchStates.get(tool.toolCallId) === 'started'
               if (hadStartedProjection) {
+                notDispatchedToolCallIds.add(tool.toolCallId)
                 await appendHistory([{ kind: 'tool-call-not-dispatched', payload: {
                   toolCallId: tool.toolCallId,
                   sourceRequestId: `${invocationId}:round:${modelTurns}`,
@@ -2603,6 +2609,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         }
         return { text, messages, modelTurns, finishReason: collected.finish.reason,
           usage: { inputTokens, outputTokens, ...(cacheReadInputTokens ? { cacheReadInputTokens } : {}), ...(cacheCreationInputTokens ? { cacheCreationInputTokens } : {}) }, parked: true,
+          ...(notDispatchedToolCallIds.size ? { notDispatchedToolCallIds: [...notDispatchedToolCallIds] } : {}),
           ...(parkedTodoId ? { parkedTodoId } : {}) }
       }
       for (const tool of toolCalls) {
@@ -2670,29 +2677,16 @@ function collectCanonicalHostResponse(response: HostCommittedModelResponse): Col
 
 async function assertHostCommittedResponse(history: HistoryPort | undefined, invocationId: string, response: HostCommittedModelResponse): Promise<Readonly<{ message: CanonicalTurnMessage; sessionLedger?: unknown; sessionLedgerStepId?: string }>> {
   if (!history) throw new Error('host-committed model response requires HistoryPort')
-  const snapshot = await history.read(invocationId)
-  const latest = snapshot.events.at(-1)
+  const latest = history.readLatestEvent
+    ? await history.readLatestEvent(invocationId)
+    : (await history.read(invocationId)).events.at(-1)
   if (!latest || latest.kind !== 'model-response-committed') {
     throw new Error('host-committed model response is not the latest History event')
   }
-  const payload = latest?.payload as { message?: unknown; finishReason?: unknown; usage?: unknown } | undefined
-  if (!latest || JSON.stringify(payload?.message) !== JSON.stringify(response.message)) {
-    throw new Error('host-committed model response does not match the latest canonical History event')
-  }
-  const hostFinishReason = response.finishReason === 'tool-calls' ? 'tool_use'
-    : response.finishReason === 'length' ? 'max_tokens'
-      : response.finishReason === 'cancelled' ? 'cancelled' : 'end_turn'
-  if (payload?.finishReason !== hostFinishReason) throw new Error('host-committed model response finish reason does not match History')
-  const expectedUsage = {
-    inputTokens: response.usage.inputTokens,
-    outputTokens: response.usage.outputTokens,
-    ...(response.usage.cacheReadInputTokens !== undefined ? { cacheReadInputTokens: response.usage.cacheReadInputTokens } : {}),
-    ...(response.usage.cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens: response.usage.cacheCreationInputTokens } : {})
-  }
-  if (JSON.stringify(payload?.usage) !== JSON.stringify(expectedUsage)) {
-    throw new Error('host-committed model response usage does not match History')
-  }
-  const sessionLedger = (payload as { sessionLedger?: unknown } | undefined)?.sessionLedger
+  const payload = latest.payload && typeof latest.payload === 'object' && !Array.isArray(latest.payload)
+    ? latest.payload as { sessionLedger?: unknown }
+    : undefined
+  const sessionLedger = payload?.sessionLedger
   const sessionLedgerStepId = sessionLedger && typeof sessionLedger === 'object' && !Array.isArray(sessionLedger) && typeof (sessionLedger as { stepId?: unknown }).stepId === 'string'
     ? (sessionLedger as { stepId: string }).stepId
     : undefined

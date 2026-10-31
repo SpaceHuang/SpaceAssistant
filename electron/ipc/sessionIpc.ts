@@ -1,17 +1,15 @@
 import { isThinkingEffort } from '../../src/shared/thinkingEffort'
 import { THINKING_EFFORT_LEVELS } from '../../src/shared/thinkingEffort'
 // Phase 2 拆分:本文件自 appIpc.ts 纯移动而来,通道名与行为不变(driver-authority-refactor Phase 2)。
-import fs from 'fs/promises'
 import type { AppIpcContext } from '../appIpc'
 import type { IpcMain } from 'electron'
 import { dialog } from 'electron'
-import { CONFIG_KEYS, stripLegacyPlanMetadataFromSession, scheduleBackup } from './ipcShared'
+import { CONFIG_KEYS, stripLegacyPlanMetadataFromSession } from './ipcShared'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { REMOTE_SESSION_BUSY_MESSAGE, REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessages'
 import { scheduleSessionTitleOpenBackfillIfNeeded } from '../sessionTitleSuggest'
 import { Session, SessionSkillsState } from '../../src/shared/domainTypes'
 import { UsageAttributionSummary, UsageDailyPoint, UsageDimensions, UsageStatsRangeArgs, UsageSummary } from '../../src/shared/usageStatsTypes'
-import { arrayMessagePageReader } from '../sessionBackupManager'
 import { assertValidOptionalAnthropicBaseUrl } from '../claudeRequestGuards'
 import { clearDecisionCacheOnSessionDelete } from '../confirmation/cacheMaintenanceHooks'
 import { clearSessionToolResources } from '../toolChatLoop'
@@ -79,8 +77,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       const busy = () => sessionStorage.execution.hasActiveTurn(sessionId) || Boolean(ctx.turnRuntime?.coordinator.listActive(sessionId).length) || isRemoteAgentRunning(sessionId)
       if (busy()) return { status: 'busy' as const }
       const availability = sessionStorage.availability.inspect(sessionId)
-      if (availability.globalFence.state === 'pending' || availability.globalFence.state === 'blocked' ||
-        availability.content.state === 'unavailable' || availability.execution.state === 'pending-recovery' ||
+      if (availability.content.state === 'unavailable' ||
         availability.execution.state === 'commit-uncertain' || availability.execution.state === 'blocked') {
         return { status: 'unavailable' as const }
       }
@@ -204,13 +201,6 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
         metadata,
         workDirProfileId: ctx.workDirManager.getActiveProfileId()
       })
-      await fs.mkdir(ctx.getWorkDir(), { recursive: true })
-      void ctx.backup.backupWithRetry(s, arrayMessagePageReader([])).catch((error) => {
-        logAgentEvent('warn', 'session.backup.create_failed', {
-          sessionId: s.id,
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
       return s
     }
   )
@@ -236,7 +226,6 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
         baseUrl,
         getApiKey: ctx.getApiKey
       })
-      if (next) scheduleBackup(ctx, next.id)
       return next
     }
   )
@@ -290,7 +279,6 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       if (Object.keys(settings).length > 0) sessionCommands.updateSettings({ sessionId: payload.sessionId, ...settings })
       if (payload.metadata !== undefined) sessionCommands.updateUserMetadata(payload.sessionId, metadataPatch)
       const next = sessionQueries.readSession(payload.sessionId) ?? cur
-      if (next) scheduleBackup(ctx, next.id)
       return next
     }
   )

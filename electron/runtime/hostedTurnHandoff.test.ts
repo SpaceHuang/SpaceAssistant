@@ -1552,7 +1552,7 @@ describe('createHostedTurnHandoff', () => {
     mockRunHostedAgentTurn.mockResolvedValue({
       text: 'finished', modelTurns: 3, finishReason: 'stop',
       usage: { inputTokens: 20, outputTokens: 9, cacheReadInputTokens: 4 },
-      messages: [{ role: 'assistant', content: 'finished' }]
+      messages: [{ role: 'assistant', content: 'finished' }], notDispatchedToolCallIds: ['denied-tool']
     })
     const handoff = createHostedTurnHandoff({ agentSdk, history: history as never, invocationId: 'req-1', turnId: 'turn-1', routeId: 'route-1' })
     const request = { messages: [{ role: 'user', content: 'hello' }], maxTokens: 100 }

@@ -3186,7 +3186,7 @@ describe('runAgentTurn', () => {
       .toEqual([assistantMessage, { role: 'assistant', content: 'done' }])
   })
 
-  it('rejects a host response handoff without matching committed History before tool execution', async () => {
+  it('trusts the host commit handoff without rereading and comparing the full History response', async () => {
     const registry = new ModelProviderRegistry()
     const providerStream = vi.fn(() => stream({ type: 'text-delta', text: 'unused' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }))
     registry.register(route, { providerId: 'fake', stream: providerStream })
@@ -3213,8 +3213,8 @@ describe('runAgentTurn', () => {
     await expect(runHostedAgentTurn({
       host, invocationId: 'host-seeded-mismatch', turnId: 'turn-seeded', routeId: route.routeId,
       request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 80 },
-      initialResponse: { message: { role: 'assistant', toolCalls: [{ id: 'seed-tool', name: 'lookup', input: { query: 'q' } }] }, finishReason: 'tool-calls', usage: { type: 'usage', inputTokens: 1, outputTokens: 1 }, historyCommitted: true }
-    })).rejects.toThrow('does not match the latest canonical History event')
+      initialResponse: { message: { role: 'assistant', content: 'committed by host' }, finishReason: 'stop', usage: { type: 'usage', inputTokens: 1, outputTokens: 1 }, historyCommitted: true }
+    })).resolves.toMatchObject({ text: 'committed by host' })
     await expect(runHostedAgentTurn({
       host, invocationId: 'host-seeded-mismatch-finish', turnId: 'turn-seeded', routeId: route.routeId,
       request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 80 },
@@ -3225,16 +3225,6 @@ describe('runAgentTurn', () => {
       request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 80 },
       initialResponse: { message: { role: 'assistant', content: 'answer' }, finishReason: 'stop', usage: { type: 'usage', inputTokens: -1, outputTokens: 1 }, historyCommitted: true }
     })).rejects.toThrow('host-committed model response has invalid usage')
-    await expect(runHostedAgentTurn({
-      host, invocationId: 'host-seeded-history-mismatch', turnId: 'turn-seeded', routeId: route.routeId,
-      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 80 },
-      initialResponse: { message: { role: 'assistant', content: 'different response' }, finishReason: 'length', usage: { type: 'usage', inputTokens: 2, outputTokens: 3 }, historyCommitted: true }
-    })).rejects.toThrow('host-committed model response finish reason does not match History')
-    await expect(runHostedAgentTurn({
-      host, invocationId: 'host-seeded-response-mismatch', turnId: 'turn-seeded', routeId: route.routeId,
-      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 80 },
-      initialResponse: { message: { role: 'assistant', content: 'different response' }, finishReason: 'stop', usage: { type: 'usage', inputTokens: 1, outputTokens: 1 }, historyCommitted: true }
-    })).rejects.toThrow('host-committed model response usage does not match History')
     expect(execute).not.toHaveBeenCalled()
     expect(providerStream).not.toHaveBeenCalled()
   })

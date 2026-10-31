@@ -64,9 +64,10 @@ export function appendSqliteAgentHistoryBatchInTransaction(
   const actualSchemaVersion = stream?.schema_version ?? schemaVersion
   if (events.some((event) => event.schemaVersion !== actualSchemaVersion)) throw new HistoryBatchError(`unsupported history schema version: ${events[0].schemaVersion}`)
 
-  const existing = events.map((event) => conn.prepare(
+  const findExistingEvent = conn.prepare(
     'SELECT invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json FROM agent_history_events WHERE invocation_id = ? AND (idempotency_key = ? OR event_id = ?)'
-  ).get(invocationId, event.idempotencyKey, event.eventId) as EventRow | undefined)
+  )
+  const existing = events.map((event) => findExistingEvent.get(invocationId, event.idempotencyKey, event.eventId) as EventRow | undefined)
   if (existing.some(Boolean)) {
     const exactDuplicate = existing.every((row, index) => row !== undefined && historyEventsEqual(fromRow(row), { ...events[index], payload: JSON.parse(serialized[index]) }))
     if (!exactDuplicate) {

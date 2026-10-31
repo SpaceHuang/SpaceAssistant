@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from 'antd'
 import { DetailPanelProvider, useDetailPanel } from './DetailPanelContext'
+import { preloadShiki } from '../../utils/shikiHighlighter'
 import {
   emitFileContentSyncForTests,
   flushFileContentSyncForTests,
@@ -83,6 +84,11 @@ describe('DetailPanelContext', () => {
       expect(result.current.fileType).toBe('text')
       expect(result.current.contentMode).toBe('file')
     })
+  })
+
+  it('does not preload syntax highlighting when the app mounts', () => {
+    renderDetailPanel()
+    expect(preloadShiki).not.toHaveBeenCalled()
   })
 
   it('openFile sets selectedFile before load completes and shows error on failure', async () => {

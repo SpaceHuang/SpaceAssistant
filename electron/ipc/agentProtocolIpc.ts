@@ -7,7 +7,7 @@ import { approveOneTimeUnknownEffectRetry, hasPendingUnknownEffectRetryApproval,
 import { BrowserWindow, dialog, type IpcMain } from 'electron'
 import { AUTO_CONTRACT } from '../processOutput/contracts'
 import { AgentLogEventName, AgentLogFields } from '../agentLogger/types'
-import { CONFIG_KEYS, readAppLocale, readSkillsConfig, readWikiConfig, readToolsConfig, scheduleBackup, flushBackup, backupAfterMessagePatch, readExposureInputsFromDb } from './ipcShared'
+import { CONFIG_KEYS, readAppLocale, readSkillsConfig, readWikiConfig, readToolsConfig, readExposureInputsFromDb } from './ipcShared'
 import { ChatImageAttachment } from '../../src/shared/domainTypes'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { Message, ModelEntry, SessionSkillsState, SkillDefinition, SkippedCandidate, SkillRouteRecentMessage, SkillRouteResult } from '../../src/shared/domainTypes'
@@ -801,7 +801,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     'message:append-non-turn',
     async (_e, msg: Message): Promise<{ messageId: string; sequence: number }> => {
       const { message, sequence } = sessionCommands.appendNonTurnMessage(msg)
-      scheduleBackup(ctx, message.sessionId)
       return { messageId: message.id, sequence }
     }
   )
@@ -1043,7 +1042,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     appendHintMessage: async (sessionId, hint) => {
       const msg = createSkillHintSystemMessage(sessionId, hint)
       const { sequence } = sessionCommands.appendNonTurnMessage(msg)
-      scheduleBackup(ctx, sessionId)
       return { messageId: msg.id, sequence }
     },
     updateSessionState: async (sessionId, patch) => {
@@ -1254,7 +1252,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         throw new Error('MESSAGE_PATCH_OPERATION_UNSUPPORTED')
       }
       if (!entry) return null
-      await backupAfterMessagePatch(ctx, payload.sessionId, payload.patch)
       return entry
     }
   )
@@ -1314,7 +1311,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       }
       const result = sessionCommands.deleteQueuedMessage(payload.messageId, previewCandidate)
       if (result.ok) {
-        await flushBackup(ctx, result.sessionId)
       }
       return result
     }
@@ -1322,13 +1318,11 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   ipcMain.handle('chat:update-queued-message', async (_e, payload: { sessionId: string; messageId: string; content: string }) => {
     const result = sessionCommands.editQueuedMessage(payload)
-    if (result.ok) await flushBackup(ctx, payload.sessionId)
     return result
   })
 
   ipcMain.handle('chat:reorder-queued-messages', async (_e, payload: { sessionId: string; messageIds: string[] }) => {
     const result = sessionCommands.reorderQueuedMessages(payload)
-    if (result.ok) await flushBackup(ctx, payload.sessionId)
     return result
   })
 

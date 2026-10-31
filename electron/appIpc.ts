@@ -4,7 +4,7 @@ import type { IpcMain } from 'electron'
 import { AppDatabase } from './database'
 import { BrowserDetectContext } from './browser/browserDependencyDetect'
 import { ClaudeTurnExecution } from './claudeStreamHandlers'
-import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
+import { SessionBackupLifecycle } from './sessionBackupLifecycle'
 import { TurnRuntime } from './turnRuntime'
 import { WorkDirManager } from './workDirManager'
 import { registerAgentIpc } from './ipc/agentProtocolIpc'
@@ -32,7 +32,7 @@ export type AppIpcContext = {
   sessionStorage: SessionStorage
   /** Security policy/cache persistence adapter bound at this composition root. */
   securitySettingsStorage?: ReturnType<typeof createSecuritySettingsStorage>
-  backup: DebouncedSessionBackupManager
+  backup: SessionBackupLifecycle
   workDirManager: WorkDirManager
   getWorkDir: () => string
   setWorkDir: (dir: string) => void

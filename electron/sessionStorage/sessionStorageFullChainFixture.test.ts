@@ -18,9 +18,9 @@ describe('session storage full chain synthetic fixture', () => {
   it('honors equals-form scenario and sample options before launching Electron', () => {
     const { fixture, runnerTimeoutMs } = createFixtureDefinition(['--only=cold-history', '--samples=1', '--seed=41', '--timeout-ms=60000'])
     expect(fixture.scenarios).toEqual([
-      { kind: 'cold-history', count: 1, bodyBytes: 1024 * 1024 },
-      { kind: 'cold-history', count: 10, bodyBytes: 10 * 1024 * 1024 },
-      { kind: 'cold-history', count: 100, bodyBytes: 100 * 1024 * 1024 }
+      { kind: 'cold-history', scenarioId: 'cold-history-1', count: 1, bodyBytes: 1024 * 1024 },
+      { kind: 'cold-history', scenarioId: 'cold-history-10', count: 10, bodyBytes: 10 * 1024 * 1024 },
+      { kind: 'cold-history', scenarioId: 'cold-history-100', count: 100, bodyBytes: 100 * 1024 * 1024 }
     ])
     expect(fixture.samples).toBe(1)
     expect(fixture.seed).toBe(41)

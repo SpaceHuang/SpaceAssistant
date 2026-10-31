@@ -1,19 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { App as AntdApp, Button } from 'antd'
 import { useAppDispatch, useTypedSelector } from './hooks'
 import { setSessions, upsertSession } from './store/sessionSlice'
 import { setSession, setScrollToMessageId } from './store/chatSlice'
 import { setConfig, setSettingsOpen, setAboutOpen, setUsageStatsOpen, openSettings } from './store/configSlice'
-import { ChatView } from './components/Chat/ChatView'
-import { ConfigSettingsPage } from './components/Config/ConfigModal'
-import { AboutModal } from './components/Config/AboutModal'
-import { UsageStatsDrawer } from './components/UsageStats/UsageStatsDrawer'
-import { WikiPane, type WikiPaneHandle } from './components/WikiPane'
+import { createLazyChatView } from './components/Chat/lazyChatView'
+import type { WikiPaneHandle } from './components/WikiPane'
 import { WikiPaneToolbar } from './components/WikiPane/WikiPaneToolbar'
 import { collectToWiki } from './services/wikiImportService'
 import { ensureWorkDirForSession } from './services/workDirSessionSync'
 import { startInvalidationService } from './services/invalidationService'
-import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
+import { DetailPanelProvider, useDetailPanel } from './components/DetailPanel/DetailPanelContext'
+import { createLazyDetailPanel } from './components/DetailPanel/lazyDetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
 import { initTurnProjectionBridge } from './services/turnProjectionService'
 import { initTurnDisplayBridge } from './services/turnDisplayStore'
@@ -22,8 +20,7 @@ import { initRemoteSessionSwitchBridge } from './services/remoteSessionSwitchSer
 import { initConfirmStores } from './services/confirmStoresInit'
 import { navigateToPendingConfirmation } from './services/notificationNavigation'
 import { initToolExposure } from './services/toolExposureService'
-import { SessionListPane } from './components/SessionList/SessionListPane'
-import { SearchPane } from './components/Search/SearchPane'
+import { createLazySessionListPane } from './components/SessionList/lazySessionListPane'
 import { SearchProvider } from './components/Search/SearchProvider'
 import { SearchBar } from './components/Search/SearchBar'
 import { requestFilePaneSelect, isUnderWikiRoot } from './services/filePaneNavigation'
@@ -40,7 +37,13 @@ import searchLineRaw from './assets/search_line.svg?raw'
 import searchFillRaw from './assets/search_fill.svg?raw'
 import settingsRaw from './assets/settings_1_line.svg?raw'
 import { TitleBar } from './components/TitleBar/TitleBar'
-import { refreshMcpToolCatalog } from './services/mcpToolCatalog'
+import { scheduleAfterFirstPaint } from './services/scheduleAfterFirstPaint'
+
+const ConfigSettingsPage = lazy(() => import('./components/Config/ConfigModal').then((module) => ({ default: module.ConfigSettingsPage })))
+const AboutModal = lazy(() => import('./components/Config/AboutModal').then((module) => ({ default: module.AboutModal })))
+const UsageStatsDrawer = lazy(() => import('./components/UsageStats/UsageStatsDrawer').then((module) => ({ default: module.UsageStatsDrawer })))
+const WikiPane = lazy(() => import('./components/WikiPane').then((module) => ({ default: module.WikiPane })))
+const SearchPane = lazy(() => import('./components/Search/SearchPane').then((module) => ({ default: module.SearchPane })))
 
 const chatLineSvg = patchSvg(chatLineRaw)
 const chatFillSvg = patchSvg(chatFillRaw)
@@ -49,6 +52,9 @@ const wikiFillSvg = patchSvg(wikiFillRaw)
 const searchLineSvg = patchSvg(searchLineRaw)
 const searchFillSvg = patchSvg(searchFillRaw)
 const settingsSvg = patchSvg(settingsRaw)
+const ChatView = createLazyChatView()
+const SessionListPane = createLazySessionListPane()
+const DetailPanel = createLazyDetailPanel()
 
 const startupRequestsReported = new Set<string>()
 
@@ -112,13 +118,23 @@ function AppShellInner() {
   const dispatch = useAppDispatch()
   const config = useTypedSelector((s) => s.config.config)
   const usageStatsOpen = useTypedSelector((s) => s.config.usageStatsOpen)
+  const settingsOpen = useTypedSelector((s) => s.config.settingsOpen)
+  const aboutOpen = useTypedSelector((s) => s.config.aboutOpen)
   const sessions = useTypedSelector((s) => s.session.list)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const [siderKey, setSiderKey] = useState<'sessions' | 'wiki' | 'search'>('sessions')
+  const [searchVisited, setSearchVisited] = useState(false)
+  const [settingsVisited, setSettingsVisited] = useState(false)
   const [wikiInitialized, setWikiInitialized] = useState<boolean | null>(null)
   const wikiPaneRef = useRef<WikiPaneHandle>(null)
   const { openFile } = useDetailPanel()
-  useEffect(() => { void measureStartupRequest('renderer.mcp-tool-catalog', refreshMcpToolCatalog) }, [])
+  useEffect(() => {
+    scheduleAfterFirstPaint(() => {
+      void import('./services/mcpToolCatalog')
+        .then(({ refreshMcpToolCatalog }) => measureStartupRequest('renderer.mcp-tool-catalog', refreshMcpToolCatalog))
+    })
+  }, [])
+  useEffect(() => { if (settingsOpen) setSettingsVisited(true) }, [settingsOpen])
 
   // 偏差 11:失效通知服务(通知驱动重取,真相只从 Storage 取)
   useEffect(() => startInvalidationService(), [])
@@ -269,7 +285,7 @@ function AppShellInner() {
                 lineSvg={searchLineSvg}
                 fillSvg={searchFillSvg}
                 active={siderKey === 'search'}
-                onClick={() => setSiderKey('search')}
+                onClick={() => { setSearchVisited(true); setSiderKey('search') }}
                 label={t('activity.search')}
               />
             </div>
@@ -303,19 +319,25 @@ function AppShellInner() {
               ) : null}
             </div>
             <div className="sider-content-body">
-              {siderKey === 'sessions' && <SessionListPane />}
+              {siderKey === 'sessions' && <Suspense fallback={null}><SessionListPane /></Suspense>}
               {siderKey === 'wiki' && (
-                <WikiPane
-                  ref={wikiPaneRef}
-                  workDir={config?.workDir ?? ''}
-                  onFileSelect={handleFileSelect}
-                  onSwitchToWikiTab={() => setSiderKey('wiki')}
-                  onCollectToWiki={handleCollectToWiki}
-                  onInitStateChange={setWikiInitialized}
-                />
+                <Suspense fallback={null}>
+                  <WikiPane
+                    ref={wikiPaneRef}
+                    workDir={config?.workDir ?? ''}
+                    onFileSelect={handleFileSelect}
+                    onSwitchToWikiTab={() => setSiderKey('wiki')}
+                    onCollectToWiki={handleCollectToWiki}
+                    onInitStateChange={setWikiInitialized}
+                  />
+                </Suspense>
               )}
               <div className={siderKey === 'search' ? 'search-pane-mount' : 'search-pane-mount search-pane-mount--hidden'}>
-                <SearchPane onSessionResultClick={handleSearchSessionClick} onFileResultClick={handleSearchFileClick} />
+                {searchVisited && (
+                  <Suspense fallback={null}>
+                    <SearchPane onSessionResultClick={handleSearchSessionClick} onFileResultClick={handleSearchFileClick} />
+                  </Suspense>
+                )}
               </div>
             </div>
           </div>
@@ -324,17 +346,19 @@ function AppShellInner() {
 
       <main className="app-main">
         <div className="app-main-body">
-          <ChatView />
+          <Suspense fallback={null}><ChatView /></Suspense>
         </div>
       </main>
 
       <SplitPane id="rightSider" defaultSize={320} minSize={180} maxSize={960} side="right" className="app-detail-sider">
-        <DetailPanel />
+        <Suspense fallback={null}><DetailPanel /></Suspense>
       </SplitPane>
 
-      <ConfigSettingsPage />
-      <AboutModal />
-      <UsageStatsDrawer open={usageStatsOpen} onClose={() => dispatch(setUsageStatsOpen(false))} />
+      <Suspense fallback={null}>
+        {(settingsOpen || settingsVisited) && <ConfigSettingsPage />}
+        {aboutOpen && <AboutModal />}
+        {usageStatsOpen && <UsageStatsDrawer open onClose={() => dispatch(setUsageStatsOpen(false))} />}
+      </Suspense>
       </div>
     </div>
   )

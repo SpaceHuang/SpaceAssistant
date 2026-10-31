@@ -48,6 +48,7 @@ export type SessionTranscriptCommitIntent = SessionTranscriptCommitIntentBase & 
 export interface HistoryPort {
   appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult>
   read(invocationId: string): Promise<HistorySnapshot>
+  readLatestEvent?(invocationId: string): Promise<HistoryEvent | undefined>
   prepareTransitionState?(snapshot: HistorySnapshot): Promise<void>
   findByIdempotencyKey?(invocationId: string, idempotencyKey: string): Promise<HistoryEvent | undefined>
 }
@@ -633,6 +634,11 @@ export class MemoryHistory implements HistoryPort {
   async read(invocationId: string): Promise<HistorySnapshot> {
     const stream = this.streams.get(invocationId) ?? { schemaVersion: this.schemaVersion, events: [] }
     return { invocationId, version: stream.events.length, schemaVersion: stream.schemaVersion, events: structuredClone(stream.events) }
+  }
+
+  async readLatestEvent(invocationId: string): Promise<HistoryEvent | undefined> {
+    const event = this.streams.get(invocationId)?.events.at(-1)
+    return event ? structuredClone(event) : undefined
   }
 
   async findByIdempotencyKey(invocationId: string, idempotencyKey: string): Promise<HistoryEvent | undefined> {

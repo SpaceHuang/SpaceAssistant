@@ -187,49 +187,15 @@ export function readWikiConfig(db: AppDatabase): WikiConfig {
 }
 
 
-/** 按 sequence 游标分页读取，不受固定条数上限约束，避免大会话导出被静默截断 */
+// ---- 跨域 helper 工厂(域文件注入 ctx 后以原名调用,块内调用点保持原样)----
 
+/** 显式导出使用的分页读取器；普通写入和启动／退出流程不得调用。 */
 export function backupPageReader(ctx: AppIpcContext, sessionId: string): MessagePageReader {
   return async (afterSequence, pageSize) => {
-    if (!ctx.sessionStorage) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
     const page = await readExportPageAfterPreparation(ctx.sessionStorage, { sessionId, fromSequence: afterSequence, pageSize })
     return { messages: page.rows.map(({ message }) => message), nextSequence: page.nextSequence }
   }
 }
-
-export async function loadBackupPayload(ctx: AppIpcContext, sessionId: string) {
-  const storage = ctx.sessionStorage
-  if (!storage) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
-  const queries = ctx.sessionStorage?.queries
-  if (!queries) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
-  const s = queries.readSession(sessionId)
-  if (!s) return null
-  return { session: s, readPage: backupPageReader(ctx, sessionId) }
-}
-
-export function scheduleBackup(ctx: AppIpcContext, sessionId: string): void {
-  ctx.backup.schedule(sessionId, async () => loadBackupPayload(ctx, sessionId))
-}
-
-export async function flushBackup(ctx: AppIpcContext, sessionId: string): Promise<void> {
-  await ctx.backup.flush(sessionId, async () => loadBackupPayload(ctx, sessionId))
-}
-
-export const BACKUP_FLUSH_STATUSES = new Set(['completed', 'failed', 'sent'])
-
-export async function backupAfterMessagePatch(
-  ctx: AppIpcContext,
-  sessionId: string,
-  patch: Partial<Pick<Message, 'status'>>
-): Promise<void> {
-  if (patch.status && BACKUP_FLUSH_STATUSES.has(patch.status)) {
-    await flushBackup(ctx, sessionId)
-    return
-  }
-  scheduleBackup(ctx, sessionId)
-}
-
-// ---- 跨域 helper 工厂(域文件注入 ctx 后以原名调用,块内调用点保持原样)----
 
 export function makeRecordTrustToCache(ctx: AppIpcContext) {
   return (

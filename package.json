@@ -34,7 +34,7 @@
     "build:electron": "rimraf dist-electron && npm run check:pi-ai-runtime-closure && npm run check:session-storage-cleanup-boundary && npm run check:session-storage-boundary && npm run build:agent-provider-pi-ai && tsc -p tsconfig.electron.json",
     "build:electron:incremental": "npm run check:pi-ai-runtime-closure && npm run check:session-storage-cleanup-boundary && npm run check:session-storage-boundary && npm run build:agent-provider-pi-ai && tsc -p tsconfig.electron.json",
     "check:session-storage-cleanup-boundary": "node scripts/check-session-storage-cleanup-boundary.mjs",
-    "build": "npm run build:tray-icons && npm run build:renderer && npm run build:electron",
+    "build": "npm run build:tray-icons && npm run build:renderer && npm run build:electron && node scripts/session-storage-build-fingerprint.mjs",
     "typecheck:renderer": "tsc -p tsconfig.renderer.json --noEmit",
     "typecheck:agent-sdk": "tsc -p packages/agent-sdk/tsconfig.json",
     "typecheck:agent-provider-testing": "tsc -p packages/agent-provider-testing/tsconfig.json",

@@ -76,6 +76,7 @@ function bindAssistantMessageIdentity(history: HistoryPort, assistantMessageId: 
       return { ...event, payload: { ...payload, message: { ...message, id: assistantMessageId } } }
     }), expectedVersion, transcriptCommit),
     read: (invocationId) => history.read(invocationId),
+    ...(history.readLatestEvent ? { readLatestEvent: (invocationId: string) => history.readLatestEvent!(invocationId) } : {}),
     ...(history.prepareTransitionState ? { prepareTransitionState: (snapshot: HistorySnapshot) => history.prepareTransitionState!(snapshot) } : {}),
     ...(history.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, key: string) => history.findByIdempotencyKey!(invocationId, key) } : {})
   }
@@ -361,6 +362,7 @@ export function createHostedTurnHandoff(input: {
     const historyFacade: HistoryPort = {
       appendBatch: (events, expectedVersion, transcriptCommit) => input.history.appendBatch(events, expectedVersion, transcriptCommit),
       read: (invocationId) => input.history.read(invocationId),
+      ...(input.history.readLatestEvent ? { readLatestEvent: (invocationId: string) => input.history.readLatestEvent!(invocationId) } : {}),
       ...(input.history.prepareTransitionState ? { prepareTransitionState: (snapshot: HistorySnapshot) => input.history.prepareTransitionState!(snapshot) } : {}),
       ...(input.history.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, key: string) => input.history.findByIdempotencyKey!(invocationId, key) } : {})
     }
@@ -384,6 +386,7 @@ export function createHostedTurnHandoff(input: {
       appendBatch: (events, expectedVersion, transcriptCommit) => commitBoundHostHistory.appendBatch(events, expectedVersion,
         transcriptCommit ? { ...transcriptCommit, executionLease: ownership } : undefined),
       read: (invocationId) => commitBoundHostHistory.read(invocationId),
+      ...(commitBoundHostHistory.readLatestEvent ? { readLatestEvent: (invocationId: string) => commitBoundHostHistory.readLatestEvent!(invocationId) } : {}),
       ...(commitBoundHostHistory.prepareTransitionState ? { prepareTransitionState: (snapshot: HistorySnapshot) => commitBoundHostHistory.prepareTransitionState!(snapshot) } : {}),
       ...(commitBoundHostHistory.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, key: string) => commitBoundHostHistory.findByIdempotencyKey!(invocationId, key) } : {})
     } : commitBoundHostHistory
@@ -433,8 +436,9 @@ export function createHostedTurnHandoff(input: {
         ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
         ...(handoff.initialResponse ? { initialResponse: handoff.initialResponse } : {})
       })
-      const snapshot = await input.history.read(input.invocationId)
-      const terminal = [...(snapshot?.events ?? [])].reverse().find((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted' || event.kind === 'invocation-parked')
+      const terminal = input.history.readLatestEvent
+        ? await input.history.readLatestEvent(input.invocationId)
+        : (await input.history.read(input.invocationId)).events.at(-1)
       if (!terminal) throw new HostedTurnFinalizedError(new Error('Hosted invocation terminal is missing from canonical History'), 'failed')
       if (terminal.kind === 'invocation-parked') {
         const payload = terminal.payload && typeof terminal.payload === 'object' && !Array.isArray(terminal.payload)
@@ -500,13 +504,7 @@ export function createHostedTurnHandoff(input: {
             modelTurns: Math.max(0, hosted.modelTurns - (handoff.initialResponse ? 1 : 0)),
             initialMessageCount: request.messages.length,
             messages: hosted.messages,
-            notDispatchedToolCallIds: snapshot.events.flatMap((event) => {
-              if (event.kind !== 'tool-call-not-dispatched') return []
-              const toolCallId = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
-                ? (event.payload as { toolCallId?: unknown }).toolCallId
-                : undefined
-              return typeof toolCallId === 'string' ? [toolCallId] : []
-            })
+            notDispatchedToolCallIds: hosted.notDispatchedToolCallIds ?? []
           }
         }
       }

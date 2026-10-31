@@ -3,7 +3,10 @@ import { extractPowershellCommandFacts } from '../../shell/powershellCommandFact
 import { foldStringIr, resolveIrChain, type IrScope } from '../../shell/scriptIr/pythonAdapter'
 import type { IrExpr, IrModule, IrStmt } from '../../shell/scriptIr/types'
 import { scriptParserService } from '../../shell/scriptParserService'
-import * as ts from 'typescript'
+import type * as ts from 'typescript'
+import { createLazyRuntimeModule } from '../../lazyRuntimeModule'
+
+const getTypeScript = createLazyRuntimeModule(() => require('typescript') as typeof ts)
 
 export type ScriptPathUnknownReason = 'dynamic-execution' | 'unmodeled-call' | null
 /** P2-1:unknown 证据(调用名;方案 §5「回显具体调用名」),去重封顶。 */
@@ -536,14 +539,15 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
   }
 }
 
-function staticTsString(node: ts.Expression | undefined): string | undefined {
+function staticTsString(node: ts.Expression | undefined, compiler: typeof ts): string | undefined {
   if (!node) return undefined
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
+  if (compiler.isStringLiteral(node) || compiler.isNoSubstitutionTemplateLiteral(node)) return node.text
   return undefined
 }
 
 function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'typescript'): ScriptPathFacts {
-  const source = ts.createSourceFile(`run-script.${language === 'typescript' ? 'ts' : 'js'}`, code, ts.ScriptTarget.Latest, true, language === 'typescript' ? ts.ScriptKind.TS : ts.ScriptKind.JS)
+  const compiler = getTypeScript()
+  const source = compiler.createSourceFile(`run-script.${language === 'typescript' ? 'ts' : 'js'}`, code, compiler.ScriptTarget.Latest, true, language === 'typescript' ? compiler.ScriptKind.TS : compiler.ScriptKind.JS)
   const parseDiagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics
   if (parseDiagnostics.length > 0) return emptyUnknown()
   const modules = new Map<string, string>()
@@ -553,17 +557,17 @@ function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'type
   const bindModule = (name: string, module: string) => { modules.set(name, module.replace(/^node:/, '')) }
 
   const moduleFromExpr = (expr: ts.Expression): string | undefined => {
-    if (ts.isIdentifier(expr)) return modules.get(expr.text)
-    if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression) && expr.expression.text === 'require') {
-      const moduleName = staticTsString(expr.arguments[0])
+    if (compiler.isIdentifier(expr)) return modules.get(expr.text)
+    if (compiler.isCallExpression(expr) && compiler.isIdentifier(expr.expression) && expr.expression.text === 'require') {
+      const moduleName = staticTsString(expr.arguments[0], compiler)
       if (!moduleName) state.unknown = true
       return moduleName?.replace(/^node:/, '')
     }
     return undefined
   }
   const resolveCall = (expr: ts.Expression): { module: string; name: string } | undefined => {
-    if (ts.isIdentifier(expr)) return namedImports.get(expr.text)
-    if (!ts.isPropertyAccessExpression(expr)) return undefined
+    if (compiler.isIdentifier(expr)) return namedImports.get(expr.text)
+    if (!compiler.isPropertyAccessExpression(expr)) return undefined
     const module = moduleFromExpr(expr.expression)
     if (module) return { module, name: expr.name.text }
     const parent = resolveCall(expr.expression)
@@ -572,27 +576,27 @@ function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'type
   }
 
   for (const statement of source.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue
+    if (!compiler.isImportDeclaration(statement) || !compiler.isStringLiteral(statement.moduleSpecifier)) continue
     const module = statement.moduleSpecifier.text.replace(/^node:/, '')
     const clause = statement.importClause
     if (!clause) continue
     if (clause.name) bindModule(clause.name.text, module)
     const bindings = clause.namedBindings
-    if (bindings && ts.isNamespaceImport(bindings)) bindModule(bindings.name.text, module)
-    if (bindings && ts.isNamedImports(bindings)) {
+    if (bindings && compiler.isNamespaceImport(bindings)) bindModule(bindings.name.text, module)
+    if (bindings && compiler.isNamedImports(bindings)) {
       for (const element of bindings.elements) namedImports.set(element.name.text, { module, name: element.propertyName?.text ?? element.name.text })
     }
   }
 
   const visit = (node: ts.Node): void => {
-    if (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isClassDeclaration(node) || ts.isImportEqualsDeclaration(node)) state.unknown = true
-    if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
+    if (compiler.isFunctionDeclaration(node) || compiler.isFunctionExpression(node) || compiler.isArrowFunction(node) || compiler.isClassDeclaration(node) || compiler.isImportEqualsDeclaration(node)) state.unknown = true
+    if (compiler.isVariableDeclaration(node) && node.initializer && compiler.isIdentifier(node.name)) {
       const module = moduleFromExpr(node.initializer)
       if (module) bindModule(node.name.text, module)
     }
-    if (ts.isCallExpression(node)) {
+    if (compiler.isCallExpression(node)) {
       const resolved = resolveCall(node.expression)
-      const staticRequire = ts.isIdentifier(node.expression) && node.expression.text === 'require'
+      const staticRequire = compiler.isIdentifier(node.expression) && node.expression.text === 'require'
       const moduleName = resolved?.module.replace(/^node:/, '')
       const callName = resolved?.name.split('.').at(-1) ?? ''
       if (moduleName === 'child_process' || moduleName === 'worker_threads') state.unknown = true
@@ -603,26 +607,26 @@ function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'type
           const targets = node.arguments.slice(0, count)
           if (targets.length < count) state.unknown = true
           for (const target of targets) {
-            const value = staticTsString(target)
+            const value = staticTsString(target, compiler)
             if (value === undefined) state.unknown = true
             else paths.add(value)
           }
         }
       } else if (staticRequire) {
-        const required = staticTsString(node.arguments[0])?.replace(/^node:/, '')
+        const required = staticTsString(node.arguments[0], compiler)?.replace(/^node:/, '')
         if (required !== 'fs' && required !== 'fs/promises') state.unknown = true
       } else {
-        const fullName = ts.isPropertyAccessExpression(node.expression)
+        const fullName = compiler.isPropertyAccessExpression(node.expression)
           ? `${node.expression.expression.getText(source)}.${node.expression.name.text}`
-          : ts.isIdentifier(node.expression) ? node.expression.text : ''
+          : compiler.isIdentifier(node.expression) ? node.expression.text : ''
         if (!JS_SAFE_CALLS.has(fullName)) state.unknown = true
       }
       node.arguments.forEach(visit)
       return
     }
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
-      if (ts.isIdentifier(node.left) && (modules.has(node.left.text) || namedImports.has(node.left.text))) state.unknown = true
-      if (ts.isPropertyAccessExpression(node.left)) {
+    if (compiler.isBinaryExpression(node) && node.operatorToken.kind >= compiler.SyntaxKind.FirstAssignment && node.operatorToken.kind <= compiler.SyntaxKind.LastAssignment) {
+      if (compiler.isIdentifier(node.left) && (modules.has(node.left.text) || namedImports.has(node.left.text))) state.unknown = true
+      if (compiler.isPropertyAccessExpression(node.left)) {
         const binding = resolveCall(node.left)
         if (binding?.module === 'fs' || binding?.module === 'fs/promises') state.unknown = true
       }

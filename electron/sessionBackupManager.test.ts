@@ -10,7 +10,6 @@ import { appendMessage, createSession } from './database/operations'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { backupPageReader } from './ipc/ipcShared'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
-import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import type { AppIpcContext } from './appIpc'
 import { certifyCanonicalSessionApiRead, setCanonicalApiReadFeatureEnabled } from './sessionStorage/certification'
 import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch, markSessionMessageContentWriteStopped, verifyAndCompleteSessionMessageContentCleanup } from './sessionStorage/maintenance'
@@ -172,14 +171,7 @@ describe('SessionBackupManager', () => {
 
       const readPage = backupPageReader({ db, sessionStorage: createSqliteSessionStorage(db) } as AppIpcContext, session.id)
       const manager = new SessionBackupManager(workDir)
-      const backupOnce = manager.backupSession.bind(manager)
-      const backupSpy = vi.spyOn(manager, 'backupSession')
-        .mockRejectedValueOnce(new Error('injected shutdown backup write failure'))
-        .mockImplementation(backupOnce)
-      const debounced = new DebouncedSessionBackupManager(manager)
-      debounced.schedule(session.id, async () => ({ session, readPage }))
-      await debounced.flushAllWithRetry(debounced.getPendingSessionIds(), async () => ({ session, readPage }), 2)
-      expect(backupSpy).toHaveBeenCalledTimes(2)
+      await manager.backupSession(session, readPage)
 
       const restored = await manager.restoreSession(session.id)
       expect(restored?.messages.map(({ id, content }) => [id, content])).toEqual([

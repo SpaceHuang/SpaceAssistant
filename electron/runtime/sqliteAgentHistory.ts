@@ -585,7 +585,19 @@ export class SqliteAgentHistory implements HistoryPort {
     const expectedSessionGeneration = this.sessionId && hasSessionsTable
       ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
       : undefined
-    const storedEvents = this.spillStore ? await Promise.all(events.map((event) => this.spillLargeCanonicalPayload(event))) : events
+    const storedEvents: HistoryEvent[] = []
+    if (this.spillStore) {
+      // Bound concurrent large-result encoding and yield between groups so a batch of
+      // tool completions cannot monopolize the main process while preparing spill files.
+      const spillBatchSize = 1
+      for (let offset = 0; offset < events.length; offset += spillBatchSize) {
+        const batch = events.slice(offset, offset + spillBatchSize)
+        storedEvents.push(...await Promise.all(batch.map((event) => this.spillLargeCanonicalPayload(event))))
+        if (offset + spillBatchSize < events.length) await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    } else {
+      storedEvents.push(...events)
+    }
     let storedTranscriptJson: string | undefined
     if (this.spillStore && transcriptCommit && transcriptCommit.protocol !== 2) {
       const transcriptJson = JSON.stringify(transcriptCommit.messages)
@@ -1447,7 +1459,63 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   async read(invocationId: string): Promise<HistorySnapshot> {
-    return this.readSync(invocationId)
+    const snapshot = this.readSync(invocationId, { hydrateSpills: false, validate: false })
+    try {
+      const events = this.spillStore ? await Promise.all(snapshot.events.map((event) => this.hydrateLargeToolResult(event))) : snapshot.events
+      for (const event of events) validateHistoryBatch([event])
+      validateHistoryTransition([], events)
+      return { ...snapshot, events }
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'SPILL_CONTENT_UNAVAILABLE') throw error
+      throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async readLatestEvent(invocationId: string): Promise<HistoryEvent | undefined> {
+    const exactStream = this.conn.prepare('SELECT invocation_id,version,schema_version,session_id FROM agent_history_streams WHERE invocation_id=?')
+      .get(invocationId) as StreamRow | undefined
+    if (exactStream && this.sessionId && exactStream.session_id !== this.sessionId) {
+      throw new HistoryBatchError(`invocation ${invocationId} does not belong to session ${this.sessionId}`)
+    }
+    let resolvedInvocationId = exactStream?.invocation_id
+    if (!resolvedInvocationId) {
+      const hasTurnTable = Boolean(this.conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'").get())
+      const hasAcceptedTurnTable = Boolean(this.conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='accepted_turn_contexts'").get())
+      if (hasTurnTable) {
+        const matches = this.conn.prepare(`SELECT turns.turn_id AS turnId FROM turns
+          JOIN agent_history_streams streams ON streams.invocation_id=turns.turn_id
+          WHERE turns.request_id=? AND (? IS NULL OR turns.session_id=?) ORDER BY turns.rowid DESC LIMIT 2`)
+          .all(invocationId, this.sessionId ?? null, this.sessionId ?? null) as Array<{ turnId: string }>
+        if (!this.sessionId && matches.length > 1) throw new HistoryBatchError(`requestId ${invocationId} maps to multiple session turns`)
+        resolvedInvocationId = matches[0]?.turnId
+      }
+      if (!resolvedInvocationId && hasAcceptedTurnTable) {
+        const matches = this.conn.prepare(`SELECT turn_id AS turnId FROM accepted_turn_contexts
+          WHERE request_id=? AND (? IS NULL OR session_id=?) ORDER BY created_at DESC LIMIT 2`)
+          .all(invocationId, this.sessionId ?? null, this.sessionId ?? null) as Array<{ turnId: string }>
+        if (!this.sessionId && matches.length > 1) throw new HistoryBatchError(`requestId ${invocationId} maps to multiple accepted turns`)
+        if (matches.length === 1) resolvedInvocationId = matches[0]!.turnId
+      }
+      resolvedInvocationId ??= invocationId
+    }
+    const stream = exactStream ?? this.conn.prepare('SELECT invocation_id,version,schema_version,session_id FROM agent_history_streams WHERE invocation_id=?')
+      .get(resolvedInvocationId) as StreamRow | undefined
+    if (!stream || stream.version === 0) return undefined
+    if (stream.schema_version !== this.schemaVersion) throw new HistoryBatchError(`unsupported schema version ${stream.schema_version} (adapter supports ${this.schemaVersion})`)
+    const row = this.conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,session_id
+      FROM agent_history_events WHERE invocation_id=? ORDER BY sequence DESC LIMIT 1`).get(resolvedInvocationId) as EventRow | undefined
+    if (!row) throw new HistoryCorruptionError(invocationId, 'stream version is nonzero but no latest event exists')
+    if (row.sequence !== stream.version || row.schema_version !== stream.schema_version ||
+      (row.session_id !== null && row.session_id !== stream.session_id)) {
+      throw new HistoryCorruptionError(invocationId, 'latest event ownership or sequence differs from its stream')
+    }
+    try {
+      const event = fromRow(row)
+      return this.spillStore ? this.hydrateLargeToolResultSync(event) : event
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'SPILL_CONTENT_UNAVAILABLE') throw error
+      throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error))
+    }
   }
 
   async prepareTransitionState(snapshot: HistorySnapshot): Promise<void> {
@@ -1513,7 +1581,7 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   /** Synchronous read for startup coordinators whose recovery contract is intentionally synchronous. */
-  readSync(invocationId: string): HistorySnapshot {
+  readSync(invocationId: string, options: { hydrateSpills?: boolean; validate?: boolean } = {}): HistorySnapshot {
     const readGeneration = this.sessionId
       ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
       : undefined
@@ -1565,8 +1633,8 @@ export class SqliteAgentHistory implements HistoryPort {
     const events = rows.map((row) => {
       try {
         const event = fromRow(row)
-        if (this.spillStore) return this.hydrateLargeToolResultSync(event)
-        validateHistoryBatch([event])
+        if (this.spillStore && options.hydrateSpills !== false) return this.hydrateLargeToolResultSync(event)
+        if (options.validate !== false) validateHistoryBatch([event])
         return event
       } catch (error) {
         if (error && typeof error === 'object' && 'code' in error && error.code === 'SPILL_CONTENT_UNAVAILABLE') throw error
@@ -1577,8 +1645,10 @@ export class SqliteAgentHistory implements HistoryPort {
     if (stream && events.some((event, index) => event.sequence !== index + 1 || event.schemaVersion !== stream.schema_version)) {
       throw new HistoryCorruptionError(invocationId, 'event sequence or schema version is not contiguous')
     }
-    try { validateHistoryTransition([], events) }
-    catch (error) { throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error)) }
+    if (options.validate !== false) {
+      try { validateHistoryTransition([], events) }
+      catch (error) { throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error)) }
+    }
     const sessionGeneration = this.sessionId
       ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
       : undefined
@@ -1783,6 +1853,80 @@ export class SqliteAgentHistory implements HistoryPort {
       }
     } else if (event.kind === 'invocation-completed' && 'outputText' in payload) {
       hydrated.outputText = hydrateTaggedText(payload.outputText)
+    }
+    const result = { ...event, payload: hydrated }
+    validateHistoryBatch([result])
+    return result
+  }
+
+  private async hydrateLargeToolResult(event: HistoryEvent): Promise<HistoryEvent> {
+    if (!event.payload || typeof event.payload !== 'object') return event
+    const payload = event.payload as Record<string, unknown>
+    const hydrateTaggedText = async (tagged: unknown): Promise<unknown> => {
+      if (!tagged || typeof tagged !== 'object' || !('__spaceassistant_spill_v1' in tagged)) return tagged
+      const descriptor = (tagged as { __spaceassistant_spill_v1: SpillDescriptor }).__spaceassistant_spill_v1
+      if (descriptor.kind !== 'source-of-truth') throw new Error('canonical tool result references a non-source spill')
+      return this.spillStore!.readSourceTruth(descriptor)
+    }
+    const hydrated: Record<string, unknown> = { ...payload }
+    if (event.kind === 'tool-call-finished') {
+      const hydrateResult = async (value: unknown): Promise<unknown> => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+        const record = value as Record<string, unknown>
+        const data = await hydrateTaggedText(record.data)
+        return data === record.data ? value : { ...record, data }
+      }
+      if ('result' in payload) hydrated.result = await hydrateResult(payload.result)
+      const ledger = payload.sessionLedger
+      if (ledger && typeof ledger === 'object' && !Array.isArray(ledger) && 'result' in ledger) {
+        hydrated.sessionLedger = { ...(ledger as Record<string, unknown>), result: await hydrateResult((ledger as Record<string, unknown>).result) }
+      }
+    } else if (event.kind === 'model-response-committed') {
+      const message = payload.message
+      if (message && typeof message === 'object' && !Array.isArray(message)) {
+        const record = message as Record<string, unknown>
+        const content = record.content
+        if (typeof content === 'object' && content !== null && !Array.isArray(content)) {
+          hydrated.message = { ...record, content: await hydrateTaggedText(content) }
+        } else if (Array.isArray(content)) {
+          hydrated.message = { ...record, content: await Promise.all(content.map(async (block) => {
+            if (!block || typeof block !== 'object' || Array.isArray(block)) return block
+            const blockRecord = block as Record<string, unknown>
+            const field = blockRecord.type === 'text' ? 'text' : blockRecord.type === 'thinking' ? 'thinking' : undefined
+            if (!field) return block
+            const value = await hydrateTaggedText(blockRecord[field])
+            return value === blockRecord[field] ? block : { ...blockRecord, [field]: value }
+          })) }
+        }
+      }
+    } else if (event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted') {
+      const messages = payload.messages
+      if (Array.isArray(messages)) {
+        hydrated.messages = await Promise.all(messages.map(async (message) => {
+          if (!message || typeof message !== 'object' || Array.isArray(message)) return message
+          const record = message as Record<string, unknown>
+          const content = record.content
+          if (typeof content === 'object' && content !== null && !Array.isArray(content)) {
+            const value = await hydrateTaggedText(content)
+            return value === content ? message : { ...record, content: value }
+          }
+          if (!Array.isArray(content)) return message
+          let changed = false
+          const blocks = await Promise.all(content.map(async (block) => {
+            if (!block || typeof block !== 'object' || Array.isArray(block)) return block
+            const blockRecord = block as Record<string, unknown>
+            const field = blockRecord.type === 'text' ? 'text' : blockRecord.type === 'thinking' ? 'thinking' : blockRecord.type === 'image' ? 'data' : undefined
+            if (!field) return block
+            const value = await hydrateTaggedText(blockRecord[field])
+            if (value === blockRecord[field]) return block
+            changed = true
+            return { ...blockRecord, [field]: value }
+          }))
+          return changed ? { ...record, content: blocks } : message
+        }))
+      }
+    } else if (event.kind === 'invocation-completed' && 'outputText' in payload) {
+      hydrated.outputText = await hydrateTaggedText(payload.outputText)
     }
     const result = { ...event, payload: hydrated }
     validateHistoryBatch([result])

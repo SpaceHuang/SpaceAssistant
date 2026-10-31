@@ -25,13 +25,13 @@ export function createFixtureDefinition(args) {
   const rng = (() => { let x = seed >>> 0; return () => ((x = (x * 1664525 + 1013904223) >>> 0) / 0x100000000) })()
   const sizes = { eventBytes: 4096, messageBytes: 4096, toolBytes: 4096, hugeToolBytes: 1024 * 1024 }
   let scenarios = [
-    ...counts.events.flatMap((n) => counts.pending.map((pendingCount) => ({ kind: 'events', count: n, pendingCount,
+    ...counts.events.flatMap((n) => counts.pending.map((pendingCount) => ({ kind: 'events', scenarioId: `events-${n}-pending-${pendingCount}`, count: n, pendingCount,
       batchSize: 10, bodyBytes: n * sizes.eventBytes }))),
-    ...counts.turns.map((n) => ({ kind: 'turns', count: n, bodyBytes: n * sizes.messageBytes, pageSize: 20 })),
-    ...counts.tools.map((n) => ({ kind: 'tools', count: n, bodyBytes: n * sizes.toolBytes })),
-    { kind: 'large-tool-results', count: counts.hugeTools, batchSize: 10, bodyBytes: counts.hugeTools * sizes.hugeToolBytes },
-    ...counts.coldHistory.map((mib) => ({ kind: 'cold-history', count: mib, bodyBytes: mib * 1024 * 1024 })),
-    ...counts.contextSummary.map((count) => ({ kind: 'context-summary', count, bodyBytes: 1024 }))
+    ...counts.turns.map((n) => ({ kind: 'turns', scenarioId: `turns-${n}`, count: n, bodyBytes: n * sizes.messageBytes, pageSize: 20 })),
+    ...counts.tools.map((n) => ({ kind: 'tools', scenarioId: `tools-${n}`, count: n, bodyBytes: n * sizes.toolBytes })),
+    { kind: 'large-tool-results', scenarioId: `large-tool-results-${counts.hugeTools}`, count: counts.hugeTools, batchSize: 10, bodyBytes: counts.hugeTools * sizes.hugeToolBytes },
+    ...counts.coldHistory.map((mib) => ({ kind: 'cold-history', scenarioId: `cold-history-${mib}`, count: mib, bodyBytes: mib * 1024 * 1024 })),
+    ...counts.contextSummary.map((count) => ({ kind: 'context-summary', scenarioId: `context-summary-${count}`, count, bodyBytes: 1024 }))
   ]
   if (only) scenarios = scenarios.filter(({ kind }) => kind === only)
   if (!scenarios.length) throw new Error(`unknown or empty scenario selection: ${only}`)

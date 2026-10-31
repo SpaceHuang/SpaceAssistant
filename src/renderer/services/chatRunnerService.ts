@@ -40,26 +40,6 @@ function cloneMessages(msgs: Message[]): Message[] {
   }))
 }
 
-/** @deprecated timestamp 合并；展示/API 路径禁止使用。保留给测试兼容。 */
-export function mergeDbAndLive(db: Message[], live?: Message[] | null): Message[] {
-  return mergeMessagesByTimestamp(db, live)
-}
-
-/** timestamp 语义合并（非 DisplayOrder）。 */
-export function mergeMessagesByTimestamp(db: Message[], live?: Message[] | null): Message[] {
-  if (!live?.length) return db
-  const map = new Map<string, Message>()
-  for (const m of db) map.set(m.id, m)
-  for (const m of live) {
-    map.set(m.id, {
-      ...m,
-      toolCalls: m.toolCalls ? m.toolCalls.map((t) => ({ ...t })) : undefined,
-      skillHints: m.skillHints ? m.skillHints.map((h) => ({ ...h })) : undefined
-    })
-  }
-  return [...map.values()].sort((a, b) => a.timestamp - b.timestamp)
-}
-
 export function initLiveSessionFromStore(sessionId: string): void {
   // Historical rows belong to the display/query store. The live map tracks only
   // events that arrive during or after a turn, so session selection stays O(1).
@@ -74,13 +54,6 @@ function ensureLiveSession(sessionId: string): Message[] {
     liveBySession.set(sessionId, arr)
   }
   return arr
-}
-
-/** 合并 DB + Redux + live，供发送 LLM 请求时构建完整上下文。 */
-export async function resolveSessionMessagesForApi(sessionId: string): Promise<Message[]> {
-  const dbRows = await window.api.chatGetMessages({ sessionId })
-  const live = getLiveMessages(sessionId)
-  return mergeDbAndLive(dbRows, live)
 }
 
 /** 追加 live 快照；仅当用户正在查看该会话时同步 Redux；同步 API overlay。 */

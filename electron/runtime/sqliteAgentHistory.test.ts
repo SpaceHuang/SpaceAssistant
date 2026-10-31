@@ -58,6 +58,40 @@ function expectApiRouteScopesInvalid(db: ReturnType<typeof createMemoryAppDb>, s
 }
 
 describe('SqliteAgentHistory', () => {
+  it('prepares the batch idempotency lookup once per append batch', () => {
+    const conn = createDb()
+    const prepare = conn.prepare.bind(conn)
+    const prepareSpy = vi.spyOn(conn, 'prepare').mockImplementation((sql) => prepare(sql))
+    const events = Array.from({ length: 10 }, (_, index) => ({
+      invocationId: 'prepare-once-invocation', turnId: 'prepare-once-turn', sequence: index + 1, schemaVersion: 1,
+      eventId: `prepare-once-event-${index + 1}`, idempotencyKey: `prepare-once-key-${index + 1}`,
+      kind: 'approval-updated' as const, payload: { index }
+    }))
+
+    runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, events, 0))
+
+    expect(prepareSpy.mock.calls.filter(([sql]) => sql.includes('idempotency_key = ? OR event_id = ?'))).toHaveLength(1)
+    conn.close()
+  })
+
+  it('reads only the latest committed event without hydrating the invocation history', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    await history.appendBatch([
+      { invocationId: 'latest-event-read', turnId: 'latest-event-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'latest-event-context', idempotencyKey: 'latest-event-context', kind: 'invocation-context-committed', payload: { messages: [{ content: 'prior' }] } },
+      { invocationId: 'latest-event-read', turnId: 'latest-event-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'latest-event-terminal', idempotencyKey: 'latest-event-terminal', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    const fullRead = vi.spyOn(history, 'read')
+
+    await expect(history.readLatestEvent('latest-event-read')).resolves.toMatchObject({
+      eventId: 'latest-event-terminal', kind: 'invocation-completed'
+    })
+    expect(fullRead).not.toHaveBeenCalled()
+    conn.close()
+  })
+
   // This regression exercises the production SQLite port without a remote model.
   it('uses the real SQLite history port for cached hot appends and keyed provider replay', async () => {
     const temp = createTempDatabase('sqlite-history-writer-count-')
@@ -515,6 +549,31 @@ describe('SqliteAgentHistory', () => {
     await fs.rm(path.join(root, stored.messages[0]!.content.__spaceassistant_spill_v1.locator))
     expect(() => history.readSync('spill-recovery-invocation')).toThrowError(expect.objectContaining({ code: 'SPILL_CONTENT_UNAVAILABLE' }))
     await expect(history.recoverInterruptedInvocations()).rejects.toThrowError(expect.objectContaining({ code: 'SPILL_CONTENT_UNAVAILABLE' }))
+    temp.cleanup()
+  })
+
+  it('hydrates cold History spills asynchronously without synchronous file reads', async () => {
+    const temp = createTempDatabase('history-spill-async-read-')
+    const conn = getDbConnection(temp.db)
+    const sessionId = 'spill-async-read-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'spill-generation')`).run(sessionId)
+    const store = createSpillStore(path.join(path.dirname(temp.dbPath), 'spill'))
+    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId, store)
+    const sourceBody = 'async source body '.repeat(5_000)
+    await history.appendBatch([{
+      invocationId: 'spill-async-read-invocation', turnId: 'spill-async-read-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'spill-async-read-event', idempotencyKey: 'spill-async-read-event', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'async-user', role: 'user', content: sourceBody }] }
+    }], 0)
+    const syncRead = vi.spyOn(store, 'readSourceTruthSync').mockImplementation(() => { throw new Error('sync spill read used') })
+    const asyncRead = vi.spyOn(store, 'readSourceTruth')
+
+    const snapshot = await history.read('spill-async-read-invocation')
+
+    expect((snapshot.events[0]!.payload as { messages: Array<{ content: string }> }).messages[0]!.content).toBe(sourceBody)
+    expect(asyncRead).toHaveBeenCalledOnce()
+    expect(syncRead).not.toHaveBeenCalled()
     temp.cleanup()
   })
 
@@ -1546,6 +1605,39 @@ describe('SqliteAgentHistory', () => {
     expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('atomic-response-failure-assistant'))
       .toEqual({ content: 'initial checkpoint', status: 'streaming' })
     db.close()
+  })
+
+  it('serializes source spill writes for large tool result batches to keep main-thread pauses bounded', async () => {
+    const conn = createDb()
+    let activeWrites = 0
+    let maxConcurrentWrites = 0
+    let locator = 0
+    const spillStore = { commitSourceTruthUnderFence: async (payload: string) => {
+      activeWrites += 1
+      maxConcurrentWrites = Math.max(maxConcurrentWrites, activeWrites)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      activeWrites -= 1
+      locator += 1
+      return { version: 1 as const, kind: 'source-of-truth' as const, locator: `${String(locator).padStart(8, '0')}.spill`,
+        byteLength: Buffer.byteLength(payload), sha256: createHash('sha256').update(payload).digest('hex'), createdAt: 1, head: payload.slice(0, 256), tail: payload.slice(-256) }
+    } } as unknown as SpillStore
+    const history = new SqliteAgentHistory(conn, 1, () => 100, undefined, spillStore)
+    const toolCallIds = Array.from({ length: 8 }, (_, index) => `spill-call-${index}`)
+    const events: HistoryEvent[] = [{ ...event('spill-batch-proposal', 1), kind: 'model-response-committed',
+      payload: { message: { role: 'assistant', toolCalls: toolCallIds.map((id) => ({ id })) } } }]
+    for (const [index, toolCallId] of toolCallIds.entries()) {
+      events.push({ ...event(`spill-batch-start-${index}`, index + 2), kind: 'tool-call-started', payload: { toolCallId } })
+    }
+    for (const [index, toolCallId] of toolCallIds.entries()) {
+      events.push({ ...event(`spill-batch-finish-${index}`, toolCallIds.length + index + 2), kind: 'tool-call-finished',
+        payload: { toolCallId, result: { success: true, data: 'x'.repeat(70 * 1024) } } })
+    }
+
+    await history.appendBatch(events, 0)
+
+    expect(maxConcurrentWrites).toBe(1)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events').get()).toEqual({ count: events.length })
+    conn.close()
   })
 
   it('keeps large canonical response inline and mirrored when source spill preparation fails', async () => {

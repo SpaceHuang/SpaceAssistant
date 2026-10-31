@@ -89,7 +89,7 @@ const mockIpcMain = () => {
 function makeCtx(db: AppIpcContext['db']): AppIpcContext {
   return {
     db,
-    backup: { schedule: vi.fn(), flush: vi.fn(), backupImmediate: vi.fn(), deleteBackup: vi.fn() } as unknown as AppIpcContext['backup'],
+    backup: { backupImmediate: vi.fn(), deleteBackup: vi.fn(), deleteBackupWithRetry: vi.fn() } as unknown as AppIpcContext['backup'],
     workDirManager: {
       listProfiles: () => [],
       addProfile: vi.fn(),

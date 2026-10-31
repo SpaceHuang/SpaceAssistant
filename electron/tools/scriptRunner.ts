@@ -1,4 +1,7 @@
-import * as ts from 'typescript'
+import type * as ts from 'typescript'
+import { createLazyRuntimeModule } from '../lazyRuntimeModule'
+
+const getTypeScript = createLazyRuntimeModule(() => require('typescript') as typeof ts)
 
 export type RunScriptLanguage = 'python' | 'javascript' | 'typescript' | 'powershell'
 export type ScriptInterpreterPaths = Partial<Record<Exclude<RunScriptLanguage, 'python'>, string>>
@@ -21,12 +24,13 @@ export function resolveNonPythonScriptLaunch(
     return { command: interpreterPaths.javascript?.trim() || 'node', args: ['--input-type=module', '-e', source], interpreterName: 'node', code: source }
   }
   if (language === 'typescript') {
-    const result = ts.transpileModule(source, {
+    const compiler = getTypeScript()
+    const result = compiler.transpileModule(source, {
       fileName: 'run-script.ts',
       reportDiagnostics: true,
-      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, removeComments: true }
+      compilerOptions: { target: compiler.ScriptTarget.ES2022, module: compiler.ModuleKind.ESNext, removeComments: true }
     })
-    if (result.diagnostics?.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) throw new Error('INVALID_TYPESCRIPT_SCRIPT')
+    if (result.diagnostics?.some((diagnostic) => diagnostic.category === compiler.DiagnosticCategory.Error)) throw new Error('INVALID_TYPESCRIPT_SCRIPT')
     return {
       command: interpreterPaths.typescript?.trim() || 'node',
       args: ['--input-type=module', '-e', result.outputText],

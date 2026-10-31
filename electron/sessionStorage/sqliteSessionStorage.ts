@@ -18,7 +18,6 @@ import { withSessionLedgerLifecycleLock } from '../sessionLedgerLifecycle'
 import type { CompactionReplay } from '../../src/shared/compactionEvents'
 import type { CanonicalContextMeterEvent, PreparedChatBodyView } from './public/model'
 import { createStorageSessionContextAdapter } from './contextAdapter'
-import { createSqliteSessionRecoveryPort, type SessionRecoveryDependencies } from './recovery'
 import { createStorageLifecycleControl } from './lifecycle'
 import { createSessionLedgerRecoveryBindings } from './infrastructure/sqlite/sessionLedgerRecoveryBindings'
 import { readSessionLedgerAvailability } from './infrastructure/sqlite/sessionLedgerAvailabilityReader'
@@ -98,7 +97,6 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   ensureSessionLedgerReady?: (input: { session: import('../../src/shared/domainTypes').Session; workDir: string; retryBlocked?: boolean }) =>
     Promise<boolean | { ready: boolean; canonicalReadVersion: number | null }>
   inspectMaintenance?: () => readonly MaintenanceState[]
-  recoveryStages?: Partial<Pick<SessionRecoveryDependencies, 'history' | 'snapshots' | 'coordinator' | 'reconcile' | 'continuations' | 'ledgerRepairs'>>
 } = {}): SessionStorage {
   const ledgerCheckReady = (result: boolean | { ready: boolean; canonicalReadVersion: number | null }): boolean =>
     typeof result === 'boolean' ? result : result.ready
@@ -678,18 +676,14 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
         }
       } })
   })
-  const recovery = createSqliteSessionRecoveryPort({ db, queries, execution, getTurnRuntime: options.getTurnRuntime, stages: options.recoveryStages })
   const availability = Object.freeze({
     inspect: (sessionId: string) => runInTransaction(getDbConnection(db), () => {
       const session = queries.readSession(sessionId)
-      const recoveryStatus = recovery.inspectRecoveryStatus()
-      const globalFence = Object.freeze({ state: recoveryStatus.state, source: Object.freeze({ recoveryState: recoveryStatus.state }) })
       const maintenanceTasks = (options.inspectMaintenance?.() ?? []).map(({ taskId, category, status }) => ({ taskId, category, status }))
       const maintenanceState = maintenanceTasks.some(({ status }) => status === 'failed') ? 'blocked' as const
         : maintenanceTasks.some(({ status }) => status === 'paused') ? 'paused' as const : 'available' as const
       const maintenanceSource = Object.freeze(maintenanceTasks.map(({ taskId, status }) => Object.freeze({ taskId, status })))
       if (!session) return Object.freeze({
-        globalFence,
         content: Object.freeze({ state: 'unavailable' as const, reason: 'session-missing' as const,
           source: Object.freeze({ sessionGeneration: '', messageRevision: 0, authority: 'unknown' }) }),
         execution: Object.freeze({ state: 'blocked' as const, source: Object.freeze({ sessionId, transcriptVersion: 0 }) }),
@@ -707,9 +701,8 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
         else throw error
       }
       const transcript = execution.readTranscriptState(sessionId)
-      let executionState: 'ready' | 'busy' | 'pending-recovery' | 'commit-uncertain' | 'blocked'
-      if (recoveryStatus.state === 'pending' || recoveryStatus.state === 'blocked' || recovery.inspectReadiness(sessionId).reason === 'recovery-pending') executionState = 'pending-recovery'
-      else if (transcript.status === 'commit_uncertain') executionState = 'commit-uncertain'
+      let executionState: 'ready' | 'busy' | 'commit-uncertain' | 'blocked'
+      if (transcript.status === 'commit_uncertain') executionState = 'commit-uncertain'
       else if (transcript.status === 'blocked') executionState = 'blocked'
       else if (execution.hasActiveTurn(sessionId)) executionState = 'busy'
       else executionState = 'ready'
@@ -727,7 +720,6 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
           ...(readiness.failureClass !== undefined ? { failureClass: readiness.failureClass } : {}) } }
       }
       return Object.freeze({
-        globalFence,
         content: Object.freeze({ state: contentReadable ? 'readable' as const : 'unavailable' as const,
           ...(!contentReadable ? { reason: 'content-unavailable' as const } : {}),
           source: Object.freeze({ sessionGeneration: session.generation, messageRevision: cutover?.message_revision ?? 0,
@@ -751,7 +743,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const readContextMeterEventsForSession = async (input: Readonly<{ sessionId: string; workDir: string }>): Promise<readonly CanonicalContextMeterEvent[]> =>
     readContextMeterEventsForLocation(input.sessionId, input.workDir)
   const storagePorts: SessionStorage = {
-    queries, commands: createSessionCommands(db), execution, contexts, recovery, availability, ensureLedgerReady,
+    queries, commands: createSessionCommands(db), execution, contexts, availability, ensureLedgerReady,
     readPreparedChatBodyV1, canReadChatBodyBeforePreparation, requestChatBodyV1, readChatMessagesBeforePreparation,
     cleanup: createSqliteSessionCleanupPort(db),
     projectionMigration: Object.freeze({
@@ -954,11 +946,6 @@ export function createSqliteSessionStorageHost(db: AppDatabase, input: {
       await lifecycle.prepareProjection(request)
       lifecycle.requestMaintenance({ reason: 'scope-changed', category: 'pending-reclamation' })
     },
-    recoveryStages: {
-      ...input.storage.recoveryStages,
-      history: input.startup.recoverHistory,
-      ledgerRepairs: async () => (await input.startup.recoverSessionLedgers()).repairFailureCount
-    }
   })
   const hostStorage: SessionStorage = Object.freeze({ ...storage,
     prepareProjection: async (request: Parameters<NonNullable<SessionStorage['prepareProjection']>>[0]) => {

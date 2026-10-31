@@ -14,7 +14,7 @@ import * as sessionStorageShadow from './sessionStorage/infrastructure/sqlite/se
 import * as sessionStorageCutover from './sessionStorage/certification'
 import * as sessionTranscriptProjection from './sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import * as sessionContentWriteAuthority from './sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority'
-import { backupPageReader, loadBackupPayload } from './ipc/ipcShared'
+import { backupPageReader } from './ipc/ipcShared'
 import { createMemoryAppDb, createTempDatabase } from './database/testHelpers'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { getDbConnection as getActualDbConnection } from './database/sqliteStore'
@@ -358,7 +358,7 @@ describe('file IPC handlers', () => {
     expect(databaseOperations.getSession(ctx.db, session.id)?.metadata).toEqual({ plan: 'legacy', userNote: 'keep' })
   })
 
-  it('auto backup reader resolves message bodies through the canonical-aware sequence page', async () => {
+  it('explicit backup page reader resolves message bodies through the canonical-aware sequence page', async () => {
     const message = { id: 'backup-canonical-user', sessionId: 'backup-session', role: 'user' as const,
       content: 'canonical backup body', timestamp: 1, status: 'sent' as const, schemaVersion: 1 }
     const readPage = vi.spyOn(sessionTranscriptProjection, 'getProjectedMessagesPageWithSequence').mockReturnValue({
@@ -368,26 +368,6 @@ describe('file IPC handlers', () => {
 
     expect(readPage).toHaveBeenCalledWith(ctx.db, 'backup-session', 0, 25)
     expect(page).toEqual({ messages: [message], nextSequence: 8 })
-  })
-
-  it('backup payload trusts the injected query result and does not fall back to a database reader', async () => {
-    const queries = Object.freeze({ ...ctx.sessionStorage!.queries, readSession: vi.fn(() => undefined) })
-    ctx.sessionStorage = { ...ctx.sessionStorage!, queries } as SessionStorage
-
-    await expect(loadBackupPayload(ctx, 'missing-backup-session')).resolves.toBeNull()
-    expect(database.getSession).not.toHaveBeenCalled()
-    expect(queries.readSession).toHaveBeenCalledWith('missing-backup-session')
-  })
-
-  it('prepares canonical chat bodies before selecting the backup session snapshot', async () => {
-    const events: string[] = []
-    const queries = Object.freeze({ ...ctx.sessionStorage!.queries, readSession: vi.fn(() => { events.push('select'); return undefined }) })
-    ctx.sessionStorage = { ...ctx.sessionStorage!, queries,
-      ensureChatBodyV1: async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`); return [] } } as SessionStorage
-
-    await expect(loadBackupPayload(ctx, 'backup-order-session')).resolves.toBeNull()
-
-    expect(events).toEqual(['select'])
   })
 
   it('API context baseline IPC resolves the latest-window rows through canonical bodies', async () => {

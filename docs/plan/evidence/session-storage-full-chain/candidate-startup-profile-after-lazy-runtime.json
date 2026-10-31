@@ -1,0 +1,1165 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-1",
+        "count": 100,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-16",
+        "count": 100,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-1",
+        "count": 400,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 1638400
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-16",
+        "count": 400,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 1638400
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-1",
+        "count": 800,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 3276800
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-16",
+        "count": 800,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 3276800
+      }
+    ],
+    "samples": 3,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "sqlite-transaction-boundary",
+        "samples": 3,
+        "work": "SELECT 1 inside production runInTransaction",
+        "p50Ms": 0.006,
+        "p95Ms": 0.006,
+        "maxMs": 0.015
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 1,
+        "samples": 3,
+        "inputBytes": {
+          "p50Bytes": 2983,
+          "p95Bytes": 2983,
+          "maxBytes": 2983
+        },
+        "resultBytes": {
+          "p50Bytes": 1677,
+          "p95Bytes": 1677,
+          "maxBytes": 1677
+        },
+        "roundTrip": {
+          "p50Ms": 16.517,
+          "p95Ms": 16.517,
+          "maxMs": 29.417
+        },
+        "workerDuration": {
+          "p50Ms": 0.732,
+          "p95Ms": 0.732,
+          "maxMs": 0.757
+        }
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 100,
+        "samples": 3,
+        "inputBytes": {
+          "p50Bytes": 232939,
+          "p95Bytes": 232939,
+          "maxBytes": 232939
+        },
+        "resultBytes": {
+          "p50Bytes": 111459,
+          "p95Bytes": 111459,
+          "maxBytes": 111459
+        },
+        "roundTrip": {
+          "p50Ms": 16.884,
+          "p95Ms": 16.884,
+          "maxMs": 17.272
+        },
+        "workerDuration": {
+          "p50Ms": 0.963,
+          "p95Ms": 0.963,
+          "maxMs": 1.019
+        }
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-1",
+        "count": 100,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 409600,
+        "samples": 3,
+        "historyReadCalls": 3,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0.695,
+        "historyAppendCalls": 30,
+        "historyAppendDurationMs": 58.946,
+        "historyBytesWritten": 1239147,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.001,
+          "p95Ms": 0.002,
+          "maxMs": 0.121
+        },
+        "p50Ms": 19.451,
+        "p95Ms": 19.451,
+        "maxMs": 23.265
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-16",
+        "count": 100,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 409600,
+        "samples": 3,
+        "historyReadCalls": 3,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0.326,
+        "historyAppendCalls": 30,
+        "historyAppendDurationMs": 62.342,
+        "historyBytesWritten": 1241421,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0.001,
+          "maxMs": 0.002
+        },
+        "p50Ms": 20.037,
+        "p95Ms": 20.037,
+        "maxMs": 23.1
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-1",
+        "count": 400,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 1638400,
+        "samples": 3,
+        "historyReadCalls": 3,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0.315,
+        "historyAppendCalls": 120,
+        "historyAppendDurationMs": 256.594,
+        "historyBytesWritten": 4956147,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.008
+        },
+        "p50Ms": 88.753,
+        "p95Ms": 88.753,
+        "maxMs": 90.187
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-16",
+        "count": 400,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 1638400,
+        "samples": 3,
+        "historyReadCalls": 3,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0.309,
+        "historyAppendCalls": 120,
+        "historyAppendDurationMs": 226.052,
+        "historyBytesWritten": 4958421,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.001
+        },
+        "p50Ms": 74.701,
+        "p95Ms": 74.701,
+        "maxMs": 78.207
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-1",
+        "count": 800,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 3276800,
+        "samples": 3,
+        "historyReadCalls": 3,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0.299,
+        "historyAppendCalls": 240,
+        "historyAppendDurationMs": 454.47,
+        "historyBytesWritten": 9912147,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.012
+        },
+        "p50Ms": 152.425,
+        "p95Ms": 152.425,
+        "maxMs": 152.455
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-16",
+        "count": 800,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 3276800,
+        "samples": 3,
+        "historyReadCalls": 3,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0.296,
+        "historyAppendCalls": 240,
+        "historyAppendDurationMs": 451.571,
+        "historyBytesWritten": 9914421,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.001
+        },
+        "p50Ms": 151.604,
+        "p95Ms": 151.604,
+        "maxMs": 152.189
+      },
+      {
+        "kind": "startup-session-scale",
+        "completedSessionCount": 100,
+        "samples": 3,
+        "completedMessages": 200,
+        "dbOpen": {
+          "p50Ms": 1.888,
+          "p95Ms": 1.888,
+          "maxMs": 2.062
+        },
+        "minimumStorageBarrier": {
+          "p50Ms": 0.069,
+          "p95Ms": 0.069,
+          "maxMs": 1.854
+        },
+        "firstTargetPreparation": {
+          "p50Ms": 0.191,
+          "p95Ms": 0.191,
+          "maxMs": 0.695
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.261,
+          "p95Ms": 0.261,
+          "maxMs": 2.55
+        },
+        "scope": "file-backed SQLite reopen, SessionStorage composition, and one selected target availability check",
+        "limitations": [
+          "startup does not inspect unselected session messages or globally recover History",
+          "availability preparation reads at most the selected session API baseline",
+          "Electron window load is reported separately"
+        ]
+      },
+      {
+        "kind": "startup-session-scale",
+        "completedSessionCount": 1000,
+        "samples": 3,
+        "completedMessages": 2000,
+        "dbOpen": {
+          "p50Ms": 1.985,
+          "p95Ms": 1.985,
+          "maxMs": 2.2
+        },
+        "minimumStorageBarrier": {
+          "p50Ms": 0.064,
+          "p95Ms": 0.064,
+          "maxMs": 0.098
+        },
+        "firstTargetPreparation": {
+          "p50Ms": 0.208,
+          "p95Ms": 0.208,
+          "maxMs": 0.278
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.272,
+          "p95Ms": 0.272,
+          "maxMs": 0.376
+        },
+        "scope": "file-backed SQLite reopen, SessionStorage composition, and one selected target availability check",
+        "limitations": [
+          "startup does not inspect unselected session messages or globally recover History",
+          "availability preparation reads at most the selected session API baseline",
+          "Electron window load is reported separately"
+        ]
+      },
+      {
+        "kind": "cold-app-first-screen",
+        "samples": 3,
+        "processSpawnToFirstPaint": {
+          "p50Ms": 1085.599,
+          "p95Ms": 1085.599,
+          "maxMs": 1231.551
+        },
+        "bootstrapToFirstPaint": {
+          "p50Ms": 953.463,
+          "p95Ms": 953.463,
+          "maxMs": 1121.036
+        },
+        "bootstrapToWindowReady": {
+          "p50Ms": 588,
+          "p95Ms": 588,
+          "maxMs": 720
+        },
+        "rendererStartToFirstPaint": {
+          "p50Ms": 135,
+          "p95Ms": 135,
+          "maxMs": 135
+        },
+        "mainModuleLoad": {
+          "p50Ms": 232.619,
+          "p95Ms": 232.619,
+          "maxMs": 279.044
+        },
+        "rendererOutcome": "ok",
+        "appVersion": "0.3.1",
+        "electronVersion": "44.1.1",
+        "sqliteVersion": "3.53.3",
+        "topModuleLoadSelfMs": [
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/types.js",
+            "meanMs": 8.981
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/auth.js",
+            "meanMs": 2.099
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/main.js",
+            "meanMs": 2.016
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/sessionStorage/queries.js",
+            "meanMs": 1.96
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/web-tree-sitter/web-tree-sitter.cjs",
+            "meanMs": 1.935
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v3/types.cjs",
+            "meanMs": 1.776
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/runtime/sqliteAgentHistory.js",
+            "meanMs": 1.675
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/packages/agent-sdk/src/turn.js",
+            "meanMs": 1.454
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/src/shared/mcpTypes.js",
+            "meanMs": 1.413
+          },
+          {
+            "filename": "http",
+            "meanMs": 1.273
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/tools/builtinExecutors.js",
+            "meanMs": 1.267
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/res/resource/model-baseline.json",
+            "meanMs": 1.257
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v4/classic/schemas.cjs",
+            "meanMs": 1.21
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/sessionEvents.js",
+            "meanMs": 1.163
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/fast-deep-equal/index.js",
+            "meanMs": 1.084
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/ipc/agentProtocolIpc.js",
+            "meanMs": 1.069
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v4/core/schemas.cjs",
+            "meanMs": 1.037
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/operations.js",
+            "meanMs": 1.03
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/confirmation/legacyImConfigBoundary.js",
+            "meanMs": 0.989
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/runtime/invocationAssembler.js",
+            "meanMs": 0.922
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/migrations.js",
+            "meanMs": 0.893
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/protocol.js",
+            "meanMs": 0.817
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/mcp/mcpConnectionManager.js",
+            "meanMs": 0.751
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/packages/agent-sdk/src/history.js",
+            "meanMs": 0.639
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/streamableHttp.js",
+            "meanMs": 0.564
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/schema.js",
+            "meanMs": 0.529
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/index.js",
+            "meanMs": 0.527
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/confirmation/toolCallGate.js",
+            "meanMs": 0.518
+          },
+          {
+            "filename": "dns/promises",
+            "meanMs": 0.514
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/feishu/remoteCommandRouter.js",
+            "meanMs": 0.496
+          }
+        ],
+        "startupPhaseSamples": [
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 161,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 161,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 717,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 717,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 717,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 720,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 14,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 14,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 16,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 127,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 161,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 162,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 14,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 565,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 565,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 565,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 566,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 7,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 7,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 135,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 162,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 163,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 587,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 587,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 587,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 588,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 135,
+              "outcome": "ok"
+            }
+          ]
+        ],
+        "scope": "production main process, isolated empty userData per sample, production IPC handlers, built renderer over loopback HTTP; window show suppressed by probe bootstrap",
+        "limitations": [
+          "OS page cache is not cleared",
+          "no real model request is made",
+          "window pixels are not captured"
+        ]
+      }
+    ],
+    "buildFingerprint": {
+      "sourceSha256": "d1dd671520a1be81b6e2c4f153242c7e5377a5c5504c74f3423261d93c40c0e7",
+      "electronSha256": "4c14e418c22e45b786b13fa75c1fdc6fcc8bf78b1738aede81ee8cc587681b96",
+      "rendererSha256": "8a08e03c0d5528878db65f5c656d8fe5d952742b80f07d07f02a0a855e982ec4"
+    },
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "samples": 3,
+      "coldAppFirstScreen": {
+        "kind": "cold-app-first-screen",
+        "samples": 3,
+        "processSpawnToFirstPaint": {
+          "p50Ms": 1085.599,
+          "p95Ms": 1085.599,
+          "maxMs": 1231.551
+        },
+        "bootstrapToFirstPaint": {
+          "p50Ms": 953.463,
+          "p95Ms": 953.463,
+          "maxMs": 1121.036
+        },
+        "bootstrapToWindowReady": {
+          "p50Ms": 588,
+          "p95Ms": 588,
+          "maxMs": 720
+        },
+        "rendererStartToFirstPaint": {
+          "p50Ms": 135,
+          "p95Ms": 135,
+          "maxMs": 135
+        },
+        "mainModuleLoad": {
+          "p50Ms": 232.619,
+          "p95Ms": 232.619,
+          "maxMs": 279.044
+        },
+        "rendererOutcome": "ok",
+        "appVersion": "0.3.1",
+        "electronVersion": "44.1.1",
+        "sqliteVersion": "3.53.3",
+        "topModuleLoadSelfMs": [
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/types.js",
+            "meanMs": 8.981
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/auth.js",
+            "meanMs": 2.099
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/main.js",
+            "meanMs": 2.016
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/sessionStorage/queries.js",
+            "meanMs": 1.96
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/web-tree-sitter/web-tree-sitter.cjs",
+            "meanMs": 1.935
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v3/types.cjs",
+            "meanMs": 1.776
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/runtime/sqliteAgentHistory.js",
+            "meanMs": 1.675
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/packages/agent-sdk/src/turn.js",
+            "meanMs": 1.454
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/src/shared/mcpTypes.js",
+            "meanMs": 1.413
+          },
+          {
+            "filename": "http",
+            "meanMs": 1.273
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/tools/builtinExecutors.js",
+            "meanMs": 1.267
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/res/resource/model-baseline.json",
+            "meanMs": 1.257
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v4/classic/schemas.cjs",
+            "meanMs": 1.21
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/sessionEvents.js",
+            "meanMs": 1.163
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/fast-deep-equal/index.js",
+            "meanMs": 1.084
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/ipc/agentProtocolIpc.js",
+            "meanMs": 1.069
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v4/core/schemas.cjs",
+            "meanMs": 1.037
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/operations.js",
+            "meanMs": 1.03
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/confirmation/legacyImConfigBoundary.js",
+            "meanMs": 0.989
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/runtime/invocationAssembler.js",
+            "meanMs": 0.922
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/migrations.js",
+            "meanMs": 0.893
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/protocol.js",
+            "meanMs": 0.817
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/mcp/mcpConnectionManager.js",
+            "meanMs": 0.751
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/packages/agent-sdk/src/history.js",
+            "meanMs": 0.639
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/streamableHttp.js",
+            "meanMs": 0.564
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/schema.js",
+            "meanMs": 0.529
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/compile/index.js",
+            "meanMs": 0.527
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/confirmation/toolCallGate.js",
+            "meanMs": 0.518
+          },
+          {
+            "filename": "dns/promises",
+            "meanMs": 0.514
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/feishu/remoteCommandRouter.js",
+            "meanMs": 0.496
+          }
+        ],
+        "startupPhaseSamples": [
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 161,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 161,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 717,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 717,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 717,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 720,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 14,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 14,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 16,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 127,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 161,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 162,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 14,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 565,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 565,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 565,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 566,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 7,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 7,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 135,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 162,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 163,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 587,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 587,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 587,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 588,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 135,
+              "outcome": "ok"
+            }
+          ]
+        ],
+        "scope": "production main process, isolated empty userData per sample, production IPC handlers, built renderer over loopback HTTP; window show suppressed by probe bootstrap",
+        "limitations": [
+          "OS page cache is not cleared",
+          "no real model request is made",
+          "window pixels are not captured"
+        ]
+      }
+    }
+  },
+  "mode": "candidate",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}

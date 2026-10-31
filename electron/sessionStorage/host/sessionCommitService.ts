@@ -97,6 +97,10 @@ export function createSessionCommitService(input: Readonly<{
       if (invocationId !== input.invocationId) throw new Error('SESSION_COMMIT_INVOCATION_MISMATCH')
       return await input.history.read(invocationId)
     },
+    ...(input.history.readLatestEvent ? { readLatestEvent: async (invocationId: string) => {
+      if (invocationId !== input.invocationId) throw new Error('SESSION_COMMIT_INVOCATION_MISMATCH')
+      return await input.history.readLatestEvent!(invocationId)
+    } } : {}),
     ...(input.history.prepareTransitionState ? { prepareTransitionState: (snapshot: import('../../../packages/agent-sdk/src/history').HistorySnapshot) =>
       input.history.prepareTransitionState!(snapshot) } : {}),
     ...(input.history.findByIdempotencyKey ? { findByIdempotencyKey: async (invocationId: string, idempotencyKey: string) => {

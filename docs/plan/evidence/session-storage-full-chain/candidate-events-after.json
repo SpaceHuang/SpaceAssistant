@@ -1,0 +1,421 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-1",
+        "count": 100,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-16",
+        "count": 100,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-1",
+        "count": 400,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 1638400
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-16",
+        "count": 400,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 1638400
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-1",
+        "count": 800,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 3276800
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-16",
+        "count": 800,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 3276800
+      }
+    ],
+    "samples": 30,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "sqlite-transaction-boundary",
+        "samples": 30,
+        "work": "SELECT 1 inside production runInTransaction",
+        "p50Ms": 0.003,
+        "p95Ms": 0.005,
+        "maxMs": 0.014
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 1,
+        "samples": 30,
+        "inputBytes": {
+          "p50Bytes": 2993,
+          "p95Bytes": 2993,
+          "maxBytes": 2993
+        },
+        "resultBytes": {
+          "p50Bytes": 1680,
+          "p95Bytes": 1680,
+          "maxBytes": 1680
+        },
+        "roundTrip": {
+          "p50Ms": 18.765,
+          "p95Ms": 21.778,
+          "maxMs": 37.124
+        },
+        "workerDuration": {
+          "p50Ms": 0.795,
+          "p95Ms": 0.984,
+          "maxMs": 1.72
+        }
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 100,
+        "samples": 30,
+        "inputBytes": {
+          "p50Bytes": 233147,
+          "p95Bytes": 233147,
+          "maxBytes": 233147
+        },
+        "resultBytes": {
+          "p50Bytes": 111561,
+          "p95Bytes": 111561,
+          "maxBytes": 111561
+        },
+        "roundTrip": {
+          "p50Ms": 17.47,
+          "p95Ms": 21.278,
+          "maxMs": 21.85
+        },
+        "workerDuration": {
+          "p50Ms": 1.022,
+          "p95Ms": 1.251,
+          "maxMs": 1.477
+        }
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-1",
+        "count": 100,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 409600,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.125,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 639.213,
+        "historyBytesWritten": 12391490,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0.001,
+          "maxMs": 0.056
+        },
+        "p50Ms": 20.864,
+        "p95Ms": 24.257,
+        "maxMs": 32.521
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-16",
+        "count": 100,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 409600,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 2.799,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 634.429,
+        "historyBytesWritten": 12414530,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0.001,
+          "maxMs": 0.013
+        },
+        "p50Ms": 20.221,
+        "p95Ms": 24.766,
+        "maxMs": 25.625
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-1",
+        "count": 400,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 1638400,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.156,
+        "historyAppendCalls": 1200,
+        "historyAppendDurationMs": 2458.062,
+        "historyBytesWritten": 49561490,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.002
+        },
+        "p50Ms": 81.956,
+        "p95Ms": 87.621,
+        "maxMs": 89.276
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-16",
+        "count": 400,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 1638400,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.188,
+        "historyAppendCalls": 1200,
+        "historyAppendDurationMs": 2443.327,
+        "historyBytesWritten": 49584530,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.001
+        },
+        "p50Ms": 81.044,
+        "p95Ms": 86.857,
+        "maxMs": 95.138
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-1",
+        "count": 800,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 3276800,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.465,
+        "historyAppendCalls": 2400,
+        "historyAppendDurationMs": 4933.642,
+        "historyBytesWritten": 99121490,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.014
+        },
+        "p50Ms": 163.724,
+        "p95Ms": 175.163,
+        "maxMs": 180.211
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-16",
+        "count": 800,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 3276800,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.326,
+        "historyAppendCalls": 2400,
+        "historyAppendDurationMs": 4976.961,
+        "historyBytesWritten": 99144530,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.001
+        },
+        "p50Ms": 162.941,
+        "p95Ms": 176.082,
+        "maxMs": 223.677
+      },
+      {
+        "kind": "startup-session-scale",
+        "completedSessionCount": 100,
+        "samples": 30,
+        "completedMessages": 200,
+        "dbOpen": {
+          "p50Ms": 1.811,
+          "p95Ms": 1.922,
+          "maxMs": 2.056
+        },
+        "minimumStorageBarrier": {
+          "p50Ms": 0.029,
+          "p95Ms": 0.071,
+          "maxMs": 1.972
+        },
+        "firstTargetPreparation": {
+          "p50Ms": 0.158,
+          "p95Ms": 0.191,
+          "maxMs": 0.723
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.191,
+          "p95Ms": 0.267,
+          "maxMs": 2.696
+        },
+        "scope": "file-backed SQLite reopen, SessionStorage composition, and one selected target availability check",
+        "limitations": [
+          "startup does not inspect unselected session messages or globally recover History",
+          "availability preparation reads at most the selected session API baseline",
+          "Electron window load is reported separately"
+        ]
+      },
+      {
+        "kind": "startup-session-scale",
+        "completedSessionCount": 1000,
+        "samples": 30,
+        "completedMessages": 2000,
+        "dbOpen": {
+          "p50Ms": 1.779,
+          "p95Ms": 1.887,
+          "maxMs": 1.999
+        },
+        "minimumStorageBarrier": {
+          "p50Ms": 0.026,
+          "p95Ms": 0.035,
+          "maxMs": 0.056
+        },
+        "firstTargetPreparation": {
+          "p50Ms": 0.145,
+          "p95Ms": 0.166,
+          "maxMs": 0.235
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.171,
+          "p95Ms": 0.202,
+          "maxMs": 0.291
+        },
+        "scope": "file-backed SQLite reopen, SessionStorage composition, and one selected target availability check",
+        "limitations": [
+          "startup does not inspect unselected session messages or globally recover History",
+          "availability preparation reads at most the selected session API baseline",
+          "Electron window load is reported separately"
+        ]
+      },
+      {
+        "kind": "cold-app-first-screen",
+        "samples": 30,
+        "processSpawnToFirstPaint": {
+          "p50Ms": 1471.41,
+          "p95Ms": 1590.785,
+          "maxMs": 1779.177
+        },
+        "bootstrapToFirstPaint": {
+          "p50Ms": 1364.403,
+          "p95Ms": 1476.356,
+          "maxMs": 1675.334
+        },
+        "bootstrapToWindowReady": {
+          "p50Ms": 545,
+          "p95Ms": 591,
+          "maxMs": 675
+        },
+        "rendererStartToFirstPaint": {
+          "p50Ms": 466,
+          "p95Ms": 495,
+          "maxMs": 520
+        },
+        "rendererOutcome": "ok",
+        "appVersion": "0.3.1",
+        "electronVersion": "44.1.1",
+        "sqliteVersion": "3.53.3",
+        "scope": "production main process, isolated empty userData per sample, production IPC handlers, built renderer over loopback HTTP; window show suppressed by probe bootstrap",
+        "limitations": [
+          "OS page cache is not cleared",
+          "no real model request is made",
+          "window pixels are not captured"
+        ]
+      }
+    ],
+    "buildFingerprint": {
+      "sourceSha256": "2cbe1c14c8d7d35eb1e844b8a1b8d67ea30bf2d8dc402058feb67b0ec8c71360",
+      "electronSha256": "8187df9e9b232ae2c3ec0d2650c2cce957b95d8f119d8b940fe355c56e9b04fa",
+      "rendererSha256": "d2a206959482bd5017124dea0ef127b4d6847ccaa5d3e468a7d4041c8a1d607b"
+    },
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "samples": 30,
+      "coldAppFirstScreen": {
+        "kind": "cold-app-first-screen",
+        "samples": 30,
+        "processSpawnToFirstPaint": {
+          "p50Ms": 1471.41,
+          "p95Ms": 1590.785,
+          "maxMs": 1779.177
+        },
+        "bootstrapToFirstPaint": {
+          "p50Ms": 1364.403,
+          "p95Ms": 1476.356,
+          "maxMs": 1675.334
+        },
+        "bootstrapToWindowReady": {
+          "p50Ms": 545,
+          "p95Ms": 591,
+          "maxMs": 675
+        },
+        "rendererStartToFirstPaint": {
+          "p50Ms": 466,
+          "p95Ms": 495,
+          "maxMs": 520
+        },
+        "rendererOutcome": "ok",
+        "appVersion": "0.3.1",
+        "electronVersion": "44.1.1",
+        "sqliteVersion": "3.53.3",
+        "scope": "production main process, isolated empty userData per sample, production IPC handlers, built renderer over loopback HTTP; window show suppressed by probe bootstrap",
+        "limitations": [
+          "OS page cache is not cleared",
+          "no real model request is made",
+          "window pixels are not captured"
+        ]
+      }
+    }
+  },
+  "mode": "candidate",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}
