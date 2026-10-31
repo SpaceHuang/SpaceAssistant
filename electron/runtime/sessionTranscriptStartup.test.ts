@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { appendMessage, createSession, getMessage } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
-import { claimSessionExecution, commitSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, readSessionTranscript } from '../database/sessionTranscript'
+import { claimSessionExecution, commitSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, readSessionTranscript, reconcileUncertainSessionTranscript } from '../database/sessionTranscript'
 import { getPersistedTurn, listPersistedTurns } from '../database/operations'
 import { openDatabase } from '../database'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
@@ -18,6 +18,35 @@ function createUncertainCommittedSession() {
   commitSessionTranscript(db, { sessionId: 'startup-session', turnId: 'startup-turn', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'accepted' }] })
   markSessionExecutionUncertain(db, { sessionId: 'startup-session', turnId: 'startup-turn', ownerId: 'startup-process', generation: owner.generation })
   return db
+}
+
+async function createUncertainProtocol2Session() {
+  const db = createMemoryAppDb()
+  const session = createSession(db, { name: 'startup-protocol-2', model: 'test' })
+  const turnId = 'startup-protocol-2-turn'
+  const owner = claimSessionExecution(db, { sessionId: session.id, turnId, ownerId: 'startup-protocol-2-owner' })
+  if (!owner.acquired) throw new Error('test setup failed to claim protocol 2 session')
+  markSessionExecutionStarted(db, { sessionId: session.id, turnId, ownerId: 'startup-protocol-2-owner', generation: owner.generation })
+  const userMessage = { role: 'user', id: 'startup-protocol-2-user', content: 'accepted' }
+  const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+  await history.appendBatch([{
+    invocationId: turnId, turnId, sequence: 1, schemaVersion: 1, eventId: 'startup-protocol-2-context',
+    idempotencyKey: 'startup-protocol-2-context', kind: 'invocation-context-committed', payload: {
+      contextProtocol: 2, baseVersion: 0, inputMessages: [userMessage], failureInputMessages: [userMessage],
+      messages: [userMessage], scope: { kind: 'session', sessionId: session.id }, system: ''
+    }
+  }], 0)
+  await history.appendBatch([{
+    invocationId: turnId, turnId, sequence: 2, schemaVersion: 1, eventId: 'startup-protocol-2-terminal',
+    idempotencyKey: 'startup-protocol-2-terminal', kind: 'invocation-completed',
+    payload: { status: 'completed', contextSelection: { contextProtocol: 2, target: 'working' } }
+  }], 1, { sessionId: session.id, baseVersion: 0, outcome: 'completed', protocol: 2,
+    contextSelection: { contextProtocol: 2, target: 'working' },
+    executionLease: { sessionId: session.id, turnId, ownerId: 'startup-protocol-2-owner', generation: owner.generation } })
+  if (!markSessionExecutionUncertain(db, { sessionId: session.id, turnId, ownerId: 'startup-protocol-2-owner', generation: owner.generation })) {
+    throw new Error('test setup failed to mark protocol 2 commit uncertain')
+  }
+  return { db, sessionId: session.id, turnId, userMessage }
 }
 
 describe('startup transcript reconciliation ordering', () => {
@@ -70,6 +99,75 @@ describe('startup transcript reconciliation ordering', () => {
       .toEqual({ releasedUnstarted: 0, markedUncertain: 0, repairedCheckpoints: 0, reconciled: 1 })
     expect(readSessionTranscript(db, 'startup-session').status).toBe('ready')
     expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get('startup-session')).toEqual({ status: 'queued' })
+    db.close()
+  })
+
+  it('releases an uncertain protocol 2 commit from its receipt and terminal when the auxiliary entry is absent', async () => {
+    const { db, sessionId, turnId, userMessage } = await createUncertainProtocol2Session()
+    getDbConnection(db).prepare('DELETE FROM session_transcript_entries WHERE session_id=? AND version=1').run(sessionId)
+
+    expect(reconcileStartupSessionTranscripts(db, { historyRecoverySucceeded: true, turnCoordinatorRecoverySucceeded: true }, 2_000))
+      .toMatchObject({ reconciled: 1 })
+    expect(readSessionTranscript(db, sessionId, { version: 1 })).toMatchObject({
+      version: 1, lastTurnId: turnId, status: 'ready', messages: [userMessage]
+    })
+    expect(getDbConnection(db).prepare('SELECT turn_id,status FROM session_execution_claims WHERE session_id=?').get(sessionId))
+      .toEqual({ turn_id: '', status: 'queued' })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_execution_queue WHERE session_id=? AND turn_id=?').get(sessionId, turnId))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('keeps a protocol 2 commit uncertain when its receipt has been lost', async () => {
+    const { db, sessionId, turnId } = await createUncertainProtocol2Session()
+    getDbConnection(db).prepare('DELETE FROM session_turn_commit_receipts WHERE session_id=? AND next_version=1').run(sessionId)
+
+    expect(reconcileStartupSessionTranscripts(db, { historyRecoverySucceeded: true, turnCoordinatorRecoverySucceeded: true }, 2_000))
+      .toMatchObject({ reconciled: 0 })
+    expect(() => readSessionTranscript(db, sessionId)).toThrow('SESSION_TRANSCRIPT_SELECTION_RECEIPT_MISSING')
+    expect(getDbConnection(db).prepare('SELECT turn_id,status FROM session_execution_claims WHERE session_id=?').get(sessionId))
+      .toMatchObject({ turn_id: turnId, status: 'commit_uncertain' })
+    expect(getDbConnection(db).prepare('SELECT status FROM session_execution_queue WHERE session_id=? AND turn_id=?').get(sessionId, turnId))
+      .toEqual({ status: 'commit_uncertain' })
+    db.close()
+  })
+
+  it('keeps a protocol 2 commit blocked when its receipt terminal payload is corrupt', async () => {
+    const { db, sessionId, turnId } = await createUncertainProtocol2Session()
+    getDbConnection(db).prepare(`UPDATE agent_history_events SET payload_json='{' WHERE session_id=? AND event_id='startup-protocol-2-terminal'`).run(sessionId)
+
+    expect(reconcileStartupSessionTranscripts(db, { historyRecoverySucceeded: true, turnCoordinatorRecoverySucceeded: true }, 2_000))
+      .toMatchObject({ reconciled: 0 })
+    expect(getDbConnection(db).prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get(sessionId))
+      .toEqual({ status: 'commit_uncertain' })
+    expect(getDbConnection(db).prepare('SELECT turn_id,status FROM session_execution_claims WHERE session_id=?').get(sessionId))
+      .toEqual({ turn_id: turnId, status: 'commit_uncertain' })
+    db.close()
+  })
+
+  it('reconciles an uncertain review replacement by its receipt while its auxiliary entry is absent', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'startup-review-protocol-2', model: 'test' })
+    const owner = claimSessionExecution(db, { sessionId: session.id, turnId: 'review-source', ownerId: 'review-owner' })
+    if (!owner.acquired) throw new Error('test setup failed to claim review source')
+    expect(markSessionExecutionUncertain(db, { sessionId: session.id, turnId: 'review-source', ownerId: 'review-owner', generation: owner.generation })).toBe(true)
+    expect(reconcileUncertainSessionTranscript(db, {
+      sessionId: session.id, turnId: 'review-source', expectedVersion: 0, sessionGeneration: session.generation,
+      outcome: 'interrupted', messages: [{ role: 'user', id: 'review-user', content: 'reviewed' }],
+      operatorId: 'operator', rationale: 'startup recovery evidence', now: 10
+    })).toEqual({ reconciled: true, version: 1 })
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_transcript_checkpoints SET status='commit_uncertain',last_turn_id='review-source' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE session_execution_claims SET turn_id='review-source',owner_id='review-owner',status='commit_uncertain' WHERE session_id=?").run(session.id)
+    conn.prepare('DELETE FROM session_transcript_entries WHERE session_id=? AND version=1').run(session.id)
+
+    expect(reconcileStartupSessionTranscripts(db, { historyRecoverySucceeded: true, turnCoordinatorRecoverySucceeded: true }, 2_000))
+      .toMatchObject({ reconciled: 1 })
+    expect(readSessionTranscript(db, session.id, { version: 1 })).toMatchObject({
+      version: 1, lastTurnId: 'review-source', status: 'ready', messages: [{ role: 'user', id: 'review-user', content: 'reviewed' }]
+    })
+    expect(conn.prepare('SELECT turn_id,status FROM session_execution_claims WHERE session_id=?').get(session.id))
+      .toEqual({ turn_id: '', status: 'queued' })
     db.close()
   })
 

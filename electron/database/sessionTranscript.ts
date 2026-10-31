@@ -386,9 +386,37 @@ export function reconcileCommittedSessionTranscripts(db: AppDatabase, now = Date
     let count = 0
     for (const checkpoint of uncertain) {
       if (!checkpoint.last_turn_id) continue
-      const entry = conn.prepare(`SELECT version FROM session_transcript_entries WHERE session_id=? AND turn_id=?`).get(checkpoint.session_id, checkpoint.last_turn_id) as { version: number } | undefined
-      if (!entry || entry.version !== checkpoint.version) continue
-      conn.prepare(`UPDATE session_transcript_checkpoints SET status='ready',updated_at=? WHERE session_id=? AND version=? AND last_turn_id=? AND status='commit_uncertain'`).run(now, checkpoint.session_id, checkpoint.version, checkpoint.last_turn_id)
+      const entry = conn.prepare(`SELECT turn_id,version,context_selection_json FROM session_transcript_entries WHERE session_id=? AND turn_id=?`).get(checkpoint.session_id, checkpoint.last_turn_id) as { turn_id: string; version: number; context_selection_json: string | null } | undefined
+      const receipt = conn.prepare(`SELECT turn_id,next_version,base_version,outcome,event_start,event_end FROM session_turn_commit_receipts WHERE session_id=? AND next_version=?`).get(checkpoint.session_id, checkpoint.version) as
+        { turn_id: string; next_version: number; base_version: number; outcome: string; event_start: number | null; event_end: number | null } | undefined
+      const entrySelectsProtocol2 = entry?.context_selection_json !== null && entry?.context_selection_json !== undefined
+      let proven = false
+      if (entrySelectsProtocol2 || (!entry && receipt)) {
+        // Protocol 2 can be recovered only from a receipt whose terminal is valid
+        // and whose canonical projection can be reconstructed. An auxiliary row
+        // alone is insufficient evidence when its receipt is missing.
+        const isReviewReceipt = receipt?.turn_id.startsWith('session-review-turn:') ?? false
+        if (!receipt || receipt.next_version !== checkpoint.version || receipt.base_version !== checkpoint.version - 1 ||
+          !Number.isSafeInteger(receipt.event_start) || !Number.isSafeInteger(receipt.event_end) ||
+          !entrySelectsProtocol2 && receipt.turn_id !== checkpoint.last_turn_id && !isReviewReceipt) continue
+        const terminal = conn.prepare(`SELECT turn_id,kind,payload_json FROM agent_history_events WHERE session_id=? AND session_seq=?`)
+          .get(checkpoint.session_id, receipt.event_end!) as { turn_id: string; kind: string; payload_json: string } | undefined
+        if (!terminal || terminal.turn_id !== receipt.turn_id || !['invocation-completed','invocation-failed','invocation-interrupted','invocation-parked'].includes(terminal.kind)) continue
+        let payload: { contextSelection?: { contextProtocol?: unknown }; review?: { sourceTurnId?: unknown } }
+        try { payload = JSON.parse(terminal.payload_json) as typeof payload } catch { continue }
+        if (payload.contextSelection?.contextProtocol !== 2 || (receipt.turn_id !== checkpoint.last_turn_id && payload.review?.sourceTurnId !== checkpoint.last_turn_id)) continue
+        try {
+          const projection = readSessionTranscript(db, checkpoint.session_id, { version: checkpoint.version })
+          proven = projection.lastTurnId === checkpoint.last_turn_id
+        } catch { proven = false }
+      } else {
+        // Legacy snapshots predate protocol 2 receipts and remain recoverable
+        // through their original matching entry contract.
+        proven = Boolean(entry && entry.version === checkpoint.version && entry.turn_id === checkpoint.last_turn_id)
+      }
+      if (!proven) continue
+      const checkpointUpdate = conn.prepare(`UPDATE session_transcript_checkpoints SET status='ready',updated_at=? WHERE session_id=? AND version=? AND last_turn_id=? AND status='commit_uncertain'`).run(now, checkpoint.session_id, checkpoint.version, checkpoint.last_turn_id)
+      if (Number(checkpointUpdate.changes) !== 1) continue
       conn.prepare(`UPDATE session_execution_claims SET turn_id='',owner_id='',status='queued',updated_at=? WHERE session_id=? AND turn_id=? AND status='commit_uncertain'`).run(now, checkpoint.session_id, checkpoint.last_turn_id)
       conn.prepare(`DELETE FROM session_execution_queue WHERE session_id=? AND turn_id=? AND status='commit_uncertain'`).run(checkpoint.session_id, checkpoint.last_turn_id)
       count += 1
