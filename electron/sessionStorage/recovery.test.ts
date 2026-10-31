@@ -12,11 +12,25 @@ import { ensureLegacyLedgerReadiness, markLegacyLedgerMergeCompleted, markMissin
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSessionLedgerRecoveryBindings } from './infrastructure/sqlite/sessionLedgerRecoveryBindings'
+import { createSessionTranscriptRecoveryAdapter } from './recoveryDatabaseAdapter'
+import { claimSessionExecution } from '../database/sessionTranscript'
 import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
 import { appendCompactionTransaction, getSessionEventSink, readSessionEvents, resolveSessionEventPaths } from '../sessionEvents'
 import type { SessionHistoryRecoveryOptions } from './public/ports'
 
 describe('SessionRecoveryPort', () => {
+  it('exposes session-scoped transcript recovery to execution adapters', () => {
+    const db = createMemoryAppDb()
+    claimSessionExecution(db, { sessionId: 'adapter-target', turnId: 'stale', ownerId: 'old-owner', now: 1 })
+    claimSessionExecution(db, { sessionId: 'adapter-other', turnId: 'keep', ownerId: 'other-owner', now: 2 })
+
+    expect(createSessionTranscriptRecoveryAdapter(db).recoverTarget('adapter-target', 3))
+      .toMatchObject({ status: 'ready', releasedUnstarted: 1 })
+    expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get('adapter-other'))
+      .toEqual({ status: 'claimed' })
+    db.close()
+  })
+
   it('keeps startup recovery options as an explicit contract type', () => {
     const options: SessionHistoryRecoveryOptions = { onSessionLocationResolveError: () => undefined }
     const bindings = createSqliteStartupHistoryRecoveryBindings(createMemoryAppDb())

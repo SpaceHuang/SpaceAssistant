@@ -77,6 +77,7 @@ export interface SessionExecutionStore {
   readAccepted(input: Readonly<{ sessionId: string; requestId: string }>): AcceptedTurn | undefined
   readTranscriptState(sessionId: string): Readonly<{ sessionId: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked' }>
   readHostedTranscript(sessionId: string): HostedTranscriptSnapshot
+  recoverExecutionTarget(sessionId: string): { status: 'ready' | 'blocked' | 'active-owner'; releasedUnstarted: number; markedUncertain: number; reconciled: number }
   loadAcceptedContinuationTranscript(ref: Readonly<{ sessionId: string; turnId: string }>): ClaudeChatMessageWithBlocks[] | undefined
   claimExecution(input: Readonly<{ sessionId: string; turnId: string; ownerId: string }>): ExecutionClaimResult
   markExecutionStarted(input: ExecutionLease): boolean

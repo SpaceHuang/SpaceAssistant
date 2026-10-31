@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { openDatabase } from './index'
-import { commitSessionTranscript, claimSessionExecution, releaseSessionExecution, readSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, reconcileCommittedSessionTranscripts, reconcileUncertainSessionTranscript } from './sessionTranscript'
+import { commitSessionTranscript, claimSessionExecution, releaseSessionExecution, readSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, reconcileCommittedSessionTranscripts, reconcileUncertainSessionTranscript, recoverSessionExecutionForTarget } from './sessionTranscript'
 import { commitSessionTranscriptInTransaction } from './sessionTranscript'
 import { TransactionCommitUnknownError } from './transaction'
 import { createSession } from './operations'
@@ -390,6 +390,74 @@ describe('session transcript checkpoint and execution claim', () => {
     expect(readSessionTranscript(db, 'recover-session')).toMatchObject({ version: 1, lastTurnId: 'recover-turn', status: 'ready' })
     expect(claimSessionExecution(db, { sessionId: 'recover-session', turnId: 'next-turn', ownerId: 'process-2' })).toMatchObject({ acquired: true })
     expect(reconcileCommittedSessionTranscripts(db)).toBe(0)
+    db.close()
+  })
+
+  it('recovers only the requested target session before its next claim', () => {
+    const db = createMemoryAppDb()
+    expect(claimSessionExecution(db, { sessionId: 'target-recovery', turnId: 'stale-unstarted', ownerId: 'old-owner', now: 1 }))
+      .toMatchObject({ acquired: true })
+    expect(claimSessionExecution(db, { sessionId: 'other-recovery', turnId: 'other-unstarted', ownerId: 'other-owner', now: 2 }))
+      .toMatchObject({ acquired: true })
+
+    const recovery = recoverSessionExecutionForTarget(db, 'target-recovery', 3)
+
+    expect(recovery).toMatchObject({ status: 'ready', releasedUnstarted: 1, markedUncertain: 0, reconciled: 0 })
+    expect(getDbConnection(db).prepare('SELECT status,turn_id FROM session_execution_claims WHERE session_id=?').get('target-recovery'))
+      .toEqual({ status: 'queued', turn_id: '' })
+    expect(getDbConnection(db).prepare('SELECT status,turn_id FROM session_execution_claims WHERE session_id=?').get('other-recovery'))
+      .toEqual({ status: 'claimed', turn_id: 'other-unstarted' })
+    expect(claimSessionExecution(db, { sessionId: 'target-recovery', turnId: 'next-turn', ownerId: 'new-owner', now: 4 }))
+      .toMatchObject({ acquired: true })
+    db.close()
+  })
+
+  it('preserves claim, FIFO, and unknown-effect invariants through a fixed-seed target recovery sequence', () => {
+    const db = createMemoryAppDb()
+    let seed = 0x5eed1234
+    const next = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+      return seed
+    }
+    const sessions = ['seed-recovery-a', 'seed-recovery-b']
+    const trace: string[] = []
+    for (let index = 0; index < 16; index += 1) {
+      const sessionId = sessions[next() % sessions.length]!
+      if (next() % 3 === 0) {
+        trace.push(`recover:${sessionId}`)
+        recoverSessionExecutionForTarget(db, sessionId, 100 + index)
+      } else {
+        const turnId = `seed-turn-${index}`
+        const ownerId = `seed-owner-${index}`
+        const claim = claimSessionExecution(db, { sessionId, turnId, ownerId, now: 100 + index })
+        trace.push(`claim:${sessionId}:${turnId}:${claim.acquired ? 'acquired' : claim.reason}`)
+        if (claim.acquired && next() % 2 === 0) {
+          markSessionExecutionStarted(db, { sessionId, turnId, ownerId, generation: claim.generation })
+          trace.push(`started:${sessionId}:${turnId}`)
+        }
+      }
+
+      for (const candidateSessionId of sessions) {
+        const liveClaims = getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM session_execution_claims
+          WHERE session_id=? AND status IN ('claimed','executing','transcript_committed')`).get(candidateSessionId) as { count: number }
+        expect(liveClaims.count, `${trace.join(' -> ')}; ${candidateSessionId}`).toBeLessThanOrEqual(1)
+        const live = getDbConnection(db).prepare(`SELECT turn_id,owner_id,generation,status FROM session_execution_claims
+          WHERE session_id=? AND status IN ('claimed','executing','transcript_committed')`).get(candidateSessionId) as
+          { turn_id: string; owner_id: string; generation: number; status: string } | undefined
+        if (live) {
+          expect(getDbConnection(db).prepare(`SELECT turn_id,owner_id,generation,status FROM session_execution_queue
+            WHERE session_id=? AND turn_id=?`).get(candidateSessionId, live.turn_id)).toEqual(live)
+        }
+      }
+    }
+
+    const unknownOwner = claimSessionExecution(db, { sessionId: 'seed-unknown', turnId: 'unknown-turn', ownerId: 'unknown-owner', now: 300 })
+    if (!unknownOwner.acquired) throw new Error('expected unknown-effect seed claim')
+    markSessionExecutionStarted(db, { sessionId: 'seed-unknown', turnId: 'unknown-turn', ownerId: 'unknown-owner', generation: unknownOwner.generation })
+    expect(recoverSessionExecutionForTarget(db, 'seed-unknown', 301)).toMatchObject({ status: 'blocked', markedUncertain: 1 })
+    expect(recoverSessionExecutionForTarget(db, 'seed-unknown', 302)).toMatchObject({ status: 'blocked', markedUncertain: 0 })
+    expect(claimSessionExecution(db, { sessionId: 'seed-unknown', turnId: 'retry-unknown', ownerId: 'retry-owner', now: 303 }))
+      .toMatchObject({ acquired: false, reason: 'blocked' })
     db.close()
   })
 

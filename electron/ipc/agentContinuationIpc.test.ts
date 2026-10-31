@@ -78,6 +78,23 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     expect(dispatch).toHaveBeenCalledOnce()
   })
 
+  it('runs target recovery before continuation acceptance and preserves the active-owner busy result', async () => {
+    const { session, runtime, ctx } = await setup()
+    const dispatch = vi.fn()
+    const recoverExecutionTarget = vi.fn(() => ({ status: 'active-owner' as const, releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }))
+    const sessionStorage = { ...ctx.sessionStorage!, execution: { ...ctx.sessionStorage!.execution, recoverExecutionTarget } } as AppIpcContext['sessionStorage']
+    const testContext = { ...ctx, sessionStorage } as AppIpcContext
+
+    const result = await continueAgentFromCheckpoint({ ctx: testContext, turnRuntime: runtime,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'active-owner-continuation' },
+      dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot })
+
+    expect(recoverExecutionTarget).toHaveBeenCalledWith(session.id)
+    expect(result).toMatchObject({ accepted: false, reason: 'SESSION_EXECUTION_ACTIVE_OWNER' })
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(getPersistedTurn(db!, 'source-turn')).toMatchObject({ state: 'terminal' })
+  })
+
   it('普通继续一次性创建 unknown recovery context，保留来源 ID 且不重放旧 tool call', async () => {
     const { session, runtime, ctx, history } = await setup(true)
     const inspection = (ctx as AppIpcContext).sessionStorage!.queries.continuationSources.read({ sessionId: session.id, activeTurnIds: [], selectedAssistantMessageId: 'ipc-assistant' })

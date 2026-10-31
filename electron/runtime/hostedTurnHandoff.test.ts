@@ -57,6 +57,7 @@ vi.mock('../agentLogger/agentLogger', () => ({ logAgentEvent: (...args: unknown[
 
 import { DatabaseSync } from 'node:sqlite'
 import { createHostedTurnHandoff as createComposedHostedTurnHandoff } from './hostedTurnHandoff'
+import { registerActiveSessionExecutionOwner, releaseActiveSessionExecutionOwner } from './sessionExecutionOwnerRegistry'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { createSpillStore, readCanonicalSpillReferences, reconcileSpillOrphansAgainstCanonicalHistory } from '../storage/spillStore'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
@@ -126,6 +127,39 @@ describe('createHostedTurnHandoff', () => {
     db.close()
   })
 
+  it('recovers the target under the session admission gate before acquiring its execution claim', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'recover-before-claim', model: 'test' })
+    const storage = createSqliteSessionStorage(db)
+    const order: string[] = []
+    const recoverExecutionTarget = vi.fn(() => {
+      order.push('recover')
+      return { status: 'ready' as const, releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }
+    })
+    const sessionExecution = { ...storage.execution, recoverExecutionTarget }
+    const claimExecution = vi.spyOn(sessionExecution, 'claimExecution').mockImplementation((input) => {
+      order.push('claim')
+      return claimSessionExecution(db, input)
+    })
+    const user = { role: 'user' as const, content: 'recover before claiming' }
+    mockRunHostedAgentTurn.mockResolvedValueOnce({ text: 'ok', modelTurns: 1, finishReason: 'stop',
+      usage: { inputTokens: 1, outputTokens: 1 }, messages: [user] })
+    const history = {
+      read: async () => ({ events: [{ kind: 'invocation-completed', payload: { status: 'completed' } }] }),
+      readLatestInvocationForSession: async () => ({ kind: 'none' })
+    }
+    const handoff = createHostedTurnHandoff({ agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history: history as never, invocationId: 'recover-before-claim-invocation', turnId: 'recover-before-claim-turn',
+      routeId: 'route', sessionId: session.id, sessionDb: db, sessionExecution })
+
+    await handoff({ request: { messages: [user] }, requiredUserMessage: { id: 'recover-before-claim-user', message: user } })
+
+    expect(recoverExecutionTarget).toHaveBeenCalledWith(session.id)
+    expect(order).toEqual(['recover', 'claim'])
+    expect(claimExecution).toHaveBeenCalledOnce()
+    db.close()
+  })
+
   it('accepts an SDK parked terminal as an explicit deferred waiting result', async () => {
     const events: Array<{ kind: string; payload?: unknown }> = []
     const history = { read: async () => ({ events }) }
@@ -191,6 +225,7 @@ describe('createHostedTurnHandoff', () => {
     const db = createMemoryAppDb()
     const first = claimSessionExecution(db, { sessionId: 'queue-timeout-session', turnId: 'active-turn', ownerId: 'active-owner' })
     if (!first.acquired) throw new Error('test setup failed to claim session')
+    registerActiveSessionExecutionOwner('queue-timeout-session')
     const handoff = createHostedTurnHandoff({
       agentSdk: { createHostedTurnRuntime: vi.fn(() => ({ host: {}, dispose: async () => undefined })) },
       history: { read: async () => ({ events: [] }) } as never,
@@ -211,6 +246,7 @@ describe('createHostedTurnHandoff', () => {
     expect(releaseSessionExecution(db, {
       sessionId: 'queue-timeout-session', turnId: 'active-turn', ownerId: 'active-owner', generation: first.generation
     })).toBe(true)
+    releaseActiveSessionExecutionOwner('queue-timeout-session')
     expect(claimSessionExecution(db, { sessionId: 'queue-timeout-session', turnId: 'next-turn', ownerId: 'next-owner' }))
       .toMatchObject({ acquired: true })
     db.close()

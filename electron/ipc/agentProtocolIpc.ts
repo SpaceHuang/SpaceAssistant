@@ -142,6 +142,10 @@ export async function continueAgentFromCheckpoint(input: {
     if (JSON.stringify(currentSnapshot) !== JSON.stringify(frozenSnapshot)) {
       return { accepted: false, reason: 'CONTINUATION_SAFETY_SNAPSHOT_CHANGED' }
     }
+    const targetRecovery = await withSessionTurnAdmission(payload.sessionId, () =>
+      storage.execution.recoverExecutionTarget(payload.sessionId))
+    if (targetRecovery.status === 'active-owner') return { accepted: false, reason: 'SESSION_EXECUTION_ACTIVE_OWNER' }
+    if (targetRecovery.status === 'blocked') return { accepted: false, reason: 'SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED' }
     const priorContinuation = storage.execution.continuations.readByRequest({
       sessionId: payload.sessionId, requestIdempotencyKey: payload.requestIdempotencyKey
     }) ?? storage.execution.continuations.readAwaitingBySource({ sessionId: payload.sessionId, sourceTurnId: payload.sourceTurnId })

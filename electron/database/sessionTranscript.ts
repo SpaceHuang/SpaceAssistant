@@ -352,11 +352,13 @@ export function markSessionExecutionUncertain(db: AppDatabase, input: { sessionI
 }
 
 /** Startup recovery for claims owned by the process that exited before recovery began. */
-export function recoverStaleSessionExecutionClaims(db: AppDatabase, now = Date.now()): { releasedUnstarted: number; markedUncertain: number; repairedCheckpoints: number } {
+export function recoverStaleSessionExecutionClaims(db: AppDatabase, now = Date.now(), targetSessionId?: string): { releasedUnstarted: number; markedUncertain: number; repairedCheckpoints: number } {
   const conn = getDbConnection(db)
   const result = runInTransaction(conn, () => {
+    const sessionFilter = targetSessionId === undefined ? '' : ' AND session_id=?'
     const claims = conn.prepare(`SELECT session_id,turn_id,owner_id,generation,status FROM session_execution_claims
-      WHERE status IN ('claimed','executing','transcript_committed','commit_uncertain')`).all() as Array<{ session_id: string; turn_id: string; owner_id: string; generation: number; status: 'claimed' | 'executing' | 'transcript_committed' | 'commit_uncertain' }>
+      WHERE status IN ('claimed','executing','transcript_committed','commit_uncertain')${sessionFilter}`)
+      .all(...(targetSessionId === undefined ? [] : [targetSessionId])) as Array<{ session_id: string; turn_id: string; owner_id: string; generation: number; status: 'claimed' | 'executing' | 'transcript_committed' | 'commit_uncertain' }>
     let releasedUnstarted = 0
     let markedUncertain = 0
     let repairedCheckpoints = 0
@@ -404,10 +406,12 @@ export function recoverStaleSessionExecutionClaims(db: AppDatabase, now = Date.n
  * committed durably but a later persistence/response step marked the session uncertain.
  * A missing or mismatched entry stays blocked for explicit operator reconciliation.
  */
-export function reconcileCommittedSessionTranscripts(db: AppDatabase, now = Date.now()): number {
+export function reconcileCommittedSessionTranscripts(db: AppDatabase, now = Date.now(), targetSessionId?: string): number {
   const conn = getDbConnection(db)
   const reconciled = runInTransaction(conn, () => {
-    const uncertain = conn.prepare(`SELECT session_id,version,last_turn_id FROM session_transcript_checkpoints WHERE status='commit_uncertain'`).all() as Array<{ session_id: string; version: number; last_turn_id: string | null }>
+    const sessionFilter = targetSessionId === undefined ? '' : ' AND session_id=?'
+    const uncertain = conn.prepare(`SELECT session_id,version,last_turn_id FROM session_transcript_checkpoints
+      WHERE status='commit_uncertain'${sessionFilter}`).all(...(targetSessionId === undefined ? [] : [targetSessionId])) as Array<{ session_id: string; version: number; last_turn_id: string | null }>
     let count = 0
     for (const checkpoint of uncertain) {
       if (!checkpoint.last_turn_id) continue
@@ -450,6 +454,22 @@ export function reconcileCommittedSessionTranscripts(db: AppDatabase, now = Date
   })
   if (reconciled > 0) db.save()
   return reconciled
+}
+
+/** Reconciles only one target session before a normal execution claim is attempted. */
+export function recoverSessionExecutionForTarget(db: AppDatabase, sessionId: string, now = Date.now()): {
+  status: 'ready' | 'blocked'
+  releasedUnstarted: number
+  markedUncertain: number
+  repairedCheckpoints: number
+  reconciled: number
+} {
+  if (!sessionId.trim()) throw new Error('SESSION_EXECUTION_SESSION_ID_REQUIRED')
+  const stale = recoverStaleSessionExecutionClaims(db, now, sessionId)
+  const reconciled = reconcileCommittedSessionTranscripts(db, now, sessionId)
+  const checkpoint = getDbConnection(db).prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?')
+    .get(sessionId) as { status: string } | undefined
+  return { status: !checkpoint || checkpoint.status === 'ready' ? 'ready' : 'blocked', ...stale, reconciled }
 }
 
 /**

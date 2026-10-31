@@ -29,6 +29,8 @@ import { createTurnCoordinatorStorage } from './coordinator'
 import { createSessionCommitService } from './host/sessionCommitService'
 import { TurnRuntime, type TurnRuntimeOptions } from '../turnRuntime'
 import { cancelPendingAgentContinuation, claimAgentContinuation, createOrGetAgentContinuation, readAgentContinuationByRequest, readAgentContinuationByTarget, readAwaitingAgentContinuationBySource, readCancelledAgentContinuationBySource, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
+import { hasActiveSessionExecutionOwner, registerActiveSessionExecutionOwner, releaseActiveSessionExecutionOwner } from '../runtime/sessionExecutionOwnerRegistry'
+import { createSessionTranscriptRecoveryAdapter } from './recoveryDatabaseAdapter'
 
 const turnStorageByExecution = new WeakMap<SessionExecutionStore, TurnRuntimeOptions['storage']>()
 
@@ -50,6 +52,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
   // 工厂期捕获连接会在换入后永久失效（database is not open），必须每方法入口现取。
   const liveConn = () => getDbConnection(db)
   const coordinator = createTurnCoordinatorStorage(db)
+  const transcriptRecovery = createSessionTranscriptRecoveryAdapter(db)
   const execution: SessionExecutionStore = {
     continuations: Object.freeze({
       createOrGet: ({ sessionId, sourceInvocationId, requestIdempotencyKey, createdBy, frozenConfig }: Parameters<SessionExecutionStore['continuations']['createOrGet']>[0]) => {
@@ -126,6 +129,14 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       return state
     },
     readHostedTranscript: (sessionId) => readSessionTranscript(db, sessionId),
+    recoverExecutionTarget: (sessionId) => {
+      if (hasActiveSessionExecutionOwner(sessionId)) {
+        return { status: 'active-owner', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }
+      }
+      const recovered = transcriptRecovery.recoverTarget(sessionId)
+      return { status: recovered.status, releasedUnstarted: recovered.releasedUnstarted,
+        markedUncertain: recovered.markedUncertain, reconciled: recovered.reconciled }
+    },
     loadAcceptedContinuationTranscript: ({ sessionId, turnId }) => {
       const turn = getPersistedTurnInSession(db, sessionId, turnId)
       const continuationSource = turn.executionConfig?.continuationSource
@@ -163,9 +174,17 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       transcript[requiredUserIndex] = { ...transcript[requiredUserIndex]!, id: turn.userMessageId }
       return transcript
     },
-    claimExecution: (input) => claimSessionExecution(db, input),
+    claimExecution: (input) => {
+      const claim = claimSessionExecution(db, input)
+      if (claim.acquired) registerActiveSessionExecutionOwner(input.sessionId)
+      return claim
+    },
     markExecutionStarted: (input) => markSessionExecutionStarted(db, input),
-    releaseExecution: (input) => releaseSessionExecution(db, input),
+    releaseExecution: (input) => {
+      const released = releaseSessionExecution(db, input)
+      if (released) releaseActiveSessionExecutionOwner(input.sessionId)
+      return released
+    },
     cancelQueuedExecution: (input) => cancelQueuedSessionExecution(db, input),
     markExecutionUncertain: (input) => markSessionExecutionUncertain(db, input),
     commitExecutionConfig: ({ ref, config, intentFingerprint, fence }) => {

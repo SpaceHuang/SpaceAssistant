@@ -18,6 +18,8 @@ import { queueInputFingerprint } from '../queueInputFingerprint'
 import { readChatMessageAfterPreparation } from '../sessionStorage/public/readMessages'
 import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
+import { withSessionTurnAdmission } from '../sessionCompactionLock'
+import { registerActiveSessionExecutionOwner, releaseActiveSessionExecutionOwner } from './sessionExecutionOwnerRegistry'
 import type { DynamicModelTool } from './dynamicToolRequest'
 
 function hasSessionHistoryQueries(history: HistoryPort): history is SessionHistoryPort {
@@ -189,14 +191,21 @@ export function createHostedTurnHandoff(input: {
     try {
     let checkpoint: import('../sessionStorage/public/model').HostedTranscriptSnapshot | undefined
     if (input.sessionExecution && input.sessionId) {
+      const sessionId = input.sessionId
       const ownerId = `runtime:${process.pid}:${randomUUID()}`
-      queuedOwnership = { sessionId: input.sessionId, turnId: input.turnId, ownerId }
+      queuedOwnership = { sessionId, turnId: input.turnId, ownerId }
       // Session ownership has its own queue budget, independent of the parent turn deadline.
       const waitUntil = Date.now() + 30_000
       for (;;) {
-        const claim = input.sessionExecution!.claimExecution({ sessionId: input.sessionId, turnId: input.turnId, ownerId })
+        const claim = await withSessionTurnAdmission(sessionId, () => {
+          const recovery = input.sessionExecution!.recoverExecutionTarget(sessionId)
+          if (recovery?.status === 'blocked') return { acquired: false as const, reason: 'blocked' as const }
+          const result = input.sessionExecution!.claimExecution({ sessionId, turnId: input.turnId, ownerId })
+          if (result.acquired) registerActiveSessionExecutionOwner(sessionId)
+          return result
+        })
         if (claim.acquired) {
-          ownership = { sessionId: input.sessionId, turnId: input.turnId, ownerId, generation: claim.generation }
+          ownership = { sessionId, turnId: input.turnId, ownerId, generation: claim.generation }
           break
         }
         if (claim.reason === 'blocked' || Date.now() >= waitUntil) throw new Error(claim.reason === 'blocked' ? 'SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED' : 'SESSION_EXECUTION_QUEUE_TIMEOUT')
@@ -524,6 +533,7 @@ export function createHostedTurnHandoff(input: {
       }
     }
     } finally {
+      if (ownership) releaseActiveSessionExecutionOwner(ownership.sessionId)
       if (ownership && !keepClaimedForReconciliation) {
         input.sessionExecution!.releaseExecution(ownership)
       } else if (!ownership && queuedOwnership) input.sessionExecution!.cancelQueuedExecution(queuedOwnership)
