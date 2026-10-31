@@ -440,7 +440,7 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
-  it('commits a real SDK parked terminal and transcript participant atomically to SQLite', async () => {
+  it('commits a real SDK protocol 2 parked terminal under its durable lease atomically to SQLite', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'sqlite-sdk-parked-transcript', model: 'test-model' })
     const claim = claimSessionExecution(db, { sessionId: session.id, turnId: 'park-sqlite-turn', ownerId: 'park-sqlite-owner' })
@@ -462,7 +462,9 @@ describe('SqliteAgentHistory', () => {
     const result = await runAgentTurn({
       registry, routeId: 'sqlite-parked', invocationId: 'park-sqlite-invocation', turnId: 'park-sqlite-turn', sessionId: session.id,
       currentUserMessageId: 'park-sqlite-user', requiredUserMessage: { id: 'park-sqlite-user', message: userMessage },
-      sessionTranscriptBaseVersion: 0, sessionTranscriptFailureMessages: [userMessage], assistantMessageId: 'park-sqlite-assistant',
+      sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2,
+      sessionTranscriptExecutionLease: { sessionId: session.id, turnId: 'park-sqlite-turn', ownerId: 'park-sqlite-owner', generation: claim.generation },
+      sessionTranscriptFailureMessages: [userMessage], assistantMessageId: 'park-sqlite-assistant',
       request: { messages: [userMessage], maxTokens: 32 }, history, maxModelTurns: 2,
       safetyGate: new SafetyGate({ capabilities, permitStore: permits,
         policy: { evaluate: async (binding) => ({ kind: 'ask' as const, confirmationId: `confirm-${binding.toolCallId}`, answerer: 'user' as const, reasonCode: 'USER_APPROVAL' as const }) } }),
@@ -482,9 +484,11 @@ describe('SqliteAgentHistory', () => {
     expect(history.readSync('park-sqlite-invocation').events.at(-1)).toMatchObject({ kind: 'invocation-parked', turnId: 'park-sqlite-turn' })
     const transcript = getDbConnection(db).prepare('SELECT version,last_turn_id,status FROM session_transcript_checkpoints WHERE session_id=?').get(session.id)
     expect(transcript).toEqual({ version: 1, last_turn_id: 'park-sqlite-turn', status: 'ready' })
-    const entry = getDbConnection(db).prepare('SELECT outcome,messages_json FROM session_transcript_entries WHERE session_id=? AND version=1').get(session.id) as { outcome: string; messages_json: string }
-    expect(entry.outcome).toBe('interrupted')
-    expect(JSON.parse(entry.messages_json)).toEqual([userMessage])
+    expect(readSessionTranscript(db, session.id, { version: 1 })).toMatchObject({
+      version: 1, lastTurnId: 'park-sqlite-turn', status: 'ready', messages: [userMessage]
+    })
+    expect(getDbConnection(db).prepare('SELECT context_selection_json FROM session_transcript_entries WHERE session_id=? AND version=1').get(session.id))
+      .toEqual({ context_selection_json: JSON.stringify({ contextProtocol: 2, target: 'park-baseline' }) })
     expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(session.id)).toEqual({ status: 'transcript_committed' })
     expect(releaseSessionExecution(db, { sessionId: session.id, turnId: 'park-sqlite-turn', ownerId: 'park-sqlite-owner', generation: claim.generation })).toBe(true)
     expect(claimSessionExecution(db, { sessionId: session.id, turnId: 'approved-continuation-turn', ownerId: 'continuation-owner' }).acquired).toBe(true)
@@ -3129,6 +3133,50 @@ describe('SqliteAgentHistory', () => {
       version: 1, lastTurnId: turnId, status: 'ready', messages: [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'leased answer' }]
     })
     expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'transcript_committed' })
+    db.close()
+  })
+
+  it('commits an SDK protocol 2 failure selection through SQLite under its durable execution lease', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'sdk-v2-failure-lease-session'
+    const turnId = 'sdk-v2-failure-lease-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'sdk-v2-failure-lease-owner' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'sdk-v2-failure-lease-owner', generation: owner.generation })
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const routeId = 'sdk-v2-failure-lease-route'
+    const registry = new ModelProviderRegistry()
+    registry.register({ routeId, protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }, {
+      providerId: 'sdk-v2-failure-lease-provider', stream: async function* () {
+        yield { type: 'text-delta', text: 'partial answer' }
+        throw new Error('local provider stream failure')
+      }
+    })
+    const permits = new InMemorySafetyPermitStore()
+
+    await expect(runAgentTurn({
+      registry, routeId, invocationId: turnId, turnId, history, sessionId,
+      sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2,
+      sessionTranscriptExecutionLease: { sessionId, turnId, ownerId: 'sdk-v2-failure-lease-owner', generation: owner.generation },
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits,
+        policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(),
+      toolExecution: createPermitBoundToolExecutionPort({ permits, admission: new InMemoryExecutionAdmissionCoordinator(),
+        resolveExpected: async () => { throw new Error('tool execution is not expected') }, execute: async () => ({ output: undefined }) })
+    })).rejects.toThrow()
+
+    expect((await history.read(turnId)).events.at(-1)).toMatchObject({ kind: 'invocation-failed' })
+    expect(conn.prepare('SELECT base_version,next_version FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId))
+      .toMatchObject({ base_version: 0, next_version: 1 })
+    expect(readSessionTranscript(db, sessionId, { version: 1 })).toMatchObject({
+      version: 1, lastTurnId: turnId, status: 'ready', messages: [{ role: 'user', content: 'hello' }]
+    })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId))
+      .toEqual({ status: 'transcript_committed' })
     db.close()
   })
 
