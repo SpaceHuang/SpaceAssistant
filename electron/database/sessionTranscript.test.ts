@@ -50,16 +50,17 @@ describe('session transcript checkpoint and execution claim', () => {
     db.close()
   })
 
-  it('commits protocol 2 selection metadata without persisting selected message bodies', () => {
+  it('commits protocol 2 selection only through a receipt without creating an auxiliary entry', () => {
     const db = createMemoryAppDb()
     const input = { sessionId: 'selection-v2', turnId: 'selection-turn', baseVersion: 0, outcome: 'completed' as const, protocol: 2 as const,
       contextSelection: { contextProtocol: 2 as const, target: 'working' as const } }
     expect(commitSessionTranscript(db, input)).toEqual({ committed: true, version: 1 })
     expect(commitSessionTranscript(db, input)).toEqual({ committed: true, version: 1 })
-    const row = getDbConnection(db).prepare('SELECT messages_json,context_selection_json FROM session_transcript_entries WHERE session_id=?')
-      .get(input.sessionId) as { messages_json: string; context_selection_json: string | null }
-    expect(row).toEqual({ messages_json: '[]', context_selection_json: '{"contextProtocol":2,"target":"working"}' })
-    expect(() => readSessionTranscript(db, input.sessionId)).toThrow('SESSION_TRANSCRIPT_SELECTION_RECEIPT_MISSING')
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?')
+      .get(input.sessionId)).toEqual({ count: 0 })
+    expect(getDbConnection(db).prepare('SELECT next_version FROM session_turn_commit_receipts WHERE session_id=?').get(input.sessionId))
+      .toEqual({ next_version: 1 })
+    expect(() => readSessionTranscript(db, input.sessionId)).toThrow('SESSION_TRANSCRIPT_VERSION_NOT_FOUND')
     db.close()
   })
 
@@ -286,7 +287,6 @@ describe('session transcript checkpoint and execution claim', () => {
   })
 
   it.each([
-    ['transcript entry', `BEFORE INSERT ON session_transcript_entries WHEN NEW.session_id='commit-owner-v2-atomic'`],
     ['receipt', `BEFORE INSERT ON session_turn_commit_receipts WHEN NEW.session_id='commit-owner-v2-atomic'`],
     ['checkpoint', `BEFORE INSERT ON session_transcript_checkpoints WHEN NEW.session_id='commit-owner-v2-atomic'`],
     ['claim settlement', `BEFORE UPDATE ON session_execution_claims WHEN OLD.session_id='commit-owner-v2-atomic' AND NEW.status='transcript_committed'`],
@@ -461,8 +461,8 @@ describe('session transcript checkpoint and execution claim', () => {
     expect(readSessionTranscript(db, session.id, { version: 1 })).toMatchObject({
       version: 1, lastTurnId: 'review-source-turn', status: 'ready', messages: reviewedMessages
     })
-    expect(getDbConnection(db).prepare('SELECT messages_json,context_selection_json FROM session_transcript_entries WHERE session_id=? AND version=1')
-      .get(session.id)).toEqual({ messages_json: '[]', context_selection_json: JSON.stringify({ contextProtocol: 2, target: 'working' }) })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND version=1')
+      .get(session.id)).toEqual({ count: 0 })
     getDbConnection(db).prepare('DELETE FROM session_transcript_entries WHERE session_id=? AND version=1').run(session.id)
     expect(readSessionTranscript(db, session.id, { version: 1 })).toMatchObject({
       version: 1, lastTurnId: 'review-source-turn', status: 'ready', messages: reviewedMessages
@@ -490,8 +490,6 @@ describe('session transcript checkpoint and execution claim', () => {
     ['repair terminal event', `CREATE TRIGGER fail_review_terminal BEFORE INSERT ON agent_history_events
       WHEN NEW.kind='invocation-completed' AND NEW.turn_id LIKE 'session-review-turn:%'
       BEGIN SELECT RAISE(ABORT, 'injected review terminal failure'); END`, 'injected review terminal failure'],
-    ['version entry', `CREATE TRIGGER fail_review_entry BEFORE INSERT ON session_transcript_entries
-      WHEN NEW.turn_id='review-fault-turn' BEGIN SELECT RAISE(ABORT, 'injected review entry failure'); END`, 'injected review entry failure'],
     ['business receipt', `CREATE TRIGGER fail_review_receipt BEFORE INSERT ON session_turn_commit_receipts
       WHEN NEW.turn_id LIKE 'session-review-turn:%' BEGIN SELECT RAISE(ABORT, 'injected review receipt failure'); END`, 'injected review receipt failure'],
     ['operator audit', `CREATE TRIGGER fail_review_audit BEFORE INSERT ON session_transcript_reconciliations
@@ -579,7 +577,7 @@ describe('session transcript checkpoint and execution claim', () => {
       sessionId: session.id, turnId: 'interrupted-turn', expectedVersion: 0, sessionGeneration: session.generation,
       outcome: 'interrupted', messages: [], operatorId: 'operator-1', rationale: 'Reviewed process restart terminal.'
     })).toEqual({ reconciled: true, version: 1 })
-    expect(getDbConnection(db).prepare('SELECT outcome FROM session_transcript_entries WHERE session_id=?').get(session.id)).toEqual({ outcome: 'interrupted' })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(session.id)).toEqual({ count: 0 })
     db.close()
   })
 

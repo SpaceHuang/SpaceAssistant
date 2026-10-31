@@ -487,8 +487,8 @@ describe('SqliteAgentHistory', () => {
     expect(readSessionTranscript(db, session.id, { version: 1 })).toMatchObject({
       version: 1, lastTurnId: 'park-sqlite-turn', status: 'ready', messages: [userMessage]
     })
-    expect(getDbConnection(db).prepare('SELECT context_selection_json FROM session_transcript_entries WHERE session_id=? AND version=1').get(session.id))
-      .toEqual({ context_selection_json: JSON.stringify({ contextProtocol: 2, target: 'park-baseline' }) })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND version=1').get(session.id))
+      .toEqual({ count: 0 })
     expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(session.id)).toEqual({ status: 'transcript_committed' })
     expect(releaseSessionExecution(db, { sessionId: session.id, turnId: 'park-sqlite-turn', ownerId: 'park-sqlite-owner', generation: claim.generation })).toBe(true)
     expect(claimSessionExecution(db, { sessionId: session.id, turnId: 'approved-continuation-turn', ownerId: 'continuation-owner' }).acquired).toBe(true)
@@ -1967,8 +1967,8 @@ describe('SqliteAgentHistory', () => {
     await expect(history.appendBatch([terminal], 1, {
       sessionId, baseVersion: 0, outcome: 'completed', protocol: 2, contextSelection: selection
     })).resolves.toMatchObject({ version: 2 })
-    expect(conn.prepare('SELECT messages_json,context_selection_json FROM session_transcript_entries WHERE session_id=?')
-      .get(sessionId)).toEqual({ messages_json: '[]', context_selection_json: '{"contextProtocol":2,"target":"working"}' })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(sessionId))
+      .toEqual({ count: 0 })
     expect(conn.prepare('SELECT payload_sha256,next_version FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId))
       .toMatchObject({ next_version: 1, payload_sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'transcript_committed' })

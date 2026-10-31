@@ -305,7 +305,24 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     expect(providerRequests[0]).toContainEqual(expect.objectContaining({ role: 'assistant', content: 'checkpoint prior assistant sentinel' }))
     expect(providerRequests[0]).toContainEqual(expect.objectContaining({ role: 'user', content: 'checkpoint current user sentinel' }))
     expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 2, lastTurnId: 'checkpoint-current-turn' })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'checkpoint-current-turn')).toEqual({ count: 0 })
+    expect(getDbConnection(db).prepare('SELECT base_version,next_version,outcome FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'checkpoint-current-turn')).toEqual({ base_version: 1, next_version: 2, outcome: 'completed' })
+    expect(JSON.parse(getDbConnection(db).prepare(`SELECT payload_json FROM agent_history_events
+      WHERE session_id=? AND turn_id='checkpoint-current-turn' AND kind='invocation-completed'`).get(session.id)!.payload_json as string))
+      .toMatchObject({ contextSelection: { contextProtocol: 2, target: 'working' } })
     expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
+    db.close()
+    db = openDatabase(dbPath)
+    expect(readSessionTranscript(db, session.id, { version: 2 })).toMatchObject({
+      version: 2, lastTurnId: 'checkpoint-current-turn', messages: [
+        expect.objectContaining({ id: priorUser.message.id }), expect.objectContaining({ id: priorAssistant.message.id }),
+        expect.objectContaining({ id: current.message.id }), expect.objectContaining({ role: 'assistant', content: 'checkpoint branch answer' })
+      ]
+    })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'checkpoint-current-turn')).toEqual({ count: 0 })
   })
 
   it.each([
@@ -983,10 +1000,14 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const history = await new SqliteAgentHistory(getDbConnection(db)).read('desktop-history-terminal-turn')
     expect(history.events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)))
       .toEqual([expect.objectContaining({ kind: 'invocation-failed', payload: expect.objectContaining({ status: 'failed' }) })])
-    const transcript = getDbConnection(db).prepare('SELECT outcome,messages_json FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
-      .get(session.id, 'desktop-history-terminal-turn') as { outcome: string; messages_json: string }
+    const transcript = getDbConnection(db).prepare('SELECT outcome,next_version FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'desktop-history-terminal-turn') as { outcome: string; next_version: number }
     expect(transcript.outcome).toBe('failed')
-    expect(JSON.parse(transcript.messages_json)).toEqual([{ role: 'user', id: 'desktop-history-terminal-user', content: 'run once' }])
+    expect(readSessionTranscript(db, session.id, { version: transcript.next_version })).toMatchObject({
+      lastTurnId: 'desktop-history-terminal-turn', messages: [{ role: 'user', id: 'desktop-history-terminal-user', content: 'run once' }]
+    })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'desktop-history-terminal-turn')).toEqual({ count: 0 })
   })
 
   it('preserves Desktop auto-approved write audit and result metadata through Hosted execution', async () => {

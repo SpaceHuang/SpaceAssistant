@@ -101,6 +101,31 @@ function createHostedTurnHandoff(input: HostedTurnHandoffFixtureInput) {
 describe('createHostedTurnHandoff', () => {
   beforeEach(() => { mockRunHostedAgentTurn.mockReset(); mockLogAgentEvent.mockReset() })
 
+  it('passes protocol 2 through the default leased session execution path', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'protocol-2-default-path', model: 'test' })
+    const createHostedTurnRuntime = vi.fn(() => ({ host: {}, dispose: async () => undefined }))
+    const user = { role: 'user' as const, content: 'default writer contract' }
+    mockRunHostedAgentTurn.mockResolvedValueOnce({ text: 'ok', modelTurns: 1, finishReason: 'stop',
+      usage: { inputTokens: 1, outputTokens: 1 }, messages: [user] })
+    const history = {
+      read: async () => ({ events: [{ kind: 'invocation-completed', payload: { status: 'completed' } }] }),
+      readLatestInvocationForSession: async () => ({ kind: 'none' })
+    }
+    const handoff = createHostedTurnHandoff({ agentSdk: { createHostedTurnRuntime }, history: history as never,
+      invocationId: 'protocol-2-default-invocation', turnId: 'protocol-2-default-turn', routeId: 'route', sessionId: session.id, sessionDb: db })
+
+    await handoff({ request: { messages: [user] }, requiredUserMessage: { id: 'protocol-2-user', message: user } })
+
+    expect(createHostedTurnRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2
+    }))
+    expect(mockRunHostedAgentTurn).toHaveBeenCalledWith(expect.objectContaining({
+      sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2
+    }))
+    db.close()
+  })
+
   it('accepts an SDK parked terminal as an explicit deferred waiting result', async () => {
     const events: Array<{ kind: string; payload?: unknown }> = []
     const history = { read: async () => ({ events }) }
@@ -1185,7 +1210,7 @@ describe('createHostedTurnHandoff', () => {
     const db = temp.db
     const session = createSession(db, { name: 'terminal-commit-unknown', model: 'model' })
     const conn = getDbConnection(db)
-    let loseCommitAcknowledgement = true
+    let loseCommitAcknowledgement = false
     const uncertainConn = {
       prepare: conn.prepare.bind(conn),
       exec(sql: string) {
@@ -1203,16 +1228,32 @@ describe('createHostedTurnHandoff', () => {
     const assistant = { id: 'commit-unknown-assistant', role: 'assistant' as const, content: 'durable sidecar answer '.repeat(4_000) }
     const outputText = 'durable terminal sidecar output '.repeat(4_000)
     let hostedHistory: HistoryPort | undefined
+    let hostedRuntimeOptions: Record<string, unknown> | undefined
     mockRunHostedAgentTurn.mockImplementationOnce(async ({ invocationId }: { invocationId: string }) => {
       await hostedHistory!.appendBatch([{
         invocationId, turnId: 'commit-unknown-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'commit-unknown-context', idempotencyKey: 'commit-unknown-context', kind: 'invocation-context-committed',
+        payload: { contextProtocol: 2, baseVersion: 0, inputMessages: [user], failureInputMessages: [user], messages: [user],
+          scope: { kind: 'session', sessionId: session.id }, system: '' }
+      }], 0)
+      await hostedHistory!.appendBatch([{
+        invocationId, turnId: 'commit-unknown-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'commit-unknown-response', idempotencyKey: 'commit-unknown-response', kind: 'model-response-committed',
+        payload: { message: assistant }
+      }], 1)
+      loseCommitAcknowledgement = true
+      await hostedHistory!.appendBatch([{
+        invocationId, turnId: 'commit-unknown-turn', sequence: 3, schemaVersion: 1,
         eventId: 'commit-unknown-terminal', idempotencyKey: 'commit-unknown-terminal', kind: 'invocation-completed',
-        payload: { status: 'completed', outputText }
-      }], 0, { sessionId: session.id, baseVersion: 0, outcome: 'completed', messages: [user, assistant] })
+        payload: { status: 'completed', outputText, contextSelection: { contextProtocol: 2, target: 'working' } }
+      }], 2, { sessionId: session.id, baseVersion: 0, outcome: 'completed', protocol: 2,
+        contextSelection: { contextProtocol: 2, target: 'working' } })
       return { text: assistant.content, modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1 }, messages: [user, assistant] }
     })
     const handoff = createComposedHostedTurnHandoff({
-      agentSdk: { createHostedTurnRuntime: ({ hostHistory }) => {
+      agentSdk: { createHostedTurnRuntime: (options) => {
+        hostedRuntimeOptions = options as unknown as Record<string, unknown>
+        const { hostHistory } = options
         hostedHistory = hostHistory
         return { host: {}, dispose: async () => undefined }
       } },
@@ -1222,22 +1263,24 @@ describe('createHostedTurnHandoff', () => {
 
     await expect(handoff({ request: { messages: [user] }, requiredUserMessage: { id: user.id, message: user } }))
       .rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'commit-uncertain' })
+    expect(hostedRuntimeOptions).toMatchObject({ sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2 })
     const terminalCommit = appendHistory.mock.calls.find(([, , transcriptCommit]) => transcriptCommit !== undefined)?.[2]
+    expect(terminalCommit).toMatchObject({ protocol: 2, contextSelection: { contextProtocol: 2, target: 'working' } })
     expect(terminalCommit?.executionLease).toMatchObject({ sessionId: session.id, turnId: 'commit-unknown-turn', ownerId: expect.any(String), generation: 1 })
     expect(mockRunHostedAgentTurn).toHaveBeenCalledOnce()
-    expect((await history.read('commit-unknown-invocation')).events).toHaveLength(1)
+    expect((await history.read('commit-unknown-invocation')).events).toHaveLength(3)
     expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 1, lastTurnId: 'commit-unknown-turn', status: 'commit_uncertain' })
     expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
-      .get(session.id, 'commit-unknown-turn')).toEqual({ count: 1 })
+      .get(session.id, 'commit-unknown-turn')).toEqual({ count: 0 })
     expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
       .get(session.id, 'commit-unknown-turn')).toEqual({ count: 1 })
     const terminalPayload = JSON.parse(conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?')
       .get('commit-unknown-terminal')!.payload_json as string) as { outputText: { __spaceassistant_spill_v1: { locator: string } } }
-    const transcriptPayload = JSON.parse(conn.prepare('SELECT messages_json FROM session_transcript_entries WHERE session_id=?')
-      .get(session.id)!.messages_json as string) as { __spaceassistant_session_transcript_spill_v1: { locator: string } }
+    const responsePayload = JSON.parse(conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?')
+      .get('commit-unknown-response')!.payload_json as string) as { message: { content: { __spaceassistant_spill_v1: { locator: string } } } }
     const committedLocators = [terminalPayload.outputText.__spaceassistant_spill_v1.locator,
-      transcriptPayload.__spaceassistant_session_transcript_spill_v1.locator]
-    expect(new Set(committedLocators).size).toBe(2)
+      responsePayload.message.content.__spaceassistant_spill_v1.locator]
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(session.id)).toEqual({ count: 0 })
     expect(readCanonicalSpillReferences(conn).referencedLocators).toEqual(new Set(committedLocators))
     const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
     expect((await fs.readdir(spillRoot)).sort()).toEqual([...committedLocators].sort())

@@ -112,7 +112,7 @@ export type ContextReplacementPlanResult = Readonly<{
 }> | Readonly<{ rejected: 'OVER_BUDGET' }>
 
 export type AgentTurnHost = Readonly<{
-  createPorts(invocation: { invocationId: string; sessionId?: string; turnId?: string; windowId?: string; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>; sessionTranscriptBaseVersion?: number; sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]; routeId: string; request: PreparedModelCall['request'] }): Promise<AgentTurnPorts>
+  createPorts(invocation: { invocationId: string; sessionId?: string; turnId?: string; windowId?: string; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>; sessionTranscriptBaseVersion?: number; sessionTranscriptCommitProtocol?: 2; sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]; routeId: string; request: PreparedModelCall['request'] }): Promise<AgentTurnPorts>
 }>
 
 export type AgentTurnObserver = Readonly<{
@@ -210,6 +210,7 @@ export async function runHostedAgentTurn(input: {
   /** Optional already-collected first response; requires an exact matching committed History event. */
   initialResponse?: HostCommittedModelResponse
   sessionTranscriptBaseVersion?: number
+  sessionTranscriptCommitProtocol?: 2
   contextProjectionCommitter?: ContextProjectionCommitter
   sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]
   observer?: AgentTurnObserver
@@ -227,7 +228,7 @@ export async function runHostedAgentTurn(input: {
   }
   const request = snapshotHostedRequest(input.request)
   const requiredUserMessage = input.requiredUserMessage ? freezeRequestSnapshot(structuredClone(input.requiredUserMessage)) : undefined
-  const ports = await input.host.createPorts({ invocationId: input.invocationId, ...(input.sessionId ? { sessionId: input.sessionId } : {}), ...(input.turnId ? { turnId: input.turnId } : {}), ...(input.windowId ? { windowId: input.windowId } : {}), ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.sessionTranscriptBaseVersion !== undefined ? { sessionTranscriptBaseVersion: input.sessionTranscriptBaseVersion } : {}), ...(input.sessionTranscriptFailureMessages ? { sessionTranscriptFailureMessages: input.sessionTranscriptFailureMessages } : {}), routeId: input.routeId, request })
+  const ports = await input.host.createPorts({ invocationId: input.invocationId, ...(input.sessionId ? { sessionId: input.sessionId } : {}), ...(input.turnId ? { turnId: input.turnId } : {}), ...(input.windowId ? { windowId: input.windowId } : {}), ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.sessionTranscriptBaseVersion !== undefined ? { sessionTranscriptBaseVersion: input.sessionTranscriptBaseVersion } : {}), ...(input.sessionTranscriptCommitProtocol ? { sessionTranscriptCommitProtocol: input.sessionTranscriptCommitProtocol } : {}), ...(input.sessionTranscriptFailureMessages ? { sessionTranscriptFailureMessages: input.sessionTranscriptFailureMessages } : {}), routeId: input.routeId, request })
   if (ports.invocationId !== input.invocationId) throw new Error('host returned ports for a different invocation')
   if (input.turnId && ports.turnId !== input.turnId) throw new Error('host returned ports for a different turn')
   if (ports.routeId !== input.routeId) throw new Error('host returned ports for a different route')

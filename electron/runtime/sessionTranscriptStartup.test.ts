@@ -124,7 +124,7 @@ describe('startup transcript reconciliation ordering', () => {
 
     expect(reconcileStartupSessionTranscripts(db, { historyRecoverySucceeded: true, turnCoordinatorRecoverySucceeded: true }, 2_000))
       .toMatchObject({ reconciled: 0 })
-    expect(() => readSessionTranscript(db, sessionId)).toThrow('SESSION_TRANSCRIPT_SELECTION_RECEIPT_MISSING')
+    expect(() => readSessionTranscript(db, sessionId)).toThrow('SESSION_TRANSCRIPT_VERSION_NOT_FOUND')
     expect(getDbConnection(db).prepare('SELECT turn_id,status FROM session_execution_claims WHERE session_id=?').get(sessionId))
       .toMatchObject({ turn_id: turnId, status: 'commit_uncertain' })
     expect(getDbConnection(db).prepare('SELECT status FROM session_execution_queue WHERE session_id=? AND turn_id=?').get(sessionId, turnId))

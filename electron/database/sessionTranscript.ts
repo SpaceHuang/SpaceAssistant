@@ -18,6 +18,19 @@ function transcriptPayloadHash(outcome: string, messagesJson: string): string {
   return createHash('sha256').update(JSON.stringify({ outcome, messagesJson })).digest('hex')
 }
 
+function hydrateTranscriptSpills(value: unknown, spillRoot: string | undefined): unknown {
+  if (Array.isArray(value)) return value.map((item) => hydrateTranscriptSpills(item, spillRoot))
+  if (!value || typeof value !== 'object') return value
+  const record = value as Record<string, unknown>
+  if ('__spaceassistant_spill_v1' in record) {
+    if (Object.keys(record).length !== 1 || !spillRoot) throw new Error('SESSION_TRANSCRIPT_SOURCE_SPILL_INVALID')
+    const descriptor = record.__spaceassistant_spill_v1 as SpillDescriptor
+    if (!descriptor || descriptor.kind !== 'source-of-truth') throw new Error('SESSION_TRANSCRIPT_SOURCE_SPILL_INVALID')
+    return readSourceTruthSpillSync(spillRoot, descriptor)
+  }
+  return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, hydrateTranscriptSpills(item, spillRoot)]))
+}
+
 function stableReviewEncode(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
   if (Array.isArray(value)) return `[${value.map(stableReviewEncode).join(',')}]`
@@ -91,9 +104,11 @@ export function readSessionTranscript(db: AppDatabase, sessionId: string, option
     const eventRows = conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json
       FROM agent_history_events WHERE session_id=? AND session_seq<=? ORDER BY session_seq ASC`)
       .all(sessionId, receipt.event_end) as Array<{ invocation_id: string; sequence: number; event_id: string; idempotency_key: string; turn_id: string; schema_version: number; kind: HistoryEvent['kind']; payload_json: string }>
+    const main = conn.prepare('PRAGMA database_list').all().find((database) => (database as { name?: string }).name === 'main') as { file?: string } | undefined
+    const spillRoot = main?.file ? path.join(path.dirname(main.file), 'spill') : undefined
     const events: HistoryEvent[] = eventRows.map((event) => ({ invocationId: event.invocation_id, sequence: event.sequence,
       eventId: event.event_id, idempotencyKey: event.idempotency_key, turnId: event.turn_id, schemaVersion: event.schema_version,
-      kind: event.kind, payload: JSON.parse(event.payload_json) as unknown }))
+      kind: event.kind, payload: hydrateTranscriptSpills(JSON.parse(event.payload_json) as unknown, spillRoot) }))
     const restored = restoreSessionContext({ committedVersion: version, events })
     const terminal = events.find((event) => event.eventId === receiptTerminalRow!.event_id)
     const terminalSelection = terminal?.payload && typeof terminal.payload === 'object'
@@ -185,6 +200,14 @@ export function commitSessionTranscriptInTransaction(conn: DatabaseSync, input: 
         throw new Error('SESSION_EXECUTION_CLAIM_FENCED')
       }
     }
+    if (input.protocol === 2) {
+      const receipt = conn.prepare(`SELECT payload_sha256,base_version,next_version,outcome FROM session_turn_commit_receipts
+        WHERE session_id=? AND turn_id=?`).get(input.sessionId, input.turnId) as
+        { payload_sha256: string; base_version: number; next_version: number; outcome: string } | undefined
+      if (receipt) return receipt.payload_sha256 === payloadSha256 && receipt.base_version === input.baseVersion && receipt.outcome === input.outcome
+        ? { committed: true as const, version: receipt.next_version }
+        : { committed: false as const, reason: 'idempotency-conflict' as const, version: receipt.next_version }
+    }
     const existing = conn.prepare('SELECT base_version,version,outcome,messages_json,context_selection_json FROM session_transcript_entries WHERE session_id=? AND turn_id=?').get(input.sessionId, input.turnId) as { base_version: number; version: number; outcome: string; messages_json: string; context_selection_json: string | null } | undefined
     if (existing) {
       if (existing.outcome !== input.outcome || existing.messages_json !== storedMessagesJson || existing.context_selection_json !== contextSelectionJson) return { committed: false as const, reason: 'idempotency-conflict' as const, version: existing.version }
@@ -206,8 +229,10 @@ export function commitSessionTranscriptInTransaction(conn: DatabaseSync, input: 
     const nextVersion = currentVersion + 1
     const eventRange = conn.prepare(`SELECT MIN(session_seq) AS event_start, MAX(session_seq) AS event_end
       FROM agent_history_events WHERE session_id=? AND turn_id=? AND session_seq IS NOT NULL`).get(input.sessionId, input.turnId) as { event_start: number | null; event_end: number | null } | undefined
-    conn.prepare('INSERT INTO session_transcript_entries(session_id,turn_id,base_version,version,outcome,messages_json,context_selection_json,created_at) VALUES(?,?,?,?,?,?,?,?)').run(input.sessionId, input.turnId, input.baseVersion, nextVersion, input.outcome, storedMessagesJson, contextSelectionJson, now)
-    replaceSpillReferenceOwnerInTransaction(conn, 'session_transcript_entries', spillTranscriptOwnerKey(input.sessionId, nextVersion), storedMessagesJson, now)
+    if (input.protocol !== 2) {
+      conn.prepare('INSERT INTO session_transcript_entries(session_id,turn_id,base_version,version,outcome,messages_json,context_selection_json,created_at) VALUES(?,?,?,?,?,?,?,?)').run(input.sessionId, input.turnId, input.baseVersion, nextVersion, input.outcome, storedMessagesJson, contextSelectionJson, now)
+      replaceSpillReferenceOwnerInTransaction(conn, 'session_transcript_entries', spillTranscriptOwnerKey(input.sessionId, nextVersion), storedMessagesJson, now)
+    }
     conn.prepare(`INSERT INTO session_turn_commit_receipts(session_id,turn_id,payload_sha256,base_version,next_version,outcome,event_start,event_end,created_at)
       VALUES(?,?,?,?,?,?,?,?,?)`).run(input.sessionId, input.turnId, payloadSha256, input.baseVersion, nextVersion, input.outcome, eventRange?.event_start ?? null, eventRange?.event_end ?? null, now)
     conn.prepare(`INSERT INTO session_transcript_checkpoints(session_id,version,last_turn_id,status,updated_at) VALUES(?,?,?,'ready',?)
@@ -575,9 +600,6 @@ export function reconcileUncertainSessionTranscript(db: AppDatabase, input: {
     const eventRange = conn.prepare('SELECT MIN(session_seq) AS event_start,MAX(session_seq) AS event_end FROM agent_history_events WHERE invocation_id=?')
       .get(repairInvocationId) as { event_start: number | null; event_end: number | null }
     if (!Number.isSafeInteger(eventRange.event_start) || !Number.isSafeInteger(eventRange.event_end)) throw new Error('SESSION_REVIEW_EVENT_RANGE_MISSING')
-    conn.prepare(`INSERT INTO session_transcript_entries(session_id,turn_id,base_version,version,outcome,messages_json,context_selection_json,created_at)
-      VALUES(?,?,?,?,?,?,?,?)`).run(input.sessionId, input.turnId, checkpoint.version, nextVersion, input.outcome, '[]',
-      JSON.stringify({ contextProtocol: 2, target: 'working' }), now)
     conn.prepare(`INSERT INTO session_turn_commit_receipts(session_id,turn_id,payload_sha256,base_version,next_version,outcome,event_start,event_end,created_at)
       VALUES(?,?,?,?,?,?,?,?,?)`).run(input.sessionId, repairTurnId, reviewPayloadSha256, checkpoint.version, nextVersion,
       input.outcome, eventRange.event_start, eventRange.event_end, now)
