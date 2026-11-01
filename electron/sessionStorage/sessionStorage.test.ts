@@ -17,8 +17,10 @@ import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
 import { getProjectedMessages, readSessionTranscriptProjection } from './infrastructure/sqlite/sessionTranscriptProjection'
 import * as sessionTranscriptProjection from './infrastructure/sqlite/sessionTranscriptProjection'
 import { canonicalLedgerProjectionPayloadDigest, drainCanonicalLedgerProjectionOutbox, enqueueCanonicalLedgerProjectionTargetInTransaction, listPendingCanonicalLedgerProjectionTargets } from '../sessionLedgerOutbox'
-import { appendCompactionTransaction, getSessionEventSink, readSessionEvents, resolveSessionEventPaths, setSessionEventFailureObserver } from '../sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readCompactionReplay, readSessionEvents, resolveSessionEventPaths,
+  SessionEventWriter, setSessionEventFailureObserver } from '../sessionEvents'
 import { ensureSessionLedgerReady } from '../sessionLedgerLifecycle'
+import { ensureLegacyLedgerReadiness, markLegacyLedgerMergeCompleted } from '../sessionLedgerReadiness'
 import { createProductionSessionLedgerLifecycleDependencies } from '../runtime/sessionLedgerLifecycleProduction'
 import { projectCanonicalSessionLedgerTarget } from '../runtime/sessionLedgerOutboxProjector'
 import { buildImQueueScope } from '../../src/shared/queueScope'
@@ -28,6 +30,62 @@ import { toCanonicalModelMessages } from '../runtime/canonicalHistory'
 
 describe('SQLite session storage public queries', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
+
+  it('does not open the legacy ledger for either consumer after its exact location is merged', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'merged legacy ledger' })
+    const workDir = '/tmp/merged-legacy-ledger'
+    const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
+    const readiness = ensureLegacyLedgerReadiness(getDbConnection(db), location, session.generation)
+    expect(readiness.canonicalReadVersion).toBeNull()
+    getDbConnection(db).prepare("UPDATE session_ledger_projection_state SET state='ready',canonical_watermark='session:-1' WHERE ledger_location_key=?")
+      .run(readiness.ledgerLocationKey)
+    expect(markLegacyLedgerMergeCompleted(getDbConnection(db), location, session.generation)).toBe(true)
+    const openLegacyLedger = vi.fn(() => { throw new Error('merged ledger must not be opened') })
+    const storage = createSqliteSessionStorage(db, { getSessionEventSink: openLegacyLedger as never })
+
+    await expect(storage.readCompactionReplay({ sessionId: session.id, workDir })).resolves.toEqual({ committed: [], rejected: [] })
+    await expect(storage.readContextMeterEvents({ sessionId: session.id, workDir })).resolves.toEqual([])
+    expect(openLegacyLedger).not.toHaveBeenCalled()
+    getDbConnection(db).prepare('UPDATE sessions SET generation=? WHERE id=?').run('new-generation', session.id)
+    await expect(storage.readContextMeterEvents({ sessionId: session.id, workDir })).rejects.toThrow('merged ledger must not be opened')
+    expect(openLegacyLedger).toHaveBeenCalledOnce()
+  })
+
+  it('keeps new, completed, and unmerged ledger locations isolated in a mixed workspace', async () => {
+    db = createMemoryAppDb()
+    const workDir = '/tmp/mixed-session-ledger-locations'
+    const completed = createSession(db, { name: 'completed location' })
+    const completedLocation = { workDir, sessionId: completed.id, createdAt: completed.createdAt }
+    const completedReadiness = ensureLegacyLedgerReadiness(getDbConnection(db), completedLocation, completed.generation)
+    getDbConnection(db).prepare("UPDATE session_ledger_projection_state SET state='ready',canonical_watermark='session:-1' WHERE ledger_location_key=?")
+      .run(completedReadiness.ledgerLocationKey)
+    expect(markLegacyLedgerMergeCompleted(getDbConnection(db), completedLocation, completed.generation)).toBe(true)
+
+    const newlyCreated = createSession(db, { name: 'new location', fixedWorkDir: '/tmp/new-session-ledger-location' })
+    const unmerged = createSession(db, { name: 'unmerged location' })
+    const unmergedLocation = { workDir, sessionId: unmerged.id, createdAt: unmerged.createdAt }
+    const unmergedReadiness = ensureLegacyLedgerReadiness(getDbConnection(db), unmergedLocation, unmerged.generation)
+    getDbConnection(db).prepare("UPDATE session_ledger_projection_state SET state='ready',canonical_watermark='session:-1' WHERE ledger_location_key=?")
+      .run(unmergedReadiness.ledgerLocationKey)
+    const realSink = getSessionEventSink(workDir, unmerged.id, unmerged.createdAt)
+    await realSink.appendCritical({ type: 'request_header', payload: { schemaVersion: 1, requestId: 'incomplete-old-request', attempt: 1 } })
+    await realSink.close()
+    const openedLocations: string[] = []
+    const storage = createSqliteSessionStorage(db, {
+      ensureSessionLedgerReady: async () => true,
+      getSessionEventSink: (targetWorkDir, sessionId, createdAt) => {
+        openedLocations.push(sessionId)
+        return getSessionEventSink(targetWorkDir, sessionId, createdAt)
+      }
+    })
+
+    await expect(storage.readContextMeterEvents({ sessionId: newlyCreated.id, workDir: '/tmp/new-session-ledger-location' })).resolves.toEqual([])
+    await expect(storage.readContextMeterEvents({ sessionId: completed.id, workDir })).resolves.toEqual([])
+    await expect(storage.readContextMeterEvents({ sessionId: unmerged.id, workDir })).resolves.toHaveLength(1)
+    expect(openedLocations).toEqual([unmerged.id])
+    expect(ensureLegacyLedgerReadiness(getDbConnection(db), unmergedLocation, unmerged.generation).canonicalReadVersion).toBeNull()
+  })
 
   afterEach(() => {
     db?.close()
@@ -195,6 +253,164 @@ describe('SQLite session storage public queries', () => {
       db?.close()
       db = undefined
       fs.rmSync(path.dirname(temp.dbPath), { recursive: true, force: true })
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('imports legacy-only ContextMeter facts into History once and stops reading that location file', async () => {
+    const temp = createTempDatabase('session-context-meter-import-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'context-meter-import-ledger')
+    fs.mkdirSync(workDir, { recursive: true })
+    let sink: ReturnType<typeof getSessionEventSink> | undefined
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'legacy ContextMeter import' })
+      const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
+      const readiness = ensureLegacyLedgerReadiness(getDbConnection(db), location, session.generation)
+      getDbConnection(db).prepare("UPDATE session_ledger_projection_state SET state='ready',canonical_watermark='session:-1' WHERE ledger_location_key=?")
+        .run(readiness.ledgerLocationKey)
+      sink = getSessionEventSink(workDir, session.id, session.createdAt)
+      const requestId = 'old-meter-request'
+      const header = { schemaVersion: 1, requestId, attempt: 1, surfaceSnapshot: { schemaVersion: 1, fingerprint: 'surface' } }
+      const context = { schemaVersion: 1, requestId, attempt: 1, contextWindow: { tokens: 80_000 },
+        budget: { estimatorVersion: 'v1', serializationVersion: 'v1' } }
+      const usage = { schemaVersion: 1, requestId, turnId: 'old-meter-turn', usage: { input_tokens: 300, output_tokens: 20 } }
+      await sink.appendCritical({ type: 'request_header', payload: header })
+      await sink.appendCritical({ type: 'request_context', payload: context })
+      await sink.appendCritical({ type: 'request_usage', payload: usage })
+      await sink.close()
+
+      const lifecycleDependencies = createProductionSessionLedgerLifecycleDependencies(getDbConnection(db))
+      const storage = createSqliteSessionStorage(db, { ensureSessionLedgerReady: async ({ workDir: targetWorkDir, session: targetSession }) => {
+        const result = await ensureSessionLedgerReady({ conn: getDbConnection(db!),
+          location: { workDir: targetWorkDir, sessionId: targetSession.id, createdAt: targetSession.createdAt },
+          sessionGeneration: targetSession.generation, processGeneration: 0, retryBlocked: true, dependencies: lifecycleDependencies })
+        return { ready: result.status === 'ready', canonicalReadVersion: result.readiness.canonicalReadVersion }
+      } })
+      getDbConnection(db).exec(`CREATE TRIGGER fail_legacy_meter_import BEFORE INSERT ON agent_history_events
+        WHEN NEW.invocation_id LIKE 'legacy-meter-import:%' BEGIN SELECT RAISE(ABORT,'injected merge interruption'); END`)
+      await expect(storage.readContextMeterEvents({ sessionId: session.id, workDir })).rejects.toThrow()
+      expect(getDbConnection(db).prepare('SELECT canonical_read_version FROM session_ledger_projection_state WHERE session_id=?')
+        .get(session.id)).toEqual({ canonical_read_version: null })
+      expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM agent_history_streams WHERE invocation_id LIKE 'legacy-meter-import:%'")
+        .get()).toEqual({ count: 0 })
+      getDbConnection(db).exec('DROP TRIGGER fail_legacy_meter_import')
+
+      const firstRead = await storage.readContextMeterEvents({ sessionId: session.id, workDir })
+      expect(firstRead.map(({ type, payload }) => ({ type, payload }))).toEqual([
+        { type: 'request_header', payload: header }, { type: 'request_context', payload: context }, { type: 'request_usage', payload: usage }
+      ])
+      expect(getDbConnection(db).prepare('SELECT canonical_read_version FROM session_ledger_projection_state WHERE session_id=?')
+        .get(session.id)).toEqual({ canonical_read_version: 1 })
+      expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM session_ledger_projection_outbox WHERE session_id=? AND status='pending'")
+        .get(session.id)).toEqual({ count: 0 })
+      expect((await readSessionEvents(resolveSessionEventPaths(workDir, session.id, session.createdAt).eventsPath))
+        .filter(({ type }) => type === 'request_header' || type === 'request_context' || type === 'request_usage')).toHaveLength(3)
+      expect((await storage.execution.historyFor({ sessionId: session.id }).listInvocationIds()).some((id) => id.startsWith('legacy-meter-import:')))
+        .toBe(false)
+
+      await fs.promises.rm(resolveSessionEventPaths(workDir, session.id, session.createdAt).eventsPath)
+      const reopenedStorage = createSqliteSessionStorage(db, { ensureSessionLedgerReady: async () => true,
+        getSessionEventSink: () => { throw new Error('converted ContextMeter must not open JSONL') } })
+      await expect(reopenedStorage.readContextMeterEvents({ sessionId: session.id, workDir })).resolves.toEqual(firstRead)
+    } finally {
+      await sink?.close()
+      db?.close()
+      db = undefined
+      temp.cleanup()
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not certify a legacy location when its JSONL source changes during the merge', async () => {
+    const temp = createTempDatabase('session-context-meter-source-drift-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'context-meter-source-drift')
+    fs.mkdirSync(workDir, { recursive: true })
+    let sink: ReturnType<typeof getSessionEventSink> | undefined
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'legacy source revision' })
+      const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
+      const readiness = ensureLegacyLedgerReadiness(getDbConnection(db), location, session.generation)
+      getDbConnection(db).prepare("UPDATE session_ledger_projection_state SET state='ready',canonical_watermark='session:-1' WHERE ledger_location_key=?")
+        .run(readiness.ledgerLocationKey)
+      sink = getSessionEventSink(workDir, session.id, session.createdAt)
+      const requestId = 'source-drift-request'
+      await sink.appendCritical({ type: 'request_header', payload: { schemaVersion: 1, requestId, attempt: 1,
+        surfaceSnapshot: { schemaVersion: 1, fingerprint: 'source-drift' } } })
+      await sink.appendCritical({ type: 'request_context', payload: { schemaVersion: 1, requestId, attempt: 1,
+        contextWindow: { tokens: 80_000 }, budget: { estimatorVersion: 'v1', serializationVersion: 'v1' } } })
+
+      let sourceMutated = false
+      let replayReadCount = 0
+      const storage = createSqliteSessionStorage(db, { ensureSessionLedgerReady: async () => true,
+        readCompactionReplay: async (eventsPath) => {
+          replayReadCount += 1
+          if (!sourceMutated) {
+            sourceMutated = true
+            await fs.promises.appendFile(eventsPath, `${JSON.stringify({ seq: 3, time: Date.now(), type: 'request_retry', payload: {
+              schemaVersion: 1, requestId: 'late-source-drift-request', attempt: 2, delayMs: 10
+            } })}\n`)
+          }
+          return readCompactionReplay(eventsPath)
+        } })
+      await storage.readContextMeterEvents({ sessionId: session.id, workDir })
+      expect(sourceMutated).toBe(true)
+      expect(replayReadCount).toBe(2)
+      expect(getDbConnection(db).prepare('SELECT canonical_read_version FROM session_ledger_projection_state WHERE session_id=?')
+        .get(session.id)).toEqual({ canonical_read_version: null })
+    } finally {
+      await sink?.close()
+      db?.close()
+      db = undefined
+      temp.cleanup()
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the location unmerged when its existing outbox projection fails with ENOSPC', async () => {
+    const temp = createTempDatabase('session-context-meter-enospc-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'context-meter-enospc')
+    fs.mkdirSync(workDir, { recursive: true })
+    let sink: ReturnType<typeof getSessionEventSink> | undefined
+    const append = vi.spyOn(SessionEventWriter.prototype, 'appendCritical').mockImplementation(async () => {
+      const error = new Error('no space left on device') as NodeJS.ErrnoException
+      error.code = 'ENOSPC'
+      throw error
+    })
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'meter projection ENOSPC' })
+      const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
+      sink = getSessionEventSink(workDir, session.id, session.createdAt)
+      await sink.flush()
+      const usage = { schemaVersion: 1, requestId: 'enospc-request', turnId: 'enospc-turn', usage: { input_tokens: 10, output_tokens: 2 } }
+      await new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).appendBatch([{
+        invocationId: 'enospc-invocation', turnId: 'enospc-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'enospc-attempt-result', idempotencyKey: 'enospc-attempt-result', kind: 'provider-attempt-result',
+        payload: { requestId: usage.requestId, modelTurn: 1, attempt: 1, sessionLedger: { location, requestUsage: usage } }
+      }], 0)
+      const lifecycleDependencies = createProductionSessionLedgerLifecycleDependencies(getDbConnection(db))
+      const storage = createSqliteSessionStorage(db, { ensureSessionLedgerReady: async ({ session: targetSession, workDir: targetWorkDir }) => {
+        const result = await ensureSessionLedgerReady({ conn: getDbConnection(db!),
+          location: { workDir: targetWorkDir, sessionId: targetSession.id, createdAt: targetSession.createdAt },
+          sessionGeneration: targetSession.generation, processGeneration: 0, retryBlocked: true, dependencies: lifecycleDependencies })
+        return { ready: result.status === 'ready', canonicalReadVersion: result.readiness.canonicalReadVersion }
+      } })
+
+      await expect(storage.readContextMeterEvents({ sessionId: session.id, workDir })).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'request_usage', payload: usage })
+      ]))
+      expect(getDbConnection(db).prepare('SELECT canonical_read_version FROM session_ledger_projection_state WHERE session_id=?')
+        .get(session.id)).toEqual({ canonical_read_version: null })
+      expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM session_ledger_projection_outbox WHERE session_id=? AND status='pending'")
+        .get(session.id)).toEqual({ count: 1 })
+    } finally {
+      append.mockRestore()
+      await sink?.close()
+      db?.close()
+      db = undefined
+      temp.cleanup()
       fs.rmSync(workDir, { recursive: true, force: true })
     }
   })
@@ -569,6 +785,33 @@ describe('SQLite session storage public queries', () => {
     expect(getLedger).not.toHaveBeenCalled()
   })
 
+  it('uses canonical compaction replay for a ready database ledger without opening legacy files', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'canonical-marker-local' })
+    const workDir = '/tmp/canonical-marker-local'
+    const readiness = ensureLegacyLedgerReadiness(getDbConnection(db), { workDir, sessionId: session.id, createdAt: session.createdAt }, session.generation)
+    getDbConnection(db).prepare("UPDATE session_ledger_projection_state SET state='ready',canonical_watermark='session:-1' WHERE ledger_location_key=?")
+      .run(readiness.ledgerLocationKey)
+    expect(markLegacyLedgerMergeCompleted(getDbConnection(db), { workDir, sessionId: session.id, createdAt: session.createdAt }, session.generation)).toBe(true)
+    const ledger = getSessionEventSink(workDir, session.id, session.createdAt)
+    const sink = vi.fn(() => { throw new Error('canonical marker read must not open legacy source') })
+    const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir,
+      ensureSessionLedgerReady: async () => ({ ready: true, canonicalReadVersion: 1 }), getSessionEventSink: sink as never })
+    await new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).appendBatch([
+      { invocationId: 'canonical-marker-invocation', turnId: 'canonical-marker-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'canonical-marker-compacted', idempotencyKey: 'canonical-marker-compacted', kind: 'transcript-compacted', payload: {
+          compactionId: 'canonical-marker', messages: [], sessionLedger: { location: { workDir, sessionId: session.id, createdAt: session.createdAt },
+            start: { compactionId: 'canonical-marker', windowId: 'window' },
+            summary: { compactionId: 'canonical-marker', outputSurfaceFingerprint: 'fingerprint' } }
+        } },
+      { invocationId: 'canonical-marker-invocation', turnId: 'canonical-marker-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'canonical-marker-completed', idempotencyKey: 'canonical-marker-completed', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    await expect(storage.readCompactionReplay({ sessionId: session.id, workDir: '/tmp/canonical-marker-local' }))
+      .resolves.toMatchObject({ committed: [expect.objectContaining({ compactionId: 'canonical-marker' })] })
+    expect(sink).not.toHaveBeenCalled()
+  })
+
   it('rebuilds readCurrent from committed compaction shadow after recreating the session adapter', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'restart-context-shadow' })
@@ -775,8 +1018,17 @@ describe('SQLite session storage public queries', () => {
         { id: 'legacy-backfill-a3', sessionId: session.id, role: 'assistant', content: 'later answer', timestamp: 6, status: 'completed' }
       ])
 
-      const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
-        ensureSessionLedgerReady: async () => true })
+      const createLifecycleStorage = () => {
+        const lifecycleDependencies = createProductionSessionLedgerLifecycleDependencies(getDbConnection(db!))
+        return createSqliteSessionStorage(db!, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
+          ensureSessionLedgerReady: async ({ session: targetSession, workDir: targetWorkDir }) => {
+            const result = await ensureSessionLedgerReady({ conn: getDbConnection(db!),
+              location: { workDir: targetWorkDir, sessionId: targetSession.id, createdAt: targetSession.createdAt },
+              sessionGeneration: targetSession.generation, processGeneration: 0, retryBlocked: true, dependencies: lifecycleDependencies })
+            return { ready: result.status === 'ready', canonicalReadVersion: result.readiness.canonicalReadVersion }
+          } })
+      }
+      const storage = createLifecycleStorage()
       const appendBatch = SqliteAgentHistory.prototype.appendBatch
       const appendSpy = vi.spyOn(SqliteAgentHistory.prototype, 'appendBatch').mockImplementationOnce(async function (events, expectedVersion, transcriptCommit) {
         const first = events[0]!
@@ -804,9 +1056,10 @@ describe('SQLite session storage public queries', () => {
       ])
       db.close()
       db = openDatabase(temp.dbPath)
-      const reopenedStorage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
-        ensureSessionLedgerReady: async () => true })
+      const reopenedStorage = createLifecycleStorage()
       const replayAfterRestart = await reopenedStorage.readCompactionReplay({ sessionId: session.id, workDir })
+      expect(getDbConnection(db).prepare('SELECT canonical_read_version FROM session_ledger_projection_state WHERE session_id=?')
+        .get(session.id)).toEqual({ canonical_read_version: 1 })
       expect(replayAfterRestart.committed).toHaveLength(1)
       const reopenedHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
       expect(reopenedHistory.readSync(backfillInvocationId).events.map(({ kind }) => kind))
@@ -834,7 +1087,14 @@ describe('SQLite session storage public queries', () => {
       // The compatibility backfill and the full Hosted transcript catch-up are separate snapshots.
       expect(secondCount.count).toBe(firstCount.count + 1)
       await fs.promises.rm(resolveSessionEventPaths(workDir, session.id, session.createdAt).eventsPath)
-      const replayAfterLedgerRemoval = await reopenedStorage.readCompactionReplay({ sessionId: session.id, workDir })
+      const noFileStorage = createSqliteSessionStorage(db, { ensureSessionLedgerReady: async ({ session: targetSession, workDir: targetWorkDir }) => {
+        const lifecycleDependencies = createProductionSessionLedgerLifecycleDependencies(getDbConnection(db!))
+        const result = await ensureSessionLedgerReady({ conn: getDbConnection(db!),
+          location: { workDir: targetWorkDir, sessionId: targetSession.id, createdAt: targetSession.createdAt },
+          sessionGeneration: targetSession.generation, processGeneration: 0, retryBlocked: true, dependencies: lifecycleDependencies })
+        return { ready: result.status === 'ready', canonicalReadVersion: result.readiness.canonicalReadVersion }
+      }, getSessionEventSink: () => { throw new Error('completed compaction location must not reopen JSONL') } })
+      const replayAfterLedgerRemoval = await noFileStorage.readCompactionReplay({ sessionId: session.id, workDir })
       expect(replayAfterLedgerRemoval.committed).toHaveLength(1)
       expect((getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=? AND kind='transcript-compacted' ").get(session.id) as { count: number }).count)
         .toBe(secondCount.count)
@@ -936,6 +1196,9 @@ describe('SQLite session storage public queries', () => {
       ])
       const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
         ensureSessionLedgerReady: async () => true })
+      const readiness = ensureLegacyLedgerReadiness(getDbConnection(db), { workDir, sessionId: session.id, createdAt: session.createdAt }, session.generation)
+      getDbConnection(db).prepare("UPDATE session_ledger_projection_state SET state='ready',canonical_watermark='session:-1' WHERE ledger_location_key=?")
+        .run(readiness.ledgerLocationKey)
       await storage.readCompactionReplay({ sessionId: session.id, workDir })
 
       // Model the completed version-1 shortened snapshot written by the prior release.
@@ -1019,7 +1282,7 @@ describe('SQLite session storage public queries', () => {
     }
   })
 
-  it('replays a canonical manual compaction after a crash before its JSONL projection', async () => {
+  it('keeps canonical compaction committed when its JSONL projection is interrupted and repairs the projection on restart', async () => {
     const temp = createTempDatabase('session-context-canonical-compaction-recovery-')
     const workDir = path.join(path.dirname(temp.dbPath), 'session-context-canonical-compaction-recovery')
     fs.mkdirSync(workDir, { recursive: true })
@@ -1054,7 +1317,7 @@ describe('SQLite session storage public queries', () => {
         summarize: async () => ({ task: 'task', completed: 'done', decisions: 'decision', constraints: 'constraints',
           pending: 'pending', blockers: 'none', nextStep: 'continue' })
       })
-      expect(compacted.status).toBe('commit-uncertain')
+      expect(compacted.status).toBe('committed')
       const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
       const compactedStream = conn.prepare(`SELECT streams.invocation_id FROM agent_history_streams streams
         JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
@@ -1085,7 +1348,7 @@ describe('SQLite session storage public queries', () => {
   })
 
 
-  it('exposes the full-history context token summary through SessionQueries', () => {
+  it('exposes the full-history context token summary through the bounded projection worker', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'context-summary-query' })
     appendMessagesAtomically(db, [
@@ -1094,7 +1357,7 @@ describe('SQLite session storage public queries', () => {
       { id: 'summary-thinking', sessionId: session.id, role: 'assistant', content: 'assistant body omitted', timestamp: 3, status: 'completed', thinking: { content: 'private reasoning text', isVisible: true, startTime: 1, segments: [{ content: 'private reasoning text', startTime: 1, endTime: 2 }] } }
     ])
 
-    const baseline = createSqliteSessionStorage(db).queries.readContextHistorySummaryBaseline(session.id)
+    const baseline = await createSqliteSessionStorage(db).queries.readContextHistorySummaryBaseline(session.id)
 
     expect(baseline.sessionId).toBe(session.id)
     expect(baseline.entries.map(({ messageId }) => messageId)).toEqual(['summary-image', 'summary-thinking'])
@@ -1642,16 +1905,23 @@ describe('SQLite session storage execution query contracts', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
   afterEach(() => { db?.close(); db = undefined })
 
-  it('lists the narrow active turn identities needed by startup orphan cleanup', () => {
+  it('lists active orphan turn identities by target session without scanning unrelated sessions', () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'startup orphan turns' })
-    appendMessage(db, { id: 'startup-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    const other = createSession(db, { name: 'unrelated orphan turns' })
+    appendMessage(db, { id: 'startup-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming',
+      toolCalls: [{ id: 'orphan-shell', toolName: 'run_shell', input: {}, status: 'executing', riskLevel: 'high', processPid: 77, processGroupId: 78, processOwnerToken: 'owner-77' }] })
     appendMessage(db, { id: 'terminal-assistant', sessionId: session.id, role: 'assistant', content: 'done', timestamp: 2, status: 'completed' })
+    appendMessage(db, { id: 'unrelated-startup-assistant', sessionId: other.id, role: 'assistant', content: '', timestamp: 3, status: 'streaming' })
     createPersistedTurn(db, { turnId: 'startup-active', requestId: 'startup-request', sessionId: session.id, assistantMessageId: 'startup-assistant', state: 'executing' })
     createPersistedTurn(db, { turnId: 'startup-terminal', requestId: 'terminal-request', sessionId: session.id, assistantMessageId: 'terminal-assistant', state: 'terminal' })
+    createPersistedTurn(db, { turnId: 'unrelated-active', requestId: 'unrelated-request', sessionId: other.id, assistantMessageId: 'unrelated-startup-assistant', state: 'executing' })
 
-    expect(createSqliteSessionStorage(db).execution.listStartupOrphanTurns()).toEqual([
+    expect(createSqliteSessionStorage(db).execution.listStartupOrphanTurns(session.id)).toEqual([
       { turnId: 'startup-active', state: 'executing', assistantMessageId: 'startup-assistant' }
+    ])
+    expect(createSqliteSessionStorage(db).execution.listOrphanProcessIdentities(session.id)).toEqual([
+      { turnId: 'startup-active', toolUseId: 'orphan-shell', pid: 77, processGroupId: 78, ownerToken: 'owner-77' }
     ])
   })
 

@@ -28,14 +28,13 @@ function downgradeToolCall(tc: ToolCallRecord, now: number): ToolCallRecord {
   }
 }
 
-export function cleanupStreamingResiduesOnStartup(db: AppDatabase): number {
+function cleanupStreamingResidues(db: AppDatabase, sessionId?: string): number {
   const conn = getDbConnection(db)
-  const rows = conn
-    .prepare(`SELECT messages.id, messages.tool_calls
+  const sql = `SELECT messages.id, messages.tool_calls
       FROM messages
       LEFT JOIN turns ON turns.assistant_message_id = messages.id
-      WHERE messages.role = 'assistant' AND messages.status = 'streaming' AND turns.turn_id IS NULL`)
-    .all() as Array<{ id: string; tool_calls: string | null }>
+      WHERE messages.role = 'assistant' AND messages.status = 'streaming' AND turns.turn_id IS NULL${sessionId === undefined ? '' : ' AND messages.session_id = ?'}`
+  const rows = (sessionId === undefined ? conn.prepare(sql).all() : conn.prepare(sql).all(sessionId)) as Array<{ id: string; tool_calls: string | null }>
 
   if (rows.length === 0) return 0
 
@@ -57,6 +56,9 @@ export function cleanupStreamingResiduesOnStartup(db: AppDatabase): number {
   logAgentEvent('info', 'startup.streaming_cleanup', { fixedCount: rows.length })
   return rows.length
 }
+
+export function cleanupStreamingResiduesOnStartup(db: AppDatabase): number { return cleanupStreamingResidues(db) }
+export function cleanupStreamingResiduesForSession(db: AppDatabase, sessionId: string): number { return cleanupStreamingResidues(db, sessionId) }
 
 export function createCorruptedToolCallPlaceholder(): ToolCallRecord {
   return {

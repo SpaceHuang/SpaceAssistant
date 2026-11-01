@@ -115,6 +115,10 @@ describe('ContextUsageRing', () => {
     expect(colors).toContain('var(--sa-primary)')
     expect(colors).toContain('var(--sa-context-ring-reserved)')
   })
+  it('does not present a partial occupancy while the full session summary is pending', () => {
+    renderRing({ input_tokens: 10000, output_tokens: 5000 }, undefined, { contextSummaryReady: false })
+    expect(document.querySelectorAll('circle')).toHaveLength(1)
+  })
   it('renders from a Core meter projection without last usage', () => {
     renderRing(undefined, undefined, undefined, { pressureTokens: 100, projectedTokens: 120, anchorStatus: 'matched', surfaceTokens: 120, bodyTokens: 80, bodyRatio: 0.4, hardFit: true, bodyFit: true, contextWindow: { tokens: 200, source: 'adapter' } })
     expect(document.querySelectorAll('circle')).toHaveLength(3)

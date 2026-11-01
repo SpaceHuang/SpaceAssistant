@@ -2,12 +2,24 @@ import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'crypto'
 import { appendMessage, createPersistedTurn, createSession } from './operations'
 import { createMemoryAppDb, seedValidProjectionScope } from './testHelpers'
-import { cleanupStreamingResiduesOnStartup } from './streamingCleanup'
+import { cleanupStreamingResiduesForSession, cleanupStreamingResiduesOnStartup } from './streamingCleanup'
 import { getMessages } from './operations'
 import { getDbConnection } from './sqliteStore'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 describe('cleanupStreamingResiduesOnStartup', () => {
+  it('repairs streaming residue only for the requested session', () => {
+    const db = createMemoryAppDb()
+    const target = createSession(db, { name: 'target residue' })
+    const unrelated = createSession(db, { name: 'unrelated residue' })
+    appendMessage(db, { id: 'target-residue', sessionId: target.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    appendMessage(db, { id: 'unrelated-residue', sessionId: unrelated.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+
+    expect(cleanupStreamingResiduesForSession(db, target.id)).toBe(1)
+    expect(getMessages(db, target.id).find((message) => message.id === 'target-residue')?.status).toBe('failed')
+    expect(getMessages(db, unrelated.id).find((message) => message.id === 'unrelated-residue')?.status).toBe('streaming')
+  })
+
   it('14: downgrades streaming assistant and in-progress toolCalls', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'test' })

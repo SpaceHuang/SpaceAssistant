@@ -7,7 +7,7 @@ import { approveOneTimeUnknownEffectRetry, hasPendingUnknownEffectRetryApproval,
 import { BrowserWindow, dialog, type IpcMain } from 'electron'
 import { AUTO_CONTRACT } from '../processOutput/contracts'
 import { AgentLogEventName, AgentLogFields } from '../agentLogger/types'
-import { CONFIG_KEYS, readAppLocale, readSkillsConfig, readWikiConfig, readToolsConfig, scheduleBackup, flushBackup, backupAfterMessagePatch, readExposureInputsFromDb } from './ipcShared'
+import { CONFIG_KEYS, readAppLocale, readSkillsConfig, readWikiConfig, readToolsConfig, readExposureInputsFromDb } from './ipcShared'
 import { ChatImageAttachment } from '../../src/shared/domainTypes'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { Message, ModelEntry, SessionSkillsState, SkillDefinition, SkippedCandidate, SkillRouteRecentMessage, SkillRouteResult } from '../../src/shared/domainTypes'
@@ -142,6 +142,10 @@ export async function continueAgentFromCheckpoint(input: {
     if (JSON.stringify(currentSnapshot) !== JSON.stringify(frozenSnapshot)) {
       return { accepted: false, reason: 'CONTINUATION_SAFETY_SNAPSHOT_CHANGED' }
     }
+    const targetRecovery = await withSessionTurnAdmission(payload.sessionId, () =>
+      storage.execution.recoverExecutionTarget(payload.sessionId))
+    if (targetRecovery.status === 'active-owner') return { accepted: false, reason: 'SESSION_EXECUTION_ACTIVE_OWNER' }
+    if (targetRecovery.status === 'blocked') return { accepted: false, reason: 'SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED' }
     const priorContinuation = storage.execution.continuations.readByRequest({
       sessionId: payload.sessionId, requestIdempotencyKey: payload.requestIdempotencyKey
     }) ?? storage.execution.continuations.readAwaitingBySource({ sessionId: payload.sessionId, sourceTurnId: payload.sourceTurnId })
@@ -797,7 +801,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     'message:append-non-turn',
     async (_e, msg: Message): Promise<{ messageId: string; sequence: number }> => {
       const { message, sequence } = sessionCommands.appendNonTurnMessage(msg)
-      scheduleBackup(ctx, message.sessionId)
       return { messageId: message.id, sequence }
     }
   )
@@ -1039,7 +1042,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     appendHintMessage: async (sessionId, hint) => {
       const msg = createSkillHintSystemMessage(sessionId, hint)
       const { sequence } = sessionCommands.appendNonTurnMessage(msg)
-      scheduleBackup(ctx, sessionId)
       return { messageId: msg.id, sequence }
     },
     updateSessionState: async (sessionId, patch) => {
@@ -1250,7 +1252,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         throw new Error('MESSAGE_PATCH_OPERATION_UNSUPPORTED')
       }
       if (!entry) return null
-      await backupAfterMessagePatch(ctx, payload.sessionId, payload.patch)
       return entry
     }
   )
@@ -1291,9 +1292,25 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:delete-queued-message',
     async (_e, payload: { messageId: string; sessionId: string }) => {
-      const result = sessionCommands.deleteQueuedMessage(payload.messageId)
+      let previewCandidate: { messageId: string; content: string; source: { sessionGeneration: string; messageRevision: number; sequence: number; role: string; timestamp: number; status: string } } | undefined
+      const candidate = sessionQueries.readLatestMessagePreviewCandidate(payload.sessionId, payload.messageId)
+      if (candidate && candidate.id !== payload.messageId && candidate.status !== 'queued' &&
+        (candidate.role === 'user' || candidate.role === 'assistant')) {
+        try {
+          const prepared = await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
+          const message = await sessionQueries.readPreparedMessage?.({ sessionId: payload.sessionId, messageId: candidate.id, prepared: prepared as PreparedChatBodyView | undefined })
+          if (message?.id === candidate.id && message.sessionId === payload.sessionId && message.role === candidate.role &&
+            message.timestamp === candidate.timestamp && message.status === candidate.status) {
+            previewCandidate = { messageId: candidate.id, content: message.content,
+              source: { sessionGeneration: candidate.sessionGeneration, messageRevision: candidate.messageRevision,
+                sequence: candidate.sequence, role: candidate.role, timestamp: candidate.timestamp, status: candidate.status } }
+          }
+        } catch {
+          // Preparation is an optimization. The transactional command retains its canonical authority fallback.
+        }
+      }
+      const result = sessionCommands.deleteQueuedMessage(payload.messageId, previewCandidate)
       if (result.ok) {
-        await flushBackup(ctx, result.sessionId)
       }
       return result
     }
@@ -1301,13 +1318,11 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   ipcMain.handle('chat:update-queued-message', async (_e, payload: { sessionId: string; messageId: string; content: string }) => {
     const result = sessionCommands.editQueuedMessage(payload)
-    if (result.ok) await flushBackup(ctx, payload.sessionId)
     return result
   })
 
   ipcMain.handle('chat:reorder-queued-messages', async (_e, payload: { sessionId: string; messageIds: string[] }) => {
     const result = sessionCommands.reorderQueuedMessages(payload)
-    if (result.ok) await flushBackup(ctx, payload.sessionId)
     return result
   })
 

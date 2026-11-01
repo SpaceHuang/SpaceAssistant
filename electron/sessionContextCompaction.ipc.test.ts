@@ -46,7 +46,6 @@ describe('manual context compaction IPC ContextPort integration', () => {
       getWorkDirForSession: () => '/tmp', getUserDataDir: () => '/tmp',
       getSessionEventSink: () => sink as never, readCompactionReplay: async () => replayForStorage as never
     })
-    await baseStorage.recovery.recover()
     await baseStorage.execution.historyFor({ sessionId: session.id }).appendBatch([{
       invocationId: 'invalid-compaction-sidecar', turnId: 'invalid-compaction-turn', sequence: 1, schemaVersion: 1,
       eventId: 'invalid-compaction-sidecar:event:1', idempotencyKey: 'invalid-compaction-sidecar:transcript-compacted:1',
@@ -57,7 +56,6 @@ describe('manual context compaction IPC ContextPort integration', () => {
     }], 0)
     const observedAvailability = baseStorage.availability.inspect(session.id)
     const healthyAvailability = { ...observedAvailability,
-      globalFence: { state: 'ready' as const, source: { recoveryState: 'ready' as const } },
       content: { ...observedAvailability.content, state: 'readable' as const },
       execution: { ...observedAvailability.execution, state: 'ready' as const } }
     const inspectAvailability = vi.fn((_sessionId: string) => healthyAvailability)
@@ -111,7 +109,7 @@ describe('manual context compaction IPC ContextPort integration', () => {
     expect(summarizeSessionContext).toHaveBeenCalledOnce()
     expect(appendCompactionTransaction).toHaveBeenCalledOnce()
     inspectAvailability.mockReturnValue({ ...healthyAvailability,
-      globalFence: { state: 'pending', source: { recoveryState: 'pending' } } })
+      execution: { state: 'blocked', reason: 'session-recovery-required' } as never })
     await expect(handlers.get('chat:compact-session-context')!({ sender: window.webContents },
       { sessionId: session.id, requestId: 'ipc-compact-recovery-pending' })).resolves.toEqual({ status: 'unavailable' })
     expect(summarizeSessionContext).toHaveBeenCalledOnce()

@@ -1,0 +1,5539 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-1",
+        "count": 100,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-16",
+        "count": 100,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-1",
+        "count": 400,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 1638400
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-16",
+        "count": 400,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 1638400
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-1",
+        "count": 800,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 3276800
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-16",
+        "count": 800,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 3276800
+      }
+    ],
+    "samples": 30,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "sqlite-transaction-boundary",
+        "samples": 30,
+        "work": "SELECT 1 inside production runInTransaction",
+        "p50Ms": 0.003,
+        "p95Ms": 0.005,
+        "maxMs": 0.012
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 1,
+        "samples": 30,
+        "inputBytes": {
+          "p50Bytes": 2993,
+          "p95Bytes": 2993,
+          "maxBytes": 2993
+        },
+        "resultBytes": {
+          "p50Bytes": 1680,
+          "p95Bytes": 1680,
+          "maxBytes": 1680
+        },
+        "roundTrip": {
+          "p50Ms": 16.503,
+          "p95Ms": 18.251,
+          "maxMs": 23.472
+        },
+        "workerDuration": {
+          "p50Ms": 0.726,
+          "p95Ms": 0.86,
+          "maxMs": 0.905
+        }
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 100,
+        "samples": 30,
+        "inputBytes": {
+          "p50Bytes": 233147,
+          "p95Bytes": 233147,
+          "maxBytes": 233147
+        },
+        "resultBytes": {
+          "p50Bytes": 111561,
+          "p95Bytes": 111561,
+          "maxBytes": 111561
+        },
+        "roundTrip": {
+          "p50Ms": 17.239,
+          "p95Ms": 18.66,
+          "maxMs": 20.046
+        },
+        "workerDuration": {
+          "p50Ms": 1.006,
+          "p95Ms": 1.141,
+          "maxMs": 1.229
+        }
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-1",
+        "count": 100,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 409600,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 2.967,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 571.451,
+        "historyBytesWritten": 12391490,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0.001,
+          "maxMs": 0.054
+        },
+        "p50Ms": 18.294,
+        "p95Ms": 21.672,
+        "maxMs": 22.479
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-16",
+        "count": 100,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 409600,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 2.819,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 587.921,
+        "historyBytesWritten": 12414530,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0.001,
+          "maxMs": 0.012
+        },
+        "p50Ms": 18.953,
+        "p95Ms": 22.253,
+        "maxMs": 24.255
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-1",
+        "count": 400,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 1638400,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.154,
+        "historyAppendCalls": 1200,
+        "historyAppendDurationMs": 2418.926,
+        "historyBytesWritten": 49561490,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.001
+        },
+        "p50Ms": 79.341,
+        "p95Ms": 88.929,
+        "maxMs": 106.5
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-16",
+        "count": 400,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 1638400,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.236,
+        "historyAppendCalls": 1200,
+        "historyAppendDurationMs": 2430.355,
+        "historyBytesWritten": 49584530,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.001
+        },
+        "p50Ms": 81.468,
+        "p95Ms": 85.284,
+        "maxMs": 90.031
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-1",
+        "count": 800,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 3276800,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.223,
+        "historyAppendCalls": 2400,
+        "historyAppendDurationMs": 4895.295,
+        "historyBytesWritten": 99121490,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.002
+        },
+        "p50Ms": 160.855,
+        "p95Ms": 174.165,
+        "maxMs": 214.621
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-16",
+        "count": 800,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 3276800,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 4.302,
+        "historyAppendCalls": 2400,
+        "historyAppendDurationMs": 5417.757,
+        "historyBytesWritten": 99144530,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.002
+        },
+        "p50Ms": 165.057,
+        "p95Ms": 196.078,
+        "maxMs": 534.645
+      },
+      {
+        "kind": "startup-session-scale",
+        "completedSessionCount": 100,
+        "samples": 30,
+        "completedMessages": 200,
+        "dbOpen": {
+          "p50Ms": 1.812,
+          "p95Ms": 1.999,
+          "maxMs": 2.057
+        },
+        "minimumStorageBarrier": {
+          "p50Ms": 0.029,
+          "p95Ms": 0.081,
+          "maxMs": 1.893
+        },
+        "firstTargetPreparation": {
+          "p50Ms": 0.158,
+          "p95Ms": 0.204,
+          "maxMs": 0.785
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.185,
+          "p95Ms": 0.286,
+          "maxMs": 2.678
+        },
+        "scope": "file-backed SQLite reopen, SessionStorage composition, and one selected target availability check",
+        "limitations": [
+          "startup does not inspect unselected session messages or globally recover History",
+          "availability preparation reads at most the selected session API baseline",
+          "Electron window load is reported separately"
+        ]
+      },
+      {
+        "kind": "startup-session-scale",
+        "completedSessionCount": 1000,
+        "samples": 30,
+        "completedMessages": 2000,
+        "dbOpen": {
+          "p50Ms": 1.787,
+          "p95Ms": 2.429,
+          "maxMs": 3.437
+        },
+        "minimumStorageBarrier": {
+          "p50Ms": 0.027,
+          "p95Ms": 0.05,
+          "maxMs": 0.063
+        },
+        "firstTargetPreparation": {
+          "p50Ms": 0.151,
+          "p95Ms": 0.209,
+          "maxMs": 0.282
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.179,
+          "p95Ms": 0.259,
+          "maxMs": 0.345
+        },
+        "scope": "file-backed SQLite reopen, SessionStorage composition, and one selected target availability check",
+        "limitations": [
+          "startup does not inspect unselected session messages or globally recover History",
+          "availability preparation reads at most the selected session API baseline",
+          "Electron window load is reported separately"
+        ]
+      },
+      {
+        "kind": "cold-app-first-screen",
+        "samples": 30,
+        "processSpawnToFirstPaint": {
+          "p50Ms": 977.646,
+          "p95Ms": 1263.442,
+          "maxMs": 1274.898
+        },
+        "bootstrapToFirstPaint": {
+          "p50Ms": 860.357,
+          "p95Ms": 1152.457,
+          "maxMs": 1175.838
+        },
+        "bootstrapToWindowReady": {
+          "p50Ms": 522,
+          "p95Ms": 563,
+          "maxMs": 581
+        },
+        "rendererStartToFirstPaint": {
+          "p50Ms": 145,
+          "p95Ms": 442,
+          "maxMs": 461
+        },
+        "mainModuleLoad": {
+          "p50Ms": 197.135,
+          "p95Ms": 211.21,
+          "maxMs": 425.472
+        },
+        "rendererOutcome": "ok",
+        "appVersion": "0.3.1",
+        "electronVersion": "44.1.1",
+        "sqliteVersion": "3.53.3",
+        "topModuleLoadSelfMs": [
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/types.js",
+            "meanMs": 8.2
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/main.js",
+            "meanMs": 1.924
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/auth.js",
+            "meanMs": 1.846
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/runtime/sqliteAgentHistory.js",
+            "meanMs": 1.617
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/web-tree-sitter/web-tree-sitter.cjs",
+            "meanMs": 1.555
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/sessionStorage/queries.js",
+            "meanMs": 1.422
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/res/resource/model-baseline.json",
+            "meanMs": 1.421
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/packages/agent-sdk/src/turn.js",
+            "meanMs": 1.368
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v3/types.cjs",
+            "meanMs": 1.345
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/src/shared/mcpTypes.js",
+            "meanMs": 1.283
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/tools/builtinExecutors.js",
+            "meanMs": 1.203
+          },
+          {
+            "filename": "http",
+            "meanMs": 1.132
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/ipc/agentProtocolIpc.js",
+            "meanMs": 1.13
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/sessionEvents.js",
+            "meanMs": 1.125
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/operations.js",
+            "meanMs": 1.048
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/runtime/invocationAssembler.js",
+            "meanMs": 0.904
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/migrations.js",
+            "meanMs": 0.864
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v4/core/schemas.cjs",
+            "meanMs": 0.786
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/schema.js",
+            "meanMs": 0.778
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/confirmation/legacyImConfigBoundary.js",
+            "meanMs": 0.776
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/confirmation/toolCallGate.js",
+            "meanMs": 0.75
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v4/classic/schemas.cjs",
+            "meanMs": 0.728
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/feishu/remoteCommandRouter.js",
+            "meanMs": 0.701
+          },
+          {
+            "filename": "assert",
+            "meanMs": 0.686
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/streamableHttp.js",
+            "meanMs": 0.596
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@anthropic-ai/sdk/index.js",
+            "meanMs": 0.547
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/packages/agent-sdk/src/history.js",
+            "meanMs": 0.544
+          },
+          {
+            "filename": "dns/promises",
+            "meanMs": 0.338
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/sessionStorage/sqliteSessionStorage.js",
+            "meanMs": 0.334
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/wechat/weChatCommandRouter.js",
+            "meanMs": 0.256
+          }
+        ],
+        "startupPhaseSamples": [
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 143,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 144,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 20,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 559,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 559,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 560,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 561,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 131,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 506,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 506,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 507,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 508,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 146,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 504,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 504,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 505,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 506,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 448,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 520,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 520,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 520,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 521,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 461,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 525,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 525,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 525,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 527,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 127,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 15,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 525,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 525,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 525,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 526,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 433,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 153,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 522,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 522,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 522,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 524,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 442,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 508,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 509,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 509,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 510,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 146,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 147,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 147,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 518,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 518,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 518,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 574,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 125,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 507,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 507,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 507,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 509,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 109,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 151,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 527,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 527,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 528,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 528,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 119,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 147,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 147,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 14,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 518,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 518,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 518,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 519,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 147,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 509,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 509,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 509,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 510,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 435,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 526,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 527,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 527,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 528,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 133,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 151,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 518,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 519,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 520,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 520,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 146,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 521,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 521,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 521,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 522,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 437,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 16,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 545,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 545,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 545,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 546,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 147,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 147,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 510,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 510,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 510,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 512,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 104,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 515,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 515,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 515,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 517,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 145,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 530,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 530,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 530,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 531,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 141,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 154,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 154,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 534,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 534,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 534,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 536,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 120,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 151,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 538,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 538,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 538,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 539,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 6,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 6,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 127,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 156,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 156,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 530,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 530,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 530,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 531,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 165,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 501,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 502,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 502,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 503,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 426,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 517,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 517,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 517,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 519,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 136,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 513,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 513,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 514,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 515,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 156,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 512,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 513,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 513,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 514,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 165,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 155,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 155,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 541,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 541,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 541,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 542,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 122,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 161,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 161,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 562,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 562,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 562,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 563,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 133,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 169,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 170,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 580,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 580,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 580,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 581,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 135,
+              "outcome": "ok"
+            }
+          ]
+        ],
+        "scope": "production main process, isolated empty userData per sample, production IPC handlers, built renderer over loopback HTTP; window show suppressed by probe bootstrap",
+        "limitations": [
+          "OS page cache is not cleared",
+          "no real model request is made",
+          "window pixels are not captured"
+        ]
+      }
+    ],
+    "buildFingerprint": {
+      "sourceSha256": "d1dd671520a1be81b6e2c4f153242c7e5377a5c5504c74f3423261d93c40c0e7",
+      "electronSha256": "4c14e418c22e45b786b13fa75c1fdc6fcc8bf78b1738aede81ee8cc587681b96",
+      "rendererSha256": "8a08e03c0d5528878db65f5c656d8fe5d952742b80f07d07f02a0a855e982ec4"
+    },
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "samples": 30,
+      "coldAppFirstScreen": {
+        "kind": "cold-app-first-screen",
+        "samples": 30,
+        "processSpawnToFirstPaint": {
+          "p50Ms": 977.646,
+          "p95Ms": 1263.442,
+          "maxMs": 1274.898
+        },
+        "bootstrapToFirstPaint": {
+          "p50Ms": 860.357,
+          "p95Ms": 1152.457,
+          "maxMs": 1175.838
+        },
+        "bootstrapToWindowReady": {
+          "p50Ms": 522,
+          "p95Ms": 563,
+          "maxMs": 581
+        },
+        "rendererStartToFirstPaint": {
+          "p50Ms": 145,
+          "p95Ms": 442,
+          "maxMs": 461
+        },
+        "mainModuleLoad": {
+          "p50Ms": 197.135,
+          "p95Ms": 211.21,
+          "maxMs": 425.472
+        },
+        "rendererOutcome": "ok",
+        "appVersion": "0.3.1",
+        "electronVersion": "44.1.1",
+        "sqliteVersion": "3.53.3",
+        "topModuleLoadSelfMs": [
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/types.js",
+            "meanMs": 8.2
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/main.js",
+            "meanMs": 1.924
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/auth.js",
+            "meanMs": 1.846
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/runtime/sqliteAgentHistory.js",
+            "meanMs": 1.617
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/web-tree-sitter/web-tree-sitter.cjs",
+            "meanMs": 1.555
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/sessionStorage/queries.js",
+            "meanMs": 1.422
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/res/resource/model-baseline.json",
+            "meanMs": 1.421
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/packages/agent-sdk/src/turn.js",
+            "meanMs": 1.368
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v3/types.cjs",
+            "meanMs": 1.345
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/src/shared/mcpTypes.js",
+            "meanMs": 1.283
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/tools/builtinExecutors.js",
+            "meanMs": 1.203
+          },
+          {
+            "filename": "http",
+            "meanMs": 1.132
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/ipc/agentProtocolIpc.js",
+            "meanMs": 1.13
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/sessionEvents.js",
+            "meanMs": 1.125
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/operations.js",
+            "meanMs": 1.048
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/runtime/invocationAssembler.js",
+            "meanMs": 0.904
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/migrations.js",
+            "meanMs": 0.864
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v4/core/schemas.cjs",
+            "meanMs": 0.786
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/database/schema.js",
+            "meanMs": 0.778
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/confirmation/legacyImConfigBoundary.js",
+            "meanMs": 0.776
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/confirmation/toolCallGate.js",
+            "meanMs": 0.75
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/zod/v4/classic/schemas.cjs",
+            "meanMs": 0.728
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/feishu/remoteCommandRouter.js",
+            "meanMs": 0.701
+          },
+          {
+            "filename": "assert",
+            "meanMs": 0.686
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/streamableHttp.js",
+            "meanMs": 0.596
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/node_modules/@anthropic-ai/sdk/index.js",
+            "meanMs": 0.547
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/packages/agent-sdk/src/history.js",
+            "meanMs": 0.544
+          },
+          {
+            "filename": "dns/promises",
+            "meanMs": 0.338
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/sessionStorage/sqliteSessionStorage.js",
+            "meanMs": 0.334
+          },
+          {
+            "filename": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/session-storage-full-chain/dist-electron/electron/wechat/weChatCommandRouter.js",
+            "meanMs": 0.256
+          }
+        ],
+        "startupPhaseSamples": [
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 143,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 144,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 20,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 559,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 559,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 560,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 561,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 131,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 506,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 506,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 507,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 508,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 146,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 504,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 504,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 505,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 506,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 448,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 520,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 520,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 520,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 521,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 461,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 525,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 525,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 525,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 527,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 127,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 15,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 525,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 525,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 525,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 526,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 433,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 153,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 522,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 522,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 522,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 524,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 442,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 508,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 509,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 509,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 510,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 146,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 147,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 147,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 518,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 518,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 518,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 574,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 125,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 507,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 507,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 507,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 509,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 109,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 151,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 527,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 527,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 528,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 528,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 119,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 147,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 147,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 14,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 518,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 518,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 518,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 519,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 147,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 509,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 509,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 509,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 510,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 435,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 526,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 527,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 527,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 528,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 133,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 151,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 518,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 519,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 520,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 520,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 146,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 521,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 521,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 521,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 522,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 437,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 16,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 545,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 545,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 545,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 546,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 147,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 146,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 147,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 510,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 510,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 510,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 512,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 104,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 515,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 515,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 515,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 517,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 145,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 152,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 530,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 530,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 530,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 531,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 141,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 154,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 154,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 534,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 534,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 534,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 536,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 120,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 151,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 538,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 538,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 538,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 539,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 6,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 6,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 127,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 156,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 156,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 530,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 530,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 530,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 531,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 165,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 501,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 502,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 502,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 503,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 426,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 148,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 517,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 517,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 517,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 519,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 136,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 149,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 513,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 513,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 514,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 515,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 156,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 150,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 512,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 513,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 513,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 514,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 9,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 165,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 155,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 155,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 541,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 541,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 541,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 542,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 122,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 161,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 161,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 562,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 562,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 562,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 563,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 11,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 13,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 133,
+              "outcome": "ok"
+            }
+          ],
+          [
+            {
+              "phase": "database.compact-recovery",
+              "durationMs": 169,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.open-and-migrations",
+              "durationMs": 170,
+              "outcome": "ok"
+            },
+            {
+              "phase": "database.process-generation-fence",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "feishu-auto-start",
+              "durationMs": 10,
+              "outcome": "ok"
+            },
+            {
+              "phase": "wechat-auto-start",
+              "durationMs": 0,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-react-render-scheduled",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-dom-ready",
+              "durationMs": 580,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-did-finish-load",
+              "durationMs": 580,
+              "outcome": "ok"
+            },
+            {
+              "phase": "app.start-to-renderer-loaded",
+              "durationMs": 580,
+              "outcome": "ok",
+              "appVersion": "0.3.1",
+              "electronVersion": "44.1.1",
+              "nodeVersion": "24.19.0",
+              "sqliteVersion": "3.53.3"
+            },
+            {
+              "phase": "app.start-to-window-ready-to-show",
+              "durationMs": 581,
+              "outcome": "ok"
+            },
+            {
+              "phase": "usage-stats-startup-maintenance",
+              "durationMs": 1,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.mcp-tool-catalog",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.session-list",
+              "durationMs": 8,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.config-get",
+              "durationMs": 12,
+              "outcome": "ok"
+            },
+            {
+              "phase": "renderer.start-to-first-paint",
+              "durationMs": 135,
+              "outcome": "ok"
+            }
+          ]
+        ],
+        "scope": "production main process, isolated empty userData per sample, production IPC handlers, built renderer over loopback HTTP; window show suppressed by probe bootstrap",
+        "limitations": [
+          "OS page cache is not cleared",
+          "no real model request is made",
+          "window pixels are not captured"
+        ]
+      }
+    }
+  },
+  "mode": "candidate",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}

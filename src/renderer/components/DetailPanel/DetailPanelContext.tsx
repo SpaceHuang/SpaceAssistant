@@ -14,7 +14,6 @@ import { classifyFileType } from '../../../shared/fileTypes'
 import type { FileReadResult } from '../../../shared/api'
 import { normalizeViewerUrl } from '../../../shared/viewerUrl'
 import { normalizeRelPath } from '../../../shared/fileTreeSync'
-import { preloadShiki } from '../../utils/shikiHighlighter'
 import {
   captureScrollFromRoot,
   restoreScrollToRoot,
@@ -208,10 +207,6 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
   contentModeRef.current = contentMode
   fileTypeRef.current = fileType
   viewModeRef.current = viewMode
-
-  useEffect(() => {
-    void preloadShiki()
-  }, [])
 
   const updateLastLoadedMeta = useCallback(async (relPath: string) => {
     try {

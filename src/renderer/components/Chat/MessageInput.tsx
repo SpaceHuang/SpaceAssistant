@@ -7,7 +7,7 @@ import type { ChatImageAttachment } from '../../../shared/domainTypes'
 import { MAX_CHAT_IMAGE_ATTACHMENTS } from '../../../shared/chatAttachmentLimits'
 import { getFileExtension, getImageMimeType } from '../../../shared/fileTypes'
 import { useAppDispatch } from '../../hooks'
-import { addCompactionMarker, setContextProjection } from '../../store/chatSlice'
+import { setContextProjection } from '../../store/chatSlice'
 
 export type MessageInputHandle = {
   focus: () => void
@@ -34,6 +34,8 @@ type Props = {
   sessionId?: string
   historyImageTokens?: number
   thinkingTokensToExclude?: number
+  contextSummaryReady?: boolean
+  onContextSummaryConsumed?: () => void
   onSend: (text: string, attachments?: ChatImageAttachment[]) => void
   onSelectDirectory?: () => void
   onCompactContext?: () => void
@@ -80,6 +82,8 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     sessionId,
     historyImageTokens = 0,
     thinkingTokensToExclude = 0,
+    contextSummaryReady = true,
+    onContextSummaryConsumed,
     onSend,
     onSelectDirectory,
     onCompactContext,
@@ -445,7 +449,6 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
       const result = await window.api.chatCompactSessionContext({ sessionId, requestId: crypto.randomUUID() })
       if (sessionIdRef.current !== requestSessionId) return
       if (result.status === 'committed') {
-        dispatch(addCompactionMarker(result))
         dispatch(setContextProjection(null))
         setDirectoryStatus(result.repairBranch === 'replay-original' ? t('input.compactionRepairReplayCommitted')
           : result.repairBranch === 'new-split' ? t('input.compactionRepairResplitCommitted') : t('input.compactionCommitted'))
@@ -661,6 +664,8 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
               pendingImageAttachments={readyAttachments}
               historyImageTokens={historyImageTokens}
               thinkingTokensToExclude={thinkingTokensToExclude}
+              contextSummaryReady={contextSummaryReady}
+              onContextSummaryConsumed={onContextSummaryConsumed}
             />
             {running && text.trim() ? (
               <button

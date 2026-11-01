@@ -43,7 +43,9 @@ vi.mock('../database', async (importOriginal) => {
 })
 
 import { getDbConnection, openDatabase } from '../database'
+import { createSession as createPersistedSession } from '../database/operations'
 import { readAcceptedTurn } from '../database/acceptedTurnStorage'
+import { readSessionTranscript } from '../database/sessionTranscript'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { decodeTerminalOutcome } from '../runtime/terminalOutcome'
@@ -84,6 +86,7 @@ function invocation(overrides: Partial<ApprovalInvocation> = {}): ApprovalInvoca
 }
 
 let approvalDb = openDatabase(':memory:')
+let approvalSessionId = ''
 function createApprovalStorage(db: Parameters<typeof createSqliteSessionStorage>[0]) {
   const storage = createSqliteSessionStorage(db)
   return {
@@ -122,7 +125,11 @@ beforeEach(() => {
   getDbConnection(deps.db).exec('DELETE FROM accepted_turn_contexts')
   hostedRuntimeFailureInjection.requestId = ''
   hostedRuntimeFailureInjection.composeCalls = 0
-  mockCreateSession.mockImplementation(() => ({ id: 'sess-approval-1', name: '审批', createdAt: 1 }))
+  mockCreateSession.mockImplementation((db: Parameters<typeof createPersistedSession>[0], input: Parameters<typeof createPersistedSession>[1]) => {
+    const session = createPersistedSession(db, input)
+    approvalSessionId = session.id
+    return session
+  })
   setDefaultAgentRuntime(createDesktopAgentRuntime())
 })
 
@@ -173,7 +180,11 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
   })
 
   it('P1-4 追踪：runPromise 创建前抛错不泄漏守卫标记（同会话后续请求不被误判 recursion-blocked）', async () => {
-    mockCreateSession.mockImplementation(() => ({ id: 'sess-leak-check', name: '审批', createdAt: 1 }))
+    mockCreateSession.mockImplementation((db: Parameters<typeof createPersistedSession>[0], input: Parameters<typeof createPersistedSession>[1]) => {
+      const session = createPersistedSession(db, input)
+      approvalSessionId = session.id
+      return session
+    })
     const brokenDeps = {
       ...deps,
       getToolsConfig: () => {
@@ -187,7 +198,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     const ch = new AgentChannel({
       lane: 'automation',
       requestId: 'req-leak-check',
-      sessionId: 'sess-leak-check',
+      sessionId: approvalSessionId,
       toolName: 'write_file',
       policy: { kind: 'agent' },
       invokeApproval
@@ -303,7 +314,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     const [agentInvocation, prt] = mockRunToolChatSession.mock.calls.at(-1)! as [{ profile: Record<string, unknown>; acceptedTurn?: { turnId: string; requestId: string; currentUserMessageId: string } }, { credentials: { networkTarget?: { baseUrl?: string } } }]
     expect(prt.credentials.networkTarget?.baseUrl).toBe('https://relay.example.com')
     expect(agentInvocation.acceptedTurn).toMatchObject({ turnId: 'req-outer', requestId: 'req-outer', currentUserMessageId: 'req-outer:approval-user', lane: 'automation' })
-    expect(readAcceptedTurn(deps.db, 'sess-approval-1', 'req-outer')).toMatchObject({ turnId: 'req-outer', sessionId: 'sess-approval-1' })
+    expect(readAcceptedTurn(deps.db, approvalSessionId, 'req-outer')).toMatchObject({ turnId: 'req-outer', sessionId: approvalSessionId })
   })
 
   it('嵌套 Approval Agent 为白名单 Anthropic route 冻结父调用凭据身份', async () => {
@@ -385,7 +396,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       expect(hostedInvocationId).toBe(childRequestId)
       expect(hostedInvocationId).not.toBe('req-outer')
       const persistedHistorySessions = getDbConnection(fileDb).prepare('SELECT DISTINCT session_id FROM agent_history_streams WHERE invocation_id=?').all(childRequestId)
-      expect(persistedHistorySessions).toEqual([{ session_id: 'sess-approval-1' }])
+      expect(persistedHistorySessions).toEqual([{ session_id: approvalSessionId }])
       expect(getDbConnection(fileDb).prepare('SELECT 1 FROM agent_history_streams WHERE invocation_id=? AND session_id=?').get(childRequestId, 'sess-outer')).toBeUndefined()
       expect(snapshot.version).toBe(snapshot.events.length)
       expect(snapshot.events.map((event) => [event.invocationId, event.turnId])).toEqual(
@@ -397,9 +408,9 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       expect(snapshot.events.at(-1)?.kind).toBe('invocation-completed')
       fileDb.close()
       fileDb = openDatabase(databasePath)
-      const durableHistory = new SqliteAgentHistory(getDbConnection(fileDb), 1, Date.now, 'sess-approval-1')
+      const durableHistory = new SqliteAgentHistory(getDbConnection(fileDb), 1, Date.now, approvalSessionId)
       await expect(durableHistory.read(childRequestId)).resolves.toEqual(snapshot)
-      expect(durableHistory.listInvocationIdsForSession('sess-approval-1')).toEqual([childRequestId])
+      expect(durableHistory.listInvocationIdsForSession(approvalSessionId)).toEqual([childRequestId])
       expect(durableHistory.listInvocationIdsForSession('sess-outer')).toEqual([])
     } finally {
       fileDb.close()
@@ -458,19 +469,24 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       const result = await runApprovalAgent({ ...deps, db: testDb as never, sessionStorage: createApprovalStorage(testDb as never), historyForSession: (sessionId: string) => createSqliteSessionStorage(testDb as never).execution.historyFor({ sessionId }), model: modelId, baseUrl: 'https://relay.example.com', credentialRef: 'llm-service:svc-parent' }, invocation({ requestId }))
       expect(result).toMatchObject({ ok: false, cause: 'unavailable' })
       expect(providerCalls).toBe(1)
-      const accepted = readAcceptedTurn(testDb, 'sess-approval-1', requestId)!
+      const accepted = readAcceptedTurn(testDb, approvalSessionId, requestId)!
       const terminal = (await history!.read(accepted.turnId)).events.at(-1)!
       expect(terminal).toMatchObject(fault === 'checkpoint'
         ? { kind: 'invocation-completed', payload: { status: 'completed' } }
         : { kind: 'invocation-failed', payload: { status: 'failed' } })
       if (fault === 'checkpoint') {
-        expect(conn.prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get('sess-approval-1'))
+        expect(conn.prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get(approvalSessionId))
           .toEqual({ status: 'commit_uncertain' })
-        expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get('sess-approval-1'))
+        expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(approvalSessionId))
           .toEqual({ status: 'commit_uncertain' })
       } else {
-        expect(conn.prepare('SELECT outcome FROM session_transcript_entries WHERE session_id=? AND turn_id=?').get('sess-approval-1', accepted.turnId))
-          .toEqual({ outcome: 'failed' })
+        const receipt = conn.prepare('SELECT outcome,next_version FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+          .get(approvalSessionId, accepted.turnId) as { outcome: string; next_version: number }
+        expect(receipt.outcome).toBe('failed')
+        expect(readSessionTranscript(testDb, approvalSessionId, { version: receipt.next_version }))
+          .toMatchObject({ lastTurnId: accepted.turnId, status: 'ready', messages: expect.any(Array) })
+        expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+          .get(approvalSessionId, accepted.turnId)).toEqual({ count: 0 })
       }
     } finally {
       conn.exec('DROP TRIGGER fail_approval_injected')
@@ -547,12 +563,12 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       expect(first).toMatchObject({ ok: false, cause: 'unavailable' })
       expect(providerCalls).toBe(2)
       expect(readExecutor).toHaveBeenCalledOnce()
-      const accepted = readAcceptedTurn(testDb, 'sess-approval-1', requestId)!
+      const accepted = readAcceptedTurn(testDb, approvalSessionId, requestId)!
       const firstHistory = await history!.read(accepted.turnId)
       expect(firstHistory.events.filter((event) => event.kind === 'tool-call-started')).toHaveLength(1)
       expect(firstHistory.events.filter((event) => event.kind === 'tool-call-finished')).toHaveLength(1)
       expect(firstHistory.events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
-      expect(conn.prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get('sess-approval-1'))
+      expect(conn.prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get(approvalSessionId))
         .toEqual({ status: 'commit_uncertain' })
 
       testDb.close()
@@ -563,7 +579,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       expect(retry).toMatchObject({ ok: false, cause: 'unavailable' })
       expect(providerCalls).toBe(2)
       expect(readExecutor).toHaveBeenCalledOnce()
-      expect(getDbConnection(testDb).prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get('sess-approval-1'))
+      expect(getDbConnection(testDb).prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get(approvalSessionId))
         .toEqual({ status: 'commit_uncertain' })
     } finally {
       readExecutor.mockRestore()

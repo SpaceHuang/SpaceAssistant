@@ -64,7 +64,7 @@ export type TurnDisplayBytes = { payloadBytes: number; activityIndexBytes: numbe
 
 const utf8Length = (value: string): number => new TextEncoder().encode(value).byteLength
 const SUMMARY_CACHE_LIMIT = 256
-const summaryCache = new Map<string, { status: string; resultSignature: string; summary: ToolCallDisplaySummary; bytes: number }>()
+const summaryCache = new Map<string, { status: string; resultValue: unknown; success: boolean | undefined; summary: ToolCallDisplaySummary; bytes: number }>()
 let summaryCacheBytes = 0
 const SUMMARY_CACHE_BYTES = 512 * 1024
 
@@ -85,9 +85,45 @@ export function truncateUtf8(value: string, maxBytes: number): { value: string; 
 function preview(value: unknown): { value?: string; truncated: boolean } {
   if (value == null) return { truncated: false }
   let raw: string
-  try { raw = typeof value === 'string' ? value : JSON.stringify(value) } catch { raw = '[unserializable]' }
+  let truncated = false
+  if (typeof value === 'string') {
+    const result = truncateUtf8(value, MAX_PREVIEW_BYTES)
+    return { value: result.value, truncated: result.truncated }
+  }
+  try {
+    const seen = new WeakSet<object>()
+    let remainingBytes = MAX_PREVIEW_BYTES
+    const bounded = (current: unknown, depth: number): unknown => {
+      if (typeof current === 'string') {
+        const result = truncateUtf8(current, remainingBytes)
+        truncated ||= result.truncated
+        remainingBytes -= utf8Length(result.value)
+        return result.value
+      }
+      if (!current || typeof current !== 'object') return current
+      if (seen.has(current)) { truncated = true; return '[circular]' }
+      if (depth >= 4) { truncated = true; return '[depth limit]' }
+      seen.add(current)
+      if (Array.isArray(current)) {
+        if (current.length > 32) truncated = true
+        return [...current.slice(0, 32).map((item) => bounded(item, depth + 1)), ...(current.length > 32 ? ['[items omitted]'] : [])]
+      }
+      const result: Record<string, unknown> = {}
+      let count = 0
+      for (const key in current) {
+        if (!Object.prototype.hasOwnProperty.call(current, key)) continue
+        if (count >= 32 || remainingBytes <= 0) { truncated = true; break }
+        const boundedKey = truncateUtf8(key, 128)
+        if (boundedKey.truncated) truncated = true
+        result[boundedKey.value] = bounded((current as Record<string, unknown>)[key], depth + 1)
+        count++
+      }
+      return result
+    }
+    raw = JSON.stringify(bounded(value, 0))
+  } catch { raw = '[unserializable]' }
   const result = truncateUtf8(raw, MAX_PREVIEW_BYTES)
-  return { value: result.value, truncated: result.truncated }
+  return { value: result.value, truncated: truncated || result.truncated }
 }
 
 const inputPreviewCache = new Map<string, { input: unknown; preview: { value?: string; truncated: boolean } }>()
@@ -96,8 +132,7 @@ function toolDisplay(tool: ToolCallRecord, identity: string): ToolCallDisplaySum
   const cacheKey = `${identity}:${tool.id}`
   const cached = summaryCache.get(cacheKey)
   const resultValue = tool.result?.data ?? tool.result?.error
-  const resultSignature = tool.result ? `${tool.result.success}:${typeof resultValue === 'string' ? resultValue.length : resultValue && typeof resultValue === 'object' ? Object.keys(resultValue).length : String(resultValue ?? '')}` : ''
-  if (cached && cached.status === tool.status && tool.status === 'completed' && cached.resultSignature === resultSignature) return cached.summary
+  if (cached && cached.status === tool.status && tool.status === 'completed' && cached.resultValue === resultValue && cached.success === tool.result?.success) return cached.summary
   const cachedInput = inputPreviewCache.get(cacheKey)
   const input = cachedInput?.input === tool.input ? cachedInput.preview : preview(tool.input)
   if (!cachedInput || cachedInput.input !== tool.input) {
@@ -118,12 +153,11 @@ function toolDisplay(tool: ToolCallRecord, identity: string): ToolCallDisplaySum
     ...(tool.remoteConfirmation ? { remoteConfirmation: tool.remoteConfirmation } : {})
   }
   if (tool.status === 'completed') {
-    summaryCache.delete(cacheKey)
-    const bytes = utf8Length(JSON.stringify(summary))
     const old = summaryCache.get(cacheKey)
     if (old) summaryCacheBytes -= old.bytes
     summaryCache.delete(cacheKey)
-    summaryCache.set(cacheKey, { status: tool.status, resultSignature, summary, bytes })
+    const bytes = utf8Length(JSON.stringify(summary))
+    summaryCache.set(cacheKey, { status: tool.status, resultValue, success: tool.result?.success, summary, bytes })
     summaryCacheBytes += bytes
     while (summaryCache.size > SUMMARY_CACHE_LIMIT || summaryCacheBytes > SUMMARY_CACHE_BYTES) {
       const oldest = summaryCache.keys().next().value as string

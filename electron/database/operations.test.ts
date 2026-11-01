@@ -17,6 +17,7 @@ import {
   getMessageSkeletons,
   getMessage,
   getSession,
+  listSessions,
   getChatMessagePage,
   getContextHistorySummaryBaseline,
   getMessagesPage,
@@ -33,6 +34,7 @@ import {
   getQueueInputReceipt,
   enqueueQueuedUserMessage,
   deleteQueuedUserMessage,
+  deleteQueuedUserMessageInScope,
   claimQueuedTurnAtomically,
   recoverPersistedTurn,
   updateQueueInputReceiptState,
@@ -42,6 +44,7 @@ import {
   updateQueuedUserMessageContent,
   resolveRetryContext,
   getSessionMessageRevisionSnapshot,
+  getMessageSequence,
   setPersistedTurnExecutionConfig,
   updatePersistedTurnState,
   listTurnErrorsByAssistantMessageIds
@@ -61,11 +64,12 @@ describe('appendMessage stored count', () => {
     setConfigValue(db, 'config.activeWorkDirProfileId', 'profile-a')
     const session = createSession(db, { name: 'bootstrap-ledger', workDirProfileId: 'profile-a' })
     const conn = getDbConnection(db)
-    const row = conn.prepare('SELECT work_dir_identity,created_at,session_generation,origin,state,bootstrap_id FROM session_ledger_projection_state WHERE session_id=?')
-      .get(session.id) as { work_dir_identity: string; created_at: number; session_generation: string; origin: string; state: string; bootstrap_id: string }
+    const row = conn.prepare('SELECT work_dir_identity,created_at,session_generation,origin,state,bootstrap_id,canonical_read_version FROM session_ledger_projection_state WHERE session_id=?')
+      .get(session.id) as { work_dir_identity: string; created_at: number; session_generation: string; origin: string; state: string; bootstrap_id: string; canonical_read_version: number }
     expect(row).toMatchObject({ created_at: session.createdAt, session_generation: session.generation, origin: 'new_location', state: 'uninitialized' })
     expect(row.work_dir_identity).toMatch(/^[a-f0-9]{64}$/)
     expect(row.bootstrap_id).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(row.canonical_read_version).toBe(1)
     expect(JSON.stringify(row)).not.toContain('/workspace/a')
     db.close()
   })
@@ -440,6 +444,16 @@ describe('createSession fixed work directory', () => {
       .toEqual({ fixed_work_dir: '/workspace/project' })
     expect(getSession(db, session.id)?.fixedWorkDir).toBe('/workspace/project')
     db.close()
+  })
+})
+
+describe('listSessions profile selection', () => {
+  it('filters the requested work directory profile together with the SQL visibility predicate', () => {
+    const db = createMemoryAppDb()
+    const active = createSession(db, { name: 'active', workDirProfileId: 'profile-active', ownership: 'user', visibility: 'visible' })
+    createSession(db, { name: 'other-profile', workDirProfileId: 'profile-other', ownership: 'user', visibility: 'visible' })
+    createSession(db, { name: 'internal', workDirProfileId: 'profile-active', ownership: 'internal', visibility: 'visible' })
+    expect(listSessions(db, { view: 'user-visible', workDirProfileId: 'profile-active' }).map(({ id }) => id)).toEqual([active.id])
   })
 })
 
@@ -1558,6 +1572,20 @@ describe('getContextHistorySummaryBaseline', () => {
     })])
   })
 
+  it('reads full summary metadata without selecting message bodies', () => {
+    for (let i = 0; i < 20; i++) appendMessage(db, { id: `summary-window-${i}`, sessionId, role: i % 2 ? 'assistant' : 'user',
+      content: `body-${i}`, timestamp: i, status: i % 2 ? 'completed' : 'sent' })
+    const summary = getContextHistorySummaryBaseline(db, sessionId)
+    expect(summary.entries.map(({ messageId }) => messageId)).toEqual([])
+    const conn = getDbConnection(db)
+    const preparedSql: string[] = []
+    const prepare = conn.prepare.bind(conn)
+    vi.spyOn(conn, 'prepare').mockImplementation(((sql: string) => { preparedSql.push(sql); return prepare(sql) }) as typeof conn.prepare)
+    getContextHistorySummaryBaseline(db, sessionId)
+    expect(preparedSql.find((sql) => /FROM\s+messages/i.test(sql))).toMatch(/ORDER BY sequence ASC/i)
+    expect(preparedSql.find((sql) => /FROM\s+messages/i.test(sql))).not.toMatch(/\bcontent\b/i)
+  })
+
 })
 
 describe('getSearchCorpusPage', () => {
@@ -1896,9 +1924,42 @@ describe('canonical-backed session preview', () => {
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id IN ('preview-reorder-user','preview-reorder-assistant')").run()
 
     expect(getSession(db, session.id)?.preview).toBe('canonical final answer')
+    const replay = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
     expect(reorderQueuedUserMessages(db, { sessionId: session.id, messageIds: [second.persisted.message.id, first.persisted.message.id] })).toMatchObject({ ok: true })
 
     expect(getSession(db, session.id)?.preview).toBe('canonical final answer')
+    expect(replay).not.toHaveBeenCalled()
+    replay.mockRestore()
+    db.close()
+  })
+
+  it('deleting a non-tail queued message keeps the denormalized preview without replaying History', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'canonical preview non-tail delete' })
+    appendMessage(db, { id: 'preview-nontail-user', sessionId: session.id, role: 'user', content: 'canonical question', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'preview-nontail-assistant', sessionId: session.id, role: 'assistant', content: 'canonical answer', timestamp: 2, status: 'completed' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'preview-nontail-invocation', turnId: 'preview-nontail-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'preview-nontail-context', idempotencyKey: 'preview-nontail-context', kind: 'invocation-context-committed',
+      payload: { messages: [
+        { id: 'preview-nontail-user', role: 'user', content: 'canonical question', timestamp: 1 },
+        { id: 'preview-nontail-assistant', role: 'assistant', content: 'canonical answer', timestamp: 2 }
+      ] }
+    }], 0)
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+    const first = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'preview-nontail-first', content: 'first queued' })
+    enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'preview-nontail-second', content: 'second queued' })
+    const beforePreview = getSession(db, session.id)?.preview
+    const replay = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
+
+    expect(deleteQueuedUserMessage(db, first.persisted.message.id)).toEqual({ ok: true, sessionId: session.id })
+
+    expect(getSession(db, session.id)?.preview).toBe(beforePreview)
+    expect(replay).not.toHaveBeenCalled()
+    replay.mockRestore()
     db.close()
   })
 
@@ -1956,6 +2017,56 @@ describe('canonical-backed session preview', () => {
     expect(getSession(db, session.id)?.preview).toBe(beforePreview)
     expect(conn.prepare('SELECT id FROM messages WHERE session_id=? ORDER BY sequence').all(session.id).map(({ id }) => id))
       .toEqual(['preview-rollback-user', 'preview-rollback-assistant', queued.persisted.message.id])
+    db.close()
+  })
+
+  it('删除队尾时接受已预取且匹配的新尾消息正文，不重放完整 History', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'prepared tail preview' })
+    appendMessage(db, { id: 'prepared-tail-user', sessionId: session.id, role: 'user', content: 'canonical question', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'prepared-tail-assistant', sessionId: session.id, role: 'assistant', content: 'canonical answer', timestamp: 2, status: 'completed' })
+    const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'prepared-tail-request', content: 'queued preview' })
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id='prepared-tail-assistant'").run()
+    const reader = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
+    const snapshot = getSessionMessageRevisionSnapshot(db, session.id)!
+    const result = deleteQueuedUserMessageInScope(db, queued.persisted.message.id, { kind: 'desktop' }, {
+      messageId: 'prepared-tail-assistant', content: 'canonical answer', source: {
+        sessionGeneration: snapshot.generation, messageRevision: snapshot.messageRevision, sequence: getMessageSequence(db, session.id, 'prepared-tail-assistant')!,
+        role: 'assistant', timestamp: 2, status: 'completed'
+      }
+    })
+    expect(result).toEqual({ ok: true, sessionId: session.id })
+    expect(getSession(db, session.id)?.preview).toBe('canonical answer')
+    expect(reader).not.toHaveBeenCalled()
+    reader.mockRestore()
+    db.close()
+  })
+
+  it('新尾正文准备期间 revision 变化时拒绝删除且保留队列回执', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'stale prepared tail preview' })
+    appendMessage(db, { id: 'stale-preview-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'stale-preview-assistant', sessionId: session.id, role: 'assistant', content: 'answer', timestamp: 2, status: 'completed' })
+    const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'stale-preview-request', content: 'queued' })
+    const snapshot = getSessionMessageRevisionSnapshot(db, session.id)!
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id='stale-preview-assistant'").run()
+    const staleSnapshot = getSessionMessageRevisionSnapshot(db, session.id)!
+    conn.prepare("UPDATE messages SET thinking='{}' WHERE id='stale-preview-assistant'").run()
+    const receipt = getQueueInputReceipt(db, session.id, 'stale-preview-request')
+    const result = deleteQueuedUserMessageInScope(db, queued.persisted.message.id, { kind: 'desktop' }, {
+      messageId: 'stale-preview-assistant', content: 'answer', source: {
+        sessionGeneration: snapshot.generation, messageRevision: staleSnapshot.messageRevision,
+        sequence: getMessageSequence(db, session.id, 'stale-preview-assistant')!, role: 'assistant', timestamp: 2, status: 'completed'
+      }
+    })
+    expect(result).toEqual({ ok: false, error: 'queue_changed' })
+    expect(getMessage(db, queued.persisted.message.id)).toMatchObject({ status: 'queued', content: 'queued' })
+    expect(getQueueInputReceipt(db, session.id, 'stale-preview-request')).toEqual(receipt)
+    expect(getSession(db, session.id)?.preview).toBe('queued')
     db.close()
   })
 })

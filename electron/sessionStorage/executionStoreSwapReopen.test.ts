@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection, getDbConnectionEpoch, reopenDatabaseConnection, type AppDatabase } from '../database/sqliteStore'
-import { appendMessagesAtomically, createSession } from '../database/operations'
+import { appendMessagesAtomically, createPersistedTurn, createSession } from '../database/operations'
 import { createSessionExecutionStore } from './execution'
 import { createTurnCoordinatorStorage } from './coordinator'
+import { createTurnRuntimeForSessionExecution } from './execution'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
@@ -52,6 +53,67 @@ const trustedTodo = {
 }
 
 describe('压缩换入后复用 store 跨 reopen（闭包连接现取化回归）', () => {
+  it('target recovery rebuilds committed tool results from History after a result checkpoint was omitted', async () => {
+    const { db, cleanup } = createTempDatabase('target-tool-recovery-history-')
+    try {
+      const session = createSession(db, { name: 'tool history recovery', model: 'test' })
+      appendMessagesAtomically(db, [{ id: 'tool-recovery-assistant', sessionId: session.id, role: 'assistant', content: 'partial', timestamp: 1, status: 'streaming' }])
+      createPersistedTurn(db, { turnId: 'tool-recovery-turn', requestId: 'tool-recovery-turn', sessionId: session.id,
+        assistantMessageId: 'tool-recovery-assistant', state: 'executing' })
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+      await history.appendBatch([
+        { invocationId: 'tool-recovery-turn', turnId: 'tool-recovery-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'tool-recovery-response', idempotencyKey: 'tool-recovery-response', kind: 'model-response-committed',
+          payload: { message: { role: 'assistant', toolCalls: [
+            { id: 'committed-tool', name: 'lookup', input: {} }, { id: 'unknown-tool', name: 'run_shell', input: {} }
+          ] } } },
+        { invocationId: 'tool-recovery-turn', turnId: 'tool-recovery-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'tool-recovery-finished', idempotencyKey: 'tool-recovery-finished', kind: 'tool-call-finished',
+          payload: { toolCallId: 'committed-tool', success: true, executionOutcome: 'succeeded', result: { success: true, data: 'recovered from History' } } },
+        { invocationId: 'tool-recovery-turn', turnId: 'tool-recovery-turn', sequence: 3, schemaVersion: 1,
+          eventId: 'tool-recovery-unknown', idempotencyKey: 'tool-recovery-unknown', kind: 'tool-call-finished',
+          payload: { toolCallId: 'unknown-tool', success: false, executionOutcome: 'unknown-after-dispatch', result: { success: false } } }
+      ], 0)
+      const storage = createTurnCoordinatorStorage(db)
+
+      expect(storage.recoverTurn('tool-recovery-turn', 'tool-recovery-assistant')).toBe(true)
+      expect(getDbConnection(db).prepare('SELECT tool_calls FROM messages WHERE id=?').get('tool-recovery-assistant'))
+        .toMatchObject({ tool_calls: expect.stringContaining('recovered from History') })
+      expect(storage.getMessage('tool-recovery-assistant')?.toolCalls).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'committed-tool', status: 'completed', result: expect.objectContaining({ data: 'recovered from History' }) }),
+        expect.objectContaining({ id: 'unknown-tool', status: 'failed', result: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }) })
+      ]))
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('目标执行恢复只收敛目标 session 的 coordinator turns', () => {
+    const { db, cleanup } = createTempDatabase('target-turn-recovery-')
+    try {
+      const target = createSession(db, { name: 'target recovery', model: 'test' })
+      const unrelated = createSession(db, { name: 'unrelated recovery', model: 'test' })
+      for (const [turnId, requestId, sessionId, messageId] of [
+        ['target-recovery-turn', 'target-recovery-request', target.id, 'target-recovery-assistant'],
+        ['unrelated-recovery-turn', 'unrelated-recovery-request', unrelated.id, 'unrelated-recovery-assistant']
+      ] as const) {
+        appendMessagesAtomically(db, [{ id: messageId, sessionId, role: 'assistant', content: 'partial', timestamp: 1, status: 'streaming' }])
+        createPersistedTurn(db, { turnId, requestId, sessionId, assistantMessageId: messageId, state: 'executing' })
+      }
+      const execution = createSessionExecutionStore(db)
+      createTurnRuntimeForSessionExecution(execution, { deps: { now: () => 1, id: () => 'target-recovery-runtime' } })
+
+      execution.recoverExecutionTarget(target.id)
+
+      expect(getDbConnection(db).prepare('SELECT state,outcome FROM turns WHERE turn_id=?').get('target-recovery-turn'))
+        .toEqual({ state: 'terminal', outcome: 'recovered' })
+      expect(getDbConnection(db).prepare('SELECT state,outcome FROM turns WHERE turn_id=?').get('unrelated-recovery-turn'))
+        .toEqual({ state: 'executing', outcome: null })
+    } finally {
+      cleanup()
+    }
+  })
+
   it('connection epoch advances across close and same-object reopen', () => {
     const temp = createTempDatabase('session-connection-epoch')
     try {

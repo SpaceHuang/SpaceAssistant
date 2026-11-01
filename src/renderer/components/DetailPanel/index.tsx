@@ -1,6 +1,7 @@
+import { lazy, Suspense } from 'react'
 import { App } from 'antd'
 import { useDetailPanel } from './DetailPanelContext'
-import { FileOverlay } from './FileOverlay'
+import { createLazyFileOverlay } from './lazyFileOverlay'
 import { ReferencedFilesPanel } from './ReferencedFilesPanel'
 import { RemoteStatusBar } from './RemoteStatusBar'
 import { ResizeHandle } from './ResizeHandle'
@@ -9,6 +10,8 @@ import { useTypedSelector } from '../../hooks'
 import { runtimeText } from '../../i18n/runtimeText'
 import { collectToWiki } from '../../services/wikiImportService'
 import './detailPanel.css'
+
+const FileOverlay = createLazyFileOverlay()
 
 export { DetailPanelProvider, useDetailPanel } from './DetailPanelContext'
 
@@ -67,7 +70,7 @@ export function DetailPanel() {
       </div>
       <RemoteStatusBar />
       </div>
-      {showOverlay ? <FileOverlay /> : null}
+      {showOverlay ? <Suspense fallback={null}><FileOverlay /></Suspense> : null}
     </>
   )
 }

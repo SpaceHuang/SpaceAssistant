@@ -9,7 +9,7 @@ export type {
 } from './public/model'
 export type {
   PreparedIdentity, ExecutionLease, ExecutionClaimResult, PrepareTurnInput, ClaimQueuedTurnInput,
-  SessionRecoveryPort, SessionRecoveryReadiness, SessionRecoveryReport, SessionAvailability, SessionAvailabilityPort, SessionAvailabilityTask, SessionExecutionStore,
+  SessionAvailability, SessionAvailabilityPort, SessionAvailabilityTask, SessionExecutionStore,
   ContinuationStore, ContinuationLaunchStore, ContinuationLaunchResult, ContinuationRecordSnapshot,
   ContinuationIntentAcceptanceResult, ContinuationTerminalStatus
 } from './application/ports'

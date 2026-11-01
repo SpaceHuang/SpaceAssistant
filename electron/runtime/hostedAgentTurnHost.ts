@@ -77,6 +77,7 @@ export type HostedAgentTurnHostDependencies<TCall extends { invocationId: string
   sessionLedgerForAttemptUsage?(attempt: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
   sessionLedgerForInvocationTerminal?(terminal: { status: 'completed' | 'failed' | 'interrupted'; turnId: string; sessionEventReason?: 'completed' | 'failed' | 'interrupted' | 'cancelled' }): Record<string, unknown> | Promise<Record<string, unknown>>
   sessionTranscriptBaseVersion?: number
+  sessionTranscriptCommitProtocol?: 2
   sessionTranscriptFailureMessages?: AgentTurnPorts['sessionTranscriptFailureMessages']
 }>
 
@@ -163,6 +164,7 @@ export function createHostedAgentTurnHost<
         ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}),
         ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}),
         ...(input.sessionTranscriptBaseVersion !== undefined ? { sessionTranscriptBaseVersion: input.sessionTranscriptBaseVersion } : {}),
+        ...(input.sessionTranscriptCommitProtocol ? { sessionTranscriptCommitProtocol: input.sessionTranscriptCommitProtocol } : {}),
         ...(input.sessionTranscriptFailureMessages ? { sessionTranscriptFailureMessages: input.sessionTranscriptFailureMessages } : {}),
         registry: dependencies.providerRegistry,
         safetyGate: wrappedSafetyGate,

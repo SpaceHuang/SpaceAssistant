@@ -1,15 +1,16 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import { Buffer } from 'node:buffer'
 import type { PersistedTurn } from '../database/operations'
-import { enqueueQueuedUserMessage, getNextQueuedMessage, getPersistedTurn, getTurnByRequestId, hasActiveTurn, listPersistedTurns, setPersistedTurnExecutionConfig, failConfiguringTurn } from '../database/operations'
+import { enqueueQueuedUserMessage, getMessageSkeleton, getNextQueuedMessage, getPersistedTurn, getTurnByRequestId, hasActiveTurn, listPersistedTurns, setPersistedTurnExecutionConfig, failConfiguringTurn } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { createHash } from 'node:crypto'
 import { appendMessage } from '../database/operations'
+import { cleanupStreamingResiduesForSession } from '../database/streamingCleanup'
 import type { Message } from '../../src/shared/domainTypes'
 import { createAcceptedTurn, type AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { TurnExecutionConfig } from '../../src/shared/assistantFactAggregator'
 import { queueInputFingerprint } from '../queueInputFingerprint'
-import { readSessionTranscript } from '../database/sessionTranscript'
+import { readSessionTranscript, readSessionTranscriptControl } from '../database/sessionTranscript'
 import { cancelQueuedSessionExecution, claimSessionExecution, markSessionExecutionStarted, markSessionExecutionUncertain, releaseSessionExecution } from '../database/sessionTranscript'
 import { acceptTurnContext, readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { runInTransaction } from '../database/transaction'
@@ -26,18 +27,27 @@ import type { HistoryEvent, HistoryPort } from '../../packages/agent-sdk/src/his
 import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
 import { createTurnCoordinatorStorage } from './coordinator'
-import { createSessionCommitService } from './application/sessionCommitService'
+import { createSessionCommitService } from './host/sessionCommitService'
 import { TurnRuntime, type TurnRuntimeOptions } from '../turnRuntime'
 import { cancelPendingAgentContinuation, claimAgentContinuation, createOrGetAgentContinuation, readAgentContinuationByRequest, readAgentContinuationByTarget, readAwaitingAgentContinuationBySource, readCancelledAgentContinuationBySource, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
+import { hasActiveSessionExecutionOwner, registerActiveSessionExecutionOwner, releaseActiveSessionExecutionOwner } from '../runtime/sessionExecutionOwnerRegistry'
+import { createSessionTranscriptRecoveryAdapter } from './recoveryDatabaseAdapter'
+import { restoreLegacySessionContextSnapshot, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
+import type { CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
 
 const turnStorageByExecution = new WeakMap<SessionExecutionStore, TurnRuntimeOptions['storage']>()
+const turnRuntimeByExecution = new WeakMap<SessionExecutionStore, TurnRuntime>()
+
+type HostedContextCacheEntry = Readonly<{ generation: string; version: number; scopeKey: string; context: SessionContextState }>
 
 /** Host-only factory: the application execution port never exposes its raw TurnStorage. */
 export function createTurnRuntimeForSessionExecution(execution: SessionExecutionStore,
   options: Omit<TurnRuntimeOptions, 'storage'>): TurnRuntime {
   const storage = turnStorageByExecution.get(execution)
   if (!storage) throw new Error('SESSION_EXECUTION_TURN_RUNTIME_BINDING_MISSING')
-  return new TurnRuntime({ ...options, storage })
+  const runtime = new TurnRuntime({ ...options, storage })
+  turnRuntimeByExecution.set(execution, runtime)
+  return runtime
 }
 
 /** Narrow SQLite execution adapter for prepared acceptance and validated context loading. */
@@ -50,6 +60,8 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
   // 工厂期捕获连接会在换入后永久失效（database is not open），必须每方法入口现取。
   const liveConn = () => getDbConnection(db)
   const coordinator = createTurnCoordinatorStorage(db)
+  const transcriptRecovery = createSessionTranscriptRecoveryAdapter(db)
+  const hostedContextBySession = new Map<string, HostedContextCacheEntry>()
   const execution: SessionExecutionStore = {
     continuations: Object.freeze({
       createOrGet: ({ sessionId, sourceInvocationId, requestIdempotencyKey, createdBy, frozenConfig }: Parameters<SessionExecutionStore['continuations']['createOrGet']>[0]) => {
@@ -116,16 +128,61 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
     },
     readTurnByRequest: ({ sessionId, requestId }) => getTurnByRequestId(db, sessionId, requestId),
     hasActiveTurn: (sessionId) => hasActiveTurn(db, sessionId),
-    listStartupOrphanTurns: () => listPersistedTurns(db)
+    listStartupOrphanTurns: (sessionId) => listPersistedTurns(db, undefined, sessionId)
       .filter(({ state }) => state === 'prepared' || state === 'executing' || state === 'waiting-confirm')
       .map(({ turnId, state, assistantMessageId }) => ({ turnId, state, assistantMessageId })),
+    listOrphanProcessIdentities: (sessionId) => listPersistedTurns(db, undefined, sessionId)
+      .filter(({ state }) => state === 'prepared' || state === 'executing' || state === 'waiting-confirm')
+      .flatMap(({ turnId, assistantMessageId }) => (getMessageSkeleton(db, assistantMessageId)?.toolCalls ?? [])
+        .filter((tool) => tool.toolName === 'run_shell' && tool.status === 'executing' && Boolean(tool.processPid && tool.processOwnerToken))
+        .map((tool) => ({ turnId, toolUseId: tool.id, pid: tool.processPid!,
+          ...(tool.processGroupId ? { processGroupId: tool.processGroupId } : {}), ownerToken: tool.processOwnerToken! }))),
     getNextQueuedMessage: (sessionId) => getNextQueuedMessage(db, sessionId),
     readAccepted: ({ sessionId, requestId }) => readAcceptedTurn(db, sessionId, requestId),
     readTranscriptState: (sessionId) => {
-      const { messages: _messages, ...state } = readSessionTranscript(db, sessionId)
-      return state
+      const { sessionId: targetSessionId, version, lastTurnId, status } = readSessionTranscriptControl(db, sessionId)
+      return { sessionId: targetSessionId, version, ...(lastTurnId ? { lastTurnId } : {}), status }
     },
     readHostedTranscript: (sessionId) => readSessionTranscript(db, sessionId),
+    prepareHostedContext: async ({ sessionId, scopeKey }) => {
+      const control = readSessionTranscriptControl(db, sessionId)
+      if (!control.generation) throw new Error('SESSION_CONTEXT_SESSION_NOT_FOUND')
+      const generation = control.generation
+      const cached = hostedContextBySession.get(sessionId)
+      if (control.status === 'ready' && cached?.generation === generation && cached.version === control.version && cached.scopeKey === scopeKey) {
+        return { ...control, generation, context: cached.context, warm: true, baselineRequired: false }
+      }
+      hostedContextBySession.delete(sessionId)
+      const hasProtocol2Baseline = Boolean(liveConn().prepare(`SELECT 1 AS found FROM session_turn_commit_receipts receipt
+        JOIN agent_history_events terminal ON terminal.session_id=receipt.session_id AND terminal.session_seq=receipt.event_end
+        WHERE receipt.session_id=? AND json_extract(terminal.payload_json,'$.contextSelection.contextProtocol')=2 LIMIT 1`).get(sessionId))
+      const baselineRequired = control.version > 0 && !hasProtocol2Baseline
+      const snapshot = control.status === 'ready' ? readSessionTranscript(db, sessionId) : undefined
+      const context = restoreLegacySessionContextSnapshot({
+        invocationId: `session-context:${sessionId}`, turnId: `session-context:${sessionId}`,
+        committedVersion: control.version,
+        messages: (snapshot?.messages ?? []) as CanonicalModelMessage[], scope: { kind: 'session', sessionId }
+      })
+      return { ...control, generation, context, warm: false, baselineRequired }
+    },
+    commitHostedContext: ({ sessionId, generation, scopeKey, context }) => {
+      const control = readSessionTranscriptControl(db, sessionId)
+      if (control.status !== 'ready' || control.generation !== generation || control.version !== context.committedVersion) return false
+      hostedContextBySession.set(sessionId, { generation, version: context.committedVersion, scopeKey, context })
+      return true
+    },
+    invalidateHostedContext: (sessionId) => { hostedContextBySession.delete(sessionId) },
+    recoverExecutionTarget: (sessionId) => {
+      if (hasActiveSessionExecutionOwner(sessionId)) {
+        return { status: 'active-owner', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }
+      }
+      const turnRuntime = turnRuntimeByExecution.get(execution)
+      if (turnRuntime) turnRuntime.recoverSession(sessionId)
+      else cleanupStreamingResiduesForSession(db, sessionId)
+      const recovered = transcriptRecovery.recoverTarget(sessionId)
+      return { status: recovered.status, releasedUnstarted: recovered.releasedUnstarted,
+        markedUncertain: recovered.markedUncertain, reconciled: recovered.reconciled }
+    },
     loadAcceptedContinuationTranscript: ({ sessionId, turnId }) => {
       const turn = getPersistedTurnInSession(db, sessionId, turnId)
       const continuationSource = turn.executionConfig?.continuationSource
@@ -163,9 +220,17 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       transcript[requiredUserIndex] = { ...transcript[requiredUserIndex]!, id: turn.userMessageId }
       return transcript
     },
-    claimExecution: (input) => claimSessionExecution(db, input),
+    claimExecution: (input) => {
+      const claim = claimSessionExecution(db, input)
+      if (claim.acquired) registerActiveSessionExecutionOwner(input.sessionId)
+      return claim
+    },
     markExecutionStarted: (input) => markSessionExecutionStarted(db, input),
-    releaseExecution: (input) => releaseSessionExecution(db, input),
+    releaseExecution: (input) => {
+      const released = releaseSessionExecution(db, input)
+      if (released) releaseActiveSessionExecutionOwner(input.sessionId)
+      return released
+    },
     cancelQueuedExecution: (input) => cancelQueuedSessionExecution(db, input),
     markExecutionUncertain: (input) => markSessionExecutionUncertain(db, input),
     commitExecutionConfig: ({ ref, config, intentFingerprint, fence }) => {
@@ -400,6 +465,9 @@ function createSessionHistoryPort(db: AppDatabase, sessionId: string, requestBod
       return result
     },
     read: (invocationId: string) => history.read(invocationId),
+    readLatestEvent: (invocationId: string) => history.readLatestEvent(invocationId),
+    findByIdempotencyKey: (invocationId: string, idempotencyKey: string) => history.findByIdempotencyKey(invocationId, idempotencyKey),
+    prepareTransitionState: (snapshot: import('../../packages/agent-sdk/src/history').HistorySnapshot) => history.prepareTransitionState(snapshot),
     readLatestInvocationForSession: async (requestedSessionId: string, options?: { excludeInvocationId?: string; excludeInvocationIds?: readonly string[] }) => {
       if (requestedSessionId !== sessionId) throw new Error('SESSION_SCOPE_MISMATCH')
       return await history.readLatestInvocationForSession(sessionId, options)

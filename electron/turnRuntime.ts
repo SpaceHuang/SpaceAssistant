@@ -138,6 +138,7 @@ export class TurnRuntime {
     this.publishControlProjection(turnId, before, result.outcome === 'cancelled' ? 'source-cancelled' : 'source-timeout')
   }
   recover(): number { return this.coordinator.recover() }
+  recoverSession(sessionId: string): number { return this.coordinator.recover(sessionId) }
   terminal(turnId: string): TurnTerminal | undefined { return this.coordinator.getTerminal(turnId) }
   listTerminals(sessionId?: string): TurnTerminal[] { return this.coordinator.listTerminals(sessionId) }
   retryCheckpoint(turnId: string): void { this.coordinator.retryCheckpoint(turnId) }

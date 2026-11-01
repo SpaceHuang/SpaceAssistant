@@ -146,6 +146,19 @@ export function acceptedAssistantCheckpoint(message: Message): Message {
   }
 }
 
+/** A timed turn snapshot is only an output checkpoint; committed tool facts stay in History. */
+export function assistantOutputCheckpoint(message: Message): Message {
+  const accepted = acceptedAssistantCheckpoint(message)
+  if (accepted.status !== 'streaming') return accepted
+  const processIdentities = accepted.toolCalls?.filter((tool) => tool.toolName === 'run_shell' &&
+    (tool.status === 'executing' || tool.result?.executionOutcome === 'unknown-after-dispatch'))
+    .map((tool) => ({ id: tool.id, toolName: tool.toolName, input: {}, status: tool.status, riskLevel: tool.riskLevel,
+      ...(Number.isSafeInteger(tool.processPid) ? { processPid: tool.processPid } : {}),
+      ...(tool.processGroupId ? { processGroupId: tool.processGroupId } : {}),
+      ...(tool.processOwnerToken?.trim() ? { processOwnerToken: tool.processOwnerToken } : {}) }))
+  return { ...accepted, toolCalls: processIdentities?.length ? processIdentities : undefined }
+}
+
 function restoreProvisionalSnapshot(message: Message): Message {
   const snapshot = (message as Message & { _provisionalSnapshot?: { content: string; contentSegments?: Message['contentSegments']; thinking?: Message['thinking'] } })._provisionalSnapshot
   if (!snapshot) return message

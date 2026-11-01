@@ -61,6 +61,7 @@ export type MessageSkeleton = Readonly<{
   status: Message['status']
   sequence: number
 }>
+export type LatestMessagePreviewCandidate = Readonly<MessageSkeleton & { sessionGeneration: string; messageRevision: number }>
 export type MessageRef = Readonly<{ sessionId: string; messageId: string }>
 export type RemoteSessionIdentityUpdate =
   | Readonly<{ channel: 'feishu'; messageId: string }>

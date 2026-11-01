@@ -328,6 +328,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
       contextProjectionCommitter?: import('../../packages/agent-sdk/src/context').ContextProjectionCommitter
       sessionTranscriptBaseVersion?: number
+      sessionTranscriptCommitProtocol?: 2
       sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']
       sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
@@ -1324,6 +1325,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
       contextProjectionCommitter?: import('../../packages/agent-sdk/src/context').ContextProjectionCommitter
       sessionTranscriptBaseVersion?: number
+      sessionTranscriptCommitProtocol?: 2
       sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']
       policy: ReturnType<typeof createAgentSdkSafetyPolicy>
       confirmation?: ConfirmationPort
@@ -1384,6 +1386,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         history,
         ...(input.contextProjectionCommitter ?? materials.contextProjectionCommitter ? { contextProjectionCommitter: input.contextProjectionCommitter ?? materials.contextProjectionCommitter } : {}),
         ...(input.sessionTranscriptBaseVersion !== undefined ? { sessionTranscriptBaseVersion: input.sessionTranscriptBaseVersion } : {}),
+        ...(input.sessionTranscriptCommitProtocol ? { sessionTranscriptCommitProtocol: input.sessionTranscriptCommitProtocol } : {}),
         ...(input.sessionTranscriptFailureMessages ? { sessionTranscriptFailureMessages: input.sessionTranscriptFailureMessages } : {}),
         ...(input.sessionLedgerForInvocationTerminal ? { sessionLedgerForInvocationTerminal: input.sessionLedgerForInvocationTerminal } : {}),
         prepareTool: input.registeredTools.prepareTool,
@@ -1510,6 +1513,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       resolveRegisteredToolName?: (providerToolName: string) => string
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
       sessionTranscriptBaseVersion?: number
+      sessionTranscriptCommitProtocol?: 2
       sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
@@ -1614,6 +1618,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(input.deferredUnsurfacedCheck ? { deferredUnsurfacedCheck: input.deferredUnsurfacedCheck } : {}),
         ...(input.dynamicToolsForNextRequest ? { dynamicToolsForNextRequest: input.dynamicToolsForNextRequest } : {}),
         ...(input.hostHistory ? { hostHistory: input.hostHistory } : {}),
+        ...(input.sessionTranscriptBaseVersion !== undefined ? { sessionTranscriptBaseVersion: input.sessionTranscriptBaseVersion } : {}),
+        ...(input.sessionTranscriptCommitProtocol ? { sessionTranscriptCommitProtocol: input.sessionTranscriptCommitProtocol } : {}),
+        ...(input.sessionTranscriptFailureMessages ? { sessionTranscriptFailureMessages: input.sessionTranscriptFailureMessages } : {}),
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
         ...(input.beforeToolDispatch ? { beforeToolDispatch: input.beforeToolDispatch } : {}),
         ...(input.beforeDispatchLease ? { beforeDispatchLease: input.beforeDispatchLease } : {}),

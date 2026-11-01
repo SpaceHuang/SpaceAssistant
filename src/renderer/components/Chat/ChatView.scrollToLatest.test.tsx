@@ -17,7 +17,7 @@ import {
 import { changeAppLocale } from '../../i18n/localeSync'
 import { scrollBehaviorPreference } from '../../utils/motionPreference'
 import { store } from '../../store'
-import { setChatStatus, setMessages, setSession } from '../../store/chatSlice'
+import { restoreLastUsage, setChatStatus, setMessages, setSession } from '../../store/chatSlice'
 import { setConfig } from '../../store/configSlice'
 import { setSessions } from '../../store/sessionSlice'
 import { pendingConfirmStore } from '../../services/pendingConfirmStore'
@@ -291,6 +291,7 @@ describe('ChatView scroll to latest', () => {
         sessionId: testSession.id,
         entries: []
       }),
+      chatGetSessionCompactionMarkers: vi.fn().mockResolvedValue([]),
       chatGetSearchCorpusPage: vi.fn().mockResolvedValue({
         entries: [],
         nextSequence: 0,
@@ -332,6 +333,35 @@ describe('ChatView scroll to latest', () => {
     syncScrollState(container, { scrollHeight: 1000, clientHeight: 100, scrollTop: 880 })
 
     expectButtonHidden(getScrollToLatestButton(container))
+  })
+
+  it('renders the first page while context summary is still pending', async () => {
+    const resolvers: Array<(value: { sessionId: string; entries: [] }) => void> = []
+    vi.mocked(window.api.chatGetContextHistorySummaryBaseline).mockImplementation(() => new Promise((resolve) => resolvers.push(resolve)) as never)
+    const view = await renderChatWithMessages([makeMessage({ id: 'summary-page-user', role: 'user' })])
+    expect(view.container.querySelector('.chat-scroll-to-latest')).not.toBeNull()
+    expect(window.api.chatGetContextHistorySummaryBaseline).toHaveBeenCalledTimes(1)
+    expect(resolvers).toHaveLength(1)
+    for (const resolve of resolvers) resolve({ sessionId: testSession.id, entries: [] })
+  })
+
+  it('keeps the prepared context summary when retrying the same session page', async () => {
+    const api = window.api
+    vi.mocked(api.chatGetMessagePage).mockRejectedValueOnce(new Error('page failed'))
+      .mockImplementationOnce(async ({ sessionId }: { sessionId: string }) => pageFromMessages(sessionId, [makeMessage({ id: 'retry-page-user', role: 'user' })]))
+    store.dispatch(setConfig(makeConfig()))
+    store.dispatch(setSession(testSession.id))
+    store.dispatch(setMessages([]))
+    store.dispatch(setSessions([testSession]))
+    store.dispatch(restoreLastUsage({ input_tokens: 10000, output_tokens: 5000 }))
+    const view = render(<Provider store={store}><ConfigProvider><App><ChatView /></App></ConfigProvider></Provider>)
+
+    await screen.findByRole('alert')
+    await waitFor(() => expect(window.api.chatGetContextHistorySummaryBaseline).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(window.api.chatGetMessagePage).toHaveBeenCalledTimes(2))
+
+    expect(window.api.chatGetContextHistorySummaryBaseline).toHaveBeenCalledTimes(1)
   })
 
   it('shows the button after scrolling up more than 120px', async () => {

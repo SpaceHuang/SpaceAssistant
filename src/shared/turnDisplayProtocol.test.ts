@@ -60,6 +60,39 @@ describe('turn display protocol', () => {
     expect(truncateUtf8('😀😀a', 5)).toEqual({ value: '😀', truncated: true })
   })
 
+  it('完成结果同长度变更时重新生成预览', () => {
+    const message = { ...baseMessage, toolCalls: [{ ...baseMessage.toolCalls[0]!, result: { success: true, data: 'ab' } }] }
+    const first = toTurnDisplay({ turnId: 'cache-same-length', requestId: 'r', version: 1, lifecycle: 'completed', message })
+    const changed = { ...message, toolCalls: [{ ...message.toolCalls[0]!, result: { success: true, data: 'cd' } }] }
+    const second = toTurnDisplay({ turnId: 'cache-same-length', requestId: 'r', version: 2, lifecycle: 'completed', message: changed })
+    expect(first.message.toolCalls[0]?.display.resultPreview).toBe('ab')
+    expect(second.message.toolCalls[0]?.display.resultPreview).toBe('cd')
+  })
+
+  it('对象预览在遍历和序列化前限制深度与宽度', () => {
+    let reads = 0
+    const huge = Object.defineProperties({}, Object.fromEntries(Array.from({ length: 100_000 }, (_, index) => [`key-${index}`, { enumerable: true, get: () => { reads++; return 'value' } }])))
+    const message = { ...baseMessage, toolCalls: [{ ...baseMessage.toolCalls[0]!, result: { success: true, data: huge } }] }
+    const startedAt = performance.now()
+    const display = toTurnDisplay({ turnId: 'bounded-object', requestId: 'r', version: 1, lifecycle: 'completed', message })
+    expect(performance.now() - startedAt).toBeLessThan(1000)
+    expect(display.message.toolCalls[0]?.display.resultPreviewTruncated).toBe(true)
+    expect(new TextEncoder().encode(display.message.toolCalls[0]?.display.resultPreview ?? '').byteLength).toBeLessThanOrEqual(MAX_PREVIEW_BYTES)
+    expect(reads).toBeLessThanOrEqual(32)
+  })
+
+  it('完成摘要缓存按替换后的真实字节计量并在超预算时淘汰', () => {
+    const make = (id: string, value: string) => toTurnDisplay({ turnId: id, requestId: 'r', version: 1, lifecycle: 'completed', message: { ...baseMessage, toolCalls: [{ ...baseMessage.toolCalls[0]!, result: { success: true, data: value } }] } })
+    const first = make('cache-replacement', 'x'.repeat(MAX_PREVIEW_BYTES))
+    const replacement = make('cache-replacement', 'y'.repeat(MAX_PREVIEW_BYTES))
+    expect(replacement.message.toolCalls[0]?.display.resultPreview).toBe('y'.repeat(MAX_PREVIEW_BYTES))
+    // This batch fits the byte budget only when replacement subtracts the prior entry exactly once.
+    for (let index = 0; index < 121; index++) make(`cache-pressure-${index}`, 'z'.repeat(MAX_PREVIEW_BYTES))
+    const stillCached = make('cache-replacement', 'y'.repeat(MAX_PREVIEW_BYTES))
+    expect(stillCached.message.toolCalls[0]?.display).toBe(replacement.message.toolCalls[0]?.display)
+    expect(first.message.toolCalls[0]?.display.resultPreview).toBe('x'.repeat(MAX_PREVIEW_BYTES))
+  })
+
   it('暴露固定的有界展示预算', () => {
     expect(MAX_BOUNDED_DISPLAY_META_BYTES).toBeGreaterThan(0)
     expect(toTurnDisplay({ turnId: 't1', requestId: 'r1', version: 1, lifecycle: 'completed', message: baseMessage })).toHaveProperty('version', 1)

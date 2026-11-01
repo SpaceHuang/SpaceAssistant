@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { createSession } from '../database/operations'
+import { getDbConnection } from '../database/sqliteStore'
+import { appendMessage, createSession } from '../database/operations'
 import { registerAgentIpc } from './agentProtocolIpc'
 import { readLatestRetrySourceAfterProjection } from './agentProtocolIpc'
 import { createSessionTurnRuntime, createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
@@ -10,6 +11,39 @@ describe('chat:get-messages projection preparation', () => {
   let turnRuntime: ReturnType<typeof createSessionTurnRuntime> | undefined
   const ipcEvent = { processId: 1, sender: {} }
   afterEach(() => { db?.close(); db = undefined; turnRuntime = undefined })
+
+  it('prepares and reads only the new tail preview candidate before deleting the queued tail', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'prepared queue preview', model: 'test' })
+    const base = createSqliteSessionStorage(db)
+    appendMessage(db, { id: 'canonical-tail', sessionId: session.id, role: 'assistant', content: 'prepared answer', timestamp: 2, status: 'completed' })
+    const queued = base.commands.enqueue({ sessionId: session.id, requestId: 'preview-delete', content: 'queued' })
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id='canonical-tail'").run()
+    const prepared = { sessionId: session.id, sourceIdentityJson: 'source' }
+    const events: string[] = []
+    const sessionStorage = {
+      ...base,
+      ensureChatBodyV1: vi.fn(async () => { events.push('ensure'); return prepared }),
+      queries: { ...base.queries,
+        readPreparedMessage: vi.fn(async (input: { sessionId: string; messageId: string; prepared?: unknown }) => {
+          events.push(`candidate:${input.messageId}`)
+          return { id: 'canonical-tail', sessionId: session.id, role: 'assistant', timestamp: 2, status: 'completed', content: 'prepared answer' } as never
+        }),
+        readMessages: vi.fn(() => [{ id: 'canonical-tail', sessionId: session.id, role: 'assistant', timestamp: 2, status: 'completed', content: '' } as never]) },
+    }
+    turnRuntime = createSessionTurnRuntime(base, { deps: { now: Date.now, id: () => 'test-turn' } })
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
+      db, sessionStorage: sessionStorage as never, turnRuntime, backup: { schedule: vi.fn(), flush: vi.fn(async (_sessionId: string, write: () => Promise<void>) => write()) } as never, workDirManager: {} as never,
+      getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
+    })
+    const result = await handlers.get('chat:delete-queued-message')!(null, { sessionId: session.id, messageId: queued.persisted.message.id })
+    expect(result).toEqual({ ok: true, sessionId: session.id })
+    expect(events).toEqual(['ensure', 'candidate:canonical-tail'])
+  })
 
   it('prepares a session before the outbound retry-source query reads message bodies', async () => {
     const events: string[] = []

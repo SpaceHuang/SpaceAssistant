@@ -5,6 +5,7 @@ import {
   HistoryCorruptionError,
   invocationTerminalStatusMatches,
   rebuildInvocationStates,
+  createHistoryTransitionState,
   validateHistoryTransition,
   validateHistoryBatch,
   type HistoryAppendResult,
@@ -27,7 +28,7 @@ import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibilit
 import { decodeTerminalOutcome } from './terminalOutcome'
 import { classifySessionHistoryRepairFailure } from './sessionHistoryRecoveryDiagnostics'
 import { logAgentEvent } from '../agentLogger/agentLogger'
-import { canonicalSessionTranscriptEvents, foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
+import { canonicalSessionTranscriptEvents, restoreLegacyCanonicalSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
@@ -426,6 +427,10 @@ export class SqliteAgentHistory implements HistoryPort {
     const result: CanonicalContextMeterEvent[] = []
     const projectedUsageRequestIds = new Set<string>()
     const add = (seq: number, type: CanonicalContextMeterEvent['type'], payload: Record<string, unknown>) => result.push({ seq, type, payload })
+    const sourceSequence = (source: unknown, fallback: number): number => {
+      if (!isRecord(source) || !Number.isSafeInteger(source.time) || !Number.isSafeInteger(source.seq)) return fallback
+      return Number(source.time) * 4096 + (Number(source.seq) % 4096)
+    }
     const addRequestUsage = (seq: number, usage: unknown) => {
       if (!isRecord(usage) || typeof usage.requestId !== 'string' || projectedUsageRequestIds.has(usage.requestId)) return
       projectedUsageRequestIds.add(usage.requestId)
@@ -436,7 +441,8 @@ export class SqliteAgentHistory implements HistoryPort {
       if (!isRecord(raw)) continue
       const ledger = raw.sessionLedger
       if (!isRecord(ledger)) continue
-      const baseSeq = row.session_seq * 4
+      const baseSeq = row.created_at * 4096 + (row.session_seq % 4096) * 4
+      const sourceFacts = isRecord(ledger.legacyMeterSources) ? ledger.legacyMeterSources : undefined
       if (row.kind === 'model-request-started') {
         const header = ledger.requestHeader
         const context = ledger.requestContext
@@ -444,14 +450,21 @@ export class SqliteAgentHistory implements HistoryPort {
         const requestId = header.requestId
         const attempt = header.attempt
         if (typeof requestId !== 'string' || !Number.isInteger(attempt) || context.requestId !== requestId || context.attempt !== attempt) continue
-        add(baseSeq + 1, 'request_header', header)
-        add(baseSeq + 2, 'request_context', context)
+        add(sourceSequence(sourceFacts?.requestHeader, baseSeq + 1), 'request_header', header)
+        add(sourceSequence(sourceFacts?.requestContext, baseSeq + 2), 'request_context', context)
       } else if (row.kind === 'provider-retry-scheduled') {
         const retry = ledger.requestRetry
-        if (isRecord(retry) && typeof retry.requestId === 'string' && Number.isInteger(retry.attempt)) add(baseSeq + 1, 'request_retry', retry)
+        if (isRecord(retry) && typeof retry.requestId === 'string' && Number.isInteger(retry.attempt)) {
+          add(sourceSequence(ledger.legacyMeterSource, baseSeq + 1), 'request_retry', retry)
+        }
       } else if (row.kind === 'provider-attempt-result' || row.kind === 'model-response-committed' || row.kind === 'model-attempt-discarded') {
         const usage = ledger.requestUsage
-        addRequestUsage(baseSeq + 1, usage)
+        addRequestUsage(sourceSequence(ledger.legacyMeterSource, baseSeq + 1), usage)
+        if (row.kind === 'provider-attempt-result' && isRecord(ledger.requestFinalContext) &&
+          typeof ledger.requestFinalContext.requestId === 'string' && Number.isInteger(ledger.requestFinalContext.attempt)) {
+          add(sourceSequence(ledger.legacyMeterSource, baseSeq + 2), 'request_context',
+            { ...ledger.requestFinalContext, projectionStage: 'final' })
+        }
         if (row.kind === 'model-response-committed' && isRecord(ledger.requestContext)) {
           const context = ledger.requestContext
           if (typeof context.requestId === 'string' && Number.isInteger(context.attempt)) {
@@ -460,7 +473,7 @@ export class SqliteAgentHistory implements HistoryPort {
         }
       }
     }
-    return result
+    return result.sort((left, right) => left.seq - right.seq)
   }
 
   /** Retention proof: unknown or malformed History ownership must never imply no ledger dependency. */
@@ -532,6 +545,15 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   async appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult> {
+    validateHistoryBatch(events)
+    const invocationId = events[0].invocationId
+    const streamState = this.conn.prepare(`SELECT version,transition_state_version,transition_state_json
+      FROM agent_history_streams WHERE invocation_id=?`).get(invocationId) as {
+        version: number; transition_state_version: number | null; transition_state_json: string | null
+      } | undefined
+    if (streamState && streamState.version > 0 && streamState.transition_state_version === null && streamState.transition_state_json === null) {
+      await this.prepareTransitionState(this.readSync(invocationId))
+    }
     const locationKeys = [...new Set(events.flatMap((event) => {
       const sidecar = isRecord(event.payload) ? event.payload.sessionLedger : undefined
       const location = isRecord(sidecar) ? sidecar.location : undefined
@@ -563,9 +585,21 @@ export class SqliteAgentHistory implements HistoryPort {
     const expectedSessionGeneration = this.sessionId && hasSessionsTable
       ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
       : undefined
-    const storedEvents = this.spillStore ? await Promise.all(events.map((event) => this.spillLargeCanonicalPayload(event))) : events
+    const storedEvents: HistoryEvent[] = []
+    if (this.spillStore) {
+      // Bound concurrent large-result encoding and yield between groups so a batch of
+      // tool completions cannot monopolize the main process while preparing spill files.
+      const spillBatchSize = 1
+      for (let offset = 0; offset < events.length; offset += spillBatchSize) {
+        const batch = events.slice(offset, offset + spillBatchSize)
+        storedEvents.push(...await Promise.all(batch.map((event) => this.spillLargeCanonicalPayload(event))))
+        if (offset + spillBatchSize < events.length) await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    } else {
+      storedEvents.push(...events)
+    }
     let storedTranscriptJson: string | undefined
-    if (this.spillStore && transcriptCommit) {
+    if (this.spillStore && transcriptCommit && transcriptCommit.protocol !== 2) {
       const transcriptJson = JSON.stringify(transcriptCommit.messages)
       if (Buffer.byteLength(transcriptJson, 'utf8') > 64 * 1024) {
         try {
@@ -646,7 +680,22 @@ export class SqliteAgentHistory implements HistoryPort {
           if (event.kind === 'replay-message-committed') {
             const payload = isRecord(event.payload) ? event.payload : undefined
             const message = payload?.message
-            if (!isRecord(message) || message.role !== 'user' || !validateCanonicalInvocationMessages([message])) {
+            const sourceModelTurn = payload?.sourceModelTurn
+            const validUserReplay = isRecord(message) && message.role === 'user' && validateCanonicalInvocationMessages([message])
+            const sourceRow = typeof sourceModelTurn === 'number' && Number.isSafeInteger(sourceModelTurn) ? this.conn.prepare(`SELECT payload_json FROM agent_history_events
+              WHERE invocation_id=? AND kind='model-response-committed' AND sequence<? AND json_extract(payload_json,'$.modelTurn')=?`)
+              .get(event.invocationId, event.sequence, sourceModelTurn) as { payload_json: string } | undefined : undefined
+            let sourceToolCalls: unknown[] | undefined
+            if (sourceRow) {
+              try {
+                const committed = JSON.parse(sourceRow.payload_json) as { message?: { toolCalls?: unknown } }
+                if (Array.isArray(committed.message?.toolCalls)) sourceToolCalls = committed.message.toolCalls
+              } catch { /* malformed source responses are rejected below */ }
+            }
+            const validToolReplay = isRecord(message) && message.role === 'tool' && typeof message.toolCallId === 'string' &&
+              typeof message.isError === 'boolean' && Object.hasOwn(message, 'content') && sourceToolCalls &&
+              validateCanonicalInvocationMessages([{ role: 'assistant', toolCalls: sourceToolCalls }, message])
+            if (!validUserReplay && !validToolReplay) {
               throw new HistoryBatchError('canonical replay message is invalid')
             }
             continue
@@ -761,9 +810,27 @@ export class SqliteAgentHistory implements HistoryPort {
         return appended
       }
       if (!this.sessionId || transcriptCommit.sessionId !== this.sessionId) throw new HistoryBatchError('terminal transcript commit session identity mismatch')
+      if (transcriptCommit.protocol === 2 && (!transcriptCommit.contextSelection || transcriptCommit.messages !== undefined)) {
+        throw new HistoryBatchError('protocol 2 transcript intent must contain only a finite context selection')
+      }
       const terminal = events.length === 1 ? events[0] : undefined
       if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(terminal.kind)) {
         throw new HistoryBatchError('session transcript commit intent requires one terminal History event')
+      }
+      if (transcriptCommit.contextSelection) {
+        const payload = terminal.payload && typeof terminal.payload === 'object'
+          ? terminal.payload as { contextSelection?: unknown }
+          : undefined
+        const selection = payload?.contextSelection && typeof payload.contextSelection === 'object'
+          ? payload.contextSelection as { contextProtocol?: unknown; target?: unknown }
+          : undefined
+        const expectedTarget = terminal.kind === 'invocation-completed' ? 'working'
+          : terminal.kind === 'invocation-parked' ? 'park-baseline' : 'failure'
+        if (transcriptCommit.contextSelection.contextProtocol !== 2 ||
+          transcriptCommit.contextSelection.target !== expectedTarget ||
+          selection?.contextProtocol !== 2 || selection.target !== expectedTarget) {
+          throw new HistoryBatchError('terminal context selection does not match the atomic transcript intent')
+        }
       }
       const outcomeMatchesTerminal = terminal.kind === 'invocation-completed' ? transcriptCommit.outcome === 'completed'
         : terminal.kind === 'invocation-failed' ? transcriptCommit.outcome === 'failed' || transcriptCommit.outcome === 'timed_out'
@@ -782,7 +849,10 @@ export class SqliteAgentHistory implements HistoryPort {
       }
       const committed = commitSessionTranscriptInTransaction(this.conn, {
         sessionId: transcriptCommit.sessionId, turnId: terminal.turnId, baseVersion: transcriptCommit.baseVersion,
-        outcome: transcriptCommit.outcome, messages: transcriptCommit.messages,
+        outcome: transcriptCommit.outcome,
+        ...(transcriptCommit.protocol === 2
+          ? { protocol: 2 as const, contextSelection: transcriptCommit.contextSelection }
+          : { messages: transcriptCommit.messages }),
         ...(transcriptCommit.executionLease ? { executionLease: transcriptCommit.executionLease } : {}),
         ...(storedTranscriptJson ? { storedMessagesJson: storedTranscriptJson } : {}), now: this.now()
       })
@@ -870,13 +940,14 @@ export class SqliteAgentHistory implements HistoryPort {
         this.validateCanonicalSessionToolTransitions(events)
         const hydratedEvents = this.spillStore ? events.map((event) => this.hydrateLargeToolResultSync(event)) : events
         validateHistoryTransition([], hydratedEvents)
-        const messages = rebuildClaudeMessagesFromHistory(canonicalSessionTranscriptEvents(hydratedEvents), { omitAnonymousReplayFromSessionTranscript: true,
-          allowPendingToolCalls: streamRows.at(-1)?.kind === 'invocation-interrupted' })
+        const messages = this.canonicalSessionBodyMessages(rebuildClaudeMessagesFromHistory(canonicalSessionTranscriptEvents(hydratedEvents), { omitAnonymousReplayFromSessionTranscript: true,
+          allowPendingToolCalls: streamRows.at(-1)?.kind === 'invocation-interrupted' }), invocationId)
         const last = streamRows.at(-1)!
         snapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq, commitOrder: last.commit_order, messages })
       }
-      const folded = foldClaudeSessionSnapshots(snapshots)
-      const canonical = toCanonicalModelMessages(folded)
+      const restored = restoreLegacyCanonicalSessionSnapshots(snapshots, snapshots.length)
+      const folded = restored.messages
+      const canonical = [...restored.context.committed]
       if (JSON.stringify(projectChatBodyV1(canonical as never)) !== JSON.stringify(projectChatBodyV1(legacyMessages as never))) return { kind: 'unavailable', reason: 'legacy-mismatch' }
       const watermark = rows.at(-1)!
       const anchor = this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id
@@ -932,12 +1003,12 @@ export class SqliteAgentHistory implements HistoryPort {
         this.validateCanonicalSessionToolTransitions(events)
         const hydrated = this.spillStore ? events.map((event) => this.hydrateLargeToolResultSync(event)) : events
         validateHistoryTransition([], hydrated)
-        const messages = rebuildClaudeMessagesFromHistory(canonicalSessionTranscriptEvents(hydrated), { omitAnonymousReplayFromSessionTranscript: true,
-          allowPendingToolCalls: streamRows.at(-1)?.kind === 'invocation-interrupted' })
+        const messages = this.canonicalSessionBodyMessages(rebuildClaudeMessagesFromHistory(canonicalSessionTranscriptEvents(hydrated), { omitAnonymousReplayFromSessionTranscript: true,
+          allowPendingToolCalls: streamRows.at(-1)?.kind === 'invocation-interrupted' }), invocationId)
         const last = streamRows.at(-1)!
         snapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq, commitOrder: last.commit_order, messages })
       }
-      const folded = foldClaudeSessionSnapshots(snapshots)
+      const folded = restoreLegacyCanonicalSessionSnapshots(snapshots, snapshots.length).messages
       const watermark = rows.at(-1)!
       const anchor = this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id FROM agent_history_events
         WHERE session_id=? AND session_seq=?`).get(sessionId, watermark.session_seq) as
@@ -947,6 +1018,17 @@ export class SqliteAgentHistory implements HistoryPort {
       return { kind: 'matched', messages: folded, sessionId, sessionGeneration: session.generation, sessionSeq: watermark.session_seq,
         commitOrder: watermark.commit_order, watermarkEventId: watermark.event_id, watermarkInvocationId: watermark.invocation_id, eventCount: rows.length }
     } catch { return { kind: 'unavailable', reason: 'snapshot-invalid' } }
+  }
+
+  private canonicalSessionBodyMessages(
+    messages: readonly import('../../src/shared/api').ClaudeChatMessageWithBlocks[], invocationId: string
+  ): import('../../src/shared/api').ClaudeChatMessageWithBlocks[] {
+    return messages.flatMap((message, index) => {
+      if (message.role === 'assistant' && Array.isArray(message.content) && message.content.length === 0) return []
+      if (message.role === 'user' && Array.isArray(message.content) && message.content.length > 0 &&
+        message.content.every((block) => block && typeof block === 'object' && 'type' in block && block.type === 'tool_result')) return []
+      return [message.id?.trim() ? message : { ...message, id: `canonical:${invocationId}:${index}` }]
+    })
   }
 
   private isCanonicalSessionInvocationRowsValid(sessionId: string, invocationId: string, rows: readonly OrderedSessionEventRow[]): boolean {
@@ -1350,7 +1432,7 @@ export class SqliteAgentHistory implements HistoryPort {
       SELECT streams.invocation_id
       FROM agent_history_streams AS streams
       JOIN agent_history_events AS events ON events.invocation_id = streams.invocation_id
-      WHERE streams.session_id = ?
+      WHERE streams.session_id = ? AND streams.invocation_id NOT LIKE 'legacy-meter-import:%'
       GROUP BY streams.invocation_id
       ORDER BY MIN(events.commit_order) IS NULL ASC, MIN(events.commit_order) ASC,
         MIN(events.session_seq) IS NULL ASC, MIN(events.session_seq) ASC,
@@ -1403,11 +1485,132 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   async read(invocationId: string): Promise<HistorySnapshot> {
-    return this.readSync(invocationId)
+    const snapshot = this.readSync(invocationId, { hydrateSpills: false, validate: false })
+    try {
+      const events = this.spillStore ? await Promise.all(snapshot.events.map((event) => this.hydrateLargeToolResult(event))) : snapshot.events
+      for (const event of events) validateHistoryBatch([event])
+      validateHistoryTransition([], events)
+      return { ...snapshot, events }
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'SPILL_CONTENT_UNAVAILABLE') throw error
+      throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async readLatestEvent(invocationId: string): Promise<HistoryEvent | undefined> {
+    const exactStream = this.conn.prepare('SELECT invocation_id,version,schema_version,session_id FROM agent_history_streams WHERE invocation_id=?')
+      .get(invocationId) as StreamRow | undefined
+    if (exactStream && this.sessionId && exactStream.session_id !== this.sessionId) {
+      throw new HistoryBatchError(`invocation ${invocationId} does not belong to session ${this.sessionId}`)
+    }
+    let resolvedInvocationId = exactStream?.invocation_id
+    if (!resolvedInvocationId) {
+      const hasTurnTable = Boolean(this.conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'").get())
+      const hasAcceptedTurnTable = Boolean(this.conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='accepted_turn_contexts'").get())
+      if (hasTurnTable) {
+        const matches = this.conn.prepare(`SELECT turns.turn_id AS turnId FROM turns
+          JOIN agent_history_streams streams ON streams.invocation_id=turns.turn_id
+          WHERE turns.request_id=? AND (? IS NULL OR turns.session_id=?) ORDER BY turns.rowid DESC LIMIT 2`)
+          .all(invocationId, this.sessionId ?? null, this.sessionId ?? null) as Array<{ turnId: string }>
+        if (!this.sessionId && matches.length > 1) throw new HistoryBatchError(`requestId ${invocationId} maps to multiple session turns`)
+        resolvedInvocationId = matches[0]?.turnId
+      }
+      if (!resolvedInvocationId && hasAcceptedTurnTable) {
+        const matches = this.conn.prepare(`SELECT turn_id AS turnId FROM accepted_turn_contexts
+          WHERE request_id=? AND (? IS NULL OR session_id=?) ORDER BY created_at DESC LIMIT 2`)
+          .all(invocationId, this.sessionId ?? null, this.sessionId ?? null) as Array<{ turnId: string }>
+        if (!this.sessionId && matches.length > 1) throw new HistoryBatchError(`requestId ${invocationId} maps to multiple accepted turns`)
+        if (matches.length === 1) resolvedInvocationId = matches[0]!.turnId
+      }
+      resolvedInvocationId ??= invocationId
+    }
+    const stream = exactStream ?? this.conn.prepare('SELECT invocation_id,version,schema_version,session_id FROM agent_history_streams WHERE invocation_id=?')
+      .get(resolvedInvocationId) as StreamRow | undefined
+    if (!stream || stream.version === 0) return undefined
+    if (stream.schema_version !== this.schemaVersion) throw new HistoryBatchError(`unsupported schema version ${stream.schema_version} (adapter supports ${this.schemaVersion})`)
+    const row = this.conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,session_id
+      FROM agent_history_events WHERE invocation_id=? ORDER BY sequence DESC LIMIT 1`).get(resolvedInvocationId) as EventRow | undefined
+    if (!row) throw new HistoryCorruptionError(invocationId, 'stream version is nonzero but no latest event exists')
+    if (row.sequence !== stream.version || row.schema_version !== stream.schema_version ||
+      (row.session_id !== null && row.session_id !== stream.session_id)) {
+      throw new HistoryCorruptionError(invocationId, 'latest event ownership or sequence differs from its stream')
+    }
+    try {
+      const event = fromRow(row)
+      return this.spillStore ? this.hydrateLargeToolResultSync(event) : event
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'SPILL_CONTENT_UNAVAILABLE') throw error
+      throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async prepareTransitionState(snapshot: HistorySnapshot): Promise<void> {
+    let candidate = snapshot
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const current = this.conn.prepare(`SELECT version,schema_version,session_id,transition_state_version,transition_state_json
+        FROM agent_history_streams WHERE invocation_id=?`).get(candidate.invocationId) as {
+          version: number; schema_version: number; session_id: string | null
+          transition_state_version: number | null; transition_state_json: string | null
+        } | undefined
+      const observedGeneration = this.sessionId
+        ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
+        : undefined
+      if (current && current.version === candidate.version && current.schema_version === candidate.schemaVersion &&
+        (!this.sessionId || current.session_id === this.sessionId) &&
+        (candidate.sessionGeneration === undefined || candidate.sessionGeneration === observedGeneration) &&
+        current.transition_state_version === 1 && current.transition_state_json !== null) return
+      if (current && (current.transition_state_version !== null || current.transition_state_json !== null) &&
+        !(current.transition_state_version === 1 && current.transition_state_json !== null)) {
+        throw new HistoryBatchError('HISTORY_TRANSITION_STATE_UNSUPPORTED')
+      }
+      const state = createHistoryTransitionState(candidate.events)
+      const stale = runInTransaction(this.conn, () => {
+        const stream = this.conn.prepare(`SELECT invocation_id,version,schema_version,session_id,transition_state_version,transition_state_json
+          FROM agent_history_streams WHERE invocation_id=?`).get(candidate.invocationId) as {
+            invocation_id: string; version: number; schema_version: number; session_id: string | null
+            transition_state_version: number | null; transition_state_json: string | null
+          } | undefined
+        if (candidate.version === 0 && !stream) return false
+        const liveGeneration = this.sessionId
+          ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
+          : undefined
+        if (!stream || stream.version !== candidate.version || stream.schema_version !== candidate.schemaVersion ||
+          (this.sessionId && stream.session_id !== this.sessionId) ||
+          (candidate.sessionGeneration !== undefined && candidate.sessionGeneration !== liveGeneration)) return true
+        if (stream.transition_state_version === 1 && stream.transition_state_json !== null) return false
+        if (stream.transition_state_version !== null || stream.transition_state_json !== null) {
+          throw new HistoryBatchError('HISTORY_TRANSITION_STATE_UNSUPPORTED')
+        }
+        const updated = this.conn.prepare(`UPDATE agent_history_streams SET transition_state_version=1,transition_state_json=?
+          WHERE invocation_id=? AND version=? AND transition_state_version IS NULL AND transition_state_json IS NULL`)
+          .run(JSON.stringify(state), candidate.invocationId, candidate.version) as { changes: number | bigint }
+        return Number(updated.changes) !== 1
+      })
+      if (!stale) return
+      if (attempt === 0) {
+        candidate = this.readSync(snapshot.invocationId)
+        continue
+      }
+    }
+    throw new HistoryBatchError('HISTORY_TRANSITION_STATE_PREPARE_STALE')
+  }
+
+  async findByIdempotencyKey(invocationId: string, idempotencyKey: string): Promise<HistoryEvent | undefined> {
+    const row = this.conn.prepare(`SELECT e.event_id,e.idempotency_key,e.invocation_id,e.turn_id,e.sequence,e.schema_version,e.kind,e.payload_json
+      FROM agent_history_events e JOIN agent_history_streams s ON s.invocation_id=e.invocation_id
+      WHERE e.invocation_id=? AND e.idempotency_key=?${this.sessionId ? ' AND s.session_id=?' : ''}`)
+      .get(...(this.sessionId ? [invocationId, idempotencyKey, this.sessionId] : [invocationId, idempotencyKey])) as {
+        event_id: string; idempotency_key: string; invocation_id: string; turn_id: string; sequence: number; schema_version: number; kind: HistoryEvent['kind']; payload_json: string
+      } | undefined
+    return row ? { eventId: row.event_id, idempotencyKey: row.idempotency_key, invocationId: row.invocation_id, turnId: row.turn_id,
+      sequence: row.sequence, schemaVersion: row.schema_version, kind: row.kind, payload: JSON.parse(row.payload_json) } : undefined
   }
 
   /** Synchronous read for startup coordinators whose recovery contract is intentionally synchronous. */
-  readSync(invocationId: string): HistorySnapshot {
+  readSync(invocationId: string, options: { hydrateSpills?: boolean; validate?: boolean } = {}): HistorySnapshot {
+    const readGeneration = this.sessionId
+      ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
+      : undefined
     // Compatibility adapter: callers holding an accepted requestId can still read its
     // canonical turn stream. Exact stream IDs always win for legacy records.
     const exactStream = this.conn.prepare('SELECT invocation_id, version, schema_version, session_id FROM agent_history_streams WHERE invocation_id = ?').get(invocationId) as StreamRow | undefined
@@ -1456,8 +1659,8 @@ export class SqliteAgentHistory implements HistoryPort {
     const events = rows.map((row) => {
       try {
         const event = fromRow(row)
-        if (this.spillStore) return this.hydrateLargeToolResultSync(event)
-        validateHistoryBatch([event])
+        if (this.spillStore && options.hydrateSpills !== false) return this.hydrateLargeToolResultSync(event)
+        if (options.validate !== false) validateHistoryBatch([event])
         return event
       } catch (error) {
         if (error && typeof error === 'object' && 'code' in error && error.code === 'SPILL_CONTENT_UNAVAILABLE') throw error
@@ -1468,9 +1671,16 @@ export class SqliteAgentHistory implements HistoryPort {
     if (stream && events.some((event, index) => event.sequence !== index + 1 || event.schemaVersion !== stream.schema_version)) {
       throw new HistoryCorruptionError(invocationId, 'event sequence or schema version is not contiguous')
     }
-    try { validateHistoryTransition([], events) }
-    catch (error) { throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error)) }
-    return { invocationId: stream?.invocation_id ?? invocationId, version: stream?.version ?? 0, schemaVersion: stream?.schema_version ?? this.schemaVersion, events }
+    if (options.validate !== false) {
+      try { validateHistoryTransition([], events) }
+      catch (error) { throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error)) }
+    }
+    const sessionGeneration = this.sessionId
+      ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
+      : undefined
+    if (readGeneration !== sessionGeneration) throw new HistoryBatchError('HISTORY_SESSION_GENERATION_CHANGED_DURING_READ')
+    return { invocationId: stream?.invocation_id ?? invocationId, version: stream?.version ?? 0, schemaVersion: stream?.schema_version ?? this.schemaVersion,
+      events, ...(sessionGeneration ? { sessionGeneration } : {}) }
   }
 
   /** Reads one committed, session-owned event without hydrating its containing invocation. */
@@ -1675,6 +1885,80 @@ export class SqliteAgentHistory implements HistoryPort {
     return result
   }
 
+  private async hydrateLargeToolResult(event: HistoryEvent): Promise<HistoryEvent> {
+    if (!event.payload || typeof event.payload !== 'object') return event
+    const payload = event.payload as Record<string, unknown>
+    const hydrateTaggedText = async (tagged: unknown): Promise<unknown> => {
+      if (!tagged || typeof tagged !== 'object' || !('__spaceassistant_spill_v1' in tagged)) return tagged
+      const descriptor = (tagged as { __spaceassistant_spill_v1: SpillDescriptor }).__spaceassistant_spill_v1
+      if (descriptor.kind !== 'source-of-truth') throw new Error('canonical tool result references a non-source spill')
+      return this.spillStore!.readSourceTruth(descriptor)
+    }
+    const hydrated: Record<string, unknown> = { ...payload }
+    if (event.kind === 'tool-call-finished') {
+      const hydrateResult = async (value: unknown): Promise<unknown> => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+        const record = value as Record<string, unknown>
+        const data = await hydrateTaggedText(record.data)
+        return data === record.data ? value : { ...record, data }
+      }
+      if ('result' in payload) hydrated.result = await hydrateResult(payload.result)
+      const ledger = payload.sessionLedger
+      if (ledger && typeof ledger === 'object' && !Array.isArray(ledger) && 'result' in ledger) {
+        hydrated.sessionLedger = { ...(ledger as Record<string, unknown>), result: await hydrateResult((ledger as Record<string, unknown>).result) }
+      }
+    } else if (event.kind === 'model-response-committed') {
+      const message = payload.message
+      if (message && typeof message === 'object' && !Array.isArray(message)) {
+        const record = message as Record<string, unknown>
+        const content = record.content
+        if (typeof content === 'object' && content !== null && !Array.isArray(content)) {
+          hydrated.message = { ...record, content: await hydrateTaggedText(content) }
+        } else if (Array.isArray(content)) {
+          hydrated.message = { ...record, content: await Promise.all(content.map(async (block) => {
+            if (!block || typeof block !== 'object' || Array.isArray(block)) return block
+            const blockRecord = block as Record<string, unknown>
+            const field = blockRecord.type === 'text' ? 'text' : blockRecord.type === 'thinking' ? 'thinking' : undefined
+            if (!field) return block
+            const value = await hydrateTaggedText(blockRecord[field])
+            return value === blockRecord[field] ? block : { ...blockRecord, [field]: value }
+          })) }
+        }
+      }
+    } else if (event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted') {
+      const messages = payload.messages
+      if (Array.isArray(messages)) {
+        hydrated.messages = await Promise.all(messages.map(async (message) => {
+          if (!message || typeof message !== 'object' || Array.isArray(message)) return message
+          const record = message as Record<string, unknown>
+          const content = record.content
+          if (typeof content === 'object' && content !== null && !Array.isArray(content)) {
+            const value = await hydrateTaggedText(content)
+            return value === content ? message : { ...record, content: value }
+          }
+          if (!Array.isArray(content)) return message
+          let changed = false
+          const blocks = await Promise.all(content.map(async (block) => {
+            if (!block || typeof block !== 'object' || Array.isArray(block)) return block
+            const blockRecord = block as Record<string, unknown>
+            const field = blockRecord.type === 'text' ? 'text' : blockRecord.type === 'thinking' ? 'thinking' : blockRecord.type === 'image' ? 'data' : undefined
+            if (!field) return block
+            const value = await hydrateTaggedText(blockRecord[field])
+            if (value === blockRecord[field]) return block
+            changed = true
+            return { ...blockRecord, [field]: value }
+          }))
+          return changed ? { ...record, content: blocks } : message
+        }))
+      }
+    } else if (event.kind === 'invocation-completed' && 'outputText' in payload) {
+      hydrated.outputText = await hydrateTaggedText(payload.outputText)
+    }
+    const result = { ...event, payload: hydrated }
+    validateHistoryBatch([result])
+    return result
+  }
+
   private readSourceTruthSync(descriptor: SpillDescriptor): string {
     // History's recovery and provider-context contracts are synchronous; verify each referenced object before exposing it.
     return this.spillStore!.readSourceTruthSync(descriptor)
@@ -1708,15 +1992,16 @@ export class SqliteAgentHistory implements HistoryPort {
     }
   }
 
-  /** Rebuilds completed UI tool records only from a valid, fully settled canonical invocation. */
-  readCompletedToolCallsForSession(invocationId: string, sessionId: string, expectedTurnId: string): import('../../src/shared/domainTypes').ToolCallRecord[] | undefined {
+  /** Rebuilds tool records only from a valid canonical stream. */
+  readCompletedToolCallsForSession(invocationId: string, sessionId: string, expectedTurnId: string,
+    options: Readonly<{ allowIncomplete?: boolean }> = {}): import('../../src/shared/domainTypes').ToolCallRecord[] | undefined {
     try {
       const snapshot = this.readSync(invocationId)
       const stream = this.conn.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get(snapshot.invocationId) as { session_id: string | null } | undefined
       const terminal = snapshot.events.at(-1)
       if (!stream || (stream.session_id !== null && stream.session_id !== sessionId) ||
-        terminal?.kind !== 'invocation-completed' || !terminal.payload || typeof terminal.payload !== 'object' ||
-        (terminal.payload as { status?: unknown }).status !== 'completed' || snapshot.events.some((event) => event.turnId !== expectedTurnId)) return undefined
+        (!options.allowIncomplete && (terminal?.kind !== 'invocation-completed' || !terminal.payload || typeof terminal.payload !== 'object' ||
+          (terminal.payload as { status?: unknown }).status !== 'completed')) || snapshot.events.some((event) => event.turnId !== expectedTurnId)) return undefined
       const calls = new Map<string, import('../../src/shared/domainTypes').ToolCallRecord>()
       const approvalWaits = new Map<string, { approval: NonNullable<import('../../src/shared/domainTypes').ToolCallRecord['approval']>; reasonCode: string }>()
       for (const event of snapshot.events) {
@@ -1785,6 +2070,10 @@ export class SqliteAgentHistory implements HistoryPort {
             const rawResult = payload.result
             const result = rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult) ? structuredClone(rawResult as Record<string, unknown>) : undefined
             if (result && 'success' in result && (typeof result.success !== 'boolean' || result.success !== payload.success)) return undefined
+            const executionOutcome = ['succeeded', 'known-failure', 'unknown-after-dispatch', 'not-dispatched'].includes(String(payload.executionOutcome))
+              ? payload.executionOutcome as 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched'
+              : undefined
+            if (result && executionOutcome && result.executionOutcome === undefined) result.executionOutcome = executionOutcome
             existing.status = payload.success === true ? 'completed' : 'failed'
             existing.result = result && typeof result.success === 'boolean'
               ? result as unknown as import('../../src/shared/domainTypes').ToolCallResultPersisted
@@ -1805,12 +2094,16 @@ export class SqliteAgentHistory implements HistoryPort {
           }
         }
       }
-      return [...calls.values()].every((call) => call.status === 'completed' || call.status === 'failed' || call.status === 'rejected')
-        ? [...calls.values()]
-        : undefined
+      const recovered = [...calls.values()]
+      return options.allowIncomplete || recovered.every((call) => call.status === 'completed' || call.status === 'failed' || call.status === 'rejected')
+        ? recovered : undefined
     } catch {
       return undefined
     }
+  }
+
+  readRecoverableToolCallsForSession(invocationId: string, sessionId: string, expectedTurnId: string): import('../../src/shared/domainTypes').ToolCallRecord[] | undefined {
+    return this.readCompletedToolCallsForSession(invocationId, sessionId, expectedTurnId, { allowIncomplete: true })
   }
 
   /** Persist fail-safe interruption markers for non-terminal invocation streams after process restart. */

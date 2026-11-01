@@ -39,6 +39,7 @@ import {
   MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL,
   MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
   MIGRATION_V114_INVOCATION_PENDING_VIEWS_RETIREMENT_SQL,
+  MIGRATION_V120_SESSION_LEDGER_CANONICAL_READ_VERSION_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SESSION_TRIGGERS_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_HISTORY_TRIGGERS_SQL,
@@ -2368,6 +2369,36 @@ export function runMigrations(conn: DatabaseSync): void {
       conn.exec(MIGRATION_V117_SESSION_BODY_LOCATOR_REJECTION_SQL)
     }
     version = 117
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v117 → v118: reserve nullable per-stream transition-state columns. Existing streams
+  // remain explicitly unprepared until the bounded recovery helper validates their history.
+  if (version === 117) runInTransaction(conn, () => {
+    if (hasTable(conn, 'agent_history_streams')) {
+      if (!hasColumn(conn, 'agent_history_streams', 'transition_state_version')) {
+        conn.exec('ALTER TABLE agent_history_streams ADD COLUMN transition_state_version INTEGER')
+      }
+      if (!hasColumn(conn, 'agent_history_streams', 'transition_state_json')) {
+        conn.exec('ALTER TABLE agent_history_streams ADD COLUMN transition_state_json TEXT')
+      }
+    }
+    version = 118
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v118 → v119: store protocol 2 context selection separately from legacy full snapshots.
+  if (version === 118) runInTransaction(conn, () => {
+    if (hasTable(conn, 'session_transcript_entries') && !hasColumn(conn, 'session_transcript_entries', 'context_selection_json')) {
+      conn.exec('ALTER TABLE session_transcript_entries ADD COLUMN context_selection_json TEXT')
+    }
+    version = 119
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v119 → v120: legacy compatibility is retired independently for each stable location.
+  if (version === 119) runInTransaction(conn, () => {
+    if (hasTable(conn, 'session_ledger_projection_state') && !hasColumn(conn, 'session_ledger_projection_state', 'canonical_read_version')) {
+      conn.exec(MIGRATION_V120_SESSION_LEDGER_CANONICAL_READ_VERSION_SQL)
+    }
+    version = 120
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

@@ -171,9 +171,9 @@ describe('session storage module graph rules', () => {
     expect(findSessionStorageModuleViolations(file, source)).toEqual([])
   })
 
-  it('keeps startup ledger repair mechanics behind the SQLite History recovery host', () => {
+  it('keeps startup recovery mechanics out of the main process composition', () => {
     const main = readFileSync(path.resolve('electron/main.ts'), 'utf8')
-    expect(main).toContain('recoverInterruptedInvocationsWithLedger')
+    expect(main).not.toContain('recoverInterruptedInvocationsWithLedger')
     for (const implementationDetail of [
       'ensureCompactionTransaction', 'ensureRequestProjectionEvents', 'ensureRequestRetryEvent',
       'ensureRequestUsageEvent', 'ensureToolCallEvent', 'ensureToolResultEvent', 'reconcileInterruptedSessionEventLedger',
@@ -181,14 +181,12 @@ describe('session storage module graph rules', () => {
     ]) expect(main, implementationDetail).not.toContain(implementationDetail)
   })
 
-  it('runs the History recovery phase through SessionRecoveryPort before turn snapshot recovery', () => {
+  it('does not gate startup or unrelated sessions on global History and transcript recovery', () => {
     const main = readFileSync(path.resolve('electron/main.ts'), 'utf8')
-    const historyPhase = main.indexOf('sessionStorage.recovery.recoverHistory()')
-    const turnRuntime = main.indexOf('turnRuntime = createSessionTurnRuntime(')
-    const dependentRecovery = main.indexOf('sessionStorage.recovery.recover()')
-    expect(historyPhase).toBeGreaterThanOrEqual(0)
-    expect(turnRuntime).toBeGreaterThan(historyPhase)
-    expect(dependentRecovery).toBeGreaterThan(turnRuntime)
+    expect(main).not.toContain('sessionStorage.recovery.recoverHistory()')
+    expect(main).not.toContain('sessionStorage.recovery.recover()')
+    expect(main).not.toContain('cleanupPersistedOrphansOnStartup(')
+    expect(main).not.toContain('cleanupStreamingResiduesOnStartup(')
   })
 
   it('keeps MCP capability handlers on the injected configuration port', () => {

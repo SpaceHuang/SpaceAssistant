@@ -141,6 +141,7 @@ import * as runShellExecutor from '../tools/runShellExecutor'
 import { resolveAutomationRunOutputDir } from './taskOutputDirectory'
 import { getSession } from '../database/operations'
 import { getDbConnection } from '../database'
+import { readSessionTranscript } from '../database/sessionTranscript'
 import { getUsageStepFactsForTurn, getUsageTurnFact } from '../database/operations'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from '../sessionEvents'
@@ -822,8 +823,13 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(turn.sessionId))
         .toEqual({ status: 'commit_uncertain' })
     } else {
-      expect(conn.prepare('SELECT outcome FROM session_transcript_entries WHERE session_id=? AND turn_id=?').get(turn.sessionId, turn.turnId))
-        .toEqual({ outcome: 'failed' })
+      const receipt = conn.prepare('SELECT outcome,next_version FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+        .get(turn.sessionId, turn.turnId) as { outcome: string; next_version: number }
+      expect(receipt.outcome).toBe('failed')
+      expect(readSessionTranscript(db, turn.sessionId, { version: receipt.next_version }))
+        .toMatchObject({ lastTurnId: turn.turnId, status: 'ready', messages: expect.any(Array) })
+      expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+        .get(turn.sessionId, turn.turnId)).toEqual({ count: 0 })
     }
     conn.exec('DROP TRIGGER fail_transcript_checkpoint_update')
   })

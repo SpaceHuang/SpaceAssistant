@@ -1,7 +1,7 @@
 import type { ContextPort, ContextScope, SessionContextAdapter } from '../../../packages/agent-sdk/src/context'
 import type { SessionCommands, SessionQueries } from '../public/ports'
 import type { SessionExecutionStore } from '../public/execution'
-import type { SessionAvailabilityPort, SessionRecoveryPort } from '../application/ports'
+import type { SessionAvailabilityPort } from '../application/ports'
 import type { CompactionReplay } from '../../../src/shared/compactionEvents'
 import type { CanonicalContextMeterEvent, PreparedChatBodyView } from '../public/model'
 import type { ProjectionPreparationRequest } from '../public/ports'
@@ -126,7 +126,6 @@ export interface SessionStorage {
   readonly commands: SessionCommands
   readonly execution: SessionExecutionStore
   readonly contexts: SessionContextStoragePort
-  readonly recovery: SessionRecoveryPort
   readonly availability: SessionAvailabilityPort
   readonly cleanup: SessionCleanupPort
   readonly projectionMigration: SessionProjectionMigrationPort

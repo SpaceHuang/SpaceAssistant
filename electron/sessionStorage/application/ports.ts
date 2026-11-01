@@ -39,16 +39,10 @@ export interface ProjectionStateStore {
   invalidateInTransaction(input: Readonly<{ sessionId: string; scopeKey: string; sessionGeneration: string; now: number }>): ProjectionStateRecord | null
 }
 
-export type SessionRecoveryReadiness = Readonly<{
-  readable: boolean
-  executable: boolean
-  reason?: 'recovery-pending' | 'content-unavailable' | 'execution-blocked' | 'commit-uncertain'
-}>
 export type SessionAvailabilityTask = Readonly<{ taskId: string; category: string; status: 'idle' | 'scheduled' | 'running' | 'paused' | 'failed' | 'completed' }>
 export type SessionAvailability = Readonly<{
-  globalFence: Readonly<{ state: 'pending' | 'ready' | 'degraded' | 'blocked'; source: Readonly<{ recoveryState: 'pending' | 'ready' | 'degraded' | 'blocked' }> }>
   content: Readonly<{ state: 'readable' | 'unavailable'; reason?: 'content-unavailable' | 'session-missing'; source: Readonly<{ sessionGeneration: string; messageRevision: number; authority: string }> }>
-  execution: Readonly<{ state: 'ready' | 'busy' | 'pending-recovery' | 'commit-uncertain' | 'blocked'; source: Readonly<{ sessionId: string; transcriptVersion: number; lastTurnId?: string }> }>
+  execution: Readonly<{ state: 'ready' | 'busy' | 'commit-uncertain' | 'blocked'; source: Readonly<{ sessionId: string; transcriptVersion: number; lastTurnId?: string }> }>
   ledger: Readonly<{
     state: 'ready' | 'degraded'
     readinessState: 'uninitialized' | 'initializing' | 'unknown' | 'checking' | 'ready' | 'dirty' | 'blocked'
@@ -59,24 +53,3 @@ export type SessionAvailability = Readonly<{
   maintenance: Readonly<{ state: 'available' | 'paused' | 'blocked'; tasks: readonly SessionAvailabilityTask[]; source: readonly Readonly<{ taskId: string; status: SessionAvailabilityTask['status'] }>[] }>
 }>
 export interface SessionAvailabilityPort { inspect(sessionId: string): SessionAvailability }
-export type SessionRecoveryReport = Readonly<{
-  status: 'ready' | 'degraded' | 'blocked'
-  history: Readonly<{ succeeded: boolean; interruptedCount: number; repairFailureCount: number; sessionFailures: readonly Readonly<{ sessionId: string; invocationId: string; capability: 'execution' | 'ledger'; failureClass: 'history-stream-corrupt' | 'ledger-repair-failed' | 'ledger-repair-pending' }>[] }>
-  snapshots: Readonly<{ restoredCount: number; skippedCanonicalUnavailableCount: number; missingAssistantCount: number }>
-  coordinator: Readonly<{ succeeded: boolean; recoveredCount: number }>
-  reconciliation:
-    | Readonly<{ status: 'skipped'; reason: 'history-recovery-incomplete' | 'turn-projection-recovery-incomplete' }>
-    | Readonly<{ status: 'completed'; releasedUnstarted: number; markedUncertain: number; repairedCheckpoints: number; reconciled: number }>
-  continuations: Readonly<{ interrupted: number; unknownSideEffect: number; settled: number }>
-  failures: readonly Readonly<{ stage: 'history' | 'snapshots' | 'coordinator' | 'reconciliation' | 'continuations'; error: Error; sessionId?: string; invocationId?: string }>[]
-}>
-export type SessionRecoveryHistoryResult = Readonly<{
-  history: Readonly<{ succeeded: boolean; interruptedCount: number; repairFailureCount: number; sessionFailures: readonly Readonly<{ sessionId: string; invocationId: string; capability: 'execution' | 'ledger'; failureClass: 'history-stream-corrupt' | 'ledger-repair-failed' | 'ledger-repair-pending' }>[] }>
-  failures: readonly Readonly<{ stage: 'history'; error: Error; sessionId?: string; invocationId?: string }>[]
-}>
-export interface SessionRecoveryPort {
-  recoverHistory(): Promise<SessionRecoveryHistoryResult>
-  recover(): Promise<SessionRecoveryReport>
-  inspectReadiness(sessionId: string): SessionRecoveryReadiness
-  inspectRecoveryStatus(): Readonly<{ state: 'pending' | 'ready' | 'degraded' | 'blocked' }>
-}

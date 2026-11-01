@@ -243,7 +243,7 @@ describe('MessageInput plus menu', () => {
       await act(async () => {
         resolveResult({ status: 'committed', compactionId: 'old-session-compaction', windowId: 'w1', outputSurfaceFingerprint: 'fp1' })
       })
-      expect(store.getState().chat.compactionMarkers).toEqual([])
+      expect(store.getState().chat.contextProjection).toBeNull()
     } finally {
       window.api.chatCompactSessionContext = original
     }

@@ -182,21 +182,18 @@ function normalizeSession(session: Session): Session {
 /** 列表视图（偏差 7）：all 全量（内部调用方）；user-visible 用户可见（排除 internal/hidden，含 section 分区行）。 */
 export type SessionListView = 'all' | 'user-visible'
 
-export function listSessions(db: AppDatabase, options?: { view?: SessionListView }): Session[] {
+export function listSessions(db: AppDatabase, options?: { view?: SessionListView; workDirProfileId?: string }): Session[] {
   const conn = getDbConnection(db)
   const view = options?.view ?? 'all'
-  const rows = (
-    view === 'user-visible'
-      ? conn
-          .prepare(
-            `SELECT * FROM sessions
-             WHERE ownership IS NOT NULL AND ownership != 'internal'
-               AND visibility IS NOT NULL AND visibility != 'hidden'
-             ORDER BY updated_at DESC`
-          )
-          .all()
-      : conn.prepare('SELECT * FROM sessions ORDER BY updated_at DESC').all()
-  ) as SessionRow[]
+  const predicates: string[] = []
+  const params: string[] = []
+  if (view === 'user-visible') predicates.push("ownership IS NOT NULL AND ownership != 'internal' AND visibility IS NOT NULL AND visibility != 'hidden'")
+  if (options?.workDirProfileId !== undefined) {
+    predicates.push('work_dir_profile_id = ?')
+    params.push(options.workDirProfileId)
+  }
+  const where = predicates.length ? ` WHERE ${predicates.join(' AND ')}` : ''
+  const rows = conn.prepare(`SELECT * FROM sessions${where} ORDER BY updated_at DESC`).all(...params) as SessionRow[]
   return rows.map(rowToSession)
 }
 
@@ -309,8 +306,8 @@ export function createSession(
     if (workDir) {
       const identity = sessionLedgerLocationIdentity({ workDir, sessionId: session.id, createdAt: session.createdAt })
       conn.prepare(`INSERT INTO session_ledger_projection_state(
-        ledger_location_key,work_dir_identity,created_at,session_id,session_generation,origin,state,bootstrap_id,updated_at)
-        VALUES(?,?,?, ?,?,'new_location','uninitialized',?,?)`).run(
+        ledger_location_key,work_dir_identity,created_at,session_id,session_generation,origin,state,bootstrap_id,canonical_read_version,updated_at)
+        VALUES(?,?,?, ?,?,'new_location','uninitialized',?,1,?)`).run(
         identity.key, identity.workDirIdentity, session.createdAt, session.id, session.generation, randomUUID(), now
       )
     }
@@ -880,6 +877,13 @@ export function getMessageSkeleton(db: AppDatabase, messageId: string): StoredMe
   return row ? withoutMessageBody(rowToStoredMessage(row)) : undefined
 }
 
+export function getLatestMessageSkeleton(db: AppDatabase, sessionId: string, excludeMessageId?: string): StoredMessageSkeleton | undefined {
+  const row = getDbConnection(db).prepare(`SELECT id, session_id, role, '' AS content, tool_use, tool_calls, thinking,
+    content_segments, skill_hints, attachments, images_delivered_to_api, status, schema_version, timestamp, sequence
+    FROM messages WHERE session_id=? AND (? IS NULL OR id!=?) ORDER BY sequence DESC LIMIT 1`).get(sessionId, excludeMessageId ?? null, excludeMessageId ?? null) as MessageRow | undefined
+  return row ? withoutMessageBody(rowToStoredMessage(row)) : undefined
+}
+
 export type QueueInputReceipt = {
   sessionId: string; requestId: string; fingerprint: string; queuedMessageId?: string; turnId?: string; state: string
   queueScope?: QueueScope
@@ -1094,9 +1098,15 @@ export function failConfiguringTurn(db: AppDatabase, turnId: string, version: nu
   return changed
 }
 
-export function listPersistedTurns(db: AppDatabase, state?: string): PersistedTurn[] {
+export function listPersistedTurns(db: AppDatabase, state?: string, sessionId?: string): PersistedTurn[] {
   const conn = getDbConnection(db)
-  const rows = (state == null ? conn.prepare(`SELECT ${TURN_SELECT} FROM turns ORDER BY created_at ASC`).all() : conn.prepare(`SELECT ${TURN_SELECT} FROM turns WHERE state = ? ORDER BY created_at ASC`).all(state)) as unknown as Array<PersistedTurnRow & { excludeMessageIdsJson?: string; executionConfigJson?: string }>
+  const rows = (sessionId !== undefined
+    ? state == null
+      ? conn.prepare(`SELECT ${TURN_SELECT} FROM turns WHERE session_id = ? ORDER BY created_at ASC`).all(sessionId)
+      : conn.prepare(`SELECT ${TURN_SELECT} FROM turns WHERE state = ? AND session_id = ? ORDER BY created_at ASC`).all(state, sessionId)
+    : state == null
+      ? conn.prepare(`SELECT ${TURN_SELECT} FROM turns ORDER BY created_at ASC`).all()
+      : conn.prepare(`SELECT ${TURN_SELECT} FROM turns WHERE state = ? ORDER BY created_at ASC`).all(state)) as unknown as Array<PersistedTurnRow & { excludeMessageIdsJson?: string; executionConfigJson?: string }>
   return rows.map(decodeTurnContextRow)
 }
 
@@ -1179,6 +1189,7 @@ export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantM
   completedOutputText?: string
   completedUsage?: unknown
   completedToolCalls?: Message['toolCalls']
+  recoveredToolCalls?: Message['toolCalls']
 } = {}): boolean {
   const conn = getDbConnection(db)
   return runInTransaction(conn, () => {
@@ -1191,7 +1202,22 @@ export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantM
     // only when the caller supplied the fully reconciled History tool-call snapshot.
     if (options.completed && options.completedToolCalls === undefined &&
       assistant?.toolCalls?.some((tool) => ['calling', 'confirming', 'executing'].includes(tool.status))) return false
-    const interruptedToolCalls = assistant?.toolCalls?.map((tool) => {
+    const historyCalls = options.recoveredToolCalls
+    const toolCallsForRecovery = historyCalls ? [
+      ...historyCalls.map((canonical) => {
+        const existing = assistant?.toolCalls?.find((tool) => tool.id === canonical.id)
+        if (!existing) return canonical
+        return { ...existing, ...canonical,
+          ...(existing.riskLevel !== undefined ? { riskLevel: existing.riskLevel } : {}),
+          ...(existing.confirmedAt !== undefined ? { confirmedAt: existing.confirmedAt } : {}),
+          ...(existing.completedAt !== undefined && canonical.completedAt === undefined ? { completedAt: existing.completedAt } : {}),
+          ...(canonical.approval ?? existing.approval ? { approval: canonical.approval ?? existing.approval } : {}) }
+      }),
+      ...(assistant?.toolCalls ?? []).filter((existing) => !historyCalls.some((canonical) => canonical.id === existing.id) &&
+        (Boolean(existing.processPid && existing.processOwnerToken) ||
+          (existing.toolName === 'run_shell' && (existing.status === 'executing' || existing.result?.executionOutcome === 'unknown-after-dispatch'))))
+    ] : assistant?.toolCalls
+    const interruptedToolCalls = toolCallsForRecovery?.map((tool) => {
       if (options.completed) return tool
       if (tool.status === 'completed' || tool.status === 'failed' || tool.status === 'rejected') return tool
       return { ...tool, status: 'failed' as const, interrupted: true, completedAt: Date.now(), result: { success: false, error: '工具调用因应用退出中断' } }
@@ -1239,15 +1265,19 @@ export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantM
 }
 
 /** 启动恢复使用：列出所有尚未终止的 assistant 消息。 */
-export function listStreamingAssistantMessages(db: AppDatabase): Message[] {
+export function listStreamingAssistantMessages(db: AppDatabase, sessionId?: string): Message[] {
   const conn = getDbConnection(db)
-  const rows = conn.prepare("SELECT * FROM messages WHERE role = 'assistant' AND status = 'streaming' ORDER BY timestamp ASC").all() as MessageRow[]
+  const rows = (sessionId === undefined
+    ? conn.prepare("SELECT * FROM messages WHERE role = 'assistant' AND status = 'streaming' ORDER BY timestamp ASC").all()
+    : conn.prepare("SELECT * FROM messages WHERE session_id = ? AND role = 'assistant' AND status = 'streaming' ORDER BY timestamp ASC").all(sessionId)) as MessageRow[]
   return rows.map(rowToStoredMessage)
 }
 
-export function listRecoverableResidues(db: AppDatabase): Array<{ message: Message; turnId?: string; turnOutcome?: string }> {
+export function listRecoverableResidues(db: AppDatabase, sessionId?: string): Array<{ message: Message; turnId?: string; turnOutcome?: string }> {
   const conn = getDbConnection(db)
-  const rows = conn.prepare("SELECT m.*, t.turn_id AS residue_turn_id, t.outcome AS residue_outcome FROM messages m LEFT JOIN turns t ON t.assistant_message_id = m.id WHERE m.role = 'assistant' AND m.status = 'streaming' ORDER BY m.timestamp ASC").all() as Array<MessageRow & { residue_turn_id?: string; residue_outcome?: string }>
+  const rows = (sessionId === undefined
+    ? conn.prepare("SELECT m.*, t.turn_id AS residue_turn_id, t.outcome AS residue_outcome FROM messages m LEFT JOIN turns t ON t.assistant_message_id = m.id WHERE m.role = 'assistant' AND m.status = 'streaming' ORDER BY m.timestamp ASC").all()
+    : conn.prepare("SELECT m.*, t.turn_id AS residue_turn_id, t.outcome AS residue_outcome FROM messages m LEFT JOIN turns t ON t.assistant_message_id = m.id WHERE m.session_id = ? AND m.role = 'assistant' AND m.status = 'streaming' ORDER BY m.timestamp ASC").all(sessionId)) as Array<MessageRow & { residue_turn_id?: string; residue_outcome?: string }>
   return rows.map((row) => ({ message: rowToStoredMessage(row), ...(row.residue_turn_id ? { turnId: row.residue_turn_id } : {}), ...(row.residue_outcome ? { turnOutcome: row.residue_outcome } : {}) }))
 }
 
@@ -1555,6 +1585,14 @@ export type ContextHistoryDbBaseline = {
   entries: ContextHistoryDbRow[]
 }
 
+export type ContextHistorySummarySourceRow = Pick<MessageRow, 'id' | 'role' | 'thinking' | 'attachments' | 'sequence'>
+
+/** Read only the fields needed to build the usage-ring summary; callers may dispatch reduction to the projection worker budget. */
+export function getContextHistorySummarySourceRows(db: AppDatabase, sessionId: string): ContextHistorySummarySourceRow[] {
+  return getDbConnection(db).prepare(`SELECT id,role,thinking,attachments,sequence
+    FROM messages WHERE session_id=? ORDER BY sequence ASC`).all(sessionId) as ContextHistorySummarySourceRow[]
+}
+
 /**
  * 上下文环 DB 基线：扫描全会话，仅返回 imageTokens>0 或 thinkingTokens>0 的轻量行。
  * 不得复用 API context「最早 500 条」范围。
@@ -1563,15 +1601,7 @@ export function getContextHistorySummaryBaseline(
   db: AppDatabase,
   sessionId: string
 ): ContextHistoryDbBaseline {
-  const conn = getDbConnection(db)
-  const rows = conn
-    .prepare(
-      `SELECT id, role, thinking, attachments, sequence
-       FROM messages
-       WHERE session_id = ?
-       ORDER BY sequence ASC`
-    )
-    .all(sessionId) as Array<Pick<MessageRow, 'id' | 'role' | 'thinking' | 'attachments' | 'sequence'>>
+  const rows = getContextHistorySummarySourceRows(db, sessionId)
 
   const entries: ContextHistoryDbRow[] = []
   for (const row of rows) {
@@ -1674,6 +1704,8 @@ export function reorderQueuedUserMessagesInScope(
       return { ok: true, entries: rows.map((row) => ({ message: rowToStoredMessage(row), sequence: row.sequence })) }
     }
 
+    const previousLastId = (conn.prepare('SELECT id FROM messages WHERE session_id=? ORDER BY sequence DESC LIMIT 1')
+      .get(input.sessionId) as { id?: string } | undefined)?.id
     const maxSequence = (conn.prepare('SELECT COALESCE(MAX(sequence), -1) AS sequence FROM messages WHERE session_id = ?').get(input.sessionId) as { sequence: number }).sequence
     const updateSequence = conn.prepare("UPDATE messages SET sequence = ? WHERE id = ? AND session_id = ? AND queue_scope = ? AND status = 'queued'")
     rows.forEach((row, index) => updateSequence.run(maxSequence + index + 1, row.id, input.sessionId, serializedScope))
@@ -1684,8 +1716,12 @@ export function reorderQueuedUserMessagesInScope(
       const row = conn.prepare('SELECT * FROM messages WHERE id = ? AND session_id = ?').get(messageId, input.sessionId) as MessageRow
       return { message: rowToStoredMessage(row), sequence: row.sequence }
     })
-    const lastMessage = conn.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1').get(input.sessionId) as MessageRow | undefined
-    updateSession(db, input.sessionId, { preview: lastMessage ? contentForSessionPreview(db, lastMessage).slice(0, 120) : '' })
+    const lastMessage = conn.prepare('SELECT id FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1').get(input.sessionId) as { id?: string } | undefined
+    if (lastMessage?.id !== previousLastId) {
+      const queuedLast = rows.find((row) => row.id === lastMessage?.id)
+      const nextPreview = queuedLast ? contentForSessionPreview(db, queuedLast).slice(0, 120) : ''
+      updateSession(db, input.sessionId, { preview: nextPreview })
+    }
     bumpScopeVersionInTx(db, `session:${input.sessionId}:messages`)
     return { ok: true, entries }
   })
@@ -1793,15 +1829,17 @@ export function getMessageSequence(db: AppDatabase, sessionId: string, messageId
 
 export function deleteQueuedUserMessage(
   db: AppDatabase,
-  messageId: string
+  messageId: string,
+  previewCandidate?: { messageId: string; content: string; source: { sessionGeneration: string; messageRevision: number; sequence: number; role: string; timestamp: number; status: string } }
 ): { ok: true; sessionId: string } | { ok: false; error: string } {
-  return desktopQueueCompatibility.delete(db, messageId)
+  return desktopQueueCompatibility.delete(db, messageId, previewCandidate)
 }
 
 export function deleteQueuedUserMessageInScope(
   db: AppDatabase,
   messageId: string,
-  queueScope: QueueScope
+  queueScope: QueueScope,
+  previewCandidate?: { messageId: string; content: string; source: { sessionGeneration: string; messageRevision: number; sequence: number; role: string; timestamp: number; status: string } }
 ): { ok: true; sessionId: string } | { ok: false; error: string } {
   const conn = getDbConnection(db)
   const serializedScope = serializeQueueScope(queueScope)
@@ -1810,25 +1848,71 @@ export function deleteQueuedUserMessageInScope(
   if (row.role !== 'user' || row.status !== 'queued') return { ok: false, error: 'message_not_queued' }
 
   const sessionId = row.session_id
-  return runInTransaction(conn, () => {
+  if (previewCandidate) {
+    const current = conn.prepare(`SELECT m.role,m.timestamp,m.status,m.sequence,cutover.session_generation,cutover.message_revision,sessions.generation AS current_generation
+      FROM messages m JOIN session_message_content_cutover cutover ON cutover.session_id=m.session_id
+      JOIN sessions ON sessions.id=m.session_id WHERE m.id=? AND m.session_id=?`).get(previewCandidate.messageId, sessionId) as
+      { role: string; timestamp: number; status: string; sequence: number; session_generation: string; message_revision: number; current_generation: string } | undefined
+    const source = previewCandidate.source
+    const currentTail = getLatestMessageSkeleton(db, sessionId, messageId)
+    if (!current || !source || !currentTail || currentTail.id !== previewCandidate.messageId ||
+      current.session_generation !== current.current_generation || source.sessionGeneration !== current.session_generation ||
+      source.messageRevision !== current.message_revision || source.sequence !== current.sequence || source.role !== current.role ||
+      source.timestamp !== current.timestamp || source.status !== current.status || !['user', 'assistant'].includes(current.role) ||
+      !['sent', 'completed', 'failed', 'cancelled'].includes(current.status) || !Number.isSafeInteger(current.sequence)) {
+      return { ok: false, error: 'queue_changed' }
+    }
+  }
+  try {
+    return runInTransaction(conn, () => {
+    const revisionAtEntry = previewCandidate ? getSessionMessageRevisionSnapshot(db, sessionId) : undefined
+    const previousLastId = (conn.prepare('SELECT id FROM messages WHERE session_id=? ORDER BY sequence DESC LIMIT 1')
+      .get(sessionId) as { id?: string } | undefined)?.id
+    const nextCandidate = previewCandidate
+    if (nextCandidate) {
+      const transactionTail = getLatestMessageSkeleton(db, sessionId, messageId)
+      const source = nextCandidate.source
+      const current = conn.prepare(`SELECT m.role,m.timestamp,m.status,m.sequence,cutover.session_generation,cutover.message_revision,sessions.generation AS current_generation
+        FROM messages m JOIN session_message_content_cutover cutover ON cutover.session_id=m.session_id
+        JOIN sessions ON sessions.id=m.session_id WHERE m.id=? AND m.session_id=?`).get(nextCandidate.messageId, sessionId) as
+        { role: string; timestamp: number; status: string; sequence: number; session_generation: string; message_revision: number; current_generation: string } | undefined
+      const storage = conn.prepare('SELECT content_storage_state FROM messages WHERE id=? AND session_id=?').get(nextCandidate.messageId, sessionId) as { content_storage_state: string } | undefined
+      if (transactionTail?.id !== nextCandidate.messageId || !current || !source || storage?.content_storage_state !== 'canonical-backed-only' ||
+        current.session_generation !== current.current_generation || source.sessionGeneration !== current.session_generation ||
+        source.messageRevision !== current.message_revision || revisionAtEntry?.messageRevision !== current.message_revision || source.sequence !== current.sequence || source.role !== current.role ||
+        source.timestamp !== current.timestamp || source.status !== current.status) {
+        throw new Error('QUEUED_PREVIEW_SOURCE_CHANGED')
+      }
+    }
     const receipt = conn.prepare('SELECT session_id, request_id FROM queue_input_requests WHERE queued_message_id = ? AND queue_scope = ?').get(messageId, serializedScope) as { session_id: string; request_id: string } | undefined
     if (receipt) updateQueueInputReceiptStateInScope(db, receipt.session_id, receipt.request_id, 'cancelled', queueScope)
     conn.prepare('DELETE FROM messages WHERE id = ?').run(messageId)
 
-    const last = conn
-      .prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1')
-      .get(sessionId) as { content: string } | undefined
+    const lastId = (conn.prepare('SELECT id FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1')
+      .get(sessionId) as { id?: string } | undefined)?.id
     const countRow = conn
       .prepare('SELECT COUNT(*) AS c FROM messages WHERE session_id = ?')
       .get(sessionId) as { c: number }
 
-    updateSession(db, sessionId, {
-      messageCount: countRow.c,
-      preview: last ? contentForSessionPreview(db, last as MessageRow).slice(0, 120) : ''
-    })
+    const patch: Partial<Pick<Session, 'messageCount' | 'preview'>> = { messageCount: countRow.c }
+    if (lastId !== previousLastId) {
+      const last = lastId ? conn.prepare('SELECT * FROM messages WHERE id=? AND session_id=?').get(lastId, sessionId) as MessageRow | undefined : undefined
+      if (last && previewCandidate?.messageId === last.id) {
+        patch.preview = previewCandidate.content.slice(0, 120)
+      } else {
+        patch.preview = last ? contentForSessionPreview(db, last).slice(0, 120) : ''
+      }
+    }
+    updateSession(db, sessionId, patch)
     bumpScopeVersionInTx(db, `session:${sessionId}:messages`)
     return { ok: true, sessionId }
-  })
+    })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'QUEUED_PREVIEW_SOURCE_CHANGED') {
+      return { ok: false, error: 'queue_changed' }
+    }
+    throw error
+  }
 }
 
 export function updateQueuedUserMessageContentInScope(
@@ -2541,8 +2625,8 @@ export const desktopQueueCompatibility = Object.freeze({
     reorderQueuedUserMessagesInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE }),
   getNext: (db: AppDatabase, sessionId: string) =>
     getNextQueuedMessageInScope(db, sessionId, DESKTOP_QUEUE_SCOPE),
-  delete: (db: AppDatabase, messageId: string) =>
-    deleteQueuedUserMessageInScope(db, messageId, DESKTOP_QUEUE_SCOPE),
+  delete: (db: AppDatabase, messageId: string, previewCandidate?: { messageId: string; content: string; source: { sessionGeneration: string; messageRevision: number; sequence: number; role: string; timestamp: number; status: string } }) =>
+    deleteQueuedUserMessageInScope(db, messageId, DESKTOP_QUEUE_SCOPE, previewCandidate),
   updateContent: (db: AppDatabase, input: { sessionId: string; messageId: string; content: string }) =>
     updateQueuedUserMessageContentInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE })
 })

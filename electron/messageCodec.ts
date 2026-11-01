@@ -4,6 +4,8 @@ import { logAgentEvent } from './agentLogger/agentLogger'
 import { createCorruptedToolCallPlaceholder } from './database/streamingCleanup'
 import type { McpResultDisplay } from '../src/shared/mcpToolResultDisplay'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
+import { deserializeAttachmentsFromDb, deserializeThinkingFromDb } from '../src/shared/sessionMessageMetadataCodec'
+export { deserializeAttachmentsFromDb, deserializeThinkingFromDb } from '../src/shared/sessionMessageMetadataCodec'
 
 /** SQLite / JSON 列用的序列化（复杂字段 JSON.stringify） */
 export function serializeToolUseForDb(tool: ToolUseData | undefined): string | null {
@@ -68,15 +70,6 @@ export function serializeThinkingForDb(t: ThinkingData | undefined): string | nu
   })
 }
 
-export function deserializeThinkingFromDb(raw: string | null): ThinkingData | undefined {
-  if (!raw) return undefined
-  const o = JSON.parse(raw) as ThinkingData & { metadata?: string }
-  return {
-    ...o,
-    metadata: o.metadata && typeof o.metadata === 'string' ? JSON.parse(o.metadata) : o.metadata
-  }
-}
-
 export function serializeContentSegmentsForDb(segments: ContentSegment[] | undefined): string | null {
   if (!segments?.length) return null
   return JSON.stringify(segments)
@@ -122,7 +115,7 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
   if (!raw) return undefined
   try {
     const arr = JSON.parse(raw) as Array<
-      ToolCallRecord & { input: string; result?: { success: boolean; data?: string; error?: string; auditRef?: string; decisionRuleId?: string; userMessage?: string; dependencyRecovery?: ToolCallResultPersisted['dependencyRecovery']; autoApprovedWrite?: ToolCallResultPersisted['autoApprovedWrite']; displayData?: McpResultDisplay; notExecuted?: true; notExecutedReason?: ToolCallResultPersisted['notExecutedReason'] } }
+      ToolCallRecord & { input: string; result?: { success: boolean; data?: string; error?: string; executionOutcome?: ToolCallResultPersisted['executionOutcome']; executorEntry?: ToolCallResultPersisted['executorEntry']; executionErrorCode?: string; invocationDisposition?: ToolCallResultPersisted['invocationDisposition']; auditRef?: string; decisionRuleId?: string; userMessage?: string; dependencyRecovery?: ToolCallResultPersisted['dependencyRecovery']; autoApprovedWrite?: ToolCallResultPersisted['autoApprovedWrite']; displayData?: McpResultDisplay; notExecuted?: true; notExecutedReason?: ToolCallResultPersisted['notExecutedReason'] } }
     >
     if (!Array.isArray(arr)) return undefined
     return arr.map((c) => ({
@@ -136,6 +129,10 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
             success: c.result.success,
             error: c.result.error,
             data: c.result.data !== undefined ? JSON.parse(c.result.data) : undefined,
+            ...(c.result.executionOutcome ? { executionOutcome: c.result.executionOutcome } : {}),
+            ...(c.result.executorEntry ? { executorEntry: c.result.executorEntry } : {}),
+            ...(c.result.executionErrorCode ? { executionErrorCode: c.result.executionErrorCode } : {}),
+            ...(c.result.invocationDisposition ? { invocationDisposition: c.result.invocationDisposition } : {}),
             ...(c.result.displayData ? { displayData: c.result.displayData } : {}),
             ...(typeof c.result.auditRef === 'string' ? { auditRef: c.result.auditRef } : {}),
             ...(typeof c.result.decisionRuleId === 'string' ? { decisionRuleId: c.result.decisionRuleId } : {}),
@@ -202,16 +199,6 @@ export function deserializeSkillHintsFromDb(raw: string | null | undefined): Ski
 export function serializeAttachmentsForDb(attachments: Message['attachments']): string | null {
   if (!attachments?.length) return null
   return JSON.stringify(attachments)
-}
-
-export function deserializeAttachmentsFromDb(raw: string | null | undefined): Message['attachments'] {
-  if (!raw) return undefined
-  try {
-    const arr = JSON.parse(raw) as Message['attachments']
-    return Array.isArray(arr) ? arr : undefined
-  } catch {
-    return undefined
-  }
 }
 
 export function rowToMessage(row: {

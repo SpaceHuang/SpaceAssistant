@@ -196,7 +196,8 @@ describe('agent canonical history migration', () => {
       'refresh_history_recovery_work_for_event_update', 'refresh_history_recovery_work_for_event_delete'
     ]))
 
-    conn.prepare('INSERT INTO agent_history_streams VALUES(?,?,?,?)').run('new-invocation', 1, 1, 'new-session')
+    conn.prepare(`INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id)
+      VALUES(?,?,?,?)`).run('new-invocation', 1, 1, 'new-session')
     conn.prepare(`INSERT INTO agent_history_events(
       invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at
     ) VALUES(?,?,?,?,?,?,?,?,?)`)

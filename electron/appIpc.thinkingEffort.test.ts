@@ -119,10 +119,7 @@ function makeCtx(): AppIpcContext {
       consume: () => { throw new Error('unexpected turn event') }, terminal: () => undefined, retryCheckpoint: () => undefined
     } as unknown as NonNullable<AppIpcContext['turnRuntime']>,
     backup: {
-      schedule: vi.fn(),
-      flush: vi.fn(),
       backupImmediate: vi.fn(),
-      backupWithRetry: vi.fn(),
       deleteBackup: vi.fn(),
       deleteBackupWithRetry: vi.fn()
     } as unknown as AppIpcContext['backup'],

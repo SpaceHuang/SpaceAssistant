@@ -111,7 +111,7 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
         }
       })
     },
-    deleteQueuedMessage: (messageId) => deleteQueuedUserMessage(db, messageId),
+    deleteQueuedMessage: (messageId, previewCandidate) => deleteQueuedUserMessage(db, messageId, previewCandidate),
     editQueuedMessage: (input) => updateQueuedUserMessageContent(db, input),
     reorderQueuedMessages: (input) => reorderQueuedUserMessages(db, input),
     deleteSession: (sessionId) => { deleteSession(db, sessionId, { flush: false }) },

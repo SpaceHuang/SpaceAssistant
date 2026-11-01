@@ -1,0 +1,6263 @@
+{
+  "title": "SpaceAssistant",
+  "messageCount": 32,
+  "hasComposer": true,
+  "hasModelSelector": true,
+  "bodyTextLength": 1272,
+  "persistedContentVisible": true,
+  "reloadPersistenceVerified": true,
+  "windowReconnectionPersistenceVerified": true,
+  "sampleCount": 30,
+  "submitReplyP50Ms": 50,
+  "submitReplyP95Ms": 78,
+  "acceptedToDomP50Ms": 133,
+  "acceptedToDomP95Ms": 136,
+  "acceptedToDomMaxMs": 330,
+  "queuedEditSamples": 30,
+  "queuedEditP50Ms": 121,
+  "queuedEditP95Ms": 125,
+  "queuedEditMaxMs": 125,
+  "queuedEditSamplesMs": [
+    116,
+    102,
+    109,
+    105,
+    109,
+    107,
+    109,
+    108,
+    107,
+    107,
+    124,
+    124,
+    123,
+    123,
+    125,
+    119,
+    122,
+    125,
+    123,
+    124,
+    122,
+    121,
+    122,
+    122,
+    122,
+    125,
+    119,
+    123,
+    121,
+    119
+  ],
+  "turnDisplayFrameSamples": 30,
+  "rendererReceiveToTwoFramesP50Ms": 23.599999964237213,
+  "rendererReceiveToTwoFramesP95Ms": 31.5,
+  "rendererReceiveToTwoFramesMaxMs": 32.19999998807907,
+  "turnDisplayTargetRowChangedCount": 30,
+  "dispatchToTargetPaintP50Ms": 181,
+  "dispatchToTargetPaintP95Ms": 184,
+  "contextSummary": {
+    "samples": 30,
+    "rendererIpcRoundTripMs": {
+      "p50": 0.09999996423721313,
+      "p95": 2,
+      "max": 12.600000023841858
+    },
+    "entryCount": 0,
+    "resultBytes": 65
+  },
+  "submitWhileContextSummaryPendingMs": 133.80000001192093,
+  "sessionSwitchTraceLines": [
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436385921,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 7.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436385921,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436385921,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 2,
+      "requestInitiatedAtEpochMs": 1793436386166,
+      "outcome": "ok",
+      "pageSize": 2,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 15.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 2,
+      "requestInitiatedAtEpochMs": 1793436386166,
+      "outcome": "ok",
+      "pageSize": 2,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 3,
+      "requestInitiatedAtEpochMs": 1793436386610,
+      "outcome": "ok",
+      "pageSize": 4,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 3,
+      "requestInitiatedAtEpochMs": 1793436386610,
+      "outcome": "ok",
+      "pageSize": 4,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 4,
+      "requestInitiatedAtEpochMs": 1793436386798,
+      "outcome": "ok",
+      "pageSize": 6,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 4,
+      "requestInitiatedAtEpochMs": 1793436386798,
+      "outcome": "ok",
+      "pageSize": 6,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 5,
+      "requestInitiatedAtEpochMs": 1793436386987,
+      "outcome": "ok",
+      "pageSize": 8,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 17.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 5,
+      "requestInitiatedAtEpochMs": 1793436386987,
+      "outcome": "ok",
+      "pageSize": 8,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 4.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 6,
+      "requestInitiatedAtEpochMs": 1793436387169,
+      "outcome": "ok",
+      "pageSize": 10,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 6,
+      "requestInitiatedAtEpochMs": 1793436387169,
+      "outcome": "ok",
+      "pageSize": 10,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 7,
+      "requestInitiatedAtEpochMs": 1793436387359,
+      "outcome": "ok",
+      "pageSize": 12,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 7,
+      "requestInitiatedAtEpochMs": 1793436387359,
+      "outcome": "ok",
+      "pageSize": 12,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 8,
+      "requestInitiatedAtEpochMs": 1793436387548,
+      "outcome": "ok",
+      "pageSize": 14,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 20.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 8,
+      "requestInitiatedAtEpochMs": 1793436387548,
+      "outcome": "ok",
+      "pageSize": 14,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 9,
+      "requestInitiatedAtEpochMs": 1793436387737,
+      "outcome": "ok",
+      "pageSize": 16,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 9,
+      "requestInitiatedAtEpochMs": 1793436387737,
+      "outcome": "ok",
+      "pageSize": 16,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 10,
+      "requestInitiatedAtEpochMs": 1793436387925,
+      "outcome": "ok",
+      "pageSize": 18,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 10,
+      "requestInitiatedAtEpochMs": 1793436387925,
+      "outcome": "ok",
+      "pageSize": 18,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 11,
+      "requestInitiatedAtEpochMs": 1793436388114,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 11,
+      "requestInitiatedAtEpochMs": 1793436388114,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 12,
+      "requestInitiatedAtEpochMs": 1793436388305,
+      "outcome": "ok",
+      "pageSize": 22,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 12,
+      "requestInitiatedAtEpochMs": 1793436388305,
+      "outcome": "ok",
+      "pageSize": 22,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 13,
+      "requestInitiatedAtEpochMs": 1793436388493,
+      "outcome": "ok",
+      "pageSize": 24,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 13,
+      "requestInitiatedAtEpochMs": 1793436388493,
+      "outcome": "ok",
+      "pageSize": 24,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 14,
+      "requestInitiatedAtEpochMs": 1793436388684,
+      "outcome": "ok",
+      "pageSize": 26,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 14,
+      "requestInitiatedAtEpochMs": 1793436388684,
+      "outcome": "ok",
+      "pageSize": 26,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 15,
+      "requestInitiatedAtEpochMs": 1793436388872,
+      "outcome": "ok",
+      "pageSize": 28,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 15,
+      "requestInitiatedAtEpochMs": 1793436388872,
+      "outcome": "ok",
+      "pageSize": 28,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 16,
+      "requestInitiatedAtEpochMs": 1793436389060,
+      "outcome": "ok",
+      "pageSize": 30,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 16,
+      "requestInitiatedAtEpochMs": 1793436389060,
+      "outcome": "ok",
+      "pageSize": 30,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 17,
+      "requestInitiatedAtEpochMs": 1793436389250,
+      "outcome": "ok",
+      "pageSize": 32,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 17,
+      "requestInitiatedAtEpochMs": 1793436389250,
+      "outcome": "ok",
+      "pageSize": 32,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 18,
+      "requestInitiatedAtEpochMs": 1793436389438,
+      "outcome": "ok",
+      "pageSize": 34,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 18,
+      "requestInitiatedAtEpochMs": 1793436389438,
+      "outcome": "ok",
+      "pageSize": 34,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 19,
+      "requestInitiatedAtEpochMs": 1793436389625,
+      "outcome": "ok",
+      "pageSize": 36,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 19,
+      "requestInitiatedAtEpochMs": 1793436389625,
+      "outcome": "ok",
+      "pageSize": 36,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 20,
+      "requestInitiatedAtEpochMs": 1793436389816,
+      "outcome": "ok",
+      "pageSize": 38,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 20,
+      "requestInitiatedAtEpochMs": 1793436389816,
+      "outcome": "ok",
+      "pageSize": 38,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 21,
+      "requestInitiatedAtEpochMs": 1793436390004,
+      "outcome": "ok",
+      "pageSize": 40,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 21,
+      "requestInitiatedAtEpochMs": 1793436390004,
+      "outcome": "ok",
+      "pageSize": 40,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 22,
+      "requestInitiatedAtEpochMs": 1793436390192,
+      "outcome": "ok",
+      "pageSize": 42,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 22,
+      "requestInitiatedAtEpochMs": 1793436390192,
+      "outcome": "ok",
+      "pageSize": 42,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 23,
+      "requestInitiatedAtEpochMs": 1793436390381,
+      "outcome": "ok",
+      "pageSize": 44,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 23,
+      "requestInitiatedAtEpochMs": 1793436390381,
+      "outcome": "ok",
+      "pageSize": 44,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 24,
+      "requestInitiatedAtEpochMs": 1793436390568,
+      "outcome": "ok",
+      "pageSize": 46,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 17.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 24,
+      "requestInitiatedAtEpochMs": 1793436390568,
+      "outcome": "ok",
+      "pageSize": 46,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 25,
+      "requestInitiatedAtEpochMs": 1793436390752,
+      "outcome": "ok",
+      "pageSize": 48,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 19.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 25,
+      "requestInitiatedAtEpochMs": 1793436390752,
+      "outcome": "ok",
+      "pageSize": 48,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 26,
+      "requestInitiatedAtEpochMs": 1793436390937,
+      "outcome": "ok",
+      "pageSize": 50,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 26,
+      "requestInitiatedAtEpochMs": 1793436390937,
+      "outcome": "ok",
+      "pageSize": 50,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 27,
+      "requestInitiatedAtEpochMs": 1793436391125,
+      "outcome": "ok",
+      "pageSize": 52,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 27,
+      "requestInitiatedAtEpochMs": 1793436391125,
+      "outcome": "ok",
+      "pageSize": 52,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 28,
+      "requestInitiatedAtEpochMs": 1793436391316,
+      "outcome": "ok",
+      "pageSize": 54,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 28,
+      "requestInitiatedAtEpochMs": 1793436391316,
+      "outcome": "ok",
+      "pageSize": 54,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 29,
+      "requestInitiatedAtEpochMs": 1793436391504,
+      "outcome": "ok",
+      "pageSize": 56,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 20.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 29,
+      "requestInitiatedAtEpochMs": 1793436391504,
+      "outcome": "ok",
+      "pageSize": 56,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 30,
+      "requestInitiatedAtEpochMs": 1793436391691,
+      "outcome": "ok",
+      "pageSize": 58,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 30,
+      "requestInitiatedAtEpochMs": 1793436391691,
+      "outcome": "ok",
+      "pageSize": 58,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 31,
+      "requestInitiatedAtEpochMs": 1793436391880,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 31,
+      "requestInitiatedAtEpochMs": 1793436391880,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436392276,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 7.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 56.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436392276,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 3.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 4.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436392276,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 304,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 2,
+      "requestInitiatedAtEpochMs": 1793436394253,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 2,
+      "requestInitiatedAtEpochMs": 1793436394253,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 2,
+      "requestInitiatedAtEpochMs": 1793436394253,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 3,
+      "requestInitiatedAtEpochMs": 1793436394333,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 3,
+      "requestInitiatedAtEpochMs": 1793436394333,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 3,
+      "requestInitiatedAtEpochMs": 1793436394333,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 4,
+      "requestInitiatedAtEpochMs": 1793436394709,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 14.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 4,
+      "requestInitiatedAtEpochMs": 1793436394709,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 4,
+      "requestInitiatedAtEpochMs": 1793436394709,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 3.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 5,
+      "requestInitiatedAtEpochMs": 1793436394785,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 5,
+      "requestInitiatedAtEpochMs": 1793436394785,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 5,
+      "requestInitiatedAtEpochMs": 1793436394785,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 6,
+      "requestInitiatedAtEpochMs": 1793436395201,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 20.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 6,
+      "requestInitiatedAtEpochMs": 1793436395201,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 6,
+      "requestInitiatedAtEpochMs": 1793436395201,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 7,
+      "requestInitiatedAtEpochMs": 1793436395287,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 7,
+      "requestInitiatedAtEpochMs": 1793436395287,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 7,
+      "requestInitiatedAtEpochMs": 1793436395287,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 6.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 8,
+      "requestInitiatedAtEpochMs": 1793436395695,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 15.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 8,
+      "requestInitiatedAtEpochMs": 1793436395695,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 8,
+      "requestInitiatedAtEpochMs": 1793436395695,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 9,
+      "requestInitiatedAtEpochMs": 1793436395768,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 8.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 9,
+      "requestInitiatedAtEpochMs": 1793436395768,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 9,
+      "requestInitiatedAtEpochMs": 1793436395768,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 10,
+      "requestInitiatedAtEpochMs": 1793436396125,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 14.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 8.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 10,
+      "requestInitiatedAtEpochMs": 1793436396125,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 10,
+      "requestInitiatedAtEpochMs": 1793436396125,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 4.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 11,
+      "requestInitiatedAtEpochMs": 1793436396203,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 11,
+      "requestInitiatedAtEpochMs": 1793436396203,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 11,
+      "requestInitiatedAtEpochMs": 1793436396203,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 12,
+      "requestInitiatedAtEpochMs": 1793436396615,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 12,
+      "requestInitiatedAtEpochMs": 1793436396615,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 12,
+      "requestInitiatedAtEpochMs": 1793436396615,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 11.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 13,
+      "requestInitiatedAtEpochMs": 1793436396703,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 13,
+      "requestInitiatedAtEpochMs": 1793436396703,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 13,
+      "requestInitiatedAtEpochMs": 1793436396703,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 14,
+      "requestInitiatedAtEpochMs": 1793436397114,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 14.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 14,
+      "requestInitiatedAtEpochMs": 1793436397114,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 14,
+      "requestInitiatedAtEpochMs": 1793436397114,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 13.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 15,
+      "requestInitiatedAtEpochMs": 1793436397203,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 15,
+      "requestInitiatedAtEpochMs": 1793436397203,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 15,
+      "requestInitiatedAtEpochMs": 1793436397203,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 16,
+      "requestInitiatedAtEpochMs": 1793436397618,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 19,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 16,
+      "requestInitiatedAtEpochMs": 1793436397618,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 16,
+      "requestInitiatedAtEpochMs": 1793436397618,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 17,
+      "requestInitiatedAtEpochMs": 1793436397703,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 17,
+      "requestInitiatedAtEpochMs": 1793436397703,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 17,
+      "requestInitiatedAtEpochMs": 1793436397703,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 18,
+      "requestInitiatedAtEpochMs": 1793436398097,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 18,
+      "requestInitiatedAtEpochMs": 1793436398097,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 18,
+      "requestInitiatedAtEpochMs": 1793436398097,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 12.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 19,
+      "requestInitiatedAtEpochMs": 1793436398186,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 19,
+      "requestInitiatedAtEpochMs": 1793436398186,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 19,
+      "requestInitiatedAtEpochMs": 1793436398186,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 20,
+      "requestInitiatedAtEpochMs": 1793436398599,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 20,
+      "requestInitiatedAtEpochMs": 1793436398599,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 20,
+      "requestInitiatedAtEpochMs": 1793436398599,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 11.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 21,
+      "requestInitiatedAtEpochMs": 1793436398686,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 21,
+      "requestInitiatedAtEpochMs": 1793436398686,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 21,
+      "requestInitiatedAtEpochMs": 1793436398686,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 22,
+      "requestInitiatedAtEpochMs": 1793436399095,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 14.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 8.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 22,
+      "requestInitiatedAtEpochMs": 1793436399095,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 22,
+      "requestInitiatedAtEpochMs": 1793436399095,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 23,
+      "requestInitiatedAtEpochMs": 1793436399168,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 23,
+      "requestInitiatedAtEpochMs": 1793436399168,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 23,
+      "requestInitiatedAtEpochMs": 1793436399168,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 24,
+      "requestInitiatedAtEpochMs": 1793436399584,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 24,
+      "requestInitiatedAtEpochMs": 1793436399584,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 24,
+      "requestInitiatedAtEpochMs": 1793436399584,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 25,
+      "requestInitiatedAtEpochMs": 1793436399668,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 4.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 25,
+      "requestInitiatedAtEpochMs": 1793436399668,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 25,
+      "requestInitiatedAtEpochMs": 1793436399668,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 26,
+      "requestInitiatedAtEpochMs": 1793436400045,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 14.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 26,
+      "requestInitiatedAtEpochMs": 1793436400045,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 26,
+      "requestInitiatedAtEpochMs": 1793436400045,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 15.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 27,
+      "requestInitiatedAtEpochMs": 1793436400119,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 27,
+      "requestInitiatedAtEpochMs": 1793436400119,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 27,
+      "requestInitiatedAtEpochMs": 1793436400119,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 28,
+      "requestInitiatedAtEpochMs": 1793436400533,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 19.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 28,
+      "requestInitiatedAtEpochMs": 1793436400533,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 28,
+      "requestInitiatedAtEpochMs": 1793436400533,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 29,
+      "requestInitiatedAtEpochMs": 1793436400619,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 29,
+      "requestInitiatedAtEpochMs": 1793436400619,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 29,
+      "requestInitiatedAtEpochMs": 1793436400619,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 30,
+      "requestInitiatedAtEpochMs": 1793436401034,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 30,
+      "requestInitiatedAtEpochMs": 1793436401034,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 30,
+      "requestInitiatedAtEpochMs": 1793436401034,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 31,
+      "requestInitiatedAtEpochMs": 1793436401118,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 31,
+      "requestInitiatedAtEpochMs": 1793436401118,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 31,
+      "requestInitiatedAtEpochMs": 1793436401118,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 32,
+      "requestInitiatedAtEpochMs": 1793436401499,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 32,
+      "requestInitiatedAtEpochMs": 1793436401499,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 32,
+      "requestInitiatedAtEpochMs": 1793436401499,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 11.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 33,
+      "requestInitiatedAtEpochMs": 1793436401586,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 33,
+      "requestInitiatedAtEpochMs": 1793436401586,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 33,
+      "requestInitiatedAtEpochMs": 1793436401586,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 34,
+      "requestInitiatedAtEpochMs": 1793436402001,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 19.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 34,
+      "requestInitiatedAtEpochMs": 1793436402001,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 34,
+      "requestInitiatedAtEpochMs": 1793436402001,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 35,
+      "requestInitiatedAtEpochMs": 1793436402087,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 35,
+      "requestInitiatedAtEpochMs": 1793436402087,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 35,
+      "requestInitiatedAtEpochMs": 1793436402087,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 7.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 36,
+      "requestInitiatedAtEpochMs": 1793436402494,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 14,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 8.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 36,
+      "requestInitiatedAtEpochMs": 1793436402494,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 36,
+      "requestInitiatedAtEpochMs": 1793436402494,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 37,
+      "requestInitiatedAtEpochMs": 1793436402568,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 37,
+      "requestInitiatedAtEpochMs": 1793436402568,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 37,
+      "requestInitiatedAtEpochMs": 1793436402568,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 38,
+      "requestInitiatedAtEpochMs": 1793436402931,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 17.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 38,
+      "requestInitiatedAtEpochMs": 1793436402931,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 38,
+      "requestInitiatedAtEpochMs": 1793436402931,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 13.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 39,
+      "requestInitiatedAtEpochMs": 1793436403020,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 39,
+      "requestInitiatedAtEpochMs": 1793436403020,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 39,
+      "requestInitiatedAtEpochMs": 1793436403020,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 40,
+      "requestInitiatedAtEpochMs": 1793436403430,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 16.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 40,
+      "requestInitiatedAtEpochMs": 1793436403430,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 40,
+      "requestInitiatedAtEpochMs": 1793436403430,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 14.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 41,
+      "requestInitiatedAtEpochMs": 1793436403500,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 8.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 41,
+      "requestInitiatedAtEpochMs": 1793436403500,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 41,
+      "requestInitiatedAtEpochMs": 1793436403500,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 42,
+      "requestInitiatedAtEpochMs": 1793436403864,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 16.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 42,
+      "requestInitiatedAtEpochMs": 1793436403864,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 42,
+      "requestInitiatedAtEpochMs": 1793436403864,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 13.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 43,
+      "requestInitiatedAtEpochMs": 1793436403953,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 43,
+      "requestInitiatedAtEpochMs": 1793436403953,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 43,
+      "requestInitiatedAtEpochMs": 1793436403953,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 44,
+      "requestInitiatedAtEpochMs": 1793436404366,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 17.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 44,
+      "requestInitiatedAtEpochMs": 1793436404366,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 44,
+      "requestInitiatedAtEpochMs": 1793436404366,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 11,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 45,
+      "requestInitiatedAtEpochMs": 1793436404453,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 45,
+      "requestInitiatedAtEpochMs": 1793436404453,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 45,
+      "requestInitiatedAtEpochMs": 1793436404453,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 46,
+      "requestInitiatedAtEpochMs": 1793436404865,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 46,
+      "requestInitiatedAtEpochMs": 1793436404865,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 46,
+      "requestInitiatedAtEpochMs": 1793436404865,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 12,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 47,
+      "requestInitiatedAtEpochMs": 1793436404954,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.4,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 47,
+      "requestInitiatedAtEpochMs": 1793436404954,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 47,
+      "requestInitiatedAtEpochMs": 1793436404954,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 48,
+      "requestInitiatedAtEpochMs": 1793436405367,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 48,
+      "requestInitiatedAtEpochMs": 1793436405367,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 48,
+      "requestInitiatedAtEpochMs": 1793436405367,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 49,
+      "requestInitiatedAtEpochMs": 1793436405453,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 49,
+      "requestInitiatedAtEpochMs": 1793436405453,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 49,
+      "requestInitiatedAtEpochMs": 1793436405453,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 50,
+      "requestInitiatedAtEpochMs": 1793436405865,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 50,
+      "requestInitiatedAtEpochMs": 1793436405865,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 50,
+      "requestInitiatedAtEpochMs": 1793436405865,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 11.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 51,
+      "requestInitiatedAtEpochMs": 1793436405949,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 6.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 51,
+      "requestInitiatedAtEpochMs": 1793436405949,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 51,
+      "requestInitiatedAtEpochMs": 1793436405949,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 52,
+      "requestInitiatedAtEpochMs": 1793436406338,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 52,
+      "requestInitiatedAtEpochMs": 1793436406338,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 52,
+      "requestInitiatedAtEpochMs": 1793436406338,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 53,
+      "requestInitiatedAtEpochMs": 1793436406417,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 53,
+      "requestInitiatedAtEpochMs": 1793436406417,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 0.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 53,
+      "requestInitiatedAtEpochMs": 1793436406417,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 6.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 54,
+      "requestInitiatedAtEpochMs": 1793436406782,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 17.7,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 54,
+      "requestInitiatedAtEpochMs": 1793436406782,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 54,
+      "requestInitiatedAtEpochMs": 1793436406782,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 12,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 55,
+      "requestInitiatedAtEpochMs": 1793436406869,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 55,
+      "requestInitiatedAtEpochMs": 1793436406869,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 55,
+      "requestInitiatedAtEpochMs": 1793436406869,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 56,
+      "requestInitiatedAtEpochMs": 1793436407286,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 19,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 56,
+      "requestInitiatedAtEpochMs": 1793436407286,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 56,
+      "requestInitiatedAtEpochMs": 1793436407286,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 57,
+      "requestInitiatedAtEpochMs": 1793436407370,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 57,
+      "requestInitiatedAtEpochMs": 1793436407370,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 57,
+      "requestInitiatedAtEpochMs": 1793436407370,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 58,
+      "requestInitiatedAtEpochMs": 1793436407784,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 9.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 58,
+      "requestInitiatedAtEpochMs": 1793436407784,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 58,
+      "requestInitiatedAtEpochMs": 1793436407784,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 9.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 59,
+      "requestInitiatedAtEpochMs": 1793436407869,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 59,
+      "requestInitiatedAtEpochMs": 1793436407869,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 5.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 59,
+      "requestInitiatedAtEpochMs": 1793436407869,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 10.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 60,
+      "requestInitiatedAtEpochMs": 1793436408285,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 18.6,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 10,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 60,
+      "requestInitiatedAtEpochMs": 1793436408285,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 2.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 60,
+      "requestInitiatedAtEpochMs": 1793436408285,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 8.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 61,
+      "requestInitiatedAtEpochMs": 1793436408369,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 9.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 6.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 61,
+      "requestInitiatedAtEpochMs": 1793436408369,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 4.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 61,
+      "requestInitiatedAtEpochMs": 1793436408369,
+      "outcome": "ok",
+      "pageSize": 20,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 2.3,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 11.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 62,
+      "requestInitiatedAtEpochMs": 1793436408895,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 16.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 62,
+      "requestInitiatedAtEpochMs": 1793436408895,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 8.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 63,
+      "requestInitiatedAtEpochMs": 1793436409080,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 16,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 63,
+      "requestInitiatedAtEpochMs": 1793436409080,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 4.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 64,
+      "requestInitiatedAtEpochMs": 1793436409256,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 29.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 64,
+      "requestInitiatedAtEpochMs": 1793436409256,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 10,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 65,
+      "requestInitiatedAtEpochMs": 1793436409513,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 65,
+      "requestInitiatedAtEpochMs": 1793436409513,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 8.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 66,
+      "requestInitiatedAtEpochMs": 1793436409765,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 66,
+      "requestInitiatedAtEpochMs": 1793436409765,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 8.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 67,
+      "requestInitiatedAtEpochMs": 1793436410013,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 67,
+      "requestInitiatedAtEpochMs": 1793436410013,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 9.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 68,
+      "requestInitiatedAtEpochMs": 1793436410266,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 68,
+      "requestInitiatedAtEpochMs": 1793436410266,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 8.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 69,
+      "requestInitiatedAtEpochMs": 1793436410514,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 69,
+      "requestInitiatedAtEpochMs": 1793436410514,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 8.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 70,
+      "requestInitiatedAtEpochMs": 1793436410766,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 19,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 70,
+      "requestInitiatedAtEpochMs": 1793436410766,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 7.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 71,
+      "requestInitiatedAtEpochMs": 1793436411016,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 71,
+      "requestInitiatedAtEpochMs": 1793436411016,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 8.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 72,
+      "requestInitiatedAtEpochMs": 1793436411266,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 72,
+      "requestInitiatedAtEpochMs": 1793436411266,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 9.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 73,
+      "requestInitiatedAtEpochMs": 1793436411517,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 73,
+      "requestInitiatedAtEpochMs": 1793436411517,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 9.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 74,
+      "requestInitiatedAtEpochMs": 1793436411783,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 74,
+      "requestInitiatedAtEpochMs": 1793436411783,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 9.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 75,
+      "requestInitiatedAtEpochMs": 1793436412049,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 24,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 75,
+      "requestInitiatedAtEpochMs": 1793436412049,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 9.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 76,
+      "requestInitiatedAtEpochMs": 1793436412319,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 24.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 76,
+      "requestInitiatedAtEpochMs": 1793436412319,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 9.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 77,
+      "requestInitiatedAtEpochMs": 1793436412601,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 24.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 77,
+      "requestInitiatedAtEpochMs": 1793436412601,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 9.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 78,
+      "requestInitiatedAtEpochMs": 1793436412867,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 78,
+      "requestInitiatedAtEpochMs": 1793436412867,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 11.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 79,
+      "requestInitiatedAtEpochMs": 1793436413133,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 79,
+      "requestInitiatedAtEpochMs": 1793436413133,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 11.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 80,
+      "requestInitiatedAtEpochMs": 1793436413401,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 80,
+      "requestInitiatedAtEpochMs": 1793436413401,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 10.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 81,
+      "requestInitiatedAtEpochMs": 1793436413669,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 81,
+      "requestInitiatedAtEpochMs": 1793436413669,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 10.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 82,
+      "requestInitiatedAtEpochMs": 1793436413934,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 21.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 82,
+      "requestInitiatedAtEpochMs": 1793436413934,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 10.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 83,
+      "requestInitiatedAtEpochMs": 1793436414199,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 22.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 83,
+      "requestInitiatedAtEpochMs": 1793436414199,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 11.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 84,
+      "requestInitiatedAtEpochMs": 1793436414468,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 24.7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 84,
+      "requestInitiatedAtEpochMs": 1793436414468,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 11.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 85,
+      "requestInitiatedAtEpochMs": 1793436414752,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 85,
+      "requestInitiatedAtEpochMs": 1793436414752,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 11.5,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 86,
+      "requestInitiatedAtEpochMs": 1793436415035,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 23.3,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 86,
+      "requestInitiatedAtEpochMs": 1793436415035,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 13.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 87,
+      "requestInitiatedAtEpochMs": 1793436415319,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 25.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 87,
+      "requestInitiatedAtEpochMs": 1793436415319,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 11.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 88,
+      "requestInitiatedAtEpochMs": 1793436415601,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 24.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 88,
+      "requestInitiatedAtEpochMs": 1793436415601,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 11.8,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 89,
+      "requestInitiatedAtEpochMs": 1793436415886,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 24.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 89,
+      "requestInitiatedAtEpochMs": 1793436415886,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 13.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 90,
+      "requestInitiatedAtEpochMs": 1793436416168,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 24.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 90,
+      "requestInitiatedAtEpochMs": 1793436416168,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 12.4,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 91,
+      "requestInitiatedAtEpochMs": 1793436416455,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 25.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 91,
+      "requestInitiatedAtEpochMs": 1793436416455,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 14.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 92,
+      "requestInitiatedAtEpochMs": 1793436416735,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 26.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 92,
+      "requestInitiatedAtEpochMs": 1793436416735,
+      "outcome": "ok",
+      "pageSize": 60,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 12.9,
+          "outcome": "ok"
+        }
+      ]
+    }
+  ],
+  "turnDisplayPaintDiagnostic": [
+    {
+      "turnId": "126df95a-03ed-4d05-96a2-c480ef8d4962",
+      "requestId": "dom-request-0-1793436385979",
+      "targetMessageId": "7be92b4d-d2e9-4f32-8c68-5bbb6950a5aa",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 274,
+      "acceptedAssistantMessageId": "7be92b4d-d2e9-4f32-8c68-5bbb6950a5aa",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "fef1ccf2-99ad-4cd0-adff-00b25db5a800",
+      "requestId": "dom-request-1-1793436386448",
+      "targetMessageId": "9ec6f593-f594-465f-8f09-b024f3604135",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 180,
+      "acceptedAssistantMessageId": "9ec6f593-f594-465f-8f09-b024f3604135",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "0c213aeb-1dde-435c-a158-ffa63c9cd7e6",
+      "requestId": "dom-request-2-1793436386643",
+      "targetMessageId": "ce5d94d6-79b6-466c-bcaa-fb03590d2e36",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 181,
+      "acceptedAssistantMessageId": "ce5d94d6-79b6-466c-bcaa-fb03590d2e36",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "528cc8fe-a58f-492c-b7fd-63600c357d06",
+      "requestId": "dom-request-3-1793436386831",
+      "targetMessageId": "c04b8693-6cc2-4015-8e94-2443f7a10378",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 175,
+      "acceptedAssistantMessageId": "c04b8693-6cc2-4015-8e94-2443f7a10378",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "4d478885-3e4e-4c1c-be08-a537354d2337",
+      "requestId": "dom-request-4-1793436387013",
+      "targetMessageId": "e32a580c-0348-4f4f-a7e0-bccee71ef2b0",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 182,
+      "acceptedAssistantMessageId": "e32a580c-0348-4f4f-a7e0-bccee71ef2b0",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "6373478b-4d2b-4ddd-b6fb-21db2ad81bfe",
+      "requestId": "dom-request-5-1793436387203",
+      "targetMessageId": "17eaa6aa-2fa3-4a69-a17f-255f49bee7a9",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 183,
+      "acceptedAssistantMessageId": "17eaa6aa-2fa3-4a69-a17f-255f49bee7a9",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "8bb47ae9-6a23-468e-8f9e-d3d74bf77c12",
+      "requestId": "dom-request-6-1793436387392",
+      "targetMessageId": "3a6fb026-c41e-4a51-8364-04ffeb42544a",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 182,
+      "acceptedAssistantMessageId": "3a6fb026-c41e-4a51-8364-04ffeb42544a",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "a01cb840-39f1-4c17-832a-5ffd8a2d7a64",
+      "requestId": "dom-request-7-1793436387581",
+      "targetMessageId": "812d1570-9987-4efa-870e-bbfce56ae992",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 182,
+      "acceptedAssistantMessageId": "812d1570-9987-4efa-870e-bbfce56ae992",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "a6696e71-3cb5-420f-9e89-40d4f5978f2d",
+      "requestId": "dom-request-8-1793436387770",
+      "targetMessageId": "169d70aa-7026-4f2c-adea-14fcd4209eaa",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 182,
+      "acceptedAssistantMessageId": "169d70aa-7026-4f2c-adea-14fcd4209eaa",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "2d5ab2d7-7509-48e1-a093-bc8741614820",
+      "requestId": "dom-request-9-1793436387959",
+      "targetMessageId": "10dc18bc-6a76-42c7-b924-85756165c13c",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 184,
+      "acceptedAssistantMessageId": "10dc18bc-6a76-42c7-b924-85756165c13c",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "e460c9d2-020d-491e-abcf-29b445de2eaa",
+      "requestId": "dom-request-10-1793436388149",
+      "targetMessageId": "7f53b06d-e9a5-406d-9d01-75e4101f7e0c",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 182,
+      "acceptedAssistantMessageId": "7f53b06d-e9a5-406d-9d01-75e4101f7e0c",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "5b7aacdf-0248-4a16-9d0c-79b922c5fbb4",
+      "requestId": "dom-request-11-1793436388339",
+      "targetMessageId": "4291af9e-1ae2-45ae-ac69-a8cab6cf8a0c",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 181,
+      "acceptedAssistantMessageId": "4291af9e-1ae2-45ae-ac69-a8cab6cf8a0c",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "d90bebd9-edd2-4098-8d06-4c139d17a4e9",
+      "requestId": "dom-request-12-1793436388528",
+      "targetMessageId": "4de9f0f5-d0fe-42ab-9e4b-871880b98702",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 182,
+      "acceptedAssistantMessageId": "4de9f0f5-d0fe-42ab-9e4b-871880b98702",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "68346e51-f65c-4713-8fec-45a6d780ecff",
+      "requestId": "dom-request-13-1793436388717",
+      "targetMessageId": "5a520fd5-7788-4ed2-862b-1cf1e68eb611",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 182,
+      "acceptedAssistantMessageId": "5a520fd5-7788-4ed2-862b-1cf1e68eb611",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "e3fba274-6725-487a-aadd-bc588a1d64ce",
+      "requestId": "dom-request-14-1793436388906",
+      "targetMessageId": "1b44303e-db4e-4bbc-bcd3-ac270a6bf7aa",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 182,
+      "acceptedAssistantMessageId": "1b44303e-db4e-4bbc-bcd3-ac270a6bf7aa",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "98219e87-d794-434d-bf92-06bf8dc067b6",
+      "requestId": "dom-request-15-1793436389094",
+      "targetMessageId": "a1f475b4-7b09-4a41-a907-03f5480523ce",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 181,
+      "acceptedAssistantMessageId": "a1f475b4-7b09-4a41-a907-03f5480523ce",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "6e6503fb-d023-4f60-abae-ab00444400d9",
+      "requestId": "dom-request-16-1793436389282",
+      "targetMessageId": "f86a0078-53fd-48df-9707-13a9ced2e114",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 180,
+      "acceptedAssistantMessageId": "f86a0078-53fd-48df-9707-13a9ced2e114",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "8f4b2041-0bfe-4693-887d-450c942a4abb",
+      "requestId": "dom-request-17-1793436389470",
+      "targetMessageId": "0aba5c57-ee26-4383-aedd-4ad187606e1a",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 184,
+      "acceptedAssistantMessageId": "0aba5c57-ee26-4383-aedd-4ad187606e1a",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "3bcc2b03-8eb9-4cc5-a41f-93312643b1a9",
+      "requestId": "dom-request-18-1793436389661",
+      "targetMessageId": "d6e9ad5a-094c-4000-a523-b80ff4674528",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 181,
+      "acceptedAssistantMessageId": "d6e9ad5a-094c-4000-a523-b80ff4674528",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "680f1479-e5e5-44c7-98ac-65082130e4b9",
+      "requestId": "dom-request-19-1793436389848",
+      "targetMessageId": "bb582a18-8887-440b-b7b0-6492bd2897b6",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 181,
+      "acceptedAssistantMessageId": "bb582a18-8887-440b-b7b0-6492bd2897b6",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "3024ce89-e033-4289-9062-f8d392906396",
+      "requestId": "dom-request-20-1793436390036",
+      "targetMessageId": "ad738e57-2294-477b-a24c-0531e04f9437",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 181,
+      "acceptedAssistantMessageId": "ad738e57-2294-477b-a24c-0531e04f9437",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "120263f4-cc3b-4825-8554-bf17257d8c88",
+      "requestId": "dom-request-21-1793436390225",
+      "targetMessageId": "c3b0609c-7a22-444f-a667-e2eaa17541b7",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 180,
+      "acceptedAssistantMessageId": "c3b0609c-7a22-444f-a667-e2eaa17541b7",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "a84bd79a-b12d-486c-8374-175bbe6efcc4",
+      "requestId": "dom-request-22-1793436390412",
+      "targetMessageId": "0de18aa1-72b9-4c44-a79f-55d391bbc4b4",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 178,
+      "acceptedAssistantMessageId": "0de18aa1-72b9-4c44-a79f-55d391bbc4b4",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "d823af2c-506a-41bb-ad95-b1fe27cebb08",
+      "requestId": "dom-request-23-1793436390597",
+      "targetMessageId": "406ed23e-0661-4634-88dd-0a0308d6bd36",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 178,
+      "acceptedAssistantMessageId": "406ed23e-0661-4634-88dd-0a0308d6bd36",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "e45d40ae-f3a5-4c5e-9789-8fb0c90c0f4f",
+      "requestId": "dom-request-24-1793436390781",
+      "targetMessageId": "e429f18b-83ac-47e4-9987-b9c0987a15a3",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 181,
+      "acceptedAssistantMessageId": "e429f18b-83ac-47e4-9987-b9c0987a15a3",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "241f3d79-9d7e-4218-97cc-dbf3f6ce40b7",
+      "requestId": "dom-request-25-1793436390970",
+      "targetMessageId": "ab8aa596-b4f4-4f11-9c0c-5749f9fe647d",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 184,
+      "acceptedAssistantMessageId": "ab8aa596-b4f4-4f11-9c0c-5749f9fe647d",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "4117d74d-a69f-4548-8a15-9600444237f1",
+      "requestId": "dom-request-26-1793436391160",
+      "targetMessageId": "ba28db24-c9a1-41bf-8445-257ef477672b",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 181,
+      "acceptedAssistantMessageId": "ba28db24-c9a1-41bf-8445-257ef477672b",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "e155f7bb-f850-4cf3-8df2-bc96f0be9421",
+      "requestId": "dom-request-27-1793436391348",
+      "targetMessageId": "4d76dd15-ec8c-4cb3-a3fa-4d158bfecd74",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 180,
+      "acceptedAssistantMessageId": "4d76dd15-ec8c-4cb3-a3fa-4d158bfecd74",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "c41da284-8a63-4fce-8097-d12a9644daaf",
+      "requestId": "dom-request-28-1793436391535",
+      "targetMessageId": "af785aa6-558b-4857-b83e-e4561146b791",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 181,
+      "acceptedAssistantMessageId": "af785aa6-558b-4857-b83e-e4561146b791",
+      "displayMessageMatchesAccepted": true
+    },
+    {
+      "turnId": "1fe8ff80-0fd4-48f9-941f-c9555df7de19",
+      "requestId": "dom-request-29-1793436391724",
+      "targetMessageId": "4f638a12-3375-4d0d-bc25-d77214a12a9d",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 180,
+      "acceptedAssistantMessageId": "4f638a12-3375-4d0d-bc25-d77214a12a9d",
+      "displayMessageMatchesAccepted": true
+    }
+  ],
+  "displayAssistantBubblePresentAtFrameCount": 0,
+  "acceptedAssistantBubblePresentAtFrameCount": 0,
+  "displayMessageMatchesAcceptedCount": 0,
+  "turnDisplayFrameDiagnostic": [
+    {
+      "turnId": "126df95a-03ed-4d05-96a2-c480ef8d4962",
+      "lifecycle": "failed",
+      "displayMessageId": "7be92b4d-d2e9-4f32-8c68-5bbb6950a5aa",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 21.700000047683716,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "fef1ccf2-99ad-4cd0-adff-00b25db5a800",
+      "lifecycle": "failed",
+      "displayMessageId": "9ec6f593-f594-465f-8f09-b024f3604135",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 28.400000035762787,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "0c213aeb-1dde-435c-a158-ffa63c9cd7e6",
+      "lifecycle": "failed",
+      "displayMessageId": "ce5d94d6-79b6-466c-bcaa-fb03590d2e36",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 26.5,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "528cc8fe-a58f-492c-b7fd-63600c357d06",
+      "lifecycle": "failed",
+      "displayMessageId": "c04b8693-6cc2-4015-8e94-2443f7a10378",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 19.69999998807907,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "4d478885-3e4e-4c1c-be08-a537354d2337",
+      "lifecycle": "failed",
+      "displayMessageId": "e32a580c-0348-4f4f-a7e0-bccee71ef2b0",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 21.19999998807907,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "6373478b-4d2b-4ddd-b6fb-21db2ad81bfe",
+      "lifecycle": "failed",
+      "displayMessageId": "17eaa6aa-2fa3-4a69-a17f-255f49bee7a9",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 31.299999952316284,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "8bb47ae9-6a23-468e-8f9e-d3d74bf77c12",
+      "lifecycle": "failed",
+      "displayMessageId": "3a6fb026-c41e-4a51-8364-04ffeb42544a",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 23.599999964237213,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "a01cb840-39f1-4c17-832a-5ffd8a2d7a64",
+      "lifecycle": "failed",
+      "displayMessageId": "812d1570-9987-4efa-870e-bbfce56ae992",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 19.69999998807907,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "a6696e71-3cb5-420f-9e89-40d4f5978f2d",
+      "lifecycle": "failed",
+      "displayMessageId": "169d70aa-7026-4f2c-adea-14fcd4209eaa",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 30.5,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "2d5ab2d7-7509-48e1-a093-bc8741614820",
+      "lifecycle": "failed",
+      "displayMessageId": "10dc18bc-6a76-42c7-b924-85756165c13c",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 24.600000023841858,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "e460c9d2-020d-491e-abcf-29b445de2eaa",
+      "lifecycle": "failed",
+      "displayMessageId": "7f53b06d-e9a5-406d-9d01-75e4101f7e0c",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 18.30000001192093,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "5b7aacdf-0248-4a16-9d0c-79b922c5fbb4",
+      "lifecycle": "failed",
+      "displayMessageId": "4291af9e-1ae2-45ae-ac69-a8cab6cf8a0c",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 28.5,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "d90bebd9-edd2-4098-8d06-4c139d17a4e9",
+      "lifecycle": "failed",
+      "displayMessageId": "4de9f0f5-d0fe-42ab-9e4b-871880b98702",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 22.900000035762787,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "68346e51-f65c-4713-8fec-45a6d780ecff",
+      "lifecycle": "failed",
+      "displayMessageId": "5a520fd5-7788-4ed2-862b-1cf1e68eb611",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 32.19999998807907,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "e3fba274-6725-487a-aadd-bc588a1d64ce",
+      "lifecycle": "failed",
+      "displayMessageId": "1b44303e-db4e-4bbc-bcd3-ac270a6bf7aa",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 28.299999952316284,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "98219e87-d794-434d-bf92-06bf8dc067b6",
+      "lifecycle": "failed",
+      "displayMessageId": "a1f475b4-7b09-4a41-a907-03f5480523ce",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 22.69999998807907,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "6e6503fb-d023-4f60-abae-ab00444400d9",
+      "lifecycle": "failed",
+      "displayMessageId": "f86a0078-53fd-48df-9707-13a9ced2e114",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 18.30000001192093,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "8f4b2041-0bfe-4693-887d-450c942a4abb",
+      "lifecycle": "failed",
+      "displayMessageId": "0aba5c57-ee26-4383-aedd-4ad187606e1a",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 30.899999976158142,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "3bcc2b03-8eb9-4cc5-a41f-93312643b1a9",
+      "lifecycle": "failed",
+      "displayMessageId": "d6e9ad5a-094c-4000-a523-b80ff4674528",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 23.599999964237213,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "680f1479-e5e5-44c7-98ac-65082130e4b9",
+      "lifecycle": "failed",
+      "displayMessageId": "bb582a18-8887-440b-b7b0-6492bd2897b6",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 19.30000001192093,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "3024ce89-e033-4289-9062-f8d392906396",
+      "lifecycle": "failed",
+      "displayMessageId": "ad738e57-2294-477b-a24c-0531e04f9437",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 30.399999976158142,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "120263f4-cc3b-4825-8554-bf17257d8c88",
+      "lifecycle": "failed",
+      "displayMessageId": "c3b0609c-7a22-444f-a667-e2eaa17541b7",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 24,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "a84bd79a-b12d-486c-8374-175bbe6efcc4",
+      "lifecycle": "failed",
+      "displayMessageId": "0de18aa1-72b9-4c44-a79f-55d391bbc4b4",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 21.599999964237213,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "d823af2c-506a-41bb-ad95-b1fe27cebb08",
+      "lifecycle": "failed",
+      "displayMessageId": "406ed23e-0661-4634-88dd-0a0308d6bd36",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 21.30000001192093,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "e45d40ae-f3a5-4c5e-9789-8fb0c90c0f4f",
+      "lifecycle": "failed",
+      "displayMessageId": "e429f18b-83ac-47e4-9987-b9c0987a15a3",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 18.399999976158142,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "241f3d79-9d7e-4218-97cc-dbf3f6ce40b7",
+      "lifecycle": "failed",
+      "displayMessageId": "ab8aa596-b4f4-4f11-9c0c-5749f9fe647d",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 30.69999998807907,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "4117d74d-a69f-4548-8a15-9600444237f1",
+      "lifecycle": "failed",
+      "displayMessageId": "ba28db24-c9a1-41bf-8445-257ef477672b",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 23.599999964237213,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "e155f7bb-f850-4cf3-8df2-bc96f0be9421",
+      "lifecycle": "failed",
+      "displayMessageId": "4d76dd15-ec8c-4cb3-a3fa-4d158bfecd74",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 19,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "c41da284-8a63-4fce-8097-d12a9644daaf",
+      "lifecycle": "failed",
+      "displayMessageId": "af785aa6-558b-4857-b83e-e4561146b791",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 31.5,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    },
+    {
+      "turnId": "1fe8ff80-0fd4-48f9-941f-c9555df7de19",
+      "lifecycle": "failed",
+      "displayMessageId": "4f638a12-3375-4d0d-bc25-d77214a12a9d",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 27,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    }
+  ],
+  "submitReplySamplesMs": [
+    135,
+    78,
+    49,
+    50,
+    48,
+    49,
+    50,
+    48,
+    50,
+    49,
+    50,
+    50,
+    50,
+    50,
+    50,
+    50,
+    51,
+    49,
+    50,
+    51,
+    51,
+    49,
+    72,
+    48,
+    50,
+    50,
+    50,
+    51,
+    51,
+    50
+  ],
+  "acceptedToDomSamplesMs": [
+    330,
+    112,
+    133,
+    127,
+    136,
+    136,
+    133,
+    136,
+    133,
+    135,
+    134,
+    133,
+    134,
+    134,
+    133,
+    133,
+    131,
+    136,
+    132,
+    132,
+    133,
+    133,
+    107,
+    132,
+    133,
+    135,
+    133,
+    131,
+    133,
+    133
+  ]
+}

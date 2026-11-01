@@ -4,7 +4,7 @@ import type { SessionOwnership, SessionVisibility } from '../../../src/shared/se
 import type { SessionDirectoryGrantRecord } from '../../../src/shared/sessionDirectoryGrant'
 import type { SessionUsage } from '../../../src/shared/sessionUsage'
 import type { EnqueueResult, MessageEntry, RemoteSessionIdentityUpdate, ContinuationSourceInspection,
-  ContinuationRecoveryFacts, MessageRef, ChatMessagePage, ApiContextBaseline, ContextHistorySummaryBaseline, CanonicalContextMeterEvent,
+  ContinuationRecoveryFacts, MessageRef, ChatMessagePage, ApiContextBaseline, ContextHistorySummaryBaseline, CanonicalContextMeterEvent, LatestMessagePreviewCandidate,
   RoutingRead, RouteInput, SelectionFence, ExportPage, SearchCorpusPage, MessageSearchHit, MessageSkeleton, RetryContextTarget,
   PreparedChatBodyView,
 } from './model'
@@ -34,7 +34,7 @@ export type SessionHistoryPort = HistoryPort & Readonly<{
 }>
 
 /** SDK-derived commit protocol aliases keep the History contract owned by agent-sdk. */
-export type SessionCommitPort = Pick<SessionHistoryPort, 'appendBatch' | 'read'>
+export type SessionCommitPort = Pick<SessionHistoryPort, 'appendBatch' | 'read' | 'readLatestEvent' | 'findByIdempotencyKey' | 'prepareTransitionState'>
 export type SessionCommitEvent = Parameters<SessionHistoryPort['appendBatch']>[0][number]
 export type SessionCommitResult = Awaited<ReturnType<SessionHistoryPort['appendBatch']>>
 export type SessionCommitIntent = NonNullable<Parameters<SessionHistoryPort['appendBatch']>[2]>
@@ -93,7 +93,7 @@ export interface SessionCommands {
   applyGeneratedTitle(sessionId: string, title: string): Session | undefined
   recordRemoteSessionActivity(sessionId: string, at: number): Session | undefined
   recordRemoteSessionIdentity(sessionId: string, identity: RemoteSessionIdentityUpdate): Session | undefined
-  deleteQueuedMessage(messageId: string): { ok: true; sessionId: string } | { ok: false; error: string }
+  deleteQueuedMessage(messageId: string, previewCandidate?: { messageId: string; content: string; source: { sessionGeneration: string; messageRevision: number; sequence: number; role: string; timestamp: number; status: string } }): { ok: true; sessionId: string } | { ok: false; error: string }
   editQueuedMessage(input: { sessionId: string; messageId: string; content: string }):
     | { ok: true; message: Message; sequence: number }
     | { ok: false; error: 'message_not_queued' | 'empty_content' }
@@ -117,10 +117,11 @@ export interface SessionQueries {
   readSession(sessionId: string): Session | undefined
   readSessionIdForPlatformMessage(input: { channel: 'feishu' | 'wechat'; platformMessageId: string }): string | undefined
   readSessionUsage(sessionId: string): SessionUsage | undefined
-  listSessions(options?: { view?: 'all' | 'user-visible' }): Session[]
+  listSessions(options?: { view?: 'all' | 'user-visible'; workDirProfileId?: string }): Session[]
   readMessage(ref: MessageRef): Message | undefined
   /** Read control metadata without materializing message content. */
   readMessageSkeleton(ref: MessageRef): MessageSkeleton | undefined
+  readLatestMessagePreviewCandidate(sessionId: string, excludeMessageId: string): LatestMessagePreviewCandidate | undefined
   readMessages(input: { sessionId: string; limit?: number; offset?: number }): Message[]
   /** Counts queued user rows from the message index without materializing transcript bodies. */
   countQueuedMessages?(sessionId: string): number
@@ -148,7 +149,7 @@ export interface SessionQueries {
   readChatPage(input: { sessionId: string; beforeSequence?: number | null; limit?: number }): ChatMessagePage
   readTurnContext(input: { sessionId: string; boundarySequence?: number; requiredUserMessageId?: string; excludeMessageIds?: string[] }): Message[]
   readApiBaseline(input: { sessionId: string; limit?: number }): ApiContextBaseline
-  readContextHistorySummaryBaseline(sessionId: string): ContextHistorySummaryBaseline
+  readContextHistorySummaryBaseline(sessionId: string): Promise<ContextHistorySummaryBaseline>
   /** Returns canonical replay when this session has History, or undefined for legacy-only sessions. */
   readCanonicalCompactionReplay(sessionId: string): CompactionReplay | undefined
   readCanonicalContextMeterEvents(sessionId: string): readonly CanonicalContextMeterEvent[] | undefined

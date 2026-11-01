@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { appendMessage, createPersistedTurn, createSession, getPersistedTurn } from '../database/operations'
+import { appendMessage, createPersistedTurn, createSession, getPersistedTurn, getSession, updateSession } from '../database/operations'
 import { getDbConnection } from '../database'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSessionTurnRuntime, createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
@@ -76,6 +76,23 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     const duplicate = await continueAgentFromCheckpoint(options)
     expect(duplicate).toMatchObject({ accepted: true, continuationId: accepted.continuationId, targetTurnId: accepted.targetTurnId })
     expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('runs target recovery before continuation acceptance and preserves the active-owner busy result', async () => {
+    const { session, runtime, ctx } = await setup()
+    const dispatch = vi.fn()
+    const recoverExecutionTarget = vi.fn(() => ({ status: 'active-owner' as const, releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }))
+    const sessionStorage = { ...ctx.sessionStorage!, execution: { ...ctx.sessionStorage!.execution, recoverExecutionTarget } } as AppIpcContext['sessionStorage']
+    const testContext = { ...ctx, sessionStorage } as AppIpcContext
+
+    const result = await continueAgentFromCheckpoint({ ctx: testContext, turnRuntime: runtime,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'active-owner-continuation' },
+      dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot })
+
+    expect(recoverExecutionTarget).toHaveBeenCalledWith(session.id)
+    expect(result).toMatchObject({ accepted: false, reason: 'SESSION_EXECUTION_ACTIVE_OWNER' })
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(getPersistedTurn(db!, 'source-turn')).toMatchObject({ state: 'terminal' })
   })
 
   it('普通继续一次性创建 unknown recovery context，保留来源 ID 且不重放旧 tool call', async () => {
@@ -270,6 +287,28 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     }), started.continuationId)
     expect(getPersistedTurn(db!, started.targetTurnId)?.executionConfig?.continuationSource)
       .toMatchObject({ invocationId: 'source-turn', sourceTurnId: 'source-turn' })
+  })
+
+  it.each(['feishu', 'wechat'] as const)('remote %s session metadata does not widen continuation recovery beyond its selected session', async (source) => {
+    const { session, runtime, ctx } = await setup()
+    const targetSession = getDbConnection(db!).prepare('SELECT id FROM sessions WHERE id=?').get(session.id) as { id: string }
+    const sessionRecord = getSession(db!, session.id)!
+    updateSession(db!, session.id, { metadata: { ...sessionRecord.metadata, source } })
+    const originalRecover = ctx.sessionStorage!.execution.recoverExecutionTarget.bind(ctx.sessionStorage!.execution)
+    const recover = vi.fn(originalRecover)
+    const scopedStorage = Object.create(ctx.sessionStorage!) as AppIpcContext['sessionStorage']
+    Object.defineProperty(scopedStorage, 'execution', { value: Object.freeze({ ...ctx.sessionStorage!.execution, recoverExecutionTarget: recover }) })
+    const scopedContext = { ...ctx, sessionStorage: scopedStorage } as AppIpcContext
+    const dispatch = vi.fn()
+
+    const result = await continueAgentFromCheckpoint({ ctx: scopedContext, turnRuntime: runtime,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: `${source}-daily-boundary` },
+      dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot })
+
+    expect(result).toMatchObject({ accepted: true })
+    expect(recover).toHaveBeenCalledExactlyOnceWith(session.id)
+    expect(targetSession.id).toBe(session.id)
+    expect(dispatch).toHaveBeenCalledOnce()
   })
 
   it('注册的 chat:continue-from-checkpoint handler 真实落到 admission 编排并返回 IPC response', async () => {

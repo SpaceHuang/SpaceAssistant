@@ -227,7 +227,7 @@ function mergeCanonicalBackedBodies(
   if (canonicalById.size !== canonicalMessages.length) return undefined
   const storedById = new Map(storedMessages.map((message) => [message.id, message]))
   const rowById = new Map(rows.map((row) => [row.id, row]))
-  if (storedById.size !== rows.length || canonicalMessages.some((message) => typeof message.id !== 'string' || !rowById.has(message.id))) return undefined
+  if (storedById.size !== rows.length || canonicalMessages.some((message) => typeof message.id !== 'string')) return undefined
 
   const projected: Message[] = []
   for (const stored of storedMessages) {

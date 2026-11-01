@@ -1,0 +1,220 @@
+{
+  "title": "SpaceAssistant",
+  "messageCount": 9,
+  "hasComposer": true,
+  "hasModelSelector": true,
+  "bodyTextLength": 254,
+  "persistedContentVisible": true,
+  "reloadPersistenceVerified": true,
+  "windowReconnectionPersistenceVerified": true,
+  "sampleCount": 1,
+  "submitReplyP50Ms": 145,
+  "submitReplyP95Ms": 145,
+  "acceptedToDomP50Ms": 333,
+  "acceptedToDomP95Ms": 333,
+  "acceptedToDomMaxMs": 333,
+  "queuedEditSamples": 1,
+  "queuedEditP50Ms": 226,
+  "queuedEditP95Ms": 226,
+  "queuedEditMaxMs": 226,
+  "queuedEditSamplesMs": [
+    226
+  ],
+  "turnDisplayFrameSamples": 1,
+  "rendererReceiveToTwoFramesP50Ms": 18.099999964237213,
+  "rendererReceiveToTwoFramesP95Ms": 18.099999964237213,
+  "rendererReceiveToTwoFramesMaxMs": 18.099999964237213,
+  "turnDisplayTargetRowChangedCount": 1,
+  "dispatchToTargetPaintP50Ms": 285,
+  "dispatchToTargetPaintP95Ms": 285,
+  "contextSummary": {
+    "rendererIpcRoundTripMs": 13.900000035762787,
+    "entryCount": 0,
+    "resultBytes": 65
+  },
+  "submitWhileContextSummaryPendingMs": 143.69999998807907,
+  "sessionSwitchTraceLines": [
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436001302,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 10.1,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 7.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436001302,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 1.9,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436001302,
+      "outcome": "ok",
+      "pageSize": 0,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 1.8,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 7,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 2,
+      "requestInitiatedAtEpochMs": 1793436001551,
+      "outcome": "ok",
+      "pageSize": 2,
+      "stages": [
+        {
+          "name": "renderer-page-request",
+          "durationMs": 15.6,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 2,
+      "requestInitiatedAtEpochMs": 1793436001551,
+      "outcome": "ok",
+      "pageSize": 2,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 8.2,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436002234,
+      "outcome": "ok",
+      "pageSize": 2,
+      "stages": [
+        {
+          "name": "selection-to-page-request",
+          "durationMs": 8.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "renderer-page-request",
+          "durationMs": 57.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436002234,
+      "outcome": "ok",
+      "pageSize": 2,
+      "stages": [
+        {
+          "name": "store-commit",
+          "durationMs": 0.2,
+          "outcome": "ok"
+        },
+        {
+          "name": "render-commit",
+          "durationMs": 3.5,
+          "outcome": "ok"
+        },
+        {
+          "name": "next-paint",
+          "durationMs": 7.1,
+          "outcome": "ok"
+        }
+      ]
+    },
+    {
+      "event": "session.switch.trace",
+      "instance": "renderer",
+      "requestOrdinal": 1,
+      "requestInitiatedAtEpochMs": 1793436002234,
+      "outcome": "ok",
+      "pageSize": 2,
+      "stages": [
+        {
+          "name": "failure-reason-hydration",
+          "durationMs": 310,
+          "outcome": "ok"
+        }
+      ]
+    }
+  ],
+  "turnDisplayPaintDiagnostic": [
+    {
+      "turnId": "526e1afa-8f6f-49a1-9eb3-bda62891de35",
+      "requestId": "dom-request-0-1793436001361",
+      "targetMessageId": "25a2b181-75cb-45c0-840e-bcba0f31211a",
+      "targetRowChanged": true,
+      "dispatchToNextPaintMs": 285,
+      "acceptedAssistantMessageId": "25a2b181-75cb-45c0-840e-bcba0f31211a",
+      "displayMessageMatchesAccepted": true
+    }
+  ],
+  "displayAssistantBubblePresentAtFrameCount": 0,
+  "acceptedAssistantBubblePresentAtFrameCount": 0,
+  "displayMessageMatchesAcceptedCount": 0,
+  "turnDisplayFrameDiagnostic": [
+    {
+      "turnId": "526e1afa-8f6f-49a1-9eb3-bda62891de35",
+      "lifecycle": "failed",
+      "displayMessageId": "25a2b181-75cb-45c0-840e-bcba0f31211a",
+      "acceptedAssistantMessageId": null,
+      "rendererReceiveToTwoFramesMs": 18.099999964237213,
+      "displayMessageMatchesAccepted": false,
+      "displayAssistantBubblePresent": false,
+      "acceptedAssistantBubblePresent": false
+    }
+  ],
+  "submitReplySamplesMs": [
+    145
+  ],
+  "acceptedToDomSamplesMs": [
+    333
+  ]
+}

@@ -14,7 +14,7 @@ import * as sessionStorageShadow from './sessionStorage/infrastructure/sqlite/se
 import * as sessionStorageCutover from './sessionStorage/certification'
 import * as sessionTranscriptProjection from './sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import * as sessionContentWriteAuthority from './sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority'
-import { backupPageReader, loadBackupPayload } from './ipc/ipcShared'
+import { backupPageReader } from './ipc/ipcShared'
 import { createMemoryAppDb, createTempDatabase } from './database/testHelpers'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { getDbConnection as getActualDbConnection } from './database/sqliteStore'
@@ -339,7 +339,26 @@ describe('file IPC handlers', () => {
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
   })
 
-  it('auto backup reader resolves message bodies through the canonical-aware sequence page', async () => {
+  it('session:list filters profile in its query and does not persist legacy metadata cleanup', () => {
+    const session = databaseOperations.createSession(ctx.db, { name: 'read-only session list', model: 'test',
+      workDirProfileId: 'default', ownership: 'user', visibility: 'visible', metadata: { plan: 'legacy', userNote: 'keep' } })
+    const listSessions = vi.fn(() => [session])
+    const stripLegacyPlanMetadata = vi.fn()
+    ctx.sessionStorage = { ...ctx.sessionStorage!, queries: { ...ctx.sessionStorage!.queries, listSessions },
+      commands: { ...ctx.sessionStorage!.commands, stripLegacyPlanMetadata } } as SessionStorage
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const flushSave = vi.spyOn(ctx.db, 'flushSave')
+
+    const listed = ipc.getHandler('session:list')!() as Session[]
+
+    expect(listSessions).toHaveBeenCalledWith({ view: 'user-visible', workDirProfileId: 'default' })
+    expect(listed[0]?.metadata).toEqual({ userNote: 'keep' })
+    expect(stripLegacyPlanMetadata).not.toHaveBeenCalled()
+    expect(flushSave).not.toHaveBeenCalled()
+    expect(databaseOperations.getSession(ctx.db, session.id)?.metadata).toEqual({ plan: 'legacy', userNote: 'keep' })
+  })
+
+  it('explicit backup page reader resolves message bodies through the canonical-aware sequence page', async () => {
     const message = { id: 'backup-canonical-user', sessionId: 'backup-session', role: 'user' as const,
       content: 'canonical backup body', timestamp: 1, status: 'sent' as const, schemaVersion: 1 }
     const readPage = vi.spyOn(sessionTranscriptProjection, 'getProjectedMessagesPageWithSequence').mockReturnValue({
@@ -349,26 +368,6 @@ describe('file IPC handlers', () => {
 
     expect(readPage).toHaveBeenCalledWith(ctx.db, 'backup-session', 0, 25)
     expect(page).toEqual({ messages: [message], nextSequence: 8 })
-  })
-
-  it('backup payload trusts the injected query result and does not fall back to a database reader', async () => {
-    const queries = Object.freeze({ ...ctx.sessionStorage!.queries, readSession: vi.fn(() => undefined) })
-    ctx.sessionStorage = { ...ctx.sessionStorage!, queries } as SessionStorage
-
-    await expect(loadBackupPayload(ctx, 'missing-backup-session')).resolves.toBeNull()
-    expect(database.getSession).not.toHaveBeenCalled()
-    expect(queries.readSession).toHaveBeenCalledWith('missing-backup-session')
-  })
-
-  it('prepares canonical chat bodies before selecting the backup session snapshot', async () => {
-    const events: string[] = []
-    const queries = Object.freeze({ ...ctx.sessionStorage!.queries, readSession: vi.fn(() => { events.push('select'); return undefined }) })
-    ctx.sessionStorage = { ...ctx.sessionStorage!, queries,
-      ensureChatBodyV1: async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`); return [] } } as SessionStorage
-
-    await expect(loadBackupPayload(ctx, 'backup-order-session')).resolves.toBeNull()
-
-    expect(events).toEqual(['select'])
   })
 
   it('API context baseline IPC resolves the latest-window rows through canonical bodies', async () => {

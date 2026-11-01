@@ -68,11 +68,11 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
     update: (messageId, patch) => updateMessageContent(db, messageId, patch),
     updateIfStreaming: (messageId, patch) => updateMessageContentIfStreaming(db, messageId, patch),
     checkpoint: (turnId, version, message) => checkpointTurnAtomically(db, turnId, version, message.id, message),
-    listStreaming: () => listStreamingAssistantMessages(db),
-    listRecoverableResidues: () => listRecoverableResidues(db),
+    listStreaming: (sessionId) => listStreamingAssistantMessages(db, sessionId),
+    listRecoverableResidues: (sessionId) => listRecoverableResidues(db, sessionId),
     finalizeResidueMessage: (messageId, targetStatus) => finalizeResidueMessageKeepingOutcome(db, messageId, targetStatus),
     finalizeParkedResidueMessage: (messageId) => finalizeParkedResidueMessage(db, messageId),
-    listUnfinishedTurns: () => listPersistedTurns(db)
+    listUnfinishedTurns: (sessionId) => listPersistedTurns(db, undefined, sessionId)
       .filter((turn) => turn.state === 'configuring' || turn.state === 'prepared' || turn.state === 'executing' || turn.state === 'waiting-confirm')
     .map((turn) => ({ turnId: turn.turnId, assistantMessageId: turn.assistantMessageId })),
     recoverTurn: (turnId, assistantMessageId) => {
@@ -83,6 +83,7 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
       let historyInvocationId: string | undefined
       let completedHistory: ReturnType<SqliteAgentHistory['readCompletedInvocationForSession']>
       let completedToolCalls: ReturnType<SqliteAgentHistory['readCompletedToolCallsForSession']>
+      let recoverableToolCalls: ReturnType<SqliteAgentHistory['readRecoverableToolCallsForSession']>
       try {
         sessionInvocationIds = turn ? history.listInvocationIdsForSession(turn.sessionId) : []
         // Newly accepted turns own a canonical stream keyed by turnId. Read the
@@ -92,6 +93,7 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
           : turn?.requestId
         completedHistory = turn?.sessionId && historyInvocationId ? history.readCompletedInvocationForSession(historyInvocationId, turn.sessionId, turn.turnId) : undefined
         completedToolCalls = turn?.sessionId && historyInvocationId ? history.readCompletedToolCallsForSession(historyInvocationId, turn.sessionId, turn.turnId) : undefined
+        recoverableToolCalls = turn?.sessionId && historyInvocationId ? history.readRecoverableToolCallsForSession(historyInvocationId, turn.sessionId, turn.turnId) : undefined
       } catch (error) {
         if (!(error instanceof HistoryCorruptionError)) throw error
         // Corrupt canonical history cannot authorize success. Preserve startup recovery by
@@ -124,8 +126,8 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
         if (!(error instanceof HistoryCorruptionError)) throw error
         return recoverPersistedTurn(db, turnId, assistantMessageId)
       }
-      if (canonicalOutcome && recoverPersistedTurn(db, turnId, assistantMessageId, { outcome: canonicalOutcome })) return canonicalOutcome
-      return recoverPersistedTurn(db, turnId, assistantMessageId)
+      if (canonicalOutcome && recoverPersistedTurn(db, turnId, assistantMessageId, { outcome: canonicalOutcome, ...(recoverableToolCalls ? { recoveredToolCalls: recoverableToolCalls } : {}) })) return canonicalOutcome
+      return recoverPersistedTurn(db, turnId, assistantMessageId, recoverableToolCalls ? { recoveredToolCalls: recoverableToolCalls } : {})
     },
     saveTurn: (turn) => { createPersistedTurn(db, turn) }
     ,updateTurnState: (turnId, state, patch) => { updatePersistedTurnState(db, turnId, state, patch) }

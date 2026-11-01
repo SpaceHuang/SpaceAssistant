@@ -1,11 +1,9 @@
 const path = require('node:path')
 const { app, BrowserWindow, ipcMain } = require('electron')
-const { registerAppIpcHandlers } = require('../dist-electron/electron/appIpc.js')
+const { registerAgentIpc } = require('../dist-electron/electron/ipc/agentProtocolIpc.js')
 const { openDatabase } = require('../dist-electron/electron/database/index.js')
-const { createSession } = require('../dist-electron/electron/database/index.js')
-const { getPersistedTurn, getMessages } = require('../dist-electron/electron/database/index.js')
-const { createTurnCoordinatorStorage } = require('../dist-electron/electron/turnCoordinatorStorage.js')
-const { TurnRuntime } = require('../dist-electron/electron/turnRuntime.js')
+const { createSession, getPersistedTurn, getMessages } = require('../dist-electron/electron/database/operations.js')
+const { createSessionTurnRuntime, createSqliteSessionStorage } = require('../dist-electron/electron/sessionStorage/sqliteSessionStorage.js')
 
 const sampleCount = Number(process.env.SPACEASSISTANT_IPC_SAMPLES || 1000)
 const preload = path.join(__dirname, 'probe-chat-business-ipc-preload.cjs')
@@ -15,9 +13,9 @@ app.disableHardwareAcceleration()
 
 const db = openDatabase(':memory:')
 const session = createSession(db, { name: 'business-ipc-probe' })
+const sessionStorage = createSqliteSessionStorage(db)
 const metrics = []
-const turnRuntime = new TurnRuntime({
-  storage: createTurnCoordinatorStorage(db),
+const turnRuntime = createSessionTurnRuntime(sessionStorage, {
   deps: { now: Date.now, id: () => require('node:crypto').randomUUID(), onMetric: (metric) => metrics.push(metric) },
   source: async () => ({ outcome: 'completed' }),
   onEvent: (turn, event) => probeWindow?.webContents.send('chat:turn-projection', { turn, event, probeSentAtMs: Date.now() })
@@ -27,6 +25,7 @@ let prepared
 // 只替身隔离模型/存储副作用；IPC 注册本身走生产 registerAppIpcHandlers。
 const ctx = {
   db,
+  sessionStorage,
   backup: { schedule() {}, flush: async () => {}, backupImmediate: async () => {}, deleteBackup: async () => {} },
   workDirManager: {
     listProfiles: () => [], addProfile: () => undefined, updateProfile: () => undefined,
@@ -42,7 +41,7 @@ const ctx = {
   turnRuntime
 }
 
-registerAppIpcHandlers(ipcMain, ctx)
+registerAgentIpc(ipcMain, ctx)
 prepared = turnRuntime.prepare({ mode: 'create-user', requestId: 'probe-request', sessionId: session.id, input: { text: 'probe' }, config: {} })
 ipcMain.handle('probe:complete-turn', async () => {
   turnRuntime.bindRequest(prepared.requestId, prepared.turnId)

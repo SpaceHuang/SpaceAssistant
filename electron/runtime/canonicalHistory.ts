@@ -1,6 +1,7 @@
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import type { CanonicalContentBlock, CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
+import { restoreLegacySessionContextSnapshot, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 
 type UnknownRecord = Record<string, unknown>
 
@@ -239,6 +240,12 @@ export type CanonicalSessionSnapshot = Readonly<{
 export function canonicalSessionTranscriptEvents(events: readonly HistoryEvent[]): HistoryEvent[] {
   const transcriptEvents: HistoryEvent[] = []
   for (const event of events) {
+    if (event.kind === 'replay-message-committed') {
+      const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+        ? event.payload as { message?: { role?: unknown } } : undefined
+      // Model-context tool results pair with a tool call in History but are not standalone chat bodies.
+      if (payload?.message?.role === 'tool') continue
+    }
     if (event.kind === 'tool-call-started' || event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' || event.kind === 'approval-deferred') continue
     if (event.kind === 'model-response-committed') {
       const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
@@ -285,6 +292,19 @@ export function foldClaudeSessionSnapshots(snapshots: readonly CanonicalSessionS
     session.fold(snapshot)
   }
   return session.messages()
+}
+
+/** Convert legacy full snapshots at the storage boundary, then hand state ownership to the shared reducer. */
+export function restoreLegacyCanonicalSessionSnapshots(snapshots: readonly CanonicalSessionSnapshot[], committedVersion: number):
+  Readonly<{ messages: ClaudeChatMessageWithBlocks[]; context: SessionContextState }> {
+  const messages = foldClaudeSessionSnapshots(snapshots)
+  const context = restoreLegacySessionContextSnapshot({
+    invocationId: `legacy-canonical-session:${snapshots.at(-1)?.sessionId ?? 'empty'}`,
+    turnId: `legacy-canonical-version:${committedVersion}`,
+    committedVersion,
+    messages: toCanonicalModelMessages(messages)
+  })
+  return { messages, context }
 }
 
 export type CanonicalSessionSnapshotFoldSession = Readonly<{
@@ -631,10 +651,21 @@ export function foldCanonicalHistoryChunk(
       continue
     }
     if (event.kind === 'replay-message-committed') {
-      flushResults()
       const payload = event.payload as { message?: unknown }
       const message = payload?.message as CanonicalModelMessage | undefined
-      if (!message || (message.role !== 'user' && message.role !== 'assistant')) throw new Error(`invalid canonical replay message: ${event.eventId}`)
+      if (!message) throw new Error(`invalid canonical replay message: ${event.eventId}`)
+      if (message.role === 'tool') {
+        if (!message.toolCallId?.trim() || !toolCallOrder.includes(message.toolCallId) ||
+          (!pendingToolCalls.has(message.toolCallId) && !replayResults.has(message.toolCallId))) {
+          throw new Error(`canonical replay tool result has no committed call: ${message.toolCallId ?? event.eventId}`)
+        }
+        pendingToolCalls.delete(message.toolCallId)
+        replayResults.set(message.toolCallId, { type: 'tool_result', tool_use_id: message.toolCallId,
+          content: message.content ?? '', ...(message.isError ? { is_error: true } : {}) })
+        continue
+      }
+      flushResults()
+      if (message.role !== 'user' && message.role !== 'assistant') throw new Error(`invalid canonical replay message: ${event.eventId}`)
       if (message.role === 'assistant') throw new Error('assistant replay messages must use model-response-committed')
       if (!message.id?.trim() && options.omitAnonymousReplayFromSessionTranscript) continue
       if (typeof message.content === 'string') emitMessage({ role: 'user', content: message.content, ...(message.id ? { id: message.id } : {}) })

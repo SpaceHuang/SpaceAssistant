@@ -17,6 +17,14 @@ describe('persisted operation status hints', () => {
 })
 
 describe('deserializeToolCallsFromDb', () => {
+  it('preserves canonical execution outcome metadata needed to display unknown effects after recovery', () => {
+    const restored = deserializeToolCallsFromDb(serializeToolCallsForDb([{
+      id: 'unknown-outcome', toolName: 'run_shell', input: {}, status: 'failed', riskLevel: 'high',
+      result: { success: false, executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', executionErrorCode: 'SHELL_TIMEOUT' }
+    }]))?.[0]?.result
+    expect(restored).toMatchObject({ success: false, executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', executionErrorCode: 'SHELL_TIMEOUT' })
+  })
+
   it('compacts oversized string tool results before persisting them and restores the truncation marker', () => {
     const full = `head-${'x'.repeat(40_000)}-tail`
     const raw = serializeToolCallsForDb([{

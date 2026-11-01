@@ -161,20 +161,20 @@ describe('security:clear-cache 联动撤销旧信任存储（B6/B7）', () => {
   const invoke = (payload?: Record<string, unknown>) =>
     ipc.getHandler('security:clear-cache')?.(null, payload) as Promise<{ ok: boolean; cleared: number }>
 
-  it('queued message edit IPC returns declared success result and flushes backup', async () => {
+  it('queued message edit IPC returns declared success result without exporting a backup', async () => {
     const message = { id: 'q1', sessionId: 's1', role: 'user', content: 'edited', timestamp: 1, status: 'queued', schemaVersion: 1 }
     mockEditQueuedMessage.mockReturnValue({ ok: true, message, sequence: 7 })
     const result = await ipc.getHandler('chat:update-queued-message')?.(null, { sessionId: 's1', messageId: 'q1', content: 'edited' })
     expect(mockEditQueuedMessage).toHaveBeenCalledWith({ sessionId: 's1', messageId: 'q1', content: 'edited' })
     expect(result).toEqual({ ok: true, message, sequence: 7 })
-    expect(ctx.backup.flush).toHaveBeenCalledWith('s1', expect.any(Function))
+    expect(ctx.backup.backupImmediate).not.toHaveBeenCalled()
   })
 
   it('queued message edit IPC preserves declared error result without flushing backup', async () => {
     mockEditQueuedMessage.mockReturnValue({ ok: false, error: 'message_not_queued' })
     const result = await ipc.getHandler('chat:update-queued-message')?.(null, { sessionId: 's1', messageId: 'q1', content: 'edited' })
     expect(result).toEqual({ ok: false, error: 'message_not_queued' })
-    expect(ctx.backup.flush).not.toHaveBeenCalled()
+    expect(ctx.backup.backupImmediate).not.toHaveBeenCalled()
   })
 
   it('单键清除时联动撤销该键对应的旧库信任', async () => {

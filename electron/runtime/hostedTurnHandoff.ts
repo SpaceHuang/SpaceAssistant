@@ -2,7 +2,7 @@ import type { CanonicalModelMessage, PreparedModelCall } from '../../packages/ag
 import type { HostCommittedModelResponse } from '../../packages/agent-sdk/src/turn'
 import { runHostedAgentTurn } from '../../packages/agent-sdk/src/turn'
 import { ToolLoopRoundLimitError } from '../../packages/agent-sdk/src/turn'
-import type { HistoryPort } from '../../packages/agent-sdk/src/history'
+import type { HistoryPort, HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import type { RunToolChatSessionArgs, RunToolChatSessionResult } from '../toolChatLoop'
 import type { SessionExecutionStore } from '../sessionStorage/public/execution'
 import { createSessionCommitService } from '../sessionStorage/host/sessionCommitService'
@@ -18,6 +18,10 @@ import { queueInputFingerprint } from '../queueInputFingerprint'
 import { readChatMessageAfterPreparation } from '../sessionStorage/public/readMessages'
 import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
+import { withSessionTurnAdmission } from '../sessionCompactionLock'
+import { hasActiveSessionExecutionOwner, registerActiveSessionExecutionOwner, releaseActiveSessionExecutionOwner } from './sessionExecutionOwnerRegistry'
+import { cleanupOrphanProcess } from '../shell/orphanProcessCleanup'
+import { restoreLegacySessionContextSnapshot, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 import type { DynamicModelTool } from './dynamicToolRequest'
 
 function hasSessionHistoryQueries(history: HistoryPort): history is SessionHistoryPort {
@@ -32,7 +36,7 @@ function hostedFailureOutcome(terminal: Parameters<typeof decodeTerminalOutcome>
 }
 
 type HostedRuntimeFactory = Readonly<{
-  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; /** FR3：延迟名集合（并入 capabilities known + authorized）。 */ deferredToolNames?: ReadonlySet<string>; /** FR8：延迟维度（turn 计量）。 */ deferredDimension?: import('../../src/shared/usageAttribution').DeferredToolDimension; /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影用）。 */ deferredUnsurfacedCheck?: (toolName: string) => boolean; /** FR12②：广告面层被裁工具名。 */ eagerBudgetDroppedNames?: ReadonlySet<string>; dynamicToolsForNextRequest?: () => readonly DynamicModelTool[]; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; sessionTranscriptBaseVersion?: number; sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']; beforeDispatchLease?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
+  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; /** FR3：延迟名集合（并入 capabilities known + authorized）。 */ deferredToolNames?: ReadonlySet<string>; /** FR8：延迟维度（turn 计量）。 */ deferredDimension?: import('../../src/shared/usageAttribution').DeferredToolDimension; /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影用）。 */ deferredUnsurfacedCheck?: (toolName: string) => boolean; /** FR12②：广告面层被裁工具名。 */ eagerBudgetDroppedNames?: ReadonlySet<string>; dynamicToolsForNextRequest?: () => readonly DynamicModelTool[]; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; sessionTranscriptBaseVersion?: number; sessionTranscriptCommitProtocol?: 2; sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']; beforeDispatchLease?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
 }>
 
 type HandoffInput = Readonly<{
@@ -71,7 +75,10 @@ function bindAssistantMessageIdentity(history: HistoryPort, assistantMessageId: 
       if (message.role !== 'assistant') return event
       return { ...event, payload: { ...payload, message: { ...message, id: assistantMessageId } } }
     }), expectedVersion, transcriptCommit),
-    read: (invocationId) => history.read(invocationId)
+    read: (invocationId) => history.read(invocationId),
+    ...(history.readLatestEvent ? { readLatestEvent: (invocationId: string) => history.readLatestEvent!(invocationId) } : {}),
+    ...(history.prepareTransitionState ? { prepareTransitionState: (snapshot: HistorySnapshot) => history.prepareTransitionState!(snapshot) } : {}),
+    ...(history.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, key: string) => history.findByIdempotencyKey!(invocationId, key) } : {})
   }
 }
 
@@ -182,25 +189,53 @@ export function createHostedTurnHandoff(input: {
     }
     let ownership: { sessionId: string; turnId: string; ownerId: string; generation: number } | undefined
     let queuedOwnership: { sessionId: string; turnId: string; ownerId: string } | undefined
+    let sessionContext: SessionContextState | undefined
+    let contextGeneration: string | undefined
+    let sessionContextBaselineRequired = false
+    let contextPublished = false
     let keepClaimedForReconciliation = false
     let executionStarted = false
     try {
     let checkpoint: import('../sessionStorage/public/model').HostedTranscriptSnapshot | undefined
     if (input.sessionExecution && input.sessionId) {
+      const sessionId = input.sessionId
       const ownerId = `runtime:${process.pid}:${randomUUID()}`
-      queuedOwnership = { sessionId: input.sessionId, turnId: input.turnId, ownerId }
+      queuedOwnership = { sessionId, turnId: input.turnId, ownerId }
       // Session ownership has its own queue budget, independent of the parent turn deadline.
       const waitUntil = Date.now() + 30_000
       for (;;) {
-        const claim = input.sessionExecution!.claimExecution({ sessionId: input.sessionId, turnId: input.turnId, ownerId })
+        const claim = await withSessionTurnAdmission(sessionId, async () => {
+          const activeOwner = hasActiveSessionExecutionOwner(sessionId)
+          if (!activeOwner) {
+            for (const orphan of input.sessionExecution!.listOrphanProcessIdentities(sessionId)) {
+              const result = await cleanupOrphanProcess({ pid: orphan.pid, processGroupId: orphan.processGroupId, ownerToken: orphan.ownerToken })
+              logAgentEvent('info', 'shell.orphan_cleanup', { turnId: orphan.turnId, toolUseId: orphan.toolUseId, result })
+            }
+            const recovery = input.sessionExecution!.recoverExecutionTarget(sessionId)
+            if (recovery?.status === 'blocked') return { acquired: false as const, reason: 'blocked' as const }
+          }
+          const result = input.sessionExecution!.claimExecution({ sessionId, turnId: input.turnId, ownerId })
+          if (result.acquired) registerActiveSessionExecutionOwner(sessionId)
+          return result
+        })
         if (claim.acquired) {
-          ownership = { sessionId: input.sessionId, turnId: input.turnId, ownerId, generation: claim.generation }
+          ownership = { sessionId, turnId: input.turnId, ownerId, generation: claim.generation }
           break
         }
         if (claim.reason === 'blocked' || Date.now() >= waitUntil) throw new Error(claim.reason === 'blocked' ? 'SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED' : 'SESSION_EXECUTION_QUEUE_TIMEOUT')
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
-      checkpoint = input.sessionExecution.readHostedTranscript(input.sessionId)
+      if (input.trackScopedModelInput) {
+        const state = input.sessionExecution.readTranscriptState(input.sessionId)
+        checkpoint = { ...state, messages: [] }
+      } else {
+        const preparedContext = await input.sessionExecution.prepareHostedContext({ sessionId: input.sessionId, scopeKey: 'session' })
+        checkpoint = { sessionId: input.sessionId, version: preparedContext.version, status: preparedContext.status,
+          ...(preparedContext.lastTurnId ? { lastTurnId: preparedContext.lastTurnId } : {}), messages: preparedContext.context.committed }
+        sessionContext = preparedContext.context
+        contextGeneration = preparedContext.generation
+        sessionContextBaselineRequired = preparedContext.baselineRequired
+      }
       if (checkpoint.status !== 'ready') throw new Error('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED')
       if (checkpoint.version > 0) {
         logAgentEvent('info', 'history.cutover', {
@@ -212,7 +247,7 @@ export function createHostedTurnHandoff(input: {
     let request = handoff.request
     if (!input.trackScopedModelInput && checkpoint && checkpoint.version > 0 && handoff.requiredUserMessage) {
       const systemMessages = handoff.request.messages.filter((message) => message.role === 'system')
-      request = { ...handoff.request, messages: [...systemMessages, ...committedTranscriptMessages(checkpoint.messages as CanonicalModelMessage[]), handoff.requiredUserMessage.message] }
+      request = { ...handoff.request, messages: [...systemMessages, ...committedTranscriptMessages((sessionContext?.committed ?? checkpoint.messages) as CanonicalModelMessage[]), handoff.requiredUserMessage.message] }
     } else if (!input.trackScopedModelInput && input.sessionId && handoff.requiredUserMessage && hasSessionHistoryQueries(input.history)) {
       // Existing streams must never silently fall back to legacy session messages.
       const sessionHistory = input.history
@@ -304,6 +339,19 @@ export function createHostedTurnHandoff(input: {
         }]
       }
     }
+    if (sessionContext && checkpoint?.version === 0 && handoff.requiredUserMessage) {
+      const required = JSON.stringify(handoff.requiredUserMessage.message)
+      let acceptedIndex = -1
+      for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+        if (JSON.stringify(request.messages[index]) === required) { acceptedIndex = index; break }
+      }
+      const legacySeed = acceptedIndex >= 0 ? request.messages.slice(0, acceptedIndex).filter((message) => message.role !== 'system') : []
+      if (legacySeed.length > 0) sessionContextBaselineRequired = true
+      sessionContext = restoreLegacySessionContextSnapshot({
+        invocationId: `legacy-session-context:${input.sessionId}`, turnId: `legacy-session-context:${input.sessionId}`,
+        committedVersion: 0, messages: legacySeed as CanonicalModelMessage[], scope: { kind: 'session', sessionId: input.sessionId! }
+      })
+    }
     const transcriptFailureMessages = ownership && checkpoint && handoff.requiredUserMessage
       ? (() => {
           const required = JSON.stringify(handoff.requiredUserMessage.message)
@@ -316,7 +364,10 @@ export function createHostedTurnHandoff(input: {
       : undefined
     const historyFacade: HistoryPort = {
       appendBatch: (events, expectedVersion, transcriptCommit) => input.history.appendBatch(events, expectedVersion, transcriptCommit),
-      read: (invocationId) => input.history.read(invocationId)
+      read: (invocationId) => input.history.read(invocationId),
+      ...(input.history.readLatestEvent ? { readLatestEvent: (invocationId: string) => input.history.readLatestEvent!(invocationId) } : {}),
+      ...(input.history.prepareTransitionState ? { prepareTransitionState: (snapshot: HistorySnapshot) => input.history.prepareTransitionState!(snapshot) } : {}),
+      ...(input.history.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, key: string) => input.history.findByIdempotencyKey!(invocationId, key) } : {})
     }
     // The terminal participant may mirror an assistant message only when the accepted turn
     // owner has a matching persisted target. Session-only Hosted requests still commit their
@@ -337,7 +388,10 @@ export function createHostedTurnHandoff(input: {
     const leaseBoundHostHistory: HistoryPort = ownership ? {
       appendBatch: (events, expectedVersion, transcriptCommit) => commitBoundHostHistory.appendBatch(events, expectedVersion,
         transcriptCommit ? { ...transcriptCommit, executionLease: ownership } : undefined),
-      read: (invocationId) => commitBoundHostHistory.read(invocationId)
+      read: (invocationId) => commitBoundHostHistory.read(invocationId),
+      ...(commitBoundHostHistory.readLatestEvent ? { readLatestEvent: (invocationId: string) => commitBoundHostHistory.readLatestEvent!(invocationId) } : {}),
+      ...(commitBoundHostHistory.prepareTransitionState ? { prepareTransitionState: (snapshot: HistorySnapshot) => commitBoundHostHistory.prepareTransitionState!(snapshot) } : {}),
+      ...(commitBoundHostHistory.findByIdempotencyKey ? { findByIdempotencyKey: (invocationId: string, key: string) => commitBoundHostHistory.findByIdempotencyKey!(invocationId, key) } : {})
     } : commitBoundHostHistory
     const runtime = await input.agentSdk.createHostedTurnRuntime({
       ...(input.confirmationAdapter ? { confirmationAdapter: input.confirmationAdapter } : {}),
@@ -350,6 +404,7 @@ export function createHostedTurnHandoff(input: {
       resolveRegisteredToolName: handoff.resolveRegisteredToolName,
       hostHistory: leaseBoundHostHistory,
       ...(ownership && checkpoint ? { sessionTranscriptBaseVersion: checkpoint.version } : {}),
+      ...(ownership && checkpoint ? { sessionTranscriptCommitProtocol: 2 as const } : {}),
       ...(transcriptFailureMessages ? { sessionTranscriptFailureMessages: transcriptFailureMessages } : {}),
       ...(handoff.afterToolResult ? { afterToolResult: handoff.afterToolResult } : {}),
       ...(handoff.beforeToolDispatch ? { beforeToolDispatch: handoff.beforeToolDispatch } : {}),
@@ -373,13 +428,21 @@ export function createHostedTurnHandoff(input: {
         requiredUserMessage: handoff.requiredUserMessage,
         routeId: input.routeId,
         request: handoff.signal ? { ...request, signal: handoff.signal } : request,
+        ...(sessionContext ? { sessionContext } : {}),
+        ...(sessionContextBaselineRequired ? { sessionContextBaselineRequired: true } : {}),
+        ...(sessionContext && handoff.requiredUserMessage ? { sessionContextInputMessages: [handoff.requiredUserMessage.message], sessionContextFailureInputMessages: [handoff.requiredUserMessage.message] } : {}),
+        ...(sessionContext && contextGeneration ? { onSessionContextCommitted: (context: SessionContextState) => {
+          contextPublished = input.sessionExecution!.commitHostedContext({ sessionId: input.sessionId!, generation: contextGeneration!, scopeKey: 'session', context })
+        } } : {}),
         ...(ownership && checkpoint ? { sessionTranscriptBaseVersion: checkpoint.version } : {}),
+        ...(ownership && checkpoint ? { sessionTranscriptCommitProtocol: 2 as const } : {}),
         ...(transcriptFailureMessages ? { sessionTranscriptFailureMessages: transcriptFailureMessages } : {}),
         ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
         ...(handoff.initialResponse ? { initialResponse: handoff.initialResponse } : {})
       })
-      const snapshot = await input.history.read(input.invocationId)
-      const terminal = [...(snapshot?.events ?? [])].reverse().find((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted' || event.kind === 'invocation-parked')
+      const terminal = input.history.readLatestEvent
+        ? await input.history.readLatestEvent(input.invocationId)
+        : (await input.history.read(input.invocationId)).events.at(-1)
       if (!terminal) throw new HostedTurnFinalizedError(new Error('Hosted invocation terminal is missing from canonical History'), 'failed')
       if (terminal.kind === 'invocation-parked') {
         const payload = terminal.payload && typeof terminal.payload === 'object' && !Array.isArray(terminal.payload)
@@ -387,8 +450,10 @@ export function createHostedTurnHandoff(input: {
         const todoId = typeof payload.todoId === 'string' ? payload.todoId : undefined
         if (!todoId || payload.status !== 'parked') throw new HostedTurnFinalizedError(new Error('Hosted parked terminal is invalid'), 'failed')
         if (ownership && checkpoint) {
-          const committed = input.sessionExecution!.readHostedTranscript(ownership.sessionId)
+          const committed = input.sessionExecution!.readTranscriptState(ownership.sessionId)
           if (committed.status !== 'ready' || committed.version !== checkpoint.version + 1 || committed.lastTurnId !== ownership.turnId) {
+            contextPublished = false
+            input.sessionExecution!.invalidateHostedContext(ownership.sessionId)
             input.sessionExecution!.markExecutionUncertain(ownership)
             keepClaimedForReconciliation = true
             throw new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:parked-terminal-participant-incomplete'), 'commit-uncertain')
@@ -411,8 +476,10 @@ export function createHostedTurnHandoff(input: {
         throw new HostedTurnFinalizedError(new Error(`Hosted invocation ended as ${terminal.kind}`), hostedFailureOutcome(terminal))
       }
       if (ownership && checkpoint) {
-        const committed = input.sessionExecution!.readHostedTranscript(ownership.sessionId)
+        const committed = input.sessionExecution!.readTranscriptState(ownership.sessionId)
         if (committed.status !== 'ready' || committed.version !== checkpoint.version + 1 || committed.lastTurnId !== ownership.turnId) {
+          contextPublished = false
+          input.sessionExecution!.invalidateHostedContext(ownership.sessionId)
           input.sessionExecution!.markExecutionUncertain(ownership)
           keepClaimedForReconciliation = true
           logAgentEvent('error', 'session.transcript.reconciliation', {
@@ -441,13 +508,7 @@ export function createHostedTurnHandoff(input: {
             modelTurns: Math.max(0, hosted.modelTurns - (handoff.initialResponse ? 1 : 0)),
             initialMessageCount: request.messages.length,
             messages: hosted.messages,
-            notDispatchedToolCallIds: snapshot.events.flatMap((event) => {
-              if (event.kind !== 'tool-call-not-dispatched') return []
-              const toolCallId = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
-                ? (event.payload as { toolCallId?: unknown }).toolCallId
-                : undefined
-              return typeof toolCallId === 'string' ? [toolCallId] : []
-            })
+            notDispatchedToolCallIds: hosted.notDispatchedToolCallIds ?? []
           }
         }
       }
@@ -491,8 +552,10 @@ export function createHostedTurnHandoff(input: {
         throw new HostedTurnFinalizedError(error, 'commit-uncertain', terminalUsage(terminal))
       }
       if (terminal && terminal.kind !== 'invocation-completed' && ownership && checkpoint && transcriptFailureMessages) {
-        const committed = input.sessionExecution!.readHostedTranscript(ownership.sessionId)
+        const committed = input.sessionExecution!.readTranscriptState(ownership.sessionId)
         if (committed.status !== 'ready' || committed.version !== checkpoint.version + 1 || committed.lastTurnId !== ownership.turnId) {
+          contextPublished = false
+          input.sessionExecution!.invalidateHostedContext(ownership.sessionId)
           input.sessionExecution!.markExecutionUncertain(ownership)
           keepClaimedForReconciliation = true
           logAgentEvent('error', 'session.transcript.reconciliation', {
@@ -516,6 +579,8 @@ export function createHostedTurnHandoff(input: {
       }
     }
     } finally {
+      if (ownership && sessionContext && !contextPublished) input.sessionExecution!.invalidateHostedContext(ownership.sessionId)
+      if (ownership) releaseActiveSessionExecutionOwner(ownership.sessionId)
       if (ownership && !keepClaimedForReconciliation) {
         input.sessionExecution!.releaseExecution(ownership)
       } else if (!ownership && queuedOwnership) input.sessionExecution!.cancelQueuedExecution(queuedOwnership)

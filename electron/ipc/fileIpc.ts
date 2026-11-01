@@ -14,8 +14,7 @@ import { defaultPdfSavePath, getFileMetadata, readFileForViewer } from '../fileR
 import { getMainWindow } from '../windowRef'
 import { normalizeRelPathInput, resolveSafePath } from '../pathSecurity'
 import { withTransientLockRetry } from '../safeAtomicWrite'
-import { atomicWrite, buildMarkdownDocx, markdownToPrintHtml, isSupportedMarkdownExport, markdownResourceUrls, sameFileIdentity, MAX_MARKDOWN_EXPORT_IMAGES, MAX_MARKDOWN_EXPORT_IMAGE_BYTES, MAX_MARKDOWN_EXPORT_TOTAL_IMAGE_BYTES } from '../markdownExport'
-import { defaultMarkdownExportPath, normalizeMarkdownExportPath, isMarkdownExportablePath, type MarkdownExportResult } from '../../src/shared/markdownExport'
+import { defaultMarkdownExportPath, normalizeMarkdownExportPath, isMarkdownExportablePath, type MarkdownExportFormat, type MarkdownExportResult } from '../../src/shared/markdownExport'
 import { resolveSafeReadPath } from '../pathSecurity'
 import { resolveWikiMount } from '../wiki/wikiMount'
 import { readWikiConfig } from './ipcShared'
@@ -213,7 +212,10 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   })
 
   ipcMain.handle('file:export-markdown', async (_e, payload: { format: unknown; markdown: unknown; sourcePath: unknown }): Promise<MarkdownExportResult> => {
-    if (!isSupportedMarkdownExport(payload?.format) || typeof payload.markdown !== 'string' || typeof payload.sourcePath !== 'string') return { ok: false, error: '导出参数无效' }
+    if ((payload?.format !== 'docx' && payload?.format !== 'pdf') || typeof payload.markdown !== 'string' || typeof payload.sourcePath !== 'string') return { ok: false, error: '导出参数无效' }
+    const format = payload.format as MarkdownExportFormat
+    const { atomicWrite, buildMarkdownDocx, markdownToPrintHtml, markdownResourceUrls, sameFileIdentity,
+      MAX_MARKDOWN_EXPORT_IMAGES, MAX_MARKDOWN_EXPORT_IMAGE_BYTES, MAX_MARKDOWN_EXPORT_TOTAL_IMAGE_BYTES } = await import('../markdownExport')
     const root = ctx.getWorkDir()
     let source: string
     const exportMounted = wikiMountOf(ctx, payload.sourcePath)
@@ -224,9 +226,9 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     } catch { return { ok: false, error: '导出参数无效' } }
     if (!isMarkdownExportablePath(source)) return { ok: false, error: '仅支持导出 Markdown 文件' }
     const win = getMainWindow(); if (!win) return { ok: false, error: ErrorCodes.WINDOW_NOT_READY }
-    const saved = await dialog.showSaveDialog(win, { defaultPath: defaultMarkdownExportPath(source, payload.format), filters: [{ name: payload.format === 'docx' ? 'Word 文档' : 'PDF', extensions: [payload.format] }] })
+    const saved = await dialog.showSaveDialog(win, { defaultPath: defaultMarkdownExportPath(source, format), filters: [{ name: format === 'docx' ? 'Word 文档' : 'PDF', extensions: [format] }] })
     if (saved.canceled || !saved.filePath) return { ok: false, canceled: true }
-    const target = normalizeMarkdownExportPath(saved.filePath, payload.format)
+    const target = normalizeMarkdownExportPath(saved.filePath, format)
     const warnings: string[] = []
     const images = new Map<string, { data: Buffer; type: 'png' | 'jpg' | 'gif' | 'bmp' }>(); const printImages = new Map<string, { data: Buffer; mime: string }>(); let total = 0
     let imageCount = 0

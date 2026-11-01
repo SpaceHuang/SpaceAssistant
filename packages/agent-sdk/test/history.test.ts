@@ -1,11 +1,175 @@
 import { describe, expect, it } from 'vitest'
-import { HistoryBatchError, HistoryIdempotencyConflict, InvocationHistoryWriter, MemoryHistory, HistorySequenceConflict, rebuildInvocationStates, type HistoryEvent } from '../src/history'
+import { advanceHistoryTransitionState, createHistoryTransitionState, HistoryBatchError, HistoryIdempotencyConflict, InvocationHistoryWriter, MemoryHistory, HistorySequenceConflict, rebuildInvocationStates, validateHistoryTransition, type HistoryEvent } from '../src/history'
 
 const event = (eventId: string, sequence: number, kind: HistoryEvent['kind'] = 'approval-updated', payload: unknown = { eventId }): HistoryEvent => ({
   eventId, idempotencyKey: `idem:${eventId}`, invocationId: 'inv-1', turnId: 'turn-1', sequence, schemaVersion: 1, kind, payload
 })
 
 describe('History Port semantics', () => {
+  it('reduces prior events into an immutable transition state and advances only the incoming batch', () => {
+    const started = event('state-1', 1, 'tool-call-started', { toolCallId: 'call-a' })
+    const state = createHistoryTransitionState([started])
+    expect(state).toMatchObject({
+      invocationId: 'inv-1',
+      turnId: 'turn-1',
+      terminalKind: null,
+      pendingToolCalls: ['call-a'],
+      pendingApprovals: [],
+      approvalIdentityByPendingId: [],
+      deferredTodoIds: [],
+      unconsumedRetryApprovals: []
+    })
+    const next = advanceHistoryTransitionState(state, [event('state-2', 2, 'tool-call-finished', { toolCallId: 'call-a' })])
+    expect(next.pendingToolCalls).toEqual([])
+    expect(state.pendingToolCalls).toEqual(['call-a'])
+  })
+
+  it('carries one-time unknown retry approvals across batches and records terminal state', () => {
+    const approval = event('retry-approval', 1, 'unknown-effect-retry-approved', {
+      targetInvocationId: 'inv-1', unknownEffectId: 'origin:call', toolName: 'write_file', inputHash: 'a'.repeat(64), approvedAt: 10
+    })
+    const state = createHistoryTransitionState([approval])
+    const consumed = advanceHistoryTransitionState(state, [
+      event('retry-consumed', 2, 'unknown-effect-retry-consumed', { targetInvocationId: 'inv-1', approvalEventId: approval.eventId, consumedAt: 11 }),
+      event('retry-started', 3, 'tool-call-started', { toolCallId: 'new-call', toolName: 'write_file', inputHash: 'a'.repeat(64) })
+    ])
+    const settled = advanceHistoryTransitionState(consumed, [event('retry-finished', 4, 'tool-call-finished', { toolCallId: 'new-call' })])
+    const terminal = advanceHistoryTransitionState(settled, [event('terminal', 5, 'invocation-failed', { status: 'failed' })])
+    expect(terminal.terminalKind).toBe('invocation-failed')
+    expect(terminal.unconsumedRetryApprovals).toEqual([])
+    expect(() => advanceHistoryTransitionState(terminal, [event('after-terminal', 5)])).toThrow(HistoryBatchError)
+  })
+
+  it('matches full-prefix reduction after every fixed-seed randomized event batch', () => {
+    let seed = 20261031
+    const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 0x1_0000_0000 }
+    const events: HistoryEvent[] = []
+    let state = createHistoryTransitionState([])
+    let sequence = 0
+    const pendingTools: string[] = []
+    const pendingApprovals: string[] = []
+    const append = (batch: HistoryEvent[]) => {
+      state = advanceHistoryTransitionState(state, batch)
+      events.push(...batch)
+      expect(state).toEqual(createHistoryTransitionState(events))
+      for (const [kind, payload] of [
+        ['approval-resolved', { approvalId: 'missing-approval', approved: true }],
+        ['unknown-effect-retry-consumed', { targetInvocationId: 'inv-1', approvalEventId: 'missing-retry', consumedAt: sequence + 1 }]
+      ] as const) {
+        const invalid = event(`invalid-${events.length}-${kind}`, events.length + 1, kind, payload)
+        const capture = (operation: () => unknown) => {
+          try { operation(); return undefined } catch (error) { return error instanceof Error ? error.message : String(error) }
+        }
+        expect(capture(() => advanceHistoryTransitionState(state, [invalid])))
+          .toEqual(capture(() => validateHistoryTransition(events, [invalid])))
+        expect(capture(() => advanceHistoryTransitionState(state, [invalid]))).toBeTruthy()
+      }
+    }
+    const next = (kind: HistoryEvent['kind'], payload: unknown, prefix: string): HistoryEvent =>
+      event(`${prefix}-${++sequence}`, sequence, kind, payload)
+
+    for (let step = 0; step < 48; step += 1) {
+      const action = Math.floor(random() * 3)
+      if (action === 0 && pendingTools.length > 0) {
+        const index = Math.floor(random() * pendingTools.length)
+        const [toolCallId] = pendingTools.splice(index, 1)
+        append([next('tool-call-finished', { toolCallId }, 'tool-finished')])
+      } else if (action === 1 && pendingApprovals.length > 0) {
+        const index = Math.floor(random() * pendingApprovals.length)
+        const [approvalId] = pendingApprovals.splice(index, 1)
+        append([next('approval-resolved', { approvalId, approved: true, outcome: 'approved', settledAt: sequence + 1 }, 'approval-resolved')])
+      } else if (action === 2) {
+        const inputHash = (step + 1).toString(16).padStart(64, '0')
+        const approval = next('unknown-effect-retry-approved', {
+          targetInvocationId: 'inv-1', unknownEffectId: `unknown-${step}`, toolName: 'write_file', inputHash, approvedAt: step + 1
+        }, 'retry-approved')
+        append([approval])
+        const toolCallId = `retry-call-${step}`
+        append([
+          next('unknown-effect-retry-consumed', { targetInvocationId: 'inv-1', approvalEventId: approval.eventId, consumedAt: step + 2 }, 'retry-consumed'),
+          next('tool-call-started', { toolCallId, toolName: 'write_file', inputHash }, 'retry-started')
+        ])
+        pendingTools.push(toolCallId)
+      } else if (pendingApprovals.length === 0 || random() < 0.5) {
+        const approvalId = `approval-${step}`
+        append([next('approval-waiting', { approvalId, answerer: 'user', reasonCode: 'fixed-seed', requestedAt: step + 1 }, 'approval-waiting')])
+        pendingApprovals.push(approvalId)
+      } else {
+        const toolCallId = `tool-${step}`
+        append([next('tool-call-started', { toolCallId }, 'tool-started')])
+        pendingTools.push(toolCallId)
+      }
+    }
+    for (const toolCallId of pendingTools) append([next('tool-call-finished', { toolCallId }, 'tool-finalized')])
+    for (const approvalId of pendingApprovals) append([next('approval-resolved', { approvalId, approved: true }, 'approval-finalized')])
+    append([next('invocation-completed', { status: 'completed' }, 'terminal')])
+
+    const parkedEvents = [
+      event('park-waiting', 1, 'approval-waiting', { toolCallId: 'park-call', approvalId: 'approval-identity', answerer: 'agent', reasonCode: 'defer', requestedAt: 1 }),
+      event('park-deferred', 2, 'approval-deferred', { toolCallId: 'park-call', approvalId: 'approval-identity', todoId: 'todo-1', invocationId: 'inv-1', checkpointId: 'checkpoint-1', workflowRevision: 1 }),
+      event('park-terminal', 3, 'invocation-parked', { status: 'parked', reason: 'deferred-approval', todoId: 'todo-1' })
+    ]
+    let parkedState = createHistoryTransitionState([])
+    for (const parkedEvent of parkedEvents) {
+      parkedState = advanceHistoryTransitionState(parkedState, [parkedEvent])
+      expect(parkedState).toEqual(createHistoryTransitionState(parkedEvents.slice(0, parkedEvent.sequence)))
+    }
+  })
+
+  it('keeps compact-state rejection equivalent to the full validator across pending obligations', () => {
+    const retry = event('retry-approved', 1, 'unknown-effect-retry-approved', {
+      targetInvocationId: 'inv-1', unknownEffectId: 'unknown-1', toolName: 'write_file', inputHash: 'a'.repeat(64), approvedAt: 1
+    })
+    const cases: Array<{ name: string; previous: HistoryEvent[]; incoming: HistoryEvent[] }> = [
+      { name: 'terminal payload/status', previous: [], incoming: [event('bad-terminal', 1, 'invocation-completed', { status: 'failed' })] },
+      { name: 'approval outcome/boolean', previous: [], incoming: [event('bad-outcome', 1, 'approval-resolved', { approvalId: 'a', approved: false, outcome: 'approved' })] },
+      {
+        name: 'approval identity',
+        previous: [event('waiting', 1, 'approval-waiting', { toolCallId: 'call-a', approvalId: 'approval-a', answerer: 'user', reasonCode: 'test', requestedAt: 1 })],
+        incoming: [event('resolved', 2, 'approval-resolved', { toolCallId: 'call-a', approvalId: 'approval-b', approved: true })]
+      },
+      {
+        name: 'deferred approval binding',
+        previous: [event('waiting', 1, 'approval-waiting', { toolCallId: 'call-a', approvalId: 'approval-a', answerer: 'agent', reasonCode: 'test', requestedAt: 1 })],
+        incoming: [event('deferred', 2, 'approval-deferred', { toolCallId: 'call-a', approvalId: 'approval-a', todoId: 'todo-a', invocationId: 'inv-1', checkpointId: '', workflowRevision: 1 })]
+      },
+      { name: 'park requires settled deferred approval', previous: [], incoming: [event('parked', 1, 'invocation-parked', { status: 'parked', reason: 'deferred-approval', todoId: 'todo-missing' })] },
+      {
+        name: 'terminal cannot leave a tool pending',
+        previous: [event('started', 1, 'tool-call-started', { toolCallId: 'call-a' })],
+        incoming: [event('completed', 2, 'invocation-completed', { status: 'completed' })]
+      },
+      {
+        name: 'retry consumption must match the approved tool input',
+        previous: [retry],
+        incoming: [
+          event('consumed', 2, 'unknown-effect-retry-consumed', { targetInvocationId: 'inv-1', approvalEventId: retry.eventId, consumedAt: 2 }),
+          event('started', 3, 'tool-call-started', { toolCallId: 'call-a', toolName: 'write_file', inputHash: 'b'.repeat(64) })
+        ]
+      },
+      {
+        name: 'retry approval is one-time',
+        previous: [retry],
+        incoming: [
+          event('consumed', 2, 'unknown-effect-retry-consumed', { targetInvocationId: 'inv-1', approvalEventId: retry.eventId, consumedAt: 2 }),
+          event('started', 3, 'tool-call-started', { toolCallId: 'call-a', toolName: 'write_file', inputHash: 'a'.repeat(64) }),
+          event('consumed-again', 4, 'unknown-effect-retry-consumed', { targetInvocationId: 'inv-1', approvalEventId: retry.eventId, consumedAt: 4 }),
+          event('started-again', 5, 'tool-call-started', { toolCallId: 'call-b', toolName: 'write_file', inputHash: 'a'.repeat(64) })
+        ]
+      },
+      { name: 'unsupported context protocol', previous: [], incoming: [event('context', 1, 'invocation-context-committed', { contextProtocol: 3 })] }
+    ]
+    const capture = (operation: () => unknown) => {
+      try { operation(); return undefined } catch (error) { return error instanceof Error ? error.message : String(error) }
+    }
+    for (const testCase of cases) {
+      const state = createHistoryTransitionState(testCase.previous)
+      expect(capture(() => advanceHistoryTransitionState(state, testCase.incoming)), testCase.name)
+        .toEqual(capture(() => validateHistoryTransition(testCase.previous, testCase.incoming)))
+      expect(capture(() => advanceHistoryTransitionState(state, testCase.incoming)), testCase.name).toBeTruthy()
+    }
+  })
+
   it('atomically consumes a one-time unknown retry with a matching tool start and rejects reuse', async () => {
     const history = new MemoryHistory()
     const writer = new InvocationHistoryWriter(history, { invocationId: 'inv-1', turnId: 'turn-1' })
@@ -40,6 +204,56 @@ describe('History Port semantics', () => {
         expect.objectContaining({ sequence: 3, kind: 'tool-call-finished', payload: { toolCallId: 'a' } })
       ]
     })
+  })
+
+  it('records the legacy adapter full-history read baseline before optimization', async () => {
+    const backing = new MemoryHistory()
+    const snapshotsRead: number[] = []
+    const history = {
+      read: async (invocationId: string) => {
+        const snapshot = await backing.read(invocationId)
+        snapshotsRead.push(snapshot.events.length)
+        return snapshot
+      },
+      appendBatch: (...args: Parameters<MemoryHistory['appendBatch']>) => backing.appendBatch(...args)
+    }
+    const writer = new InvocationHistoryWriter(history, { invocationId: 'baseline-read-count', turnId: 'baseline-turn' })
+
+    await writer.append([{ kind: 'approval-updated', payload: { revision: 1 } }])
+    await writer.append([{ kind: 'approval-updated', payload: { revision: 2 } }])
+    await writer.append([{ kind: 'approval-updated', payload: { revision: 3 } }])
+
+    expect(snapshotsRead).toEqual([0])
+  })
+
+  it('prepares cold persisted history transition state once before the first append', async () => {
+    const backing = new MemoryHistory()
+    const prepared: string[] = []
+    const history = {
+      read: (invocationId: string) => backing.read(invocationId),
+      appendBatch: (...args: Parameters<MemoryHistory['appendBatch']>) => backing.appendBatch(...args),
+      prepareTransitionState: async (snapshot: { invocationId: string }) => { prepared.push(snapshot.invocationId) }
+    }
+    const writer = new InvocationHistoryWriter(history, { invocationId: 'cold-prepare', turnId: 'cold-turn' })
+    await writer.append([{ kind: 'approval-updated', payload: {} }])
+    await writer.append([{ kind: 'approval-updated', payload: {} }])
+    expect(prepared).toEqual(['cold-prepare'])
+  })
+
+  it('uses writer version for consecutive appends without rereading event payloads', async () => {
+    const backing = new MemoryHistory()
+    let reads = 0
+    const history = {
+      read: async (invocationId: string) => { reads += 1; return backing.read(invocationId) },
+      appendBatch: (...args: Parameters<MemoryHistory['appendBatch']>) => backing.appendBatch(...args)
+    }
+    const writer = new InvocationHistoryWriter(history, { invocationId: 'warm-writer', turnId: 'warm-turn' })
+
+    await writer.append([{ kind: 'approval-updated', payload: { revision: 1 } }])
+    await writer.append([{ kind: 'approval-updated', payload: { revision: 2 } }])
+    await writer.append([{ kind: 'approval-updated', payload: { revision: 3 } }])
+
+    expect(reads).toBe(1)
   })
 
   it('checks an exact expected version inside the shared writer queue', async () => {

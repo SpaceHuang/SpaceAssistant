@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
 import path from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
@@ -80,8 +81,13 @@ export function createSpillStore(root: string) {
       await file.close()
       file = undefined
       await syncDirectoryBestEffort(root)
-      const persisted = await fs.readFile(absolutePath)
-      if (persisted.byteLength !== bytes.byteLength || sha256(persisted) !== sha256(bytes)) {
+      const persistedHash = createHash('sha256')
+      let persistedBytes = 0
+      for await (const chunk of createReadStream(absolutePath, { highWaterMark: 64 * 1024 })) {
+        persistedBytes += chunk.byteLength
+        persistedHash.update(chunk)
+      }
+      if (persistedBytes !== bytes.byteLength || persistedHash.digest('hex') !== sha256(bytes)) {
         throw new Error('spill verification failed')
       }
       return {

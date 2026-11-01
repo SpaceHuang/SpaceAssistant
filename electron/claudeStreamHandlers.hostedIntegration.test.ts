@@ -25,6 +25,8 @@ import { ToolRevocationRegistry } from './toolRevocationRegistry'
 import { createDesktopAnthropicRouteProfile } from './piAiAnthropicBridge'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { getDbConnection } from './database'
+import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
+import { ensureLegacyLedgerReadiness } from './sessionLedgerReadiness'
 import { runApprovalAgent } from './confirmation/approvalAgent'
 import { PolicyAuthorizationChangeRegistry } from './runtime/policyAuthorizationChangeRegistry'
 import { readPolicyPackages, writePolicyPackages } from './confirmation/policyRulesRuntime'
@@ -305,7 +307,24 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     expect(providerRequests[0]).toContainEqual(expect.objectContaining({ role: 'assistant', content: 'checkpoint prior assistant sentinel' }))
     expect(providerRequests[0]).toContainEqual(expect.objectContaining({ role: 'user', content: 'checkpoint current user sentinel' }))
     expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 2, lastTurnId: 'checkpoint-current-turn' })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'checkpoint-current-turn')).toEqual({ count: 0 })
+    expect(getDbConnection(db).prepare('SELECT base_version,next_version,outcome FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'checkpoint-current-turn')).toEqual({ base_version: 1, next_version: 2, outcome: 'completed' })
+    expect(JSON.parse(getDbConnection(db).prepare(`SELECT payload_json FROM agent_history_events
+      WHERE session_id=? AND turn_id='checkpoint-current-turn' AND kind='invocation-completed'`).get(session.id)!.payload_json as string))
+      .toMatchObject({ contextSelection: { contextProtocol: 2, target: 'working' } })
     expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
+    db.close()
+    db = openDatabase(dbPath)
+    expect(readSessionTranscript(db, session.id, { version: 2 })).toMatchObject({
+      version: 2, lastTurnId: 'checkpoint-current-turn', messages: [
+        expect.objectContaining({ id: priorUser.message.id }), expect.objectContaining({ id: priorAssistant.message.id }),
+        expect.objectContaining({ id: current.message.id }), expect.objectContaining({ role: 'assistant', content: 'checkpoint branch answer' })
+      ]
+    })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'checkpoint-current-turn')).toEqual({ count: 0 })
   })
 
   it.each([
@@ -983,10 +1002,14 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const history = await new SqliteAgentHistory(getDbConnection(db)).read('desktop-history-terminal-turn')
     expect(history.events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)))
       .toEqual([expect.objectContaining({ kind: 'invocation-failed', payload: expect.objectContaining({ status: 'failed' }) })])
-    const transcript = getDbConnection(db).prepare('SELECT outcome,messages_json FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
-      .get(session.id, 'desktop-history-terminal-turn') as { outcome: string; messages_json: string }
+    const transcript = getDbConnection(db).prepare('SELECT outcome,next_version FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'desktop-history-terminal-turn') as { outcome: string; next_version: number }
     expect(transcript.outcome).toBe('failed')
-    expect(JSON.parse(transcript.messages_json)).toEqual([{ role: 'user', id: 'desktop-history-terminal-user', content: 'run once' }])
+    expect(readSessionTranscript(db, session.id, { version: transcript.next_version })).toMatchObject({
+      lastTurnId: 'desktop-history-terminal-turn', messages: [{ role: 'user', id: 'desktop-history-terminal-user', content: 'run once' }]
+    })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'desktop-history-terminal-turn')).toEqual({ count: 0 })
   })
 
   it('preserves Desktop auto-approved write audit and result metadata through Hosted execution', async () => {
@@ -1134,6 +1157,11 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     runtime.modelProviders.register = (profile, provider) => profile.routeId === routeId ? routeId : register(profile, provider)
     setDefaultAgentRuntime(runtime)
     const session = createSession(db, { name: 'hosted-boundary-compaction', model: modelId, maxTokens: MODEL_BASELINE[modelId]!.maxTokens })
+    const legacyLocation = { workDir: '/tmp', sessionId: session.id, createdAt: session.createdAt }
+    const legacyIdentity = sessionLedgerLocationIdentity(legacyLocation)
+    ensureLegacyLedgerReadiness(getDbConnection(db), legacyLocation, session.generation)
+    getDbConnection(db).prepare(`UPDATE session_ledger_projection_state
+      SET origin='legacy',state='unknown',bootstrap_id=NULL,canonical_read_version=NULL WHERE ledger_location_key=?`).run(legacyIdentity.key)
     const priorUser = appendMessage(db, { id: 'boundary-prior-user', sessionId: session.id, role: 'user', content: 'older user context '.repeat(9000), timestamp: 0, status: 'sent' })
     appendMessage(db, { id: 'boundary-prior-assistant', sessionId: session.id, role: 'assistant', content: 'older assistant context '.repeat(9000), timestamp: 0.5, status: 'sent' })
     const user = appendMessage(db, { id: 'boundary-current-user', sessionId: session.id, role: 'user', content: 'current request must survive', timestamp: 1, status: 'sent' })
@@ -1155,6 +1183,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const repairTurnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn() }
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
+      sessionStorage: createSqliteSessionStorage(db, { readCompactionReplay: async () => injectedCompactionReplay ?? ({ committed: [], rejected: [] }) }),
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: ['read_file'] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),

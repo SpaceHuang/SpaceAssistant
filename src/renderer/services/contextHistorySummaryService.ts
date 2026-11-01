@@ -54,9 +54,20 @@ type ContextHistorySummaryState = {
 }
 
 const stateBySession = new Map<string, ContextHistorySummaryState>()
+const updateListeners = new Set<(sessionId: string) => void>()
+
+function notifyUpdated(sessionId: string): void {
+  for (const listener of updateListeners) listener(sessionId)
+}
+
+export function subscribeContextSummaryUpdates(listener: (sessionId: string) => void): () => void {
+  updateListeners.add(listener)
+  return () => updateListeners.delete(listener)
+}
 
 export function resetContextHistorySummaryForTest(): void {
   stateBySession.clear()
+  updateListeners.clear()
 }
 
 function ensure(sessionId: string): ContextHistorySummaryState {
@@ -81,6 +92,10 @@ export function beginContextSummarySession(sessionId: string): number {
   return s.generation
 }
 
+export function currentContextSummaryGeneration(sessionId: string): number | undefined {
+  return stateBySession.get(sessionId)?.generation
+}
+
 export function applyContextSummaryDbBaseline(
   sessionId: string,
   generation: number,
@@ -96,10 +111,10 @@ export function applyContextSummaryDbBaseline(
     }
     s.baseById = next
     for (const [id, over] of [...s.overrideById]) {
-      if (over.order.kind === 'persisted' && next.has(id)) {
-        // baseline 已覆盖且无 pending 时清理；首版简化：persisted override 若与 baseline 同 id 则删除 override
-        s.overrideById.delete(id)
-      }
+      const persisted = next.get(id)
+      if (over.order.kind === 'persisted' && persisted && over.role === persisted.role &&
+        over.imageTokens === persisted.imageTokens && over.thinkingTokens === persisted.thinkingTokens &&
+        over.order.sequence === persisted.order.sequence) s.overrideById.delete(id)
     }
   } catch {
     // 非法 sequence：保留旧状态
@@ -108,7 +123,24 @@ export function applyContextSummaryDbBaseline(
 
 export function upsertContextSummaryOverride(sessionId: string, entry: ContextSummaryEntry): void {
   const s = ensure(sessionId)
+  if (entry.imageTokens <= 0 && entry.thinkingTokens <= 0) {
+    removeContextSummaryMessage(sessionId, entry.messageId)
+    return
+  }
+  const existing = s.overrideById.get(entry.messageId)
+  if (existing?.role === entry.role && existing.imageTokens === entry.imageTokens &&
+    existing.thinkingTokens === entry.thinkingTokens && compareDisplayOrder(existing.order, entry.order) === 0) return
   s.overrideById.set(entry.messageId, entry)
+  notifyUpdated(sessionId)
+}
+
+export function removeContextSummaryMessage(sessionId: string, messageId: string): void {
+  const s = stateBySession.get(sessionId)
+  if (!s) return
+  const removedBase = s.baseById.delete(messageId)
+  const removedOverride = s.overrideById.delete(messageId)
+  const removed = removedBase || removedOverride
+  if (removed) notifyUpdated(sessionId)
 }
 
 export function ackContextSummaryPersisted(sessionId: string, messageId: string, sequence: number): void {
@@ -123,6 +155,7 @@ export function ackContextSummaryPersisted(sessionId: string, messageId: string,
     ...existing,
     order: { kind: 'persisted', sequence }
   })
+  notifyUpdated(sessionId)
 }
 
 export function mergeContextSummaryEntries(sessionId: string): ContextSummaryEntry[] {

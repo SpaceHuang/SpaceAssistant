@@ -1,0 +1,1241 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-1",
+        "count": 100,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-16",
+        "count": 100,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-1",
+        "count": 400,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 1638400
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-16",
+        "count": 400,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 1638400
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-1",
+        "count": 800,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 3276800
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-16",
+        "count": 800,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 3276800
+      },
+      {
+        "kind": "turns",
+        "scenarioId": "turns-100",
+        "count": 100,
+        "bodyBytes": 409600,
+        "pageSize": 20
+      },
+      {
+        "kind": "turns",
+        "scenarioId": "turns-1000",
+        "count": 1000,
+        "bodyBytes": 4096000,
+        "pageSize": 20
+      },
+      {
+        "kind": "tools",
+        "scenarioId": "tools-10",
+        "count": 10,
+        "bodyBytes": 40960
+      },
+      {
+        "kind": "tools",
+        "scenarioId": "tools-100",
+        "count": 100,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "tools",
+        "scenarioId": "tools-1000",
+        "count": 1000,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "large-tool-results",
+        "scenarioId": "large-tool-results-100",
+        "count": 100,
+        "batchSize": 10,
+        "bodyBytes": 104857600
+      },
+      {
+        "kind": "cold-history",
+        "scenarioId": "cold-history-1",
+        "count": 1,
+        "bodyBytes": 1048576
+      },
+      {
+        "kind": "cold-history",
+        "scenarioId": "cold-history-10",
+        "count": 10,
+        "bodyBytes": 10485760
+      },
+      {
+        "kind": "cold-history",
+        "scenarioId": "cold-history-100",
+        "count": 100,
+        "bodyBytes": 104857600
+      },
+      {
+        "kind": "context-summary",
+        "scenarioId": "context-summary-100",
+        "count": 100,
+        "bodyBytes": 1024
+      },
+      {
+        "kind": "context-summary",
+        "scenarioId": "context-summary-1000",
+        "count": 1000,
+        "bodyBytes": 1024
+      }
+    ],
+    "samples": 30,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "sqlite-transaction-boundary",
+        "samples": 30,
+        "work": "SELECT 1 inside production runInTransaction",
+        "p50Ms": 0.003,
+        "p95Ms": 0.007,
+        "maxMs": 0.012
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 1,
+        "samples": 30,
+        "inputBytes": {
+          "p50Bytes": 2993,
+          "p95Bytes": 2993,
+          "maxBytes": 2993
+        },
+        "resultBytes": {
+          "p50Bytes": 1680,
+          "p95Bytes": 1680,
+          "maxBytes": 1680
+        },
+        "roundTrip": {
+          "p50Ms": 17.494,
+          "p95Ms": 18.724,
+          "maxMs": 21.319
+        },
+        "workerDuration": {
+          "p50Ms": 0.767,
+          "p95Ms": 0.824,
+          "maxMs": 1.032
+        }
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 100,
+        "samples": 30,
+        "inputBytes": {
+          "p50Bytes": 233147,
+          "p95Bytes": 233147,
+          "maxBytes": 233147
+        },
+        "resultBytes": {
+          "p50Bytes": 111561,
+          "p95Bytes": 111561,
+          "maxBytes": 111561
+        },
+        "roundTrip": {
+          "p50Ms": 19.045,
+          "p95Ms": 20.352,
+          "maxMs": 26.896
+        },
+        "workerDuration": {
+          "p50Ms": 1.067,
+          "p95Ms": 1.345,
+          "maxMs": 1.611
+        }
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-1",
+        "count": 100,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 409600,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.554,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 735.311,
+        "historyBytesWritten": 12391490,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.001,
+          "p95Ms": 0.001,
+          "maxMs": 0.06
+        },
+        "p50Ms": 23.695,
+        "p95Ms": 28.876,
+        "maxMs": 30.959
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-100-pending-16",
+        "count": 100,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 409600,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.247,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 752.228,
+        "historyBytesWritten": 12414530,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.001,
+          "p95Ms": 0.001,
+          "maxMs": 0.018
+        },
+        "p50Ms": 23.328,
+        "p95Ms": 30.274,
+        "maxMs": 40.843
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-1",
+        "count": 400,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 1638400,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 3.662,
+        "historyAppendCalls": 1200,
+        "historyAppendDurationMs": 2897.865,
+        "historyBytesWritten": 49561490,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0.001,
+          "maxMs": 0.001
+        },
+        "p50Ms": 96.252,
+        "p95Ms": 103.41,
+        "maxMs": 105.107
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-400-pending-16",
+        "count": 400,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 1638400,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 4.249,
+        "historyAppendCalls": 1200,
+        "historyAppendDurationMs": 2587.39,
+        "historyBytesWritten": 49584530,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.001
+        },
+        "p50Ms": 86.427,
+        "p95Ms": 91.084,
+        "maxMs": 97.364
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-1",
+        "count": 800,
+        "pendingCount": 1,
+        "batchSize": 10,
+        "bodyBytes": 3276800,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 4.742,
+        "historyAppendCalls": 2400,
+        "historyAppendDurationMs": 5265.294,
+        "historyBytesWritten": 99121490,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.001
+        },
+        "p50Ms": 175.82,
+        "p95Ms": 186.901,
+        "maxMs": 195.379
+      },
+      {
+        "kind": "events",
+        "scenarioId": "events-800-pending-16",
+        "count": 800,
+        "pendingCount": 16,
+        "batchSize": 10,
+        "bodyBytes": 3276800,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 4.426,
+        "historyAppendCalls": 2400,
+        "historyAppendDurationMs": 5546.516,
+        "historyBytesWritten": 99144530,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.002
+        },
+        "p50Ms": 182.87,
+        "p95Ms": 207.383,
+        "maxMs": 255.697
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 0,
+        "durationMs": 19.64,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 1,
+        "durationMs": 18.144,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 2,
+        "durationMs": 18.016,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 3,
+        "durationMs": 17.885,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 4,
+        "durationMs": 17.828,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 5,
+        "durationMs": 29.367,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 6,
+        "durationMs": 23.009,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 7,
+        "durationMs": 20.325,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 8,
+        "durationMs": 18.136,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 9,
+        "durationMs": 17.889,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 10,
+        "durationMs": 22.671,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 11,
+        "durationMs": 21.723,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 12,
+        "durationMs": 27.543,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 13,
+        "durationMs": 20.621,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 14,
+        "durationMs": 19.627,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 15,
+        "durationMs": 24.04,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 16,
+        "durationMs": 23.806,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 17,
+        "durationMs": 21.461,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 18,
+        "durationMs": 18.235,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 19,
+        "durationMs": 28.799,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 20,
+        "durationMs": 19.056,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 21,
+        "durationMs": 17.977,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 22,
+        "durationMs": 22.204,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 23,
+        "durationMs": 21.851,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 24,
+        "durationMs": 23.325,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 25,
+        "durationMs": 18.536,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 26,
+        "durationMs": 28.744,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 27,
+        "durationMs": 112.427,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 28,
+        "durationMs": 18.572,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 29,
+        "durationMs": 21.171,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns",
+        "scenarioId": "turns-100",
+        "count": 100,
+        "bodyBytes": 409600,
+        "pageSize": 20,
+        "samples": 30,
+        "historyReadCalls": 0,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0,
+        "historyAppendCalls": 0,
+        "historyAppendDurationMs": 0,
+        "historyBytesWritten": 0,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.223,
+          "p95Ms": 0.292,
+          "maxMs": 0.371
+        },
+        "p50Ms": 0.229,
+        "p95Ms": 0.301,
+        "maxMs": 0.382
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 0,
+        "durationMs": 214.216,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 1,
+        "durationMs": 211.342,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 2,
+        "durationMs": 226.888,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 3,
+        "durationMs": 245.018,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 4,
+        "durationMs": 249.948,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 5,
+        "durationMs": 233.44,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 6,
+        "durationMs": 239.004,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 7,
+        "durationMs": 469.441,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 8,
+        "durationMs": 223.195,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 9,
+        "durationMs": 223.049,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 10,
+        "durationMs": 221.382,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 11,
+        "durationMs": 223.351,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 12,
+        "durationMs": 231.342,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 13,
+        "durationMs": 225.431,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 14,
+        "durationMs": 226.029,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 15,
+        "durationMs": 445.139,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 16,
+        "durationMs": 222.788,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 17,
+        "durationMs": 244.381,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 18,
+        "durationMs": 253.471,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 19,
+        "durationMs": 242.198,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 20,
+        "durationMs": 229.762,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 21,
+        "durationMs": 228.22,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 22,
+        "durationMs": 224.261,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 23,
+        "durationMs": 231.602,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 24,
+        "durationMs": 444.164,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 25,
+        "durationMs": 220.531,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 26,
+        "durationMs": 228.225,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 27,
+        "durationMs": 226.223,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 28,
+        "durationMs": 226.637,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 29,
+        "durationMs": 223.428,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns",
+        "scenarioId": "turns-1000",
+        "count": 1000,
+        "bodyBytes": 4096000,
+        "pageSize": 20,
+        "samples": 30,
+        "historyReadCalls": 0,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0,
+        "historyAppendCalls": 0,
+        "historyAppendDurationMs": 0,
+        "historyBytesWritten": 0,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 3.095,
+          "p95Ms": 3.469,
+          "maxMs": 7.846
+        },
+        "p50Ms": 3.108,
+        "p95Ms": 3.483,
+        "maxMs": 7.866
+      },
+      {
+        "kind": "tools",
+        "scenarioId": "tools-10",
+        "count": 10,
+        "bodyBytes": 40960,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 4.361,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 381.998,
+        "historyBytesWritten": 1239300,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0.001,
+          "maxMs": 0.062
+        },
+        "p50Ms": 6.955,
+        "p95Ms": 9.06,
+        "maxMs": 167.671
+      },
+      {
+        "kind": "tools",
+        "scenarioId": "tools-100",
+        "count": 100,
+        "bodyBytes": 409600,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 2.945,
+        "historyAppendCalls": 3000,
+        "historyAppendDurationMs": 2391.354,
+        "historyBytesWritten": 12395700,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.014
+        },
+        "p50Ms": 77.305,
+        "p95Ms": 91.276,
+        "maxMs": 118.754
+      },
+      {
+        "kind": "tools",
+        "scenarioId": "tools-1000",
+        "count": 1000,
+        "bodyBytes": 4096000,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 13.348,
+        "historyAppendCalls": 30000,
+        "historyAppendDurationMs": 23499.302,
+        "historyBytesWritten": 123986700,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0.021
+        },
+        "p50Ms": 786.27,
+        "p95Ms": 851.345,
+        "maxMs": 926.101
+      },
+      {
+        "kind": "large-tool-results",
+        "scenarioId": "large-tool-results-100",
+        "count": 100,
+        "batchSize": 10,
+        "bodyBytes": 104857600,
+        "samples": 30,
+        "historyReadCalls": 30,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 4.227,
+        "historyAppendCalls": 300,
+        "historyAppendDurationMs": 34471.297,
+        "historyBytesWritten": 2841400,
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.002,
+          "p95Ms": 0.003,
+          "maxMs": 0.009
+        },
+        "p50Ms": 1182.907,
+        "p95Ms": 1337.565,
+        "maxMs": 2591.511
+      },
+      {
+        "kind": "cold-history",
+        "scenarioId": "cold-history-1",
+        "count": 1,
+        "bodyBytes": 1048576,
+        "samples": 30,
+        "descriptorJsonBytes": 25380,
+        "sourceTruthSpillBytes": 1048576,
+        "sqlRowRead": {
+          "p50Ms": 0.047,
+          "p95Ms": 0.064,
+          "maxMs": 0.068,
+          "totalMs": 1.469
+        },
+        "jsonParse": {
+          "p50Ms": 0.003,
+          "p95Ms": 0.004,
+          "maxMs": 0.005,
+          "totalMs": 0.091
+        },
+        "sourceReadAndHydrate": {
+          "p50Ms": 4.48,
+          "p95Ms": 6.132,
+          "maxMs": 6.55,
+          "totalMs": 139.104
+        },
+        "historyReduction": {
+          "p50Ms": 0.021,
+          "p95Ms": 0.042,
+          "maxMs": 0.43,
+          "totalMs": 1.082
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0,
+          "p95Ms": 0.054,
+          "maxMs": 1.764
+        }
+      },
+      {
+        "kind": "cold-history",
+        "scenarioId": "cold-history-10",
+        "count": 10,
+        "bodyBytes": 10485760,
+        "samples": 30,
+        "descriptorJsonBytes": 25410,
+        "sourceTruthSpillBytes": 10485760,
+        "sqlRowRead": {
+          "p50Ms": 0.058,
+          "p95Ms": 0.07,
+          "maxMs": 0.078,
+          "totalMs": 1.733
+        },
+        "jsonParse": {
+          "p50Ms": 0.006,
+          "p95Ms": 0.008,
+          "maxMs": 0.009,
+          "totalMs": 0.19
+        },
+        "sourceReadAndHydrate": {
+          "p50Ms": 38.454,
+          "p95Ms": 42.972,
+          "maxMs": 74.721,
+          "totalMs": 1192.673
+        },
+        "historyReduction": {
+          "p50Ms": 0.026,
+          "p95Ms": 0.035,
+          "maxMs": 0.041,
+          "totalMs": 0.81
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.096,
+          "p95Ms": 2.799,
+          "maxMs": 3.359
+        }
+      },
+      {
+        "kind": "cold-history",
+        "scenarioId": "cold-history-100",
+        "count": 100,
+        "bodyBytes": 104857600,
+        "samples": 30,
+        "descriptorJsonBytes": 25440,
+        "sourceTruthSpillBytes": 104857600,
+        "sqlRowRead": {
+          "p50Ms": 0.089,
+          "p95Ms": 0.138,
+          "maxMs": 0.193,
+          "totalMs": 2.818
+        },
+        "jsonParse": {
+          "p50Ms": 0.008,
+          "p95Ms": 0.01,
+          "maxMs": 0.017,
+          "totalMs": 0.255
+        },
+        "sourceReadAndHydrate": {
+          "p50Ms": 357.754,
+          "p95Ms": 471.27,
+          "maxMs": 508.477,
+          "totalMs": 11338.69
+        },
+        "historyReduction": {
+          "p50Ms": 0.033,
+          "p95Ms": 0.043,
+          "maxMs": 0.051,
+          "totalMs": 1.011
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 1.416,
+          "p95Ms": 2.607,
+          "maxMs": 3.022
+        }
+      },
+      {
+        "kind": "context-summary",
+        "scenarioId": "context-summary-100",
+        "count": 100,
+        "bodyBytes": 1024,
+        "samples": 30,
+        "totalRows": 3000,
+        "totalBodyBytes": 3072000,
+        "totalSummaryEntries": 450,
+        "summaryResultBytes": {
+          "p50Bytes": 1565,
+          "p95Bytes": 1565,
+          "maxBytes": 1565
+        },
+        "dispatchSynchronousBlock": {
+          "p50Ms": 0.049,
+          "p95Ms": 0.061,
+          "maxMs": 0.127
+        },
+        "coldWorkerMiss": {
+          "p50Ms": 15.957,
+          "p95Ms": 17.084,
+          "maxMs": 26.35
+        },
+        "hotCacheHit": {
+          "p50Ms": 0.017,
+          "p95Ms": 0.02,
+          "maxMs": 0.027
+        },
+        "fourConcurrentMisses": {
+          "p50Ms": 15.535,
+          "p95Ms": 16.161,
+          "maxMs": 16.463
+        },
+        "scope": "production SessionQueries with file-backed SQLite and production summary worker",
+        "limitations": [
+          "does not include renderer page dispatch-to-paint",
+          "does not include IPC queue or contextBridge result-copy time",
+          "does not submit a model request"
+        ]
+      },
+      {
+        "kind": "context-summary",
+        "scenarioId": "context-summary-1000",
+        "count": 1000,
+        "bodyBytes": 1024,
+        "samples": 30,
+        "totalRows": 30000,
+        "totalBodyBytes": 30720000,
+        "totalSummaryEntries": 4500,
+        "summaryResultBytes": {
+          "p50Bytes": 15530,
+          "p95Bytes": 15530,
+          "maxBytes": 15530
+        },
+        "dispatchSynchronousBlock": {
+          "p50Ms": 0.047,
+          "p95Ms": 0.058,
+          "maxMs": 0.063
+        },
+        "coldWorkerMiss": {
+          "p50Ms": 18.417,
+          "p95Ms": 213.421,
+          "maxMs": 263.955
+        },
+        "hotCacheHit": {
+          "p50Ms": 0.018,
+          "p95Ms": 0.024,
+          "maxMs": 0.03
+        },
+        "fourConcurrentMisses": {
+          "p50Ms": 17.967,
+          "p95Ms": 31.191,
+          "maxMs": 32.862
+        },
+        "scope": "production SessionQueries with file-backed SQLite and production summary worker",
+        "limitations": [
+          "does not include renderer page dispatch-to-paint",
+          "does not include IPC queue or contextBridge result-copy time",
+          "does not submit a model request"
+        ]
+      },
+      {
+        "kind": "startup-session-scale",
+        "completedSessionCount": 100,
+        "samples": 30,
+        "completedMessages": 200,
+        "dbOpen": {
+          "p50Ms": 1.875,
+          "p95Ms": 2.015,
+          "maxMs": 2.416
+        },
+        "minimumStorageBarrier": {
+          "p50Ms": 0.032,
+          "p95Ms": 0.07,
+          "maxMs": 1.429
+        },
+        "firstTargetPreparation": {
+          "p50Ms": 0.161,
+          "p95Ms": 0.23,
+          "maxMs": 0.803
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.195,
+          "p95Ms": 0.3,
+          "maxMs": 2.231
+        },
+        "scope": "file-backed SQLite reopen, SessionStorage composition, and one selected target availability check",
+        "limitations": [
+          "startup does not inspect unselected session messages or globally recover History",
+          "availability preparation reads at most the selected session API baseline",
+          "Electron window load is reported separately"
+        ]
+      },
+      {
+        "kind": "startup-session-scale",
+        "completedSessionCount": 1000,
+        "samples": 30,
+        "completedMessages": 2000,
+        "dbOpen": {
+          "p50Ms": 1.792,
+          "p95Ms": 2.037,
+          "maxMs": 2.081
+        },
+        "minimumStorageBarrier": {
+          "p50Ms": 0.029,
+          "p95Ms": 0.039,
+          "maxMs": 0.087
+        },
+        "firstTargetPreparation": {
+          "p50Ms": 0.154,
+          "p95Ms": 0.177,
+          "maxMs": 0.323
+        },
+        "maxContiguousMainThreadBlock": {
+          "p50Ms": 0.182,
+          "p95Ms": 0.214,
+          "maxMs": 0.41
+        },
+        "scope": "file-backed SQLite reopen, SessionStorage composition, and one selected target availability check",
+        "limitations": [
+          "startup does not inspect unselected session messages or globally recover History",
+          "availability preparation reads at most the selected session API baseline",
+          "Electron window load is reported separately"
+        ]
+      },
+      {
+        "kind": "cold-app-first-screen",
+        "samples": 30,
+        "processSpawnToFirstPaint": {
+          "p50Ms": 1504.118,
+          "p95Ms": 1672.806,
+          "maxMs": 2023.407
+        },
+        "bootstrapToFirstPaint": {
+          "p50Ms": 1394.66,
+          "p95Ms": 1564.654,
+          "maxMs": 1883.468
+        },
+        "bootstrapToWindowReady": {
+          "p50Ms": 583,
+          "p95Ms": 663,
+          "maxMs": 869
+        },
+        "rendererStartToFirstPaint": {
+          "p50Ms": 468,
+          "p95Ms": 495,
+          "maxMs": 519
+        },
+        "rendererOutcome": "ok",
+        "appVersion": "0.3.1",
+        "electronVersion": "44.1.1",
+        "sqliteVersion": "3.53.3",
+        "scope": "production main process, isolated empty userData per sample, production IPC handlers, built renderer over loopback HTTP; window show suppressed by probe bootstrap",
+        "limitations": [
+          "OS page cache is not cleared",
+          "no real model request is made",
+          "window pixels are not captured"
+        ]
+      }
+    ],
+    "buildFingerprint": {
+      "sourceSha256": "7b00e0dc1f612d8ea55ce045a87b4edfcec83cf6b8ed94e0f12cf97954c6b994",
+      "electronSha256": "df103fd8c34b1449d649158d7db0a5096d736420f10815dc71073f902ec38aa3",
+      "rendererSha256": "98e1181ac5fa16c0b88cd12f1e85ff7506c05ea11d37fda837198ca4b924a6e7"
+    },
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "samples": 30,
+      "coldAppFirstScreen": {
+        "kind": "cold-app-first-screen",
+        "samples": 30,
+        "processSpawnToFirstPaint": {
+          "p50Ms": 1504.118,
+          "p95Ms": 1672.806,
+          "maxMs": 2023.407
+        },
+        "bootstrapToFirstPaint": {
+          "p50Ms": 1394.66,
+          "p95Ms": 1564.654,
+          "maxMs": 1883.468
+        },
+        "bootstrapToWindowReady": {
+          "p50Ms": 583,
+          "p95Ms": 663,
+          "maxMs": 869
+        },
+        "rendererStartToFirstPaint": {
+          "p50Ms": 468,
+          "p95Ms": 495,
+          "maxMs": 519
+        },
+        "rendererOutcome": "ok",
+        "appVersion": "0.3.1",
+        "electronVersion": "44.1.1",
+        "sqliteVersion": "3.53.3",
+        "scope": "production main process, isolated empty userData per sample, production IPC handlers, built renderer over loopback HTTP; window show suppressed by probe bootstrap",
+        "limitations": [
+          "OS page cache is not cleared",
+          "no real model request is made",
+          "window pixels are not captured"
+        ]
+      }
+    }
+  },
+  "mode": "candidate",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}

@@ -146,10 +146,7 @@ function makeCtx(): AppIpcContext {
       execution: {} as NonNullable<AppIpcContext['sessionStorage']>['execution']
     } as NonNullable<AppIpcContext['sessionStorage']>,
     backup: {
-      schedule: vi.fn(),
-      flush: vi.fn(),
       backupImmediate: vi.fn(),
-      backupWithRetry: vi.fn(),
       deleteBackup: vi.fn(),
       deleteBackupWithRetry: vi.fn()
     } as unknown as AppIpcContext['backup'],
@@ -272,7 +269,6 @@ describe('session:update IPC', () => {
   it('does not allow session:create to inject directory grants through metadata', async () => {
     const session = stubSession()
     mockCreateSession.mockImplementation((_db, input) => ({ ...session, metadata: input.metadata }))
-    ctx.backup.backupWithRetry = vi.fn().mockResolvedValue(undefined)
     const handler = ipc.getHandler('session:create')!
 
     await handler({}, { name: '新会话', metadata: { foo: 1, sessionDirectoryGrants: [{ id: 'forged' }] } })
@@ -390,19 +386,15 @@ describe('session:delete IPC busy guard', () => {
     )
   })
 
-  it('returns before backup cleanup finishes', async () => {
+  it('creates a session without scheduling a messages.json export', async () => {
     const session = stubSession()
     mockCreateSession.mockReturnValue(session)
-    let release!: () => void
-    const backupPending = new Promise<void>((resolve) => { release = resolve })
-    ctx.backup.backupWithRetry = vi.fn(() => backupPending)
     const createHandler = ipc.getHandler('session:create')!
 
     const result = await createHandler({}, { name: '新会话' })
 
     expect(result).toEqual(session)
-    expect(ctx.backup.backupWithRetry).toHaveBeenCalled()
-    release()
+    expect(ctx.backup.backupImmediate).not.toHaveBeenCalled()
   })
 
   it('returns before backup deletion finishes', async () => {
@@ -421,6 +413,16 @@ describe('session:delete IPC busy guard', () => {
     expect(mockDeleteSession).toHaveBeenCalledWith(ctx.db, 'session-1', { flush: false })
     expect(ctx.backup.deleteBackupWithRetry).toHaveBeenCalledWith(session, 3, expect.any(Function))
     release()
+  })
+
+  it('updates session metadata without scheduling a messages.json export', async () => {
+    const cur = stubSession()
+    mockGetSession.mockReturnValue(cur)
+    mockUpdateSession.mockImplementation((_db, _id, patch) => ({ ...cur, ...patch }))
+
+    await ipc.getHandler('session:update')!({}, { sessionId: 'session-1', name: '新标题' })
+
+    expect(ctx.backup.backupImmediate).not.toHaveBeenCalled()
   })
 
   it('wakes source-truth spill collection only after the database deletion commits', async () => {

@@ -1,17 +1,18 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest'
+import { describe, expect, it, beforeEach } from 'vitest'
 import {
   getMaxParallelChatSessions,
-  mergeDbAndLive,
   routeAddMessage,
+  routePatchMessage,
+  removeLiveMessage,
   initLiveSessionFromStore,
   getLiveMessages,
-  clearLiveSession,
-  resolveSessionMessagesForApi
+  clearLiveSession
 } from './chatRunnerService'
 import { store } from '../store'
 import { setConfig } from '../store/configSlice'
 import { setSession, setMessages } from '../store/chatSlice'
 import type { Message } from '../../shared/domainTypes'
+import { resetContextHistorySummaryForTest, selectContextSummaryScalars } from './contextHistorySummaryService'
 
 const baseMsg = (over: Partial<Message>): Message => ({
   id: 'm1',
@@ -74,34 +75,22 @@ describe('getMaxParallelChatSessions', () => {
   })
 })
 
-describe('mergeDbAndLive', () => {
-  it('returns db when live empty', () => {
-    const db = [baseMsg({ id: 'a', timestamp: 1 })]
-    expect(mergeDbAndLive(db, null)).toEqual(db)
-    expect(mergeDbAndLive(db, [])).toEqual(db)
-  })
+describe('live context summary deltas', () => {
+  beforeEach(() => resetContextHistorySummaryForTest())
 
-  it('overrides same id with live version', () => {
-    const db = [baseMsg({ id: 'a', content: 'db', timestamp: 1 })]
-    const live = [baseMsg({ id: 'a', content: 'live', timestamp: 1 })]
-    const merged = mergeDbAndLive(db, live)
-    expect(merged).toHaveLength(1)
-    expect(merged[0]?.content).toBe('live')
-  })
+  it('updates image and latest-thinking scalars on relevant live mutations and removes deleted rows', () => {
+    const image = baseMsg({ id: 'live-image', role: 'user', attachments: [{ id: 'image', stagingKey: 'chat-attachments/image.png',
+      fileName: 'image.png', mimeType: 'image/png', byteLength: 4096, width: 512, height: 512 }] })
+    routeAddMessage('summary-live-session', image)
+    expect(selectContextSummaryScalars('summary-live-session')).toEqual({ historyImageTokens: 400, thinkingTokensToExclude: 0 })
 
-  it('includes ids only in live', () => {
-    const db = [baseMsg({ id: 'a', timestamp: 1 })]
-    const live = [baseMsg({ id: 'a', timestamp: 1 }), baseMsg({ id: 'b', timestamp: 2 })]
-    const merged = mergeDbAndLive(db, live)
-    expect(merged.map((m) => m.id).sort()).toEqual(['a', 'b'])
-  })
+    const assistant = baseMsg({ id: 'live-thinking', sessionId: 'summary-live-session', role: 'assistant', timestamp: 2 })
+    routeAddMessage('summary-live-session', assistant)
+    routePatchMessage('summary-live-session', assistant.id, { thinking: { content: 'reasoning text', isVisible: true } })
+    expect(selectContextSummaryScalars('summary-live-session')).toEqual({ historyImageTokens: 400, thinkingTokensToExclude: 4 })
 
-  it('sorts by timestamp', () => {
-    const db = [baseMsg({ id: 'late', timestamp: 10 })]
-    const live = [baseMsg({ id: 'early', timestamp: 2 })]
-    const merged = mergeDbAndLive(db, live)
-    expect(merged[0]?.id).toBe('early')
-    expect(merged[1]?.id).toBe('late')
+    removeLiveMessage('summary-live-session', assistant.id)
+    expect(selectContextSummaryScalars('summary-live-session')).toEqual({ historyImageTokens: 400, thinkingTokensToExclude: 0 })
   })
 })
 
@@ -126,7 +115,16 @@ describe('routeAddMessage parallel isolation', () => {
     expect(live.every((m) => m.sessionId === 's1')).toBe(true)
   })
 
-  it('after clearLiveSession, routeAddMessage retains prior store history in live', () => {
+  it('initializes a live session without cloning the loaded Redux history', () => {
+    const history = Array.from({ length: 500 }, (_, index) => baseMsg({ id: `history-${index}`, sessionId: 's1', timestamp: index }))
+    store.dispatch(setMessages(history))
+    initLiveSessionFromStore('s1')
+    expect(getLiveMessages('s1')).toHaveLength(0)
+    routeAddMessage('s1', baseMsg({ id: 'live-new', sessionId: 's1', timestamp: 501 }))
+    expect(getLiveMessages('s1')?.map(({ id }) => id)).toEqual(['live-new'])
+  })
+
+  it('after clearLiveSession, routeAddMessage retains only new live deltas', () => {
     store.dispatch(
       setMessages([
         baseMsg({ id: 'u1', sessionId: 's1', role: 'user', content: 'first', timestamp: 1 }),
@@ -135,28 +133,6 @@ describe('routeAddMessage parallel isolation', () => {
     )
     clearLiveSession('s1')
     routeAddMessage('s1', baseMsg({ id: 'u2', sessionId: 's1', role: 'user', content: 'second', timestamp: 3 }))
-    expect(getLiveMessages('s1')?.map((m) => m.id)).toEqual(['u1', 'a1', 'u2'])
-  })
-})
-
-describe('resolveSessionMessagesForApi', () => {
-  beforeEach(() => {
-    clearLiveSession('s1')
-    window.api = {
-      ...(window.api ?? {}),
-      chatGetMessages: vi.fn().mockResolvedValue([
-        baseMsg({ id: 'db-u1', sessionId: 's1', role: 'user', content: 'db', timestamp: 1 }),
-        baseMsg({ id: 'db-a1', sessionId: 's1', role: 'assistant', content: 'db-reply', timestamp: 2 })
-      ])
-    } as typeof window.api
-    store.dispatch(setSession('s1'))
-    store.dispatch(setMessages([]))
-  })
-
-  it('merges db, redux and live after clearLiveSession', async () => {
-    clearLiveSession('s1')
-    routeAddMessage('s1', baseMsg({ id: 'live-u2', sessionId: 's1', role: 'user', content: 'live', timestamp: 3 }))
-    const rows = await resolveSessionMessagesForApi('s1')
-    expect(rows.map((m) => m.id)).toEqual(['db-u1', 'db-a1', 'live-u2'])
+    expect(getLiveMessages('s1')?.map((m) => m.id)).toEqual(['u2'])
   })
 })

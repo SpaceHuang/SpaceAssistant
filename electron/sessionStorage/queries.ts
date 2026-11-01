@@ -3,14 +3,16 @@ import {
   getSession,
   getSessionUsage,
   listSessions,
-  getContextHistorySummaryBaseline,
+  getContextHistorySummarySourceRows,
   getMessageSequence,
+  getSessionMessageRevisionSnapshot,
   getTurnByRequestId,
   getPersistedTurn,
   listTurnErrorsByAssistantMessageIds,
   getMessages,
   getMessage,
   getMessageSkeleton,
+  getLatestMessageSkeleton,
   getChatMessagePage,
   getApiContextBaseline,
   resolveRetryContext as resolveStoredRetryContext,
@@ -28,7 +30,7 @@ import {
   searchProjectedMessages
 } from './infrastructure/sqlite/sessionTranscriptProjection'
 import type { SessionQueries } from './public/ports'
-import type { MessageRef, MessageSearchHit, MessageSkeleton, RetryContextTarget } from './public/model'
+import type { ContextHistorySummaryEntry, LatestMessagePreviewCandidate, MessageRef, MessageSearchHit, MessageSkeleton, RetryContextTarget } from './public/model'
 import { inspectContinuationSources } from './continuationSources'
 import { createRoutingQueries } from './routingQueries'
 import { getDbConnection } from '../database/sqliteStore'
@@ -40,6 +42,11 @@ import type { PreparedChatBodySelection } from './infrastructure/sqlite/projecti
 import type { PreparedChatBodySearch } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
 import type { ChatBodyCandidateFact } from './infrastructure/sqlite/projectionChatBodyCachePayload'
 import type { Message } from '../../src/shared/domainTypes'
+import { readContextHistorySummaryInWorker, summarizeContextHistoryRowsInWorker } from './infrastructure/sqlite/contextHistorySummaryWorker'
+
+type ContextSummaryCacheEntry = Readonly<{ generation: string; messageRevision: number; entries: readonly ContextHistorySummaryEntry[] }>
+const CONTEXT_SUMMARY_CACHE_MAX_SESSIONS = 8
+const CONTEXT_SUMMARY_CACHE_MAX_ENTRIES = 100_000
 
 function canonicalBodyMessageIds(db: AppDatabase, sessionId: string, messages: readonly Message[]): string[] {
   if (messages.length === 0) return []
@@ -133,6 +140,27 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
   searchBodies(view: PreparedChatBodyView, query: string, limit: number, candidateFacts: readonly ChatBodyCandidateFact[]): Promise<PreparedChatBodySearch>
   invalidate(view: PreparedChatBodyView): void
 }>): SessionQueries {
+  const contextSummaryCache = new Map<string, ContextSummaryCacheEntry>()
+  const contextSummaryInFlight = new Map<string, Promise<{ sessionId: string; entries: readonly ContextHistorySummaryEntry[] }>>()
+  let contextSummaryCacheEntryCount = 0
+  const cacheContextSummary = (sessionId: string, entry: ContextSummaryCacheEntry): void => {
+    const existing = contextSummaryCache.get(sessionId)
+    if (existing) {
+      contextSummaryCache.delete(sessionId)
+      contextSummaryCacheEntryCount -= existing.entries.length
+    }
+    if (entry.entries.length > CONTEXT_SUMMARY_CACHE_MAX_ENTRIES) return
+    while (contextSummaryCache.size >= CONTEXT_SUMMARY_CACHE_MAX_SESSIONS ||
+      contextSummaryCacheEntryCount + entry.entries.length > CONTEXT_SUMMARY_CACHE_MAX_ENTRIES) {
+      const oldest = contextSummaryCache.keys().next().value as string | undefined
+      if (!oldest) break
+      const removed = contextSummaryCache.get(oldest)
+      contextSummaryCache.delete(oldest)
+      contextSummaryCacheEntryCount -= removed?.entries.length ?? 0
+    }
+    contextSummaryCache.set(sessionId, entry)
+    contextSummaryCacheEntryCount += entry.entries.length
+  }
   const queries: SessionQueries = {
     continuationSources: inspectContinuationSources(db),
     readSession: (sessionId) => getSession(db, sessionId),
@@ -155,6 +183,16 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       if (sequence === null) return undefined
       return { id: skeleton.id, sessionId: skeleton.sessionId, role: skeleton.role, timestamp: skeleton.timestamp,
         status: skeleton.status, sequence }
+    },
+    readLatestMessagePreviewCandidate: (sessionId, excludeMessageId): LatestMessagePreviewCandidate | undefined => {
+      const skeleton = getLatestMessageSkeleton(db, sessionId, excludeMessageId)
+      if (!skeleton) return undefined
+      const snapshot = getSessionMessageRevisionSnapshot(db, sessionId)
+      const sequence = getMessageSequence(db, sessionId, skeleton.id)
+      if (sequence === null) return undefined
+      return snapshot ? { id: skeleton.id, sessionId, role: skeleton.role as Message['role'], timestamp: skeleton.timestamp,
+        status: skeleton.status as Message['status'], sequence,
+        sessionGeneration: snapshot.generation, messageRevision: snapshot.messageRevision } : undefined
     },
     readMessages: ({ sessionId, limit, offset }) => getProjectedMessages(db, sessionId, limit, offset),
     countQueuedMessages: (sessionId) => Number(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM messages
@@ -497,7 +535,50 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       const baseline = limit === undefined ? getProjectedApiContextBaseline(db, sessionId) : getProjectedApiContextBaseline(db, sessionId, limit)
       return { ...baseline, entries: projectMessageEntriesV1('apiBaselineV1', baseline.entries) }
     },
-    readContextHistorySummaryBaseline: (sessionId) => getContextHistorySummaryBaseline(db, sessionId),
+    readContextHistorySummaryBaseline: async (sessionId) => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const current = getSessionMessageRevisionSnapshot(db, sessionId)
+        if (!current) return { sessionId, entries: [] }
+        const cached = contextSummaryCache.get(sessionId)
+        if (cached?.generation === current.generation && cached.messageRevision === current.messageRevision) {
+          contextSummaryCache.delete(sessionId)
+          contextSummaryCache.set(sessionId, cached)
+          return { sessionId, entries: cached.entries }
+        }
+        const inFlightKey = `${sessionId}\u0000${current.generation}\u0000${current.messageRevision}`
+        const existing = contextSummaryInFlight.get(inFlightKey)
+        if (existing) {
+          try { return await existing }
+          catch (error) {
+            if (attempt === 0 && error instanceof Error && error.message === 'CONTEXT_HISTORY_SUMMARY_SOURCE_CHANGED') continue
+            throw error
+          }
+        }
+        const pending = Promise.resolve().then(async () => {
+          const result = db.filePath === ':memory:'
+            ? await summarizeContextHistoryRowsInWorker(getContextHistorySummarySourceRows(db, sessionId))
+            : await readContextHistorySummaryInWorker({ dbPath: db.filePath, sessionId,
+              expectedGeneration: current.generation, expectedMessageRevision: current.messageRevision })
+          const latest = getSessionMessageRevisionSnapshot(db, sessionId)
+          if (!latest || latest.generation !== current.generation || latest.messageRevision !== current.messageRevision) {
+            throw new Error('CONTEXT_HISTORY_SUMMARY_SOURCE_CHANGED')
+          }
+          const entry: ContextSummaryCacheEntry = { generation: current.generation,
+            messageRevision: current.messageRevision, entries: result.entries }
+          cacheContextSummary(sessionId, entry)
+          return { sessionId, entries: result.entries }
+        })
+        contextSummaryInFlight.set(inFlightKey, pending)
+        try { return await pending }
+        catch (error) {
+          if (attempt === 0 && error instanceof Error && error.message === 'CONTEXT_HISTORY_SUMMARY_SOURCE_CHANGED') continue
+          throw error
+        } finally {
+          if (contextSummaryInFlight.get(inFlightKey) === pending) contextSummaryInFlight.delete(inFlightKey)
+        }
+      }
+      throw new Error('CONTEXT_HISTORY_SUMMARY_SOURCE_CHANGED')
+    },
     readCanonicalCompactionReplay: (sessionId) => new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId).readCanonicalCompactionReplay(sessionId),
     readCanonicalContextMeterEvents: (sessionId) => new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId).readCanonicalContextMeterEvents(sessionId),
     ...createRoutingQueries(db, preparedChatBody),

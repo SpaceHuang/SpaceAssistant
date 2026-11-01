@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 117
+export const DB_SCHEMA_VERSION = 120
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -404,7 +404,9 @@ export const MIGRATION_V19_AGENT_HISTORY_SQL = `
 CREATE TABLE IF NOT EXISTS agent_history_streams (
   invocation_id TEXT PRIMARY KEY NOT NULL,
   version INTEGER NOT NULL DEFAULT 0 CHECK(version >= 0),
-  schema_version INTEGER NOT NULL CHECK(schema_version > 0)
+  schema_version INTEGER NOT NULL CHECK(schema_version > 0),
+  transition_state_version INTEGER,
+  transition_state_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS agent_history_events (
@@ -522,6 +524,7 @@ CREATE TABLE IF NOT EXISTS session_transcript_entries (
   version INTEGER NOT NULL,
   outcome TEXT NOT NULL,
   messages_json TEXT NOT NULL,
+  context_selection_json TEXT,
   created_at INTEGER NOT NULL,
   PRIMARY KEY(session_id, turn_id),
   UNIQUE(session_id, version)
@@ -2020,6 +2023,7 @@ CREATE TABLE IF NOT EXISTS session_ledger_projection_state (
   check_token TEXT,
   checked_at INTEGER,
   owner_reconciled_process_generation INTEGER NOT NULL DEFAULT 0 CHECK(owner_reconciled_process_generation>=0),
+  canonical_read_version INTEGER CHECK(canonical_read_version IS NULL OR canonical_read_version=1),
   retry_scope TEXT CHECK(retry_scope IS NULL OR retry_scope IN ('baseline','target')),
   failure_class TEXT,
   updated_at INTEGER NOT NULL,
@@ -2504,6 +2508,11 @@ CREATE TABLE IF NOT EXISTS canonical_invocation_pending_views (
 /** v113 → v114: remove the unused invocation pending-view cache after its runtime owner retired. */
 export const MIGRATION_V114_INVOCATION_PENDING_VIEWS_RETIREMENT_SQL = `
 DROP TABLE IF EXISTS canonical_invocation_pending_views;
+`
+
+/** v119 → v120: record one-time canonical-read cutover per stable legacy ledger location. */
+export const MIGRATION_V120_SESSION_LEDGER_CANONICAL_READ_VERSION_SQL = `
+ALTER TABLE session_ledger_projection_state ADD COLUMN canonical_read_version INTEGER CHECK(canonical_read_version IS NULL OR canonical_read_version=1);
 `
 
 /**

@@ -1,0 +1,563 @@
+{
+  "fixture": {
+    "schemaVersion": 1,
+    "seed": 20261031,
+    "rngProbe": 0.44780813762918115,
+    "cacheMode": "process-cold; OS page cache not controlled",
+    "checkpoints": "disabled",
+    "scenarios": [
+      {
+        "kind": "turns",
+        "count": 100,
+        "bodyBytes": 409600,
+        "pageSize": 20
+      },
+      {
+        "kind": "turns",
+        "count": 1000,
+        "bodyBytes": 4096000,
+        "pageSize": 20
+      }
+    ],
+    "samples": 30,
+    "fixtureVersion": "session-storage-full-chain-v1"
+  },
+  "result": {
+    "runtime": {
+      "electron": "44.1.1",
+      "node": "24.19.0",
+      "sqlite": "3.53.3",
+      "platform": "darwin",
+      "arch": "arm64",
+      "checkpoints": "disabled"
+    },
+    "measurements": [
+      {
+        "kind": "sqlite-transaction-boundary",
+        "samples": 30,
+        "work": "SELECT 1 inside production runInTransaction",
+        "p50Ms": 0.003,
+        "p95Ms": 0.006,
+        "maxMs": 0.014
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 1,
+        "samples": 30,
+        "inputBytes": {
+          "p50Bytes": 2993,
+          "p95Bytes": 2993,
+          "maxBytes": 2993
+        },
+        "resultBytes": {
+          "p50Bytes": 1680,
+          "p95Bytes": 1680,
+          "maxBytes": 1680
+        },
+        "roundTrip": {
+          "p50Ms": 18.285,
+          "p95Ms": 20.583,
+          "maxMs": 24.687
+        },
+        "workerDuration": {
+          "p50Ms": 0.794,
+          "p95Ms": 0.929,
+          "maxMs": 1.087
+        }
+      },
+      {
+        "kind": "production-projection-worker-roundtrip",
+        "messageCount": 100,
+        "samples": 30,
+        "inputBytes": {
+          "p50Bytes": 233147,
+          "p95Bytes": 233147,
+          "maxBytes": 233147
+        },
+        "resultBytes": {
+          "p50Bytes": 111561,
+          "p95Bytes": 111561,
+          "maxBytes": 111561
+        },
+        "roundTrip": {
+          "p50Ms": 18.203,
+          "p95Ms": 20.016,
+          "maxMs": 27.892
+        },
+        "workerDuration": {
+          "p50Ms": 1.049,
+          "p95Ms": 1.191,
+          "maxMs": 1.525
+        }
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 0,
+        "durationMs": 22.951,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 1,
+        "durationMs": 23.576,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 2,
+        "durationMs": 23.016,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 3,
+        "durationMs": 31.09,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 4,
+        "durationMs": 21.828,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 5,
+        "durationMs": 26.415,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 6,
+        "durationMs": 35.518,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 7,
+        "durationMs": 21.517,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 8,
+        "durationMs": 20.43,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 9,
+        "durationMs": 18.366,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 10,
+        "durationMs": 20.952,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 11,
+        "durationMs": 21.662,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 12,
+        "durationMs": 18.315,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 13,
+        "durationMs": 27.128,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 14,
+        "durationMs": 18.858,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 15,
+        "durationMs": 22.604,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 16,
+        "durationMs": 22.389,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 17,
+        "durationMs": 20.947,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 18,
+        "durationMs": 18.566,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 19,
+        "durationMs": 22.139,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 20,
+        "durationMs": 25.871,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 21,
+        "durationMs": 21.165,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 22,
+        "durationMs": 22.993,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 23,
+        "durationMs": 44.437,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 24,
+        "durationMs": 21.355,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 25,
+        "durationMs": 20.063,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 26,
+        "durationMs": 21.731,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 27,
+        "durationMs": 27.56,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 28,
+        "durationMs": 20.619,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns-seed",
+        "count": 100,
+        "sample": 29,
+        "durationMs": 22.176,
+        "bodyBytes": 409600
+      },
+      {
+        "kind": "turns",
+        "count": 100,
+        "bodyBytes": 409600,
+        "pageSize": 20,
+        "samples": 30,
+        "historyReadCalls": 0,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0,
+        "historyAppendCalls": 0,
+        "historyAppendDurationMs": 0,
+        "historyBytesWritten": 0,
+        "p50Ms": 0.242,
+        "p95Ms": 0.342,
+        "maxMs": 22.341
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 0,
+        "durationMs": 260.374,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 1,
+        "durationMs": 260.578,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 2,
+        "durationMs": 262.694,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 3,
+        "durationMs": 253.673,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 4,
+        "durationMs": 294.677,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 5,
+        "durationMs": 239.02,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 6,
+        "durationMs": 293.098,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 7,
+        "durationMs": 241.091,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 8,
+        "durationMs": 301.304,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 9,
+        "durationMs": 238.957,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 10,
+        "durationMs": 290.45,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 11,
+        "durationMs": 231.198,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 12,
+        "durationMs": 296.301,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 13,
+        "durationMs": 232.744,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 14,
+        "durationMs": 301.717,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 15,
+        "durationMs": 235.959,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 16,
+        "durationMs": 288.515,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 17,
+        "durationMs": 232.793,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 18,
+        "durationMs": 293.151,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 19,
+        "durationMs": 237.49,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 20,
+        "durationMs": 324.802,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 21,
+        "durationMs": 238.146,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 22,
+        "durationMs": 297.453,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 23,
+        "durationMs": 244.163,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 24,
+        "durationMs": 299.128,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 25,
+        "durationMs": 236.225,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 26,
+        "durationMs": 302.32,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 27,
+        "durationMs": 241.638,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 28,
+        "durationMs": 295.517,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns-seed",
+        "count": 1000,
+        "sample": 29,
+        "durationMs": 239.802,
+        "bodyBytes": 4096000
+      },
+      {
+        "kind": "turns",
+        "count": 1000,
+        "bodyBytes": 4096000,
+        "pageSize": 20,
+        "samples": 30,
+        "historyReadCalls": 0,
+        "historyRowsRead": 0,
+        "historyBytesRead": 0,
+        "historyReadDurationMs": 0,
+        "historyAppendCalls": 0,
+        "historyAppendDurationMs": 0,
+        "historyBytesWritten": 0,
+        "p50Ms": 3.224,
+        "p95Ms": 3.549,
+        "maxMs": 3.874
+      }
+    ],
+    "builtRenderer": {
+      "entry": "dist/renderer/index.html",
+      "loadToDidFinishLoadMs": 194.216,
+      "consoleErrors": [],
+      "rootPresent": true,
+      "childCount": 1,
+      "nodeCount": 190,
+      "waitForRootMs": 0.4000000059604645
+    }
+  },
+  "mode": "baseline",
+  "build": {
+    "electron": "present",
+    "renderer": "present"
+  }
+}
