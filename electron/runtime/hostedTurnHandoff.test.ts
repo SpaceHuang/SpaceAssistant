@@ -221,6 +221,38 @@ describe('createHostedTurnHandoff', () => {
     db.close()
   })
 
+  it('requires a persisted baseline when a version-zero Hosted request seeds legacy history', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'zero-version-legacy-seed', model: 'test' })
+    const storage = createSqliteSessionStorage(db)
+    const oldQuestion = { role: 'user' as const, content: 'old question' }
+    const oldAnswer = { role: 'assistant' as const, content: 'old answer' }
+    const currentUser = { role: 'user' as const, content: 'new question' }
+    const history = {
+      read: async () => ({ events: [{ kind: 'invocation-completed', payload: { status: 'completed' } }] }),
+      readLatestInvocationForSession: async () => ({ kind: 'none' })
+    }
+    mockRunHostedAgentTurn.mockImplementationOnce(async ({ sessionContextBaselineRequired, sessionContext, sessionContextInputMessages }: {
+      sessionContextBaselineRequired?: boolean; sessionContext: { committed: readonly unknown[] }; sessionContextInputMessages: readonly unknown[]
+    }) => {
+      expect(sessionContextBaselineRequired).toBe(true)
+      expect(sessionContext.committed).toEqual([oldQuestion, oldAnswer])
+      expect(sessionContextInputMessages).toEqual([currentUser])
+      return { text: 'new answer', modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1 },
+        messages: [oldQuestion, oldAnswer, currentUser, { role: 'assistant', content: 'new answer' }] }
+    })
+    const handoff = createHostedTurnHandoff({ agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history: history as never, invocationId: 'zero-legacy-seed-invocation', turnId: 'zero-legacy-seed-turn', routeId: 'route',
+      sessionId: session.id, sessionDb: db, sessionQueries: storage.queries, sessionExecution: storage.execution })
+
+    try {
+      await handoff({ request: { messages: [oldQuestion, oldAnswer, currentUser] },
+        requiredUserMessage: { id: 'zero-current-user', message: currentUser } })
+    } finally {
+      db.close()
+    }
+  })
+
   it('accepts an SDK parked terminal as an explicit deferred waiting result', async () => {
     const events: Array<{ kind: string; payload?: unknown }> = []
     const history = { read: async () => ({ events }) }

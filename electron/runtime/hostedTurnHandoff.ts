@@ -346,6 +346,7 @@ export function createHostedTurnHandoff(input: {
         if (JSON.stringify(request.messages[index]) === required) { acceptedIndex = index; break }
       }
       const legacySeed = acceptedIndex >= 0 ? request.messages.slice(0, acceptedIndex).filter((message) => message.role !== 'system') : []
+      if (legacySeed.length > 0) sessionContextBaselineRequired = true
       sessionContext = restoreLegacySessionContextSnapshot({
         invocationId: `legacy-session-context:${input.sessionId}`, turnId: `legacy-session-context:${input.sessionId}`,
         committedVersion: 0, messages: legacySeed as CanonicalModelMessage[], scope: { kind: 'session', sessionId: input.sessionId! }

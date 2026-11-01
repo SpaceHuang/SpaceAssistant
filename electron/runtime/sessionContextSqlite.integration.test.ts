@@ -13,7 +13,7 @@ import { createSession } from '../database/operations'
 import { commitSessionTranscript, readSessionTranscript } from '../database/sessionTranscript'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
-import type { SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
+import { restoreLegacySessionContextSnapshot, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
 
 const route = { routeId: 'session-context-replay', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }
@@ -186,6 +186,55 @@ describe('SDK session context SQLite replay contract', () => {
       expect(warm?.committed).toEqual(expected)
       expect(readSessionTranscript(db, session.id).messages).toEqual(expected)
       expect(await execution.prepareHostedContext({ sessionId: session.id, scopeKey: 'session' })).toMatchObject({ baselineRequired: false })
+      db.close()
+      db = openDatabase(temp.dbPath)
+      expect(readSessionTranscript(db, session.id).messages).toEqual(expected)
+    } finally {
+      temp.cleanup(db)
+    }
+  })
+
+  it.each(['completed', 'failed'] as const)('persists a non-empty version-zero Hosted legacy seed through a %s terminal', async (outcome) => {
+    const temp = createTempDatabase(`session-context-zero-legacy-${outcome}-`)
+    let db = temp.db
+    const session = createSession(db, { name: 'zero-version-legacy-seed', model: 'test' })
+    const prior: CanonicalModelMessage[] = [
+      { role: 'user', id: 'zero-legacy-user', content: 'old question' },
+      { role: 'assistant', id: 'zero-legacy-answer', content: 'old answer' }
+    ]
+    const current: CanonicalModelMessage = { role: 'user', id: 'zero-current-user', content: 'new question' }
+    const prepared = await createSqliteSessionStorage(db).execution.prepareHostedContext({ sessionId: session.id, scopeKey: 'session' })
+    expect(prepared).toMatchObject({ version: 0, baselineRequired: false })
+    const context = restoreLegacySessionContextSnapshot({ invocationId: 'legacy-session-context', turnId: 'legacy-session-context',
+      committedVersion: 0, messages: prior, scope: { kind: 'session', sessionId: session.id } })
+    const legacySeed = [...prior]
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: `zero-legacy-${outcome}-provider`, stream: async function* () {
+      if (outcome === 'failed') throw new Error('deterministic legacy-seed failure')
+      yield { type: 'text-delta', text: 'new answer' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    let warm: SessionContextState | undefined
+
+    try {
+      const input = {
+        registry, routeId: route.routeId, invocationId: `zero-legacy-${outcome}`, turnId: `zero-legacy-${outcome}`, sessionId: session.id,
+        sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2 as const,
+        history: new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id),
+        request: { messages: [...prior, current], maxTokens: 32 }, maxModelTurns: 1,
+        sessionContext: context, sessionContextInputMessages: [current], sessionContextFailureInputMessages: [current],
+        sessionContextBaselineRequired: prepared.baselineRequired || legacySeed.length > 0,
+        sessionTranscriptFailureMessages: [...prior, current], requiredUserMessage: { id: 'zero-current-user', message: current },
+        safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: new InMemorySafetyPermitStore(),
+          policy: createAgentSdkSafetyPolicy() }), prepareTool: async () => { throw new Error('tools are unused') },
+        toolExecution: createToolExecutionPort(), onSessionContextCommitted: (state: SessionContextState) => { warm = state }
+      }
+      if (outcome === 'failed') await expect(runAgentTurn(input)).rejects.toThrow('deterministic legacy-seed failure')
+      else await runAgentTurn(input)
+      const expected = outcome === 'failed' ? [...prior, current] : [...prior, current, { role: 'assistant', content: 'new answer' }]
+      expect(warm?.committed).toEqual(expected)
+      expect(readSessionTranscript(db, session.id).messages).toEqual(expected)
       db.close()
       db = openDatabase(temp.dbPath)
       expect(readSessionTranscript(db, session.id).messages).toEqual(expected)
