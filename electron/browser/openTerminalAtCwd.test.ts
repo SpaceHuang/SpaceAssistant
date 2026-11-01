@@ -16,6 +16,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 })
 
 import { openTerminalAtCwd } from './openTerminalAtCwd'
+import { spawn } from 'node:child_process'
 
 describe('openTerminalAtCwd', () => {
   it('rejects cwd outside whitelist', () => {
@@ -38,5 +39,21 @@ describe('openTerminalAtCwd', () => {
   it('rejects workDir mismatch', () => {
     const r = openTerminalAtCwd('D:\\other', ctx, { allowedWorkDir: ctx.devRoot })
     expect(r.ok).toBe(false)
+  })
+
+  it('encodes a macOS cwd as literal shell data before embedding it in AppleScript', () => {
+    const originalPlatform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    try {
+      const cwd = '/tmp/a $(touch injected) `touch injected2` \'quoted\' \\folder'
+      expect(openTerminalAtCwd(cwd, ctx, { allowedWorkDir: cwd })).toEqual({ ok: true })
+      const script = vi.mocked(spawn).mock.calls.at(-1)?.[1]?.[1] as string
+      expect(script).toContain('$(touch injected)')
+      expect(script).toContain('`touch injected2`')
+      expect(script).toContain("'\\\\''quoted'\\\\''")
+      expect(script).toContain('\\\\folder')
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    }
   })
 })

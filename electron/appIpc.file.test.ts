@@ -63,7 +63,17 @@ const mockFs = vi.hoisted(() => ({
   mkdir: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   rm: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   rename: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  link: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   stat: vi.fn<() => Promise<import('fs').Stats>>().mockResolvedValue({ isDirectory: () => true } as unknown as import('fs').Stats),
+  lstat: vi.fn(async (target: string) => {
+    if (/[/\\]fake[/\\]workdir$/.test(target)) return { isDirectory: () => true, isSymbolicLink: () => false } as unknown as import('fs').Stats
+    if (/(?:old\.txt|src[/\\]file\.txt|\.sa-move-recovery-[^/\\]+)$/.test(target)) {
+      return { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, nlink: 1, dev: 1, ino: 1 } as unknown as import('fs').Stats
+    }
+    const error = Object.assign(new Error('not found'), { code: 'ENOENT' })
+    throw error
+  }),
+  realpath: vi.fn(async (target: string) => target),
   readdir: vi.fn().mockResolvedValue([]),
   readFile: vi.fn().mockResolvedValue(''),
   unlink: vi.fn().mockResolvedValue(undefined)
@@ -1162,14 +1172,14 @@ describe('file IPC handlers', () => {
     it('creates an empty file', async () => {
       const handler = ipc.getHandler('file:create-file')!
       await handler({}, 'newfile.txt')
-      expect(mockFs.writeFile).toHaveBeenCalledWith(path.join(WORK_DIR, 'newfile.txt'), '')
+      expect(mockFs.writeFile).toHaveBeenCalledWith(path.join(WORK_DIR, 'newfile.txt'), '', { flag: 'wx' })
     })
 
     it('creates intermediate directories', async () => {
       const handler = ipc.getHandler('file:create-file')!
       await handler({}, 'sub/dir/file.txt')
       expect(mockFs.mkdir).toHaveBeenCalledWith(path.join(WORK_DIR, 'sub', 'dir'), { recursive: true })
-      expect(mockFs.writeFile).toHaveBeenCalledWith(path.join(WORK_DIR, 'sub', 'dir', 'file.txt'), '')
+      expect(mockFs.writeFile).toHaveBeenCalledWith(path.join(WORK_DIR, 'sub', 'dir', 'file.txt'), '', { flag: 'wx' })
     })
 
     it('rejects path traversal', async () => {
@@ -1208,7 +1218,9 @@ describe('file IPC handlers', () => {
     it('renames a file', async () => {
       const handler = ipc.getHandler('file:rename')!
       await handler({}, 'old.txt', 'new.txt')
-      expect(mockFs.rename).toHaveBeenCalledWith(path.join(WORK_DIR, 'old.txt'), path.join(WORK_DIR, 'new.txt'))
+      expect(mockFs.link).toHaveBeenCalledWith(path.join(WORK_DIR, 'old.txt'), path.join(WORK_DIR, 'new.txt'))
+      expect(mockFs.rename).toHaveBeenCalledWith(path.join(WORK_DIR, 'old.txt'), expect.stringMatching(/\.sa-move-recovery-/))
+      expect(mockFs.unlink).toHaveBeenCalledWith(expect.stringMatching(/\.sa-move-recovery-/))
     })
 
     it('rejects newName with path separator /', async () => {
@@ -1231,7 +1243,9 @@ describe('file IPC handlers', () => {
     it('moves a file to target directory', async () => {
       const handler = ipc.getHandler('file:move')!
       await handler({}, 'src/file.txt', 'dest')
-      expect(mockFs.rename).toHaveBeenCalledWith(path.join(WORK_DIR, 'src', 'file.txt'), path.join(WORK_DIR, 'dest', 'file.txt'))
+      expect(mockFs.link).toHaveBeenCalledWith(path.join(WORK_DIR, 'src', 'file.txt'), path.join(WORK_DIR, 'dest', 'file.txt'))
+      expect(mockFs.rename).toHaveBeenCalledWith(path.join(WORK_DIR, 'src', 'file.txt'), expect.stringMatching(/\.sa-move-recovery-/))
+      expect(mockFs.unlink).toHaveBeenCalledWith(expect.stringMatching(/\.sa-move-recovery-/))
     })
 
     it('rejects if destination is not a directory', async () => {

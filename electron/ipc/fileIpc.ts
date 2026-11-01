@@ -1,5 +1,7 @@
 // Phase 2 拆分:本文件自 appIpc.ts 纯移动而来,通道名与行为不变(driver-authority-refactor Phase 2)。
 import fs from 'fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import os from 'node:os'
 import path from 'path'
 import { createRequire } from 'node:module'
@@ -9,10 +11,9 @@ import { BrowserWindow, dialog, shell } from 'electron'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { FileInfo } from '../../src/shared/domainTypes'
 import { buildLocalFileViewerUrl } from '../fileViewerUrl'
-import { copyFileInWorkDir } from '../wiki/wikiImport'
 import { defaultPdfSavePath, getFileMetadata, readFileForViewer } from '../fileReadHelpers'
 import { getMainWindow } from '../windowRef'
-import { normalizeRelPathInput, resolveSafePath } from '../pathSecurity'
+import { normalizeRelPathInput, resolveSafePath, resolveSafeWriteTarget } from '../pathSecurity'
 import { withTransientLockRetry } from '../safeAtomicWrite'
 import { defaultMarkdownExportPath, normalizeMarkdownExportPath, isMarkdownExportablePath, type MarkdownExportFormat, type MarkdownExportResult } from '../../src/shared/markdownExport'
 import { resolveSafeReadPath } from '../pathSecurity'
@@ -57,6 +58,85 @@ async function assertWikiDomainFileOperationAllowed(mounted: ReturnType<typeof w
   if (lifecycle.lifecycle === 'domain_enabled') {
     throw new Error('Wiki 已启用领域工具，请通过 Wiki 页面操作管理知识内容')
   }
+}
+
+/** Reject symlinks in every existing component before destructive file-tree operations. */
+async function assertNoSymlinkComponents(base: string, target: string): Promise<void> {
+  const root = path.resolve(base)
+  const absolute = path.resolve(target)
+  const relative = path.relative(root, absolute)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('路径超出工作目录范围')
+  const rootStat = await fs.lstat(root)
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('工作目录不可用')
+  let walked = root
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    walked = path.join(walked, segment)
+    try {
+      const stat = await fs.lstat(walked)
+      if (stat.isSymbolicLink()) throw new Error('路径包含符号链接，拒绝文件操作')
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+  }
+}
+
+async function assertMissingTarget(target: string): Promise<void> {
+  try {
+    await fs.lstat(target)
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  throw new Error('目标已存在')
+}
+
+const directoryDestinationLocks = new Map<string, Promise<void>>()
+
+async function withDirectoryDestinationLock<T>(target: string, operation: () => Promise<T>): Promise<T> {
+  const key = process.platform === 'win32' ? path.resolve(target).toLowerCase() : path.resolve(target)
+  const previous = directoryDestinationLocks.get(key) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => { release = resolve })
+  directoryDestinationLocks.set(key, current)
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (directoryDestinationLocks.get(key) === current) directoryDestinationLocks.delete(key)
+  }
+}
+
+/** Claim file destinations exclusively; keep both versions if the source changes mid-operation. */
+async function moveRegularFileNoReplace(source: string, target: string): Promise<void> {
+  const sourceStat = await fs.lstat(source)
+  if (sourceStat.isSymbolicLink()) throw new Error('路径包含符号链接，拒绝文件操作')
+  if (sourceStat.isDirectory()) {
+    await withDirectoryDestinationLock(target, async () => {
+      await assertMissingTarget(target)
+      await withTransientLockRetry(() => fs.rename(source, target))
+    })
+    return
+  }
+  if (!sourceStat.isFile() || sourceStat.nlink > 1) throw new Error('原子改名和移动仅支持普通单链接文件或目录')
+  // link() is an exclusive filesystem operation: concurrent callers cannot replace target.
+  await withTransientLockRetry(() => fs.link(source, target))
+  const quarantine = path.join(path.dirname(source), `.sa-move-recovery-${randomBytes(12).toString('hex')}`)
+  // Rename the current directory entry away atomically. Never unlink `source`: an editor may
+  // replace that path at any point, including immediately after an identity check.
+  await withTransientLockRetry(() => fs.rename(source, quarantine))
+  const movedSource = await fs.lstat(quarantine)
+  if (movedSource.dev !== sourceStat.dev || movedSource.ino !== sourceStat.ino) {
+    // Restore without replacing a newer save that may already have recreated `source`.
+    try {
+      await withTransientLockRetry(() => fs.link(quarantine, source))
+    } catch {
+      // Keep the recovery file when the source path was concurrently recreated.
+    }
+    throw new Error(`源文件在操作期间已更新；新版本已保留，恢复副本：${quarantine}`)
+  }
+  await withTransientLockRetry(() => fs.unlink(quarantine))
 }
 
 async function resolveDomainWikiAlias(mounted: NonNullable<ReturnType<typeof wikiMountOf>>): Promise<{ path?: string; error?: string } | undefined> {
@@ -336,8 +416,10 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const target = mounted
       ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
       : resolveSafePath(root, rel)
-    await fs.mkdir(path.dirname(target), { recursive: true })
-    await fs.writeFile(target, '')
+    const sandbox = mounted?.realBase ?? root
+    const safeTarget = await resolveSafeWriteTarget(sandbox, mounted?.realRel ?? rel)
+    await fs.mkdir(path.dirname(safeTarget.targetPath), { recursive: true })
+    await fs.writeFile(safeTarget.targetPath, '', { flag: 'wx' })
   })
 
   ipcMain.handle('file:create-directory', async (_e, rel: string): Promise<void> => {
@@ -347,6 +429,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const target = mounted
       ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
       : resolveSafePath(root, rel)
+    await assertNoSymlinkComponents(mounted?.realBase ?? root, target)
     await fs.mkdir(target, { recursive: true })
   })
 
@@ -362,6 +445,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const target = mounted
       ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
       : resolveSafePath(root, rel)
+    await assertNoSymlinkComponents(mounted?.realBase ?? root, target)
     await fs.rm(target, { recursive: true, force: true })
   })
 
@@ -383,7 +467,11 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const newPath = path.join(path.dirname(oldPath), newName)
     // §7.4：挂载命中时真实路径断言限 realBase 内
     if (mounted) assertInsideDir(mounted.realBase, newPath)
-    await withTransientLockRetry(() => fs.rename(oldPath, newPath))
+    const sandbox = mounted?.realBase ?? root
+    await assertNoSymlinkComponents(sandbox, oldPath)
+    await assertNoSymlinkComponents(sandbox, newPath)
+    await assertMissingTarget(newPath)
+    await moveRegularFileNoReplace(oldPath, newPath)
   })
 
   ipcMain.handle('file:move', async (_e, srcRel: string, destDirRel: string): Promise<void> => {
@@ -409,8 +497,15 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       throw new Error(ErrorCodes.TARGET_NOT_DIRECTORY)
     }
     const srcName = path.basename(srcPath)
-    if (destMounted) assertInsideDir(destMounted.realBase, path.join(destDirPath, srcName))
-    await withTransientLockRetry(() => fs.rename(srcPath, path.join(destDirPath, srcName)))
+    const destPath = path.join(destDirPath, srcName)
+    if (destMounted) assertInsideDir(destMounted.realBase, destPath)
+    const srcSandbox = srcMounted?.realBase ?? root
+    const destSandbox = destMounted?.realBase ?? root
+    await assertNoSymlinkComponents(srcSandbox, srcPath)
+    await assertNoSymlinkComponents(destSandbox, destDirPath)
+    await assertNoSymlinkComponents(destSandbox, destPath)
+    await assertMissingTarget(destPath)
+    await moveRegularFileNoReplace(srcPath, destPath)
   })
 
   ipcMain.handle('file:copy', async (_e, payload: { srcRelPath: string; destRelPath: string }): Promise<void> => {
@@ -420,10 +515,6 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     assertWikiWritable(destMounted)
     await assertWikiDomainFileOperationAllowed(srcMounted)
     await assertWikiDomainFileOperationAllowed(destMounted)
-    if (!srcMounted && !destMounted) {
-      await copyFileInWorkDir(root, payload.srcRelPath, payload.destRelPath)
-      return
-    }
     // §7.4：跨边界 copy 允许——主进程两段式：读源侧（其沙箱内）→ 写目标侧（其沙箱内）
     const srcPath = srcMounted
       ? (srcMounted.realRel ? resolveSafePath(srcMounted.realBase, srcMounted.realRel) : srcMounted.realBase)
@@ -438,8 +529,11 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       destRelInSandbox = normalizeRelPathInput(payload.destRelPath)
     }
     const destAbs = resolveSafePath(destSandbox, destRelInSandbox)
+    await assertNoSymlinkComponents(srcMounted?.realBase ?? root, srcPath)
+    await assertNoSymlinkComponents(destSandbox, destAbs)
+    await assertMissingTarget(destAbs)
     await fs.mkdir(path.dirname(destAbs), { recursive: true })
-    await fs.copyFile(srcPath, destAbs)
+    await fs.copyFile(srcPath, destAbs, fsConstants.COPYFILE_EXCL)
   })
 }
 

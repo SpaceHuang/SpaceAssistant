@@ -18,6 +18,14 @@ function isAllowedShellWorkDir(cwd: string, allowedWorkDir: string): boolean {
   }
 }
 
+function shellQuotePosix(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function appleScriptQuote(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
+
 export function openTerminalAtCwd(
   cwd: string,
   ctx: BrowserDetectContext,
@@ -42,7 +50,8 @@ export function openTerminalAtCwd(
     }
 
     if (process.platform === 'darwin') {
-      const script = `tell application "Terminal" to do script "cd \\"${cwd.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}\\""`
+      const command = `cd ${shellQuotePosix(cwd)}`
+      const script = `tell application "Terminal" to do script ${appleScriptQuote(command)}`
       spawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' }).unref()
       return { ok: true }
     }
