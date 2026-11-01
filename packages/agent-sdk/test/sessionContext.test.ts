@@ -56,6 +56,28 @@ describe('shared session context rules', () => {
     expect(restored.committed.every((message) => message.role !== 'system')).toBe(true)
   })
 
+  it('skips payload validation of a speculative simple-history path for large mixed histories', () => {
+    let inputModeReads = 0
+    const contextPayload = new Proxy({ contextProtocol: 2, inputMessages: [], failureInputMessages: [],
+      messages: [], scope: { kind: 'session', sessionId: 'large-mixed-session' } }, {
+      get(target, property, receiver) {
+        if (property === 'inputMode') inputModeReads += 1
+        return Reflect.get(target, property, receiver)
+      }
+    })
+    const events: Array<{ kind: string; payload: unknown }> = Array.from({ length: 1001 }, (_, index) => ({ kind: 'model-request-started', payload: { requestId: `neutral-${index}` } }))
+    events.push(
+      { kind: 'invocation-context-committed', payload: contextPayload },
+      { kind: 'replay-message-committed', payload: { message: assistant('large-mixed-answer', 'answer') } },
+      { kind: 'invocation-completed', payload: { status: 'completed' } }
+    )
+
+    const restored = restoreSessionContextFromOwnedEvents({ committedVersion: 1, events: events as never })
+
+    expect(restored.committed).toEqual([assistant('large-mixed-answer', 'answer')])
+    expect(inputModeReads).toBe(1)
+  })
+
   it('owns incoming messages once and shares frozen historical message objects across turns', () => {
     const sourceMessage = { role: 'user' as const, id: 'shared-user', content: [{ type: 'text' as const, text: 'original' }] }
     const seed = restoreLegacySessionContextSnapshot({ invocationId: 'shared-seed', turnId: 'shared-seed', committedVersion: 1, messages: [sourceMessage] })

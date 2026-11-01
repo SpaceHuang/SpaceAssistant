@@ -1,4 +1,4 @@
-import { performance } from 'node:perf_hooks'
+import { PerformanceObserver, performance } from 'node:perf_hooks'
 import { strict as assert } from 'node:assert'
 import { openSqliteDatabase, getDbConnection } from '../electron/database/sqliteStore.ts'
 import { createSession } from '../electron/database/operations.ts'
@@ -103,6 +103,11 @@ try {
     let maxEventLoopDelayMs = 0
     let transcript: ReturnType<typeof readSessionTranscript> | undefined
     const readStageSamples: Array<{ sample: number; readMs: number; sqlMs: number; jsonParseMs: number; reducerMs: number; remainingMs: number }> = []
+    const gcIntervals: Array<{ startTime: number; duration: number }> = []
+    const gcObserver = profileReadPhases ? new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) gcIntervals.push({ startTime: entry.startTime, duration: entry.duration })
+    }) : undefined
+    gcObserver?.observe({ entryTypes: ['gc'] })
     for (let sample = 0; sample < 30; sample += 1) {
       let timerDelayMs = 0
       const timerStart = performance.now()
@@ -132,10 +137,12 @@ try {
         }) as typeof JSON.parse
       }
       const totalStart = performance.now()
+      let readEnd = totalStart
       try { transcript = readSessionTranscript(db, session.id, {}, profileReadPhases
         ? (durationMs) => { readReducerMs = durationMs }
         : undefined) }
       finally {
+        readEnd = performance.now()
         if (profileReadPhases) {
           conn.prepare = originalPrepare
           JSON.parse = originalJsonParse
@@ -144,7 +151,9 @@ try {
       const readMs = performance.now() - totalStart
       totalSamples.push(readMs)
       if (profileReadPhases) readStageSamples.push({ sample, readMs, sqlMs: readSqlMs, jsonParseMs: readJsonParseMs,
-        reducerMs: readReducerMs, remainingMs: Math.max(0, readMs - readSqlMs - readJsonParseMs - readReducerMs) })
+        reducerMs: readReducerMs, remainingMs: Math.max(0, readMs - readSqlMs - readJsonParseMs - readReducerMs),
+        gcDuringReadMs: gcIntervals.reduce((sum, gc) => sum + Math.max(0,
+          Math.min(readEnd, gc.startTime + gc.duration) - Math.max(totalStart, gc.startTime)), 0) })
       await tick
       eventLoopSamples.push(timerDelayMs)
       maxEventLoopDelayMs = Math.max(maxEventLoopDelayMs, timerDelayMs)
@@ -157,6 +166,7 @@ try {
     const slowestRead = readStageSamples.length
       ? readStageSamples.reduce((slowest, candidate) => candidate.readMs > slowest.readMs ? candidate : slowest)
       : undefined
+    gcObserver?.disconnect()
     const summarizeStage = (select: (sample: typeof readStageSamples[number]) => number) => {
       const sorted = readStageSamples.map(select).sort((left, right) => left - right)
       return { p50: Number(sorted[Math.floor(sorted.length * 0.5)]!.toFixed(2)),
@@ -169,7 +179,8 @@ try {
         reducer: summarizeStage((sample) => sample.reducerMs), remaining: summarizeStage((sample) => sample.remainingMs) },
         slowestRead: { sample: slowestRead.sample, readMs: Number(slowestRead.readMs.toFixed(2)),
           sqlMs: Number(slowestRead.sqlMs.toFixed(2)), jsonParseMs: Number(slowestRead.jsonParseMs.toFixed(2)), reducerMs: Number(slowestRead.reducerMs.toFixed(2)),
-          remainingMs: Number(slowestRead.remainingMs.toFixed(2)) } } : {}),
+          remainingMs: Number(slowestRead.remainingMs.toFixed(2)), gcDuringReadMs: Number(slowestRead.gcDuringReadMs.toFixed(2)) },
+        maxGcDuringReadMs: Number(Math.max(...readStageSamples.map((sample) => sample.gcDuringReadMs)).toFixed(2)) } : {}),
       readSamplesMs: totalSamples.map((sample) => Number(sample.toFixed(2))),
       eventLoopSamplesMs: eventLoopSamples.map((sample) => Number(sample.toFixed(2))),
       reducerMessageCount: restored.committed.length }))

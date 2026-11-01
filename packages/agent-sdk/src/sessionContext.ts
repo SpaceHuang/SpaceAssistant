@@ -116,7 +116,12 @@ function restoreSessionContextWithOwnership(
   input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>,
   eventsAreOwned: boolean
 ): SessionContextState {
-  const simpleRestored = restoreSimpleCompletedSessionContext(input, undefined, eventsAreOwned)
+  // On large histories, cheaply identify mixed event kinds before validating the
+  // simple path's payloads. Mixed histories are reduced in segments below, so
+  // validating every old simple-turn payload here would only repeat that work.
+  const hasMixedHistoryKinds = input.events.length > 1000 && input.events.some((event) => !simpleCompletedHistoryKinds.has(event.kind))
+  const simpleRestored = hasMixedHistoryKinds ? undefined
+    : restoreSimpleCompletedSessionContext(input, undefined, eventsAreOwned)
   if (simpleRestored) return simpleRestored
   let state = freezeState({ committedVersion: input.committedVersion, committed: [], working: [], failure: [], parkBaseline: [], pendingTools: new Map(), completedToolResults: new Map(), approvedToolCallIds: new Set(), requestSystem: '' })
   let simpleRun: ContextReplayEvent[] = []
