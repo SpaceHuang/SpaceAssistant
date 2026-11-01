@@ -17,7 +17,7 @@
 
 | 文档 | 类型 | 状态 | 说明 |
 | --- | --- | --- | --- |
-| [ci-reliability-improvement-technical-plan.md](./in-flight/ci-reliability-improvement-technical-plan.md) | 技术方案 | 草稿（未实施） | 近期 CI 失败复盘、required check 门禁、跨平台测试契约与 Electron 串行初始化 |
+| [ci-reliability-improvement-technical-plan.md](./in-flight/ci-reliability-improvement-technical-plan.md) | 技术方案 | 实施中 | CI 门禁与跨平台可靠性；代码已推送 PR #3，待完整 CI 与仓库规则核验 |
 
 ## 归档（10 件）
 
