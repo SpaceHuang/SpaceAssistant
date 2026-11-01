@@ -12,6 +12,8 @@ const conn = getDbConnection(db)
 const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
 const answer = 'x'.repeat(4096)
 const checkpoints = new Set([100, 250, 400, 1000, 2500])
+// Enables per-read SQLite/JSON timing wrappers for diagnosis; leave unset for baseline gate runs.
+const profileReadPhases = process.env.SESSION_CONTEXT_COLD_REPLAY_PROFILE === '1'
 
 try {
   for (let index = 0; index < 2500; index += 1) {
@@ -97,16 +99,51 @@ try {
     assert.equal(events.filter((event) => event.kind === 'model-response-committed').length, rounds + (rounds >= 500 ? 1 : 0) - (rounds >= 1500 ? 1 : 0))
     const reduceMs = performance.now() - reduceStart
     const totalSamples: number[] = []
+    const eventLoopSamples: number[] = []
     let maxEventLoopDelayMs = 0
     let transcript: ReturnType<typeof readSessionTranscript> | undefined
+    const readStageSamples: Array<{ sample: number; readMs: number; sqlMs: number; jsonParseMs: number; remainingMs: number }> = []
     for (let sample = 0; sample < 30; sample += 1) {
       let timerDelayMs = 0
       const timerStart = performance.now()
       const tick = new Promise<void>((resolve) => setImmediate(() => { timerDelayMs = performance.now() - timerStart; resolve() }))
+      let readSqlMs = 0
+      let readJsonParseMs = 0
+      const originalPrepare = conn.prepare
+      const originalJsonParse = JSON.parse
+      if (profileReadPhases) {
+        conn.prepare = ((sql: string) => {
+          const statement = originalPrepare.call(conn, sql)
+          return new Proxy(statement, { get(target, property) {
+            const method = Reflect.get(target, property, target)
+            if (property !== 'get' && property !== 'all') return typeof method === 'function' ? method.bind(target) : method
+            return (...args: unknown[]) => {
+              const queryStart = performance.now()
+              try { return method.apply(target, args) }
+              finally { readSqlMs += performance.now() - queryStart }
+            }
+          } })
+        }) as typeof conn.prepare
+        JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+          const parseStart = performance.now()
+          try { return originalJsonParse(...args) }
+          finally { readJsonParseMs += performance.now() - parseStart }
+        }) as typeof JSON.parse
+      }
       const totalStart = performance.now()
-      transcript = readSessionTranscript(db, session.id)
-      totalSamples.push(performance.now() - totalStart)
+      try { transcript = readSessionTranscript(db, session.id) }
+      finally {
+        if (profileReadPhases) {
+          conn.prepare = originalPrepare
+          JSON.parse = originalJsonParse
+        }
+      }
+      const readMs = performance.now() - totalStart
+      totalSamples.push(readMs)
+      if (profileReadPhases) readStageSamples.push({ sample, readMs, sqlMs: readSqlMs, jsonParseMs: readJsonParseMs,
+        remainingMs: Math.max(0, readMs - readSqlMs - readJsonParseMs) })
       await tick
+      eventLoopSamples.push(timerDelayMs)
       maxEventLoopDelayMs = Math.max(maxEventLoopDelayMs, timerDelayMs)
     }
     assert.deepEqual(transcript?.messages, restored.committed, `warm/cold transcript mismatch at ${rounds} rounds`)
@@ -114,9 +151,25 @@ try {
     const totalReadP95Ms = sortedTotalSamples[Math.ceil(sortedTotalSamples.length * 0.95) - 1]!
     const maxReadSampleMs = Math.max(...totalSamples)
     const maxContinuousBlockMs = Math.max(maxReadSampleMs, maxEventLoopDelayMs)
+    const slowestRead = readStageSamples.length
+      ? readStageSamples.reduce((slowest, candidate) => candidate.readMs > slowest.readMs ? candidate : slowest)
+      : undefined
+    const summarizeStage = (select: (sample: typeof readStageSamples[number]) => number) => {
+      const sorted = readStageSamples.map(select).sort((left, right) => left - right)
+      return { p50: Number(sorted[Math.floor(sorted.length * 0.5)]!.toFixed(2)),
+        p95: Number(sorted[Math.ceil(sorted.length * 0.95) - 1]!.toFixed(2)), max: Number(sorted.at(-1)!.toFixed(2)) }
+    }
     console.log(JSON.stringify({ rounds, rows: transcript!.messages.length, historyEventRows: rows.length, historyBytes: rounds * 4096,
       sqlMs, parseMs, reduceMs, totalReadSampleCount: totalSamples.length, eventLoopDelayMs: maxEventLoopDelayMs,
-      totalReadP95Ms, maxReadSampleMs, maxContinuousBlockMs, reducerMessageCount: restored.committed.length }))
+      totalReadP95Ms, maxReadSampleMs, maxContinuousBlockMs,
+      ...(slowestRead ? { readStageSummary: { sql: summarizeStage((sample) => sample.sqlMs), jsonParse: summarizeStage((sample) => sample.jsonParseMs),
+        remaining: summarizeStage((sample) => sample.remainingMs) },
+        slowestRead: { sample: slowestRead.sample, readMs: Number(slowestRead.readMs.toFixed(2)),
+          sqlMs: Number(slowestRead.sqlMs.toFixed(2)), jsonParseMs: Number(slowestRead.jsonParseMs.toFixed(2)),
+          remainingMs: Number(slowestRead.remainingMs.toFixed(2)) } } : {}),
+      readSamplesMs: totalSamples.map((sample) => Number(sample.toFixed(2))),
+      eventLoopSamplesMs: eventLoopSamples.map((sample) => Number(sample.toFixed(2))),
+      reducerMessageCount: restored.committed.length }))
     assert.ok(maxContinuousBlockMs <= 50, `${rounds * 4096} byte cold replay blocked main thread for ${maxContinuousBlockMs.toFixed(1)} ms (read=${maxReadSampleMs.toFixed(1)} ms, event-loop=${maxEventLoopDelayMs.toFixed(1)} ms)`)
   }
 } finally {
