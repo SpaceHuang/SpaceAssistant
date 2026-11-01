@@ -110,11 +110,7 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - name: Initialize Electron binary before test workers
-        shell: bash
-        run: |
-          ELECTRON_BINARY="$(node -p "require('electron')")"
-          test -x "$ELECTRON_BINARY"
-          "$ELECTRON_BINARY" --version
+        run: node scripts/initialize-electron-ci.mjs
       - run: npm run i18n:generate-types
       - run: npm exec -- vitest run --project electron electron/confirmation/recursionGuard.test.ts electron/confirmation/toolCallGate.test.ts
       - run: npm run test:shell-lifecycle
@@ -132,11 +128,7 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - name: Initialize Electron binary before test workers
-        shell: bash
-        run: |
-          ELECTRON_BINARY="$(node -p "require('electron')")"
-          test -x "$ELECTRON_BINARY"
-          "$ELECTRON_BINARY" --version
+        run: node scripts/initialize-electron-ci.mjs
       - run: npm run i18n:generate-types
       - run: npm exec -- vitest run --project electron electron/confirmation/recursionGuard.test.ts electron/confirmation/toolCallGate.test.ts
       - run: npm run test:shell-lifecycle
@@ -155,11 +147,7 @@ jobs:
       - run: npm ci
       # Electron 必须先由串行步骤解析、检查并启动，再运行任何 Vitest worker。
       - name: Initialize Electron binary before test workers
-        shell: bash
-        run: |
-          ELECTRON_BINARY="$(node -p "require('electron')")"
-          test -x "$ELECTRON_BINARY"
-          "$ELECTRON_BINARY" --version
+        run: node scripts/initialize-electron-ci.mjs
       - run: npm run i18n:generate-types
       - run: npm exec -- vitest run --project electron electron/confirmation/recursionGuard.test.ts electron/confirmation/toolCallGate.test.ts
       - run: npm run test:shell-lifecycle
