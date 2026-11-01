@@ -144,7 +144,14 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
       }
     } else if (event.kind === 'model-response-committed' || event.kind === 'replay-message-committed') {
       const payload = event.payload as { message?: unknown }
-      if (payload?.message && typeof payload.message === 'object') state = applyContextEvent(state, { kind: event.kind, message: payload.message as CanonicalModelMessage })
+      if (payload?.message && typeof payload.message === 'object') {
+        const message = payload.message as CanonicalModelMessage
+        if (event.kind === 'replay-message-committed' && message.role === 'tool') {
+          state = applyContextEvent(state, { kind: 'tool-call-finished', toolCallId: message.toolCallId, message })
+        } else {
+          state = applyContextEvent(state, { kind: event.kind, message })
+        }
+      }
     } else if (event.kind === 'tool-call-started') {
       const payload = event.payload as { toolCall?: unknown }
       if (payload?.toolCall && typeof payload.toolCall === 'object') state = applyContextEvent(state, { kind: 'tool-call-started', toolCall: payload.toolCall as CanonicalToolCall })

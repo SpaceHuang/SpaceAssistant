@@ -58,6 +58,38 @@ function expectApiRouteScopesInvalid(db: ReturnType<typeof createMemoryAppDb>, s
 }
 
 describe('SqliteAgentHistory', () => {
+  it('continues appending after reopening parallel approvals with mixed-case IDs', async () => {
+    const temp = createTempDatabase('history-parallel-approval-order-')
+    let db = temp.db
+    try {
+      const history = new SqliteAgentHistory(getDbConnection(db))
+      const makeEvent = (eventId: string, sequence: number, kind: HistoryEvent['kind'], payload: unknown): HistoryEvent => ({
+        invocationId: 'approval-order-invocation', turnId: 'approval-order-turn', eventId, idempotencyKey: eventId,
+        sequence, schemaVersion: 1, kind, payload
+      })
+      await history.appendBatch([
+        makeEvent('approval-a-wait', 1, 'approval-waiting', { toolCallId: 'a', approvalId: 'approval-a', answerer: 'user', reasonCode: 'test', requestedAt: 1 }),
+        makeEvent('approval-B-wait', 2, 'approval-waiting', { toolCallId: 'B', approvalId: 'approval-B', answerer: 'user', reasonCode: 'test', requestedAt: 2 })
+      ], 0)
+      const transition = getDbConnection(db).prepare('SELECT transition_state_json FROM agent_history_streams WHERE invocation_id=?')
+        .get('approval-order-invocation') as { transition_state_json: string }
+      const legacyOrder = JSON.parse(transition.transition_state_json) as { approvalIdentityByPendingId: [string, string][] }
+      legacyOrder.approvalIdentityByPendingId.reverse()
+      getDbConnection(db).prepare('UPDATE agent_history_streams SET transition_state_json=? WHERE invocation_id=?')
+        .run(JSON.stringify(legacyOrder), 'approval-order-invocation')
+      db.close()
+      db = openDatabase(temp.dbPath)
+      const reopenedHistory = new SqliteAgentHistory(getDbConnection(db))
+      await reopenedHistory.appendBatch([
+        makeEvent('approval-a-resolved', 3, 'approval-resolved', { toolCallId: 'a', approvalId: 'approval-a', approved: true, outcome: 'approved', answerer: 'user', settledAt: 3 })
+      ], 2)
+      const snapshot = await reopenedHistory.read('approval-order-invocation')
+      expect(snapshot.events.map(({ kind }) => kind)).toEqual(['approval-waiting', 'approval-waiting', 'approval-resolved'])
+    } finally {
+      temp.cleanup(db)
+    }
+  })
+
   it('prepares the batch idempotency lookup once per append batch', () => {
     const conn = createDb()
     const prepare = conn.prepare.bind(conn)

@@ -13,7 +13,7 @@ import { createSession } from '../database/operations'
 import { commitSessionTranscript, readSessionTranscript } from '../database/sessionTranscript'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
-import { restoreLegacySessionContextSnapshot, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
+import { restoreLegacySessionContextSnapshot, restoreSessionContext, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
 
 const route = { routeId: 'session-context-replay', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }
@@ -145,6 +145,54 @@ describe('SDK session context SQLite replay contract', () => {
       db.close()
       db = openDatabase(temp.dbPath)
       expect(readSessionTranscript(db, session.id).messages).toEqual(warm)
+    } finally {
+      temp.cleanup(db)
+    }
+  })
+
+  it('replays a model-visible result when dispatch is rejected before execution', async () => {
+    const temp = createTempDatabase('session-context-rejected-tool-replay-')
+    let db = temp.db
+    const session = createSession(db, { name: 'rejected-tool-replay', model: 'test' })
+    const registry = new ModelProviderRegistry()
+    let modelTurn = 0
+    registry.register(route, { providerId: 'rejected-tool-provider', stream: async function* () {
+      modelTurn += 1
+      if (modelTurn === 1) {
+        yield { type: 'tool-call', toolCallId: 'rejected-call', toolName: 'lookup', input: {} }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: 'rejection understood' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('rejected-invocation', ['lookup'])
+    let warm: SessionContextState | undefined
+    try {
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+      await runAgentTurn({ registry, routeId: route.routeId, invocationId: 'rejected-invocation', turnId: 'rejected-turn', sessionId: session.id,
+        history, request: { messages: [{ role: 'user', id: 'rejected-user', content: 'try lookup' }], maxTokens: 32 },
+        sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2, maxModelTurns: 2,
+        safetyGate: new SafetyGate({ capabilities, permitStore: new InMemorySafetyPermitStore(), policy: createAgentSdkSafetyPolicy() }),
+        prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+          capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+        toolExecution: createToolExecutionPort(), beforeToolDispatch: async () => ({ kind: 'reject', reasonCode: 'TEST_REJECT', message: 'lookup blocked' }),
+        onSessionContextCommitted: (state) => { warm = state } })
+      expect(warm?.committed.filter((message) => message.role === 'tool')).toEqual([
+        { role: 'tool', toolCallId: 'rejected-call', content: 'lookup blocked', isError: true }
+      ])
+      expect(readSessionTranscript(db, session.id).messages).toEqual(warm?.committed)
+      const committedVersion = readSessionTranscript(db, session.id).version
+      const historyEvents = (await history.read('rejected-invocation')).events
+      expect(restoreSessionContext({ committedVersion, events: historyEvents }).committed).toEqual(warm?.committed)
+      db.close()
+      db = openDatabase(temp.dbPath)
+      expect(readSessionTranscript(db, session.id).messages).toEqual(warm?.committed)
+      expect(restoreSessionContext({ committedVersion, events: (await new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+        .read('rejected-invocation')).events }).committed).toEqual(warm?.committed)
     } finally {
       temp.cleanup(db)
     }

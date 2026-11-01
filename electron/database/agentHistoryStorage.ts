@@ -213,5 +213,7 @@ function isSortedUniqueStrings(values: readonly unknown[]): values is readonly s
 }
 
 function isSortedUniquePairs<T>(values: readonly (readonly [string, T])[]): boolean {
-  return values.every((value, index) => index === 0 || values[index - 1][0] < value[0])
+  // Pair arrays are maps. Older writers used localeCompare, so accept their order
+  // while still rejecting duplicate keys; the next reducer write uses code-unit order.
+  return new Set(values.map(([key]) => key)).size === values.length
 }

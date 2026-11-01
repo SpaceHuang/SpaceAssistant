@@ -538,8 +538,8 @@ function reduceTransitionState(state: HistoryTransitionState, events: readonly H
     if (event.kind === 'unknown-effect-retry-consumed' && typeof payload.approvalEventId === 'string') unconsumedRetryApprovals.delete(payload.approvalEventId)
     if (TERMINAL_INVOCATION_EVENTS.has(event.kind)) terminalKind = event.kind
   }
-  const byId = [...approvalIdentityByPendingId].sort(([a], [b]) => a.localeCompare(b))
-  const retryApprovals = [...unconsumedRetryApprovals].sort(([a], [b]) => a.localeCompare(b))
+  const byId = [...approvalIdentityByPendingId].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+  const retryApprovals = [...unconsumedRetryApprovals].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
   return {
     invocationId: state.invocationId || events[0]?.invocationId || '',
     turnId: state.turnId || events[0]?.turnId || '', terminalKind,

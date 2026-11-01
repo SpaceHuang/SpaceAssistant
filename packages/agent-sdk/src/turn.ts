@@ -2646,6 +2646,11 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       const result = settled!.status === 'fulfilled'
         ? settled!.value
         : deniedToolResults.get(tool?.toolCallId ?? '')!
+      if (tool && result.role === 'tool' && notDispatchedToolCallIds.has(tool.toolCallId)) {
+        const assistantMessage = [...messages].reverse().find((message) => message.role === 'assistant' && message.toolCalls?.some((call) => call.id === tool.toolCallId))
+        if (!assistantMessage) throw new Error('not-dispatched tool result has no committed assistant call')
+        await appendHistory([{ kind: 'replay-message-committed', payload: { message: structuredClone(result), assistantMessage: structuredClone(assistantMessage), source: 'not-dispatched-tool-result' } }])
+      }
       appendRuntimeMessage(result)
       if (tool && userApprovedToolCalls.has(tool.toolCallId)) {
         appendRuntimeMessage(createApprovalSystemMessage())

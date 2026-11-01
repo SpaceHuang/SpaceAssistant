@@ -680,7 +680,19 @@ export class SqliteAgentHistory implements HistoryPort {
           if (event.kind === 'replay-message-committed') {
             const payload = isRecord(event.payload) ? event.payload : undefined
             const message = payload?.message
-            if (!isRecord(message) || message.role !== 'user' || !validateCanonicalInvocationMessages([message])) {
+            const assistantMessage = payload?.assistantMessage
+            const validUserReplay = isRecord(message) && message.role === 'user' && validateCanonicalInvocationMessages([message])
+            const previouslyCommittedAssistant = isRecord(assistantMessage) && this.conn.prepare(`SELECT payload_json FROM agent_history_events
+              WHERE invocation_id=? AND kind='model-response-committed' ORDER BY sequence DESC`).all(event.invocationId)
+              .some((row) => {
+                try {
+                  const committed = JSON.parse((row as { payload_json: string }).payload_json) as { message?: unknown }
+                  return JSON.stringify(committed.message) === JSON.stringify(assistantMessage)
+                } catch { return false }
+              })
+            const validToolReplay = isRecord(message) && message.role === 'tool' && previouslyCommittedAssistant && isRecord(assistantMessage) &&
+              assistantMessage.role === 'assistant' && validateCanonicalInvocationMessages([{ role: 'user', content: '' }, assistantMessage, message])
+            if (!validUserReplay && !validToolReplay) {
               throw new HistoryBatchError('canonical replay message is invalid')
             }
             continue
