@@ -119,6 +119,33 @@ export function failOrphanedRuntimeSyncTriggers(commands: Pick<SessionCommands, 
   return failed
 }
 
+/** Owns online SDK wait cancellation so application shutdown can release every pause. */
+export function createRuntimeTriggerSyncWaitRegistry(): Readonly<{
+  register(triggerId: string, cancel: () => void): () => void
+  cancel(triggerId: string): void
+  cancelAll(): void
+  size(): number
+}> {
+  const waiters = new Map<string, () => void>()
+  return {
+    register(triggerId, cancel) {
+      waiters.set(triggerId, cancel)
+      return () => { if (waiters.get(triggerId) === cancel) waiters.delete(triggerId) }
+    },
+    cancel(triggerId) {
+      const cancel = waiters.get(triggerId)
+      waiters.delete(triggerId)
+      cancel?.()
+    },
+    cancelAll() {
+      const active = [...waiters.values()]
+      waiters.clear()
+      for (const cancel of active) cancel()
+    },
+    size: () => waiters.size
+  }
+}
+
 async function waitForAcceptedReceiverTurn(input: SyncCheckpointLifecycleDependencies, matched: RuntimeTriggerRecord, checkpoint: SyncCheckpointStep,
   signal: AbortSignal, pauseDeadlineAt: number): Promise<void> {
   let cancelled = false

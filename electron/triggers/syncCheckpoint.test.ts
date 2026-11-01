@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentTurnLifecycleLimits } from '../../packages/agent-sdk/src/turn'
 import type { RuntimeTriggerRecord } from '../sessionStorage/public/model'
-import { createRuntimeTriggerLifecycleAssembly, createSyncCheckpointLifecycleHooks, failOrphanedRuntimeSyncTriggers } from './syncCheckpoint'
+import { createRuntimeTriggerLifecycleAssembly, createRuntimeTriggerSyncWaitRegistry, createSyncCheckpointLifecycleHooks, failOrphanedRuntimeSyncTriggers } from './syncCheckpoint'
 import { RUNTIME_TRIGGER_LIMITS } from './limits'
 
 const limits: AgentTurnLifecycleLimits = { callbackTimeoutMs: 5000, maxPauseMs: 60000 }
@@ -12,6 +12,22 @@ function syncRecord(): RuntimeTriggerRecord {
 }
 
 describe('sync runtime trigger checkpoint', () => {
+  it('cancels every active SDK waiter at shutdown and releases the registry', () => {
+    const waiters = createRuntimeTriggerSyncWaitRegistry()
+    const first = vi.fn()
+    const second = vi.fn()
+    const unregisterFirst = waiters.register('one', first)
+    waiters.register('two', second)
+    expect(waiters.size()).toBe(2)
+    waiters.cancelAll()
+    expect(first).toHaveBeenCalledOnce()
+    expect(second).toHaveBeenCalledOnce()
+    expect(waiters.size()).toBe(0)
+    unregisterFirst()
+    waiters.cancelAll()
+    expect(first).toHaveBeenCalledOnce()
+  })
+
   it('publishes the user-confirmed runtime lifecycle limits in milliseconds', () => {
     expect(RUNTIME_TRIGGER_LIMITS).toEqual({ callbackTimeoutMs: 5000, maxPauseMs: 60000 })
   })

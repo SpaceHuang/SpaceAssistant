@@ -6,8 +6,7 @@ import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerService } from './service'
 import { createRuntimeTriggerDelivery } from './delivery'
 import { createRuntimeTriggerRecovery } from './recovery'
-import { evaluateRuntimeTriggerSource } from './sources'
-import { SettledStepFactsTracker } from './sources'
+import { evaluateRuntimeTriggerSource, SettledStepFactsTracker } from './sources'
 
 describe('runtime trigger capacity and local registration latency', () => {
   it('measures one full History reconstruction and a single appended step update', () => {
@@ -55,20 +54,30 @@ describe('runtime trigger capacity and local registration latency', () => {
       const first = commands.runtimeTriggers.read(firstTriggerId)!
       const scheduledAt = Date.parse(first.definition.condition.type === 'time' ? first.definition.condition.at : '')
       now = scheduledAt
-      service.match({ triggerId: first.id, expectedRevision: first.revision, event: { type: 'time', occurredAt: scheduledAt, taskPrompt: 'capacity' } })
-      const matched = commands.runtimeTriggers.read(first.id)!
       const queueScope = { kind: 'desktop' } as const
-      const authorization = { bindingVersion: 1 as const, requestId: `runtime-trigger:${first.id}`, ownerSessionId: owner, receiverSessionId: owner,
-        queueScope, sourceIdentity: matched.definition.condition, payloadDigest: 'capacity-event', policyRevision: 'policy',
-        authorizationGeneration: 'auth', runtimeGeneration: 'runtime' }
       const delivery = createRuntimeTriggerDelivery({ read: (id) => commands.runtimeTriggers.read(id),
         update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
-        authorize: () => authorization, queueScope: () => queueScope,
+        authorize: (trigger) => ({ bindingVersion: 1, requestId: `runtime-trigger:${trigger.id}`, ownerSessionId: owner, receiverSessionId: owner,
+          queueScope, sourceIdentity: trigger.definition.condition, payloadDigest: 'capacity-event', policyRevision: 'policy',
+          authorizationGeneration: 'auth', runtimeGeneration: 'runtime' }), queueScope: () => queueScope,
         enqueue: (input) => commands.scopedQueue.enqueue(input), readReceipt: (input) => commands.scopedQueue.readReceipt(input) })
       const deliveryWallStart = new Date().toISOString()
       const deliveryStart = performance.now()
-      expect(delivery(first.id)).toMatchObject({ kind: 'enqueued' })
-      process.stdout.write(`[runtime-trigger-delivery] platform=${process.platform} arch=${process.arch} sourceFacts=1 queueMessages=1 deliveryMs=${(performance.now() - deliveryStart).toFixed(3)} wallStart=${deliveryWallStart} wallEnd=${new Date().toISOString()}\n`)
+      const matchAndDeliver = createRuntimeTriggerRecovery({
+        listWaiting: () => commands.runtimeTriggers.listByState('waiting', 4096),
+        listMatched: () => commands.runtimeTriggers.listByState('matched', 4096),
+        read: (id) => commands.runtimeTriggers.read(id),
+        evaluateWaiting: (trigger, timestamp) => evaluateRuntimeTriggerSource(trigger, { now: timestamp, queries: { imAcceptedFacts: {} } as never }),
+        match: (id, revision, event) => commands.runtimeTriggers.update(id, revision, { state: 'matched', matchedAt: now, event, updatedAt: now }),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: now }),
+        fail: (id, revision, code, caseId) => commands.runtimeTriggers.update(id, revision, { state: 'failed', result: { code, case: caseId }, updatedAt: now }),
+        deliver: delivery, update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        readReceipt: (trigger) => commands.scopedQueue.readReceipt({ sessionId: owner, requestId: `runtime-trigger:${trigger.id}`, queueScope }),
+        isSessionBusy: () => true, startReceiver: () => 'busy', readTurnTerminal: () => ({ kind: 'active' }), now: () => now
+      })
+      await matchAndDeliver.scan()
+      expect(commands.runtimeTriggers.read(firstTriggerId)).toMatchObject({ state: 'matched', messageId: expect.any(String) })
+      process.stdout.write(`[runtime-trigger-source-to-queue] platform=${process.platform} arch=${process.arch} sourceFacts=1 queueMessages=1 elapsedMs=${(performance.now() - deliveryStart).toFixed(3)} wallStart=${deliveryWallStart} wallEnd=${new Date().toISOString()}\n`)
       const sorted = [...samples].sort((a, b) => a - b)
       const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1]!
       const registrationWallEnd = new Date().toISOString()

@@ -106,6 +106,7 @@ describe('runtime trigger migration', () => {
     expect(Number((getDbConnection(upgraded).prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion) as { value: string }).value))
       .toBe(DB_SCHEMA_VERSION)
     expect(getDbConnection(upgraded).prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_triggers'").get()).toBeTruthy()
+    const postBackupSession = createSession(upgraded, { name: 'lost-after-whole-database-restore' })
     upgraded.close()
 
     // Rollback is replacement from the closed, consistent whole-database copy, never schema surgery.
@@ -114,6 +115,7 @@ describe('runtime trigger migration', () => {
     const restoredConn = new DatabaseSync(database.dbPath)
     expect(restoredConn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '120' })
     expect(restoredConn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_triggers'").get()).toBeUndefined()
+    expect(restoredConn.prepare('SELECT id FROM sessions WHERE id=?').get(postBackupSession.id)).toBeUndefined()
     restoredConn.close()
     database.db = { close: () => undefined } as typeof database.db
     fs.rmSync(backupDir, { recursive: true, force: true })

@@ -13,6 +13,7 @@ export function createRuntimeTriggerHostService(input: {
   execution: Pick<SessionExecutionStore, 'historyFor'>
   listProcesses?: typeof listManagedProcessTargets
   processGeneration?: typeof managedProcessRuntimeGeneration
+  accepting?: () => boolean
   cancelSyncWait?: (record: import('../sessionStorage/public/model').RuntimeTriggerRecord) => void
 }) {
   const listProcesses = input.listProcesses ?? listManagedProcessTargets
@@ -90,5 +91,13 @@ export function createRuntimeTriggerHostService(input: {
       return {}
     }
   })
-  return Object.assign(service, { isSourceAuthorized, resolveQueueScope })
+  const register = service.register.bind(service)
+  return Object.assign(service, {
+    isSourceAuthorized,
+    resolveQueueScope,
+    async register(request: Parameters<typeof service.register>[0]) {
+      if (input.accepting && !input.accepting()) throw new Error('TRIGGER_ADMISSION_CLOSED')
+      return register(request)
+    }
+  })
 }

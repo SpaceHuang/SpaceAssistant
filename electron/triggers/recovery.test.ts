@@ -34,6 +34,27 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
     recovery.stop()
   })
 
+  it('waits for an active durable scan to settle before shutdown proceeds', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const evaluateWaiting = vi.fn(async () => { await gate; return { kind: 'none' as const } })
+    const recovery = createRuntimeTriggerRecovery({
+      listWaiting: () => [matched({ state: 'waiting' })], listMatched: () => [], read: () => null,
+      evaluateWaiting, match: vi.fn(), expire: vi.fn(), fail: vi.fn(), deliver: vi.fn(() => ({ kind: 'deferred' as const, case: 'none' })),
+      update: vi.fn(() => null), readReceipt: () => undefined, isSessionBusy: () => false,
+      startReceiver: vi.fn(() => 'unavailable' as const), readTurnTerminal: vi.fn(() => ({ kind: 'missing' as const }))
+    })
+    const scan = recovery.scan()
+    await vi.waitFor(() => expect(evaluateWaiting).toHaveBeenCalledOnce())
+    let stopped = false
+    const quiescence = recovery.stop().then(() => { stopped = true })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    release()
+    await Promise.all([scan, quiescence])
+    expect(stopped).toBe(true)
+  })
+
   it('keeps busy receivers queued without consuming the delivery retry budget', async () => {
     let record = matched()
     const update = vi.fn((_id: string, _revision: number, patch: Partial<RuntimeTriggerRecord>) => { record = { ...record, ...patch, revision: record.revision + 1 }; return record })
@@ -63,6 +84,33 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
     expect(record.attempts).toBe(1)
     expect(record.nextAttemptAt).toBe(3_000)
     expect(fail).not.toHaveBeenCalled()
+  })
+
+  it('stops retrying at the configured attempt ceiling', async () => {
+    let record = matched()
+    let now = 2_000
+    const update = vi.fn((_id: string, _revision: number, patch: Partial<RuntimeTriggerRecord>) => {
+      record = { ...record, ...patch, revision: record.revision + 1 }
+      return record
+    })
+    const fail = vi.fn((_id: string, _revision: number, _code: string, caseId: string) => {
+      record = { ...record, state: 'failed', result: { case: caseId }, revision: record.revision + 1 }
+    })
+    const recovery = createRuntimeTriggerRecovery({
+      listWaiting: () => [], listMatched: () => record.state === 'matched' ? [record] : [], read: () => record,
+      evaluateWaiting: () => ({ kind: 'none' }), match: vi.fn(), expire: vi.fn(), fail,
+      deliver: vi.fn(() => ({ kind: 'failed' as const, case: 'transient-queue-write' })), update,
+      readReceipt: () => undefined, isSessionBusy: () => false, startReceiver: vi.fn(() => 'busy' as const),
+      readTurnTerminal: vi.fn(() => ({ kind: 'active' as const })), now: () => now,
+      retryPolicy: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1, maxElapsedMs: 60_000, jitterRatio: 0, random: () => 0 }
+    })
+    await recovery.scan()
+    expect(record).toMatchObject({ state: 'matched', attempts: 1 })
+    now = record.nextAttemptAt!
+    await recovery.scan()
+    expect(record.state).toBe('failed')
+    expect(fail).toHaveBeenCalledWith('trigger-1', 2, 'TRIGGER_DELIVERY_FAILED', 'delivery-retries-exhausted')
+    expect(update).toHaveBeenCalledTimes(1)
   })
 
   it('settles a trigger from the exact persisted receiver Turn terminal', async () => {

@@ -32,12 +32,13 @@ export function createRuntimeTriggerRecovery(input: {
   retryPolicy?: WakeEventRetryConfig
   random?: () => number
   intervalMs?: number
-}): { scan(): Promise<void>; start(): void; stop(): void } {
+}): { scan(): Promise<void>; start(): void; stop(): Promise<void> } {
   const now = input.now ?? Date.now
   const retryPolicy = { ...DEFAULT_TRIGGER_RETRY, ...input.retryPolicy, ...(input.random ? { random: input.random } : {}) }
   const intervalMs = input.intervalMs ?? 1_000
   let busy = false
   let timer: ReturnType<typeof setInterval> | undefined
+  let activeScan: Promise<void> | undefined
 
   const settleFromTurn = async (trigger: RuntimeTriggerRecord, receipt: Receipt): Promise<void> => {
     if (!receipt.turnId) return
@@ -126,7 +127,8 @@ export function createRuntimeTriggerRecovery(input: {
     async scan() {
       if (busy) return
       busy = true
-      try {
+      const scan = (async () => {
+        try {
         const timestamp = now()
         for (const trigger of input.listWaiting()) {
           if (trigger.state !== 'waiting') continue
@@ -145,13 +147,21 @@ export function createRuntimeTriggerRecovery(input: {
             if (current?.state === 'matched') recordDeliveryFailure(current, 'delivery-runtime-failed')
           }
         }
-      } finally { busy = false }
+        } finally { busy = false }
+      })()
+      activeScan = scan
+      try { await scan }
+      finally { if (activeScan === scan) activeScan = undefined }
     },
     start() {
       if (timer) return
       timer = setInterval(() => { void this.scan() }, intervalMs)
       timer.unref?.()
     },
-    stop() { if (timer) clearInterval(timer); timer = undefined }
+    stop() {
+      if (timer) clearInterval(timer)
+      timer = undefined
+      return activeScan ?? Promise.resolve()
+    }
   }
 }

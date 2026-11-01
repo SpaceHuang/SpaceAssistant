@@ -58,7 +58,7 @@ import { createRuntimeTriggerDelivery } from './triggers/delivery'
 import { createRuntimeTriggerRecovery } from './triggers/recovery'
 import { evaluateRuntimeTriggerSource, readPersistedTurnTerminal, readSessionSettledStepFacts, readSettledStepFacts, SettledStepFactsTracker, turnTerminalBusForExecution } from './triggers/sources'
 import { createRuntimeTriggerStartAuthorizer } from './triggers/authorization'
-import { createRuntimeTriggerLifecycleAssembly, failOrphanedRuntimeSyncTriggers } from './triggers/syncCheckpoint'
+import { createRuntimeTriggerLifecycleAssembly, createRuntimeTriggerSyncWaitRegistry, failOrphanedRuntimeSyncTriggers } from './triggers/syncCheckpoint'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createTurnDisplayPublisher } from './turnDisplayPublisher'
 import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask,
@@ -307,7 +307,7 @@ let projectionRevalidationDrainStop: { stop: () => void } | null = null
 let eventLoopWatchdogStop: (() => void) | null = null
 let turnDisplayPublisherStop: (() => void) | null = null
 let runtimeTriggerReceiverStarter: ((input: import('./triggers/receiverStarter').RuntimeTriggerReceiverStartInput) => Promise<'started' | 'busy' | 'unavailable'>) | null = null
-let runtimeTriggerRecoveryStop: (() => void) | null = null
+let runtimeTriggerRecoveryStop: (() => Promise<void>) | null = null
 let runtimeTriggerSyncWaitStop: (() => void) | null = null
 let safeDatabaseMaintenanceInFlight: Promise<void> | undefined
 let isQuitting = false
@@ -779,14 +779,12 @@ app.whenReady().then(async () => {
     quiesceMaintenance: async () => { await safeDatabaseMaintenanceInFlight }
   })
   const sessionStorage = sessionStorageHost.storage
-  const runtimeTriggerSyncWaitCancels = new Map<string, () => void>()
-  runtimeTriggerSyncWaitStop = () => {
-    for (const cancel of runtimeTriggerSyncWaitCancels.values()) cancel()
-    runtimeTriggerSyncWaitCancels.clear()
-  }
+  const runtimeTriggerSyncWaiters = createRuntimeTriggerSyncWaitRegistry()
+  runtimeTriggerSyncWaitStop = runtimeTriggerSyncWaiters.cancelAll
   const runtimeTriggerService = createRuntimeTriggerHostService({ commands: sessionStorage.commands,
     queries: sessionStorage.queries, execution: sessionStorage.execution,
-    cancelSyncWait: (trigger) => { runtimeTriggerSyncWaitCancels.get(trigger.id)?.(); runtimeTriggerSyncWaitCancels.delete(trigger.id) } })
+    accepting: () => !isQuitting,
+    cancelSyncWait: (trigger) => runtimeTriggerSyncWaiters.cancel(trigger.id) })
   const runtimeTriggerSecuritySettings = createSecuritySettingsStorage(db)
   const runtimeTriggerQueueScope = (receiverSessionId: string) => runtimeTriggerService.resolveQueueScope(receiverSessionId)
   const runtimeTriggerAuthoritySnapshot = (trigger: import('./sessionStorage/public/model').RuntimeTriggerRecord): RuntimeTriggerAuthoritySnapshot | undefined => {
@@ -905,8 +903,7 @@ app.whenReady().then(async () => {
       readReceiver: async (receiverSessionId, receiverTurnId) => readPersistedTurnTerminal(
         sessionStorage.execution.readTurn({ sessionId: receiverSessionId, turnId: receiverTurnId }), receiverSessionId, receiverTurnId),
       registerWaiter: (triggerId, cancel) => {
-        runtimeTriggerSyncWaitCancels.set(triggerId, cancel)
-        return () => { if (runtimeTriggerSyncWaitCancels.get(triggerId) === cancel) runtimeTriggerSyncWaitCancels.delete(triggerId) }
+        return runtimeTriggerSyncWaiters.register(triggerId, cancel)
       },
       fail: (id, revision, code, caseId) => sessionStorage.commands.runtimeTriggers.update(id, revision,
         { state: 'failed', result: { code, case: caseId }, updatedAt: Date.now() })
@@ -1644,7 +1641,7 @@ app.on('before-quit', (event) => {
   try { getDefaultAgentRuntime().reviewScopeCache.clearAll() } catch { /* Startup may fail before runtime assembly. */ }
   turnDisplayPublisherStop?.()
   turnDisplayPublisherStop = null
-  runtimeTriggerRecoveryStop?.()
+  const runtimeTriggerRecoveryQuiescence = runtimeTriggerRecoveryStop?.() ?? Promise.resolve()
   runtimeTriggerRecoveryStop = null
   runtimeTriggerSyncWaitStop?.()
   runtimeTriggerSyncWaitStop = null
@@ -1684,7 +1681,7 @@ app.on('before-quit', (event) => {
     })
     try {
       const result = await Promise.race([
-        Promise.all([runShutdownCleanup(pendingTasks), sessionProjectionMigrationShutdown, storageQuiescence]).then(([cleanupResult, _migration, storageResult]) => {
+        Promise.all([runShutdownCleanup(pendingTasks), sessionProjectionMigrationShutdown, storageQuiescence, runtimeTriggerRecoveryQuiescence]).then(([cleanupResult, _migration, storageResult]) => {
           storageQuiescent = storageResult.status === 'quiescent'
           return cleanupResult
         }),

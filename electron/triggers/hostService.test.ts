@@ -5,6 +5,20 @@ import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerHostService } from './hostService'
 
 describe('runtime trigger host capability adapter', () => {
+  it('rejects new registrations once application shutdown has closed admission', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'shutting-down owner' })
+      const service = createRuntimeTriggerHostService({ commands: createSessionCommands(db),
+        queries: { listSessions: () => [owner], imAcceptedFacts: {} } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }) } as never,
+        accepting: () => false })
+      await expect(service.register({ ownerSessionId: owner.id, params: { clientKey: 'late-admission', receiverSessionId: owner.id,
+        expiresAt: Date.now() + 60_000, condition: { type: 'time', at: new Date(Date.now() + 30_000).toISOString(), taskPrompt: 'wake' } } }))
+        .rejects.toThrow('TRIGGER_ADMISSION_CLOSED')
+    } finally { db.close() }
+  })
+
   it('filters targets to visible sessions in the owner work profile and owned processes', async () => {
     const db = createMemoryAppDb()
     try {
