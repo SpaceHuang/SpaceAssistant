@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { ReviewScopeCache } from './reviewScopeCache'
 import { captureFileIdentity, safeAtomicWrite } from '../safeAtomicWrite'
@@ -46,10 +46,35 @@ import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src
 
 const shells: AppDatabase[] = []
 const tempDirectories = new Set<string>()
+let defaultWorkDir = ''
+beforeAll(async () => {
+  defaultWorkDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tool-call-gate-default-')))
+})
+afterAll(async () => {
+  if (defaultWorkDir) await fs.rm(defaultWorkDir, { recursive: true, force: true })
+})
+
 async function makeTempDir(prefix: string): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
   tempDirectories.add(directory)
   return directory
+}
+
+function systemHostsPath(): string {
+  if (process.platform !== 'win32') return '/etc/hosts'
+  const windowsRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
+  return path.join(windowsRoot, 'System32', 'drivers', 'etc', 'hosts')
+}
+
+function systemMissingPath(name: string): string {
+  if (process.platform !== 'win32') return path.join('/etc', name)
+  const windowsRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
+  return path.join(windowsRoot, 'System32', 'drivers', 'etc', name)
+}
+
+function systemHostsCommand(): string {
+  if (process.platform === 'win32') return `Get-Content -LiteralPath '${systemHostsPath()}'`
+  return `cat ${systemHostsPath()}`
 }
 
 describe('buildToolCallGateArgs', () => {
@@ -290,8 +315,8 @@ function base(overrides: Partial<ToolCallGateArgs> = {}): ToolCallGateArgs {
     toolUseId: `gate-test-tool-${nextGateTestId}`,
     // The write-path probe intentionally rejects missing parent directories.
     // Use the host-provided temporary root instead of relying on a machine-local fixture path.
-    workDir: os.tmpdir(),
-    userDataDir: path.join(os.tmpdir(), 'ud'),
+    workDir: defaultWorkDir || os.tmpdir(),
+    userDataDir: path.join(defaultWorkDir || os.tmpdir(), '.userdata'),
     toolsConfig: toolsConfig(),
     audit: { record: () => undefined },
     ...gateMaterialsFor(legacyDb, lane),
@@ -320,10 +345,10 @@ describe('IM standard policy override is final at the gate', () => {
     expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-environment')).toMatchObject({ kind: 'script-execution-environment', status: 'complete', digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-settings')).toMatchObject({ kind: 'script-execution-settings', status: 'complete', interpreter: expect.any(String), digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', code, url: 'https://docs.example.com/', host: 'docs.example.com', method: 'GET', complete: true })
-    expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: os.tmpdir(), timeoutSeconds: toolsConfig().scriptTimeout,
+    expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: defaultWorkDir || os.tmpdir(), timeoutSeconds: toolsConfig().scriptTimeout,
       interpreter: 'python', interpreterFallbackCandidates: process.platform === 'win32' ? ['py', 'python3'] : ['python3'], interpreterResolution: 'first-version-probe-success' })
     const explicitTimeout = await evaluate(code, 'im-standard-v3', 3600)
-    expect(explicitTimeout.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: os.tmpdir(), timeoutSeconds: 3600 })
+    expect(explicitTimeout.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: defaultWorkDir || os.tmpdir(), timeoutSeconds: 3600 })
     let scriptPrompt = ''
     const scriptApproval = new AgentChannel({ lane, requestId: 'script-review-materials', sessionId: 's', toolName: 'run_script', policy: { kind: 'agent' },
       invokeApproval: async (invocation) => { scriptPrompt = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
@@ -370,7 +395,9 @@ describe('IM standard policy override is final at the gate', () => {
         const shellApproval = new AgentChannel({ lane, requestId: 'shell-review-materials', sessionId: 's', toolName: 'run_shell', policy: { kind: 'agent' },
           invokeApproval: async (invocation) => { shellPrompt = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
         expect(await shellApproval.request({ facts: result.facts, riskLevel: result.decision.type === 'require-confirm' ? result.decision.riskLevel : 'high', memoryTiers: [], timeoutMs: 5000 })).toMatchObject({ kind: 'approved' })
-        for (const material of [command, workDir, '300', 'zsh', 'PATH', 'b'.repeat(64), 'complete']) expect(shellPrompt).toContain(material)
+        for (const material of [command, workDir, '300', 'zsh', 'PATH', 'b'.repeat(64), 'complete']) {
+          expect(shellPrompt).toContain(material === workDir ? JSON.stringify(workDir).slice(1, -1) : material)
+        }
       }
       for (const command of ['git push', 'git -c core.fsmonitor=helper status', 'git status && touch marker', 'git status | cat']) {
         const result = await run(command)
@@ -463,7 +490,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
       const single = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: file }, effectiveRules, imPolicySnapshot: snapshot }))
       const listing = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'list_directory', toolInput: { path: outside }, effectiveRules, imPolicySnapshot: snapshot }))
       const recursive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'grep', toolInput: { path: outside, pattern: 'needle' }, effectiveRules, imPolicySnapshot: snapshot }))
-      const sensitive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: '/etc/hosts' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const sensitive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: systemHostsPath() }, effectiveRules, imPolicySnapshot: snapshot }))
       const special = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: outside }, effectiveRules, imPolicySnapshot: snapshot }))
       const unknown = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: path.join(outside, '**', '*.txt') }, effectiveRules, imPolicySnapshot: snapshot }))
 
@@ -1572,7 +1599,7 @@ describe('evaluateToolCallGate', () => {
   it('V3 run_shell 将单次分析中的路径事实交给 locked 策略确认', async () => {
     const root = await fs.realpath(await makeTempDir('shell-facts-root-'))
     try {
-      const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: 'cat /etc/hosts' } }))
+      const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: systemHostsCommand() } }))
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'path-target', zone: 'system-dir' }))
       expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
       expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'shell-system-dir-confirm', answerer: 'user' })
@@ -1591,7 +1618,7 @@ describe('evaluateToolCallGate', () => {
       hints: { requiresRiskAck: false, outsideWorkDirRisk: false, warnings: [] }
     }))
     const gate = await evaluateToolCallGate(base({
-      toolName: 'run_shell', toolInput: { command: 'cat /etc/hosts' }, runShellPrecheck: precheck as never
+      toolName: 'run_shell', toolInput: { command: systemHostsCommand() }, runShellPrecheck: precheck as never
     }))
     expect(analyzeSpy).toHaveBeenCalledTimes(1)
     expect(precheck).toHaveBeenCalledTimes(1)
@@ -1742,10 +1769,10 @@ describe('evaluateToolCallGate', () => {
       }))
       expect(sensitive.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-sensitive-path-confirm', answerer: 'user' })
 
-      const system = await evaluateToolCallGate(makeArgs({ path: '/etc/im-security-review-test-new.md', content: 'private' }))
+      const system = await evaluateToolCallGate(makeArgs({ path: systemMissingPath('im-security-review-test-new.md'), content: 'private' }))
       expect(system.decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-write-deny' })
 
-      const outside = await evaluateToolCallGate(makeArgs({ path: '/etc/im-security-review-test-new.md', content: 'blocked' }))
+      const outside = await evaluateToolCallGate(makeArgs({ path: systemMissingPath('im-security-review-test-new.md'), content: 'blocked' }))
       expect(outside.decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-write-deny' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
@@ -1927,7 +1954,7 @@ describe('evaluateToolCallGate', () => {
     const declaredWithSensitivePath = await evaluateToolCallGate(base({
       appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
       toolName: 'run_script',
-      toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)\nopen("/etc/hosts", "r")' }
+      toolInput: { code: `# @path-scope workdir-readonly\ncustom_accessor(target)\nopen(${JSON.stringify(systemHostsPath())}, "r")` }
     }))
     expect(declaredWithSensitivePath.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-declaration', consistent: false }))
     expect(declaredWithSensitivePath.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-system-dir-confirm' })
@@ -1935,7 +1962,7 @@ describe('evaluateToolCallGate', () => {
 
   it('V3 run_script 静态敏感路径与内容分析共享一次解析，并进入敏感路径真人确认规则', async () => {
     const root = await fs.realpath(await makeTempDir('script-static-path-root-'))
-    const toolInput = { code: 'open("/etc/hosts", "r")' }
+    const toolInput = { code: `open(${JSON.stringify(systemHostsPath())}, "r")` }
     try {
       const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false }))
@@ -1947,9 +1974,9 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each([
-    { language: 'javascript', code: "import fs from 'node:fs'; fs.readFileSync('/etc/hosts')" },
-    { language: 'typescript', code: "import { readFile } from 'node:fs/promises'; await readFile('/etc/hosts')" },
-    { language: 'powershell', code: "Get-Content -LiteralPath '/etc/hosts'" }
+    { language: 'javascript', code: `import fs from 'node:fs'; fs.readFileSync(${JSON.stringify(systemHostsPath())})` },
+    { language: 'typescript', code: `import { readFile } from 'node:fs/promises'; await readFile(${JSON.stringify(systemHostsPath())})` },
+    { language: 'powershell', code: `Get-Content -LiteralPath '${systemHostsPath()}'` }
   ])('V3 run_script $language 的路径事实进入系统目录真人确认', async ({ language, code }) => {
     const root = await fs.realpath(await makeTempDir('script-language-gate-'))
     try {
@@ -2186,7 +2213,7 @@ describe('evaluateToolCallGate', () => {
     const root = await fs.realpath(await makeTempDir('lane-matrix-root-'))
     const outside = await fs.realpath(await makeTempDir('lane-matrix-outside-'))
     try {
-      const remoteRead = await evaluateToolCallGate(base({ lane: 'feishu', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'read_file', toolInput: { path: '/etc/hosts' } }))
+      const remoteRead = await evaluateToolCallGate(base({ lane: 'feishu', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'read_file', toolInput: { path: systemHostsPath() } }))
       expect(remoteRead.decision).toMatchObject({ type: 'require-confirm', answerer: 'user' })
 
       const automationWrite = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'write_file', toolInput: { path: path.join(outside, 'new.txt'), content: 'x' } }))
@@ -2303,7 +2330,7 @@ describe('evaluateToolCallGate', () => {
       expect(sensitive.decision).toMatchObject({ type: 'deny', ruleId: 'automation-sensitive-path-deny' })
       expect(staleAllowLookup).not.toHaveBeenCalled()
 
-      const system = await evaluateToolCallGate(base({ lane: 'automation', workDir, userDataDir, toolName: 'read_file', toolInput: { path: '/etc/hosts' } }))
+      const system = await evaluateToolCallGate(base({ lane: 'automation', workDir, userDataDir, toolName: 'read_file', toolInput: { path: systemHostsPath() } }))
       expect(system.decision).toMatchObject({ type: 'deny', ruleId: 'automation-system-dir-deny' })
 
       const unregisteredMedia = await evaluateToolCallGate(base({ lane: 'automation', workDir, userDataDir, toolName: 'read_feishu_attachment', toolInput: { attachmentId: 'attachment-1' } }))
@@ -2387,10 +2414,10 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('路径探测遇到 EACCES 时以环境错误终局拒绝且不生成 permit 或确认登记', async () => {
-    const file = '/tmp/wd/blocked.txt'
+    const file = path.join(defaultWorkDir, 'blocked.txt')
     const originalLstat = fs.lstat.bind(fs)
     const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (target, ...args) => {
-      if (String(target) === file) throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      if (path.normalize(String(target)) === path.normalize(file)) throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
       return originalLstat(target, ...args)
     })
     const registry = new ReadConfirmationRegistry()
