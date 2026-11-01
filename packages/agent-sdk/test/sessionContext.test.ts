@@ -8,20 +8,25 @@ const assistant = (id: string, content: string): CanonicalModelMessage => ({ rol
 describe('shared session context rules', () => {
   it('reuses and freezes detached history messages while the general restore API owns its inputs', () => {
     const makeEvents = () => {
+      const seedMessage = { role: 'user' as const, content: 'detached seed' }
       const message = { role: 'assistant' as const, content: 'detached answer' }
-      return { message, events: [
-        { kind: 'invocation-context-committed', payload: { contextProtocol: 2, inputMode: 'baseline', messages: [], inputMessages: [], failureInputMessages: [], scope: { kind: 'session', sessionId: 'owned' } } },
+      return { seedMessage, message, events: [
+        { kind: 'invocation-context-committed', payload: { contextProtocol: 2, inputMode: 'baseline', messages: [seedMessage], inputMessages: [seedMessage], failureInputMessages: [seedMessage], scope: { kind: 'session', sessionId: 'owned' } } },
         { kind: 'model-response-committed', payload: { message } },
         { kind: 'invocation-completed', payload: { status: 'completed', contextSelection: { contextProtocol: 2, target: 'working' } } }
       ] as import('../src/history').HistoryEvent[] }
     }
     const detached = makeEvents()
     const owned = restoreSessionContextFromOwnedEvents({ committedVersion: 1, events: detached.events })
+    expect(owned.committed[0]).toBe(detached.seedMessage)
+    expect(Object.isFrozen(detached.seedMessage)).toBe(true)
     expect(owned.committed.at(-1)).toBe(detached.message)
     expect(Object.isFrozen(detached.message)).toBe(true)
 
     const callerOwned = makeEvents()
     const copied = restoreSessionContext({ committedVersion: 1, events: callerOwned.events })
+    expect(copied.committed[0]).not.toBe(callerOwned.seedMessage)
+    expect(Object.isFrozen(callerOwned.seedMessage)).toBe(false)
     expect(copied.committed.at(-1)).not.toBe(callerOwned.message)
     expect(Object.isFrozen(callerOwned.message)).toBe(false)
   })

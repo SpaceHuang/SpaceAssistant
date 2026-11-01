@@ -131,8 +131,16 @@ export function readSessionTranscript(db: AppDatabase, sessionId: string, option
       .all(sessionId, receipt.event_end) as Array<{ event_id: string; turn_id: string; kind: HistoryEvent['kind']; payload_json: string }>
     const main = conn.prepare('PRAGMA database_list').all().find((database) => (database as { name?: string }).name === 'main') as { file?: string } | undefined
     const spillRoot = main?.file ? path.join(path.dirname(main.file), 'spill') : undefined
-    const events = eventRows.map((event) => ({ eventId: event.event_id, turnId: event.turn_id,
-      kind: event.kind, payload: hydrateTranscriptSpills(JSON.parse(event.payload_json) as unknown, spillRoot) }))
+    const events = eventRows.map((event) => {
+      const payload = JSON.parse(event.payload_json) as unknown
+      // Most canonical events contain no spill references. Avoid recursively
+      // walking every decoded payload just to discover that; keep the existing
+      // strict recursive validation for the uncommon spilled payload.
+      return { eventId: event.event_id, turnId: event.turn_id, kind: event.kind,
+        payload: event.payload_json.includes('__spaceassistant_spill_v1')
+          ? hydrateTranscriptSpills(payload, spillRoot)
+          : payload }
+    })
     const reducerStart = profileContextReducer ? performance.now() : 0
     const restored = restoreSessionContextFromOwnedEvents({ committedVersion: version, events })
     if (profileContextReducer) profileContextReducer(performance.now() - reducerStart)

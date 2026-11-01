@@ -41,6 +41,8 @@ function deepFreeze<T>(value: T): T {
 const ownMessage = (message: CanonicalModelMessage): CanonicalModelMessage => deepFreeze(structuredClone(message))
 const ownMessages = (messages: readonly CanonicalModelMessage[]): readonly CanonicalModelMessage[] =>
   Object.freeze(messages.map(ownMessage))
+const freezeOwnedMessages = (messages: readonly CanonicalModelMessage[]): readonly CanonicalModelMessage[] =>
+  Object.freeze(messages.map(deepFreeze))
 const freezeMessages = (messages: readonly CanonicalModelMessage[]): readonly CanonicalModelMessage[] =>
   Object.isFrozen(messages) ? messages : Object.freeze(messages)
 export const SESSION_CONTEXT_NEUTRAL_HISTORY_KINDS = [
@@ -130,7 +132,7 @@ function restoreSessionContextWithOwnership(
   const flushSimpleRun = () => {
     if (!simpleRun.length) return
     state = restoreSimpleCompletedSessionContext({ committedVersion: input.committedVersion, events: simpleRun }, state, eventsAreOwned)
-      ?? restoreSessionContextGeneric({ committedVersion: input.committedVersion, events: simpleRun }, state)
+      ?? restoreSessionContextGeneric({ committedVersion: input.committedVersion, events: simpleRun }, state, eventsAreOwned)
     simpleRun = []
   }
   for (const event of input.events) {
@@ -149,14 +151,14 @@ function restoreSessionContextWithOwnership(
     if (currentTurnIsSimple) simpleRun.push(...currentTurn)
     else {
       flushSimpleRun()
-      state = restoreSessionContextGeneric({ committedVersion: input.committedVersion, events: currentTurn }, state)
+      state = restoreSessionContextGeneric({ committedVersion: input.committedVersion, events: currentTurn }, state, eventsAreOwned)
     }
     currentTurn = []
     currentTurnIsSimple = true
   }
   if (currentTurn.length) {
     flushSimpleRun()
-    state = restoreSessionContextGeneric({ committedVersion: input.committedVersion, events: currentTurn }, state)
+    state = restoreSessionContextGeneric({ committedVersion: input.committedVersion, events: currentTurn }, state, eventsAreOwned)
   }
   flushSimpleRun()
   return freezeState({ ...state, committedVersion: input.committedVersion })
@@ -164,7 +166,8 @@ function restoreSessionContextWithOwnership(
 
 function restoreSessionContextGeneric(
   input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>,
-  initialState?: SessionContextState
+  initialState?: SessionContextState,
+  eventsAreOwned = false
 ): SessionContextState {
   let state = initialState ?? freezeState({ committedVersion: input.committedVersion, committed: [], working: [], failure: [], parkBaseline: [], pendingTools: new Map(), completedToolResults: new Map(), approvedToolCallIds: new Set(), requestSystem: '' })
   for (const event of input.events) {
@@ -185,9 +188,11 @@ function restoreSessionContextGeneric(
         // Protocol 2 entries written before inputMode stored the complete request in both
         // fields (and also carried `messages`). Preserve that historical snapshot meaning.
         const inputMode = explicitMode ?? (Array.isArray(payload.messages) ? 'baseline' : 'delta')
-        const additions = ownMessages((inputMode === 'baseline' && Array.isArray(payload.messages)
-          ? payload.messages : payload.inputMessages) as CanonicalModelMessage[])
-        const failureAdditions = ownMessages(payload.failureInputMessages as CanonicalModelMessage[])
+        const additionsSource = (inputMode === 'baseline' && Array.isArray(payload.messages)
+          ? payload.messages : payload.inputMessages) as CanonicalModelMessage[]
+        const additions = eventsAreOwned ? freezeOwnedMessages(additionsSource) : ownMessages(additionsSource)
+        const failureSource = payload.failureInputMessages as CanonicalModelMessage[]
+        const failureAdditions = eventsAreOwned ? freezeOwnedMessages(failureSource) : ownMessages(failureSource)
         const failureMessages = failureAdditions.length
           ? inputMode === 'baseline' ? failureAdditions : [...state.committed, ...failureAdditions]
           : state.failure
@@ -327,7 +332,8 @@ function restoreSimpleCompletedSessionContext(
     } else if (event.kind === 'invocation-context-committed') {
       const payload = event.payload as { inputMode?: 'delta' | 'baseline'; inputMessages: CanonicalModelMessage[]; messages?: CanonicalModelMessage[]; scope: ContextScope; invocationId?: string; requiredUserMessage?: { id: string; message: CanonicalModelMessage }; system?: string }
       const mode = payload.inputMode ?? (Array.isArray(payload.messages) ? 'baseline' : 'delta')
-      const additions = ownMessages(mode === 'baseline' && Array.isArray(payload.messages) ? payload.messages : payload.inputMessages)
+      const additionsSource = mode === 'baseline' && Array.isArray(payload.messages) ? payload.messages : payload.inputMessages
+      const additions = eventsAreOwned ? freezeOwnedMessages(additionsSource) : ownMessages(additionsSource)
       if (mode === 'baseline') { buffer.length = 0; hasSystemMessage = false }
       buffer.push(...additions)
       hasSystemMessage ||= additions.some((message) => message.role === 'system')
