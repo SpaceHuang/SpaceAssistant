@@ -17,7 +17,7 @@
 
 | 文档 | 类型 | 状态 | 说明 |
 | --- | --- | --- | --- |
-| [ci-reliability-improvement-technical-plan.md](./in-flight/ci-reliability-improvement-technical-plan.md) | 技术方案 | 实施中 | CI 门禁与跨平台可靠性；代码已推送 PR #3，待完整 CI 与仓库规则核验 |
+| [ci-reliability-improvement-technical-plan.md](./in-flight/ci-reliability-improvement-technical-plan.md) | 技术方案 | 已实施 | CI 门禁与跨平台可靠性；PR #3 head 全部 CI 通过，main 规则已启用 |
 
 ## 归档（10 件）
 

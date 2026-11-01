@@ -40,8 +40,12 @@
       "verificationRunId": "41318645772",
       "closureEvidence": "Commit 78dc2623 removed the spawnSync call that launched the Electron fixture runner and now calls createFixtureDefinition directly; this test passed in main CI run 41318645772. That run had unrelated failures, so this is test-level verification only.",
       "rerunOnlyClosure": false,
-      "failedJobs": ["test"],
-      "failedTests": ["electron/sessionStorage/sessionStorageFullChainFixture.test.ts > generates deterministic, content-free scale metadata for a fixed seed"]
+      "failedJobs": [
+        "test"
+      ],
+      "failedTests": [
+        "electron/sessionStorage/sessionStorageFullChainFixture.test.ts > generates deterministic, content-free scale metadata for a fixed seed"
+      ]
     },
     {
       "incidentId": "413186-grep-timeout-result",
@@ -51,13 +55,17 @@
       "rootCause": "After the regex worker validation consumed the caller deadline, an early return emitted a clean no-match result before the timeout boundary summary could be added.",
       "firstFailureAt": "2026-11-01T15:17:04Z",
       "locatedAt": "2026-11-01T16:38:38Z",
-      "fixedAt": null,
-      "fixCommit": null,
-      "verificationRunId": null,
-      "closureEvidence": null,
+      "fixedAt": "2026-11-01T17:08:00Z",
+      "fixCommit": "8cb4fecdc1cc8c804bf3973ca40b075ed8f5e34d",
+      "verificationRunId": "41329880381",
+      "closureEvidence": "Commit 7ba29e9a changed the grep fallback so timeout state reaches the boundary summary; deterministic fake-clock regression passed locally, and full Vitest passed in PR run 41329880381. The same run also validated report upload and required aggregation.",
       "rerunOnlyClosure": false,
-      "failedJobs": ["test"],
-      "failedTests": ["electron/tools/grepFallback.test.ts > honors the caller total timeout while matching in the worker"]
+      "failedJobs": [
+        "test"
+      ],
+      "failedTests": [
+        "electron/tools/grepFallback.test.ts > honors the caller total timeout while matching in the worker"
+      ]
     },
     {
       "incidentId": "413186-butler-mock-leak",
@@ -67,12 +75,14 @@
       "rootCause": "A multi-step Butler settings test exceeded its 15-second limit under full-suite load; vi.clearAllMocks cleared calls but retained mockResolvedValueOnce queues, so seven later assertions observed prior tests' review IDs.",
       "firstFailureAt": "2026-11-01T15:17:04Z",
       "locatedAt": "2026-11-01T16:38:38Z",
-      "fixedAt": null,
-      "fixCommit": null,
-      "verificationRunId": null,
-      "closureEvidence": null,
+      "fixedAt": "2026-11-01T17:08:00Z",
+      "fixCommit": "7ba29e9abf4c5e5e59b21c8b698a16e2df3ca47f",
+      "verificationRunId": "41329880381",
+      "closureEvidence": "Commit 7ba29e9a resets test-local Butler API mock implementations before each test and gives the multi-step scenario an evidence-based timeout budget; targeted renderer test passed locally and the full Vitest suite passed in PR run 41329880381.",
       "rerunOnlyClosure": false,
-      "failedJobs": ["test"],
+      "failedJobs": [
+        "test"
+      ],
       "failedTests": [
         "src/renderer/components/Config/ButlerTaskSettings.test.tsx > draft restore after reopening",
         "src/renderer/components/Config/ButlerTaskSettings.test.tsx > output Git review",

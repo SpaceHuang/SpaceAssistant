@@ -1,13 +1,13 @@
 # CI 可靠性改进技术方案
 
-> 状态：实施中（D-01、D-02 已批准；代码已落地并推送，待当前 PR CI 和仓库规则核验完成）
+> 状态：已实施（D-01、D-02 已批准；PR head 全部 CI 通过，main 保护规则已核验）
 > 核对基线：`main` `28dd3223`（2026-10-17）  
 > 范围：GitHub Actions CI 的结果可信度、合并门禁、跨平台测试和 Electron 初始化并发。  
 > 本文保留方案规格与决策记录；实现进展与验证证据记录在对应小节。GitHub 仓库规则需以 API 复核结果为准。
 
 ## 第 0 层：决策层【人必读】
 
-**一句话**：近期 CI 失败暴露了测试契约漂移、平台假设和 Electron 首次初始化竞态；测试侧已有修复且最新工作流通过，但当前仓库未启用分支保护，失败检查不会阻止代码进入 `main`。
+**一句话**：近期 CI 失败暴露了测试契约漂移、平台假设和 Electron 首次初始化竞态；修复已通过当前 PR 的全量与跨平台 CI，`main` 现要求 PR 与稳定必需检查，管理员保留紧急绕过。
 
 **只有 3 分钟的话**：看本节、[推荐门禁拓扑](#2-推荐门禁拓扑人机共读)和[阶段与验收](#7-阶段与验收人机共读)。
 
@@ -21,7 +21,7 @@
 - **可逆性**：仓库规则可调整或撤销；已直接进入主线的提交无法由规则自动回滚。
 - **依据强度**：已验证仓库级 `main` 未启用分支保护/适用规则；近 7 天存在多次失败提交，最近一次失败后才有绿色运行。未核实账号级继承策略。
 - **已批准范围**：要求 PR，并要求稳定聚合检查通过；审批人数为 0。
-- **实施状态**：工作流已有稳定 `CI / required` 检查，当前 PR #3 的完整 CI 正在运行。仓库规则尚未启用；须待成功运行可核验后配置。
+- **实施状态**：工作流稳定检查和 `main` 保护规则已启用；PR #3 head `8cb4fecd` 的所有 9 项检查成功。规则 API 读回与 artifact 证据见阶段记录。
 
 下钻：当前证据见 [F-01](#附录事实与复核命令机人工可跳过)；推荐门禁见 [INV-01](#3-可靠性不变量机人工可跳过) 与 [AC-01](#7-阶段与验收人机共读)。
 
@@ -203,15 +203,15 @@ CI 结论可映射到提交 SHA、workflow run、job、平台标签、失败步�
 
 阶段顺序是：先稳定唯一合并结论，再硬化 runner/test 契约，最后依据数据优化诊断与时长。当前实施证据与未完成项：
 
-- **P1 代码部分完成**：稳定 `CI / required` 聚合器与结果测试已提交；失败 / cancelled / skipped / missing 结果均 fail closed。已推送 PR #3（`7ba29e9a`），当前远端 run `41328093035` 尚在运行。规则 API 当前返回 `Branch not protected (404)`，rulesets / branch rules 为空；待当前 run 成功后配置并复核。
+- **P1 完成**：`CI / required` 覆盖所有 8 个 required job；失败 / cancelled / skipped / missing 均 fail closed。PR #3 head `8cb4fecd` 的 run [`41329880381`](https://github.com/SpaceHuang/SpaceAssistant/actions/runs/41329880381) 全部 9 项 check 成功。`main` classic protection 已配置并读回：required check `CI / required`、PR 必须、approval count 0、strict false、`enforce_admins=false`、禁 force push / deletion、要求 conversation resolution；仓库 rulesets 列表为空。管理员紧急绕过按 D-02 保留。
 - **P2 完成**：Electron 初始化脚本已放到完整测试和三个 shell runner 的 worker 前；工作流 checker 验证顺序与失败即停止；Windows/macOS 平台 contract 已在 run `41326452404` 上通过。TDD 修复 grep 超时摘要遗漏与 Butler 测试一次性 mock 泄漏，相关定向测试通过。
-- **P3 代码部分完成**：Vitest JSON 报告汇总为仅含测试标识/状态/耗时/脱敏错误的摘要，always 上传、保留 14 天；required 摘要带 run/attempt 链接。失败复盘命令和记录已加入，能统计类别、定位/修复耗时、连续失败与重复根因；旧失败 run 的两项根因需待修复提交对应的完整 CI 成功后关闭。
+- **P3 完成**：Vitest 成功 run artifact `vitest-report-41329880381-1` 已下载核验：12,122 passed、0 failed、140 skipped。失败摘要仅包含测试标识 / 状态 / 耗时 / 脱敏错误，always 上传、保留 14 天；required 摘要带 run 与 attempt 链接。失败复盘命令统计类别、定位/修复耗时、连续失败与重复根因；`npm run check:ci-failure-review` 报告未关闭数为 0。
 
 | 阶段 | 交付 | 验收 |
 |---|---|---|
-| P1 稳定合并结论 | `CI / required` 聚合 job；明确所有检查与平台；按 D-01 / D-02 配置仓库规则 | **AC-01**：失败、取消、跳过、缺失结果均使聚合失败；所有依赖成功时通过。纯逻辑测试已覆盖，真实平台完整成功 run 待验。**AC-02**：PR 必需检查与分支规则配置待 run 成功后落地；验证 `enforce_admins=false`、普通 PR 门禁生效，并记录管理员可紧急绕过。普通用户直接 push 的拒绝需以规则设置/API 核验，不由管理员凭据尝试绕过。 |
+| P1 稳定合并结论 | `CI / required` 聚合 job；明确所有检查与平台；按 D-01 / D-02 配置仓库规则 | **AC-01**：失败、取消、跳过、缺失结果均使聚合失败；所有依赖成功时通过。纯逻辑测试及 run `41329880381` 全部依赖成功结论通过。**AC-02**：PR 必需检查与分支规则已配置并通过 API 读回；`enforce_admins=false`、approval count 0、required context `CI / required`。管理员保留紧急绕过；普通用户 push 的门禁由规则配置约束。 |
 | P2 固化平台契约 | Electron 预热屏障有清晰检查；fixture 使用平台安全临时目录；SDK 边界和安全拒绝用例明确 | **AC-03**：shell lifecycle 的每个矩阵 runner 在 Vitest worker 启动前证明 Electron binary 已初始化；模拟预热失败时测试命令未启动。工作流 checker 断言预热顺序与不可继续执行；真实 Windows/macOS shell contract 在 run `41326452404` 已通过。**AC-04**：Windows 与 macOS 正常路径用例均不依赖固定根路径；敏感路径拒绝测试仍明确断言拒绝。**AC-05**：共享层测试的 SDK 越界导入能被 checker 检出，合法 SDK owner 层集成测试通过。 |
-| P3 改善失败定位 | 失败摘要、测试报告 artifact、复盘分类 | **AC-06**：合成失败报告的本地测试证明摘要保留测试名/状态/耗时并脱敏；当前远端 artifact 需完整 run 完成后复核。**AC-07**：单测验证失败矩阵汇总带 run 与 attempt 链接；原始 run 历史保留，重跑不覆写。**AC-08**：复盘数据与命令覆盖类别、定位/修复耗时、连续失败和不允许仅凭 rerun 关闭；两条待关闭根因须由新成功 CI 证据核销。 |
+| P3 改善失败定位 | 失败摘要、测试报告 artifact、复盘分类 | **AC-06**：合成失败测试覆盖识别与脱敏；真实 artifact `vitest-report-41329880381-1` 已核验（12,122 passed、0 failed、140 skipped），保留期 14 天。**AC-07**：单测验证失败矩阵汇总带 run 与 attempt 链接；原始 run 历史保留，重跑不覆写。**AC-08**：复盘数据与命令覆盖类别、定位/修复耗时、连续失败和禁止仅凭 rerun 关闭；`npm run check:ci-failure-review` 通过且未关闭数为 0。 |
 
 ### 迁移、回滚与兼容
 
@@ -237,7 +237,7 @@ CI 结论可映射到提交 SHA、workflow run、job、平台标签、失败步�
 
 ### F-01 当前仓库规则状态
 
-核验时间：2026-10-17。仓库级 `main` protection API 返回 `Branch not protected (404)`；仓库 rulesets 和适用于 `main` 的规则列表为空。账号级继承规则未核实，不能据此声称整个 GitHub 账号不存在规则。
+核验时间：2026-11-02。仓库级 `main` classic protection 已要求 PR + `CI / required`，approval count 0，strict false，`enforce_admins=false`；force push / deletion 关闭，conversation resolution 开启。API 读回与配置一致；仓库 rulesets 列表为空。账号级继承规则未核实。
 
 复核：
 
@@ -295,7 +295,7 @@ rg -n '"test"|"test:electron"|"test:renderer"|"test:shell-lifecycle"|"check:agen
 | INV-03 | AC-03；§4.2 Electron 初始化屏障 |
 | INV-04 / INV-05 | AC-04 / AC-05；§4.3 测试契约 |
 | INV-06 / INV-07 | AC-06 / AC-07；§4.4 失败证据 |
-| F-01 | D-01；§2.2 分支规则 |
+| F-01 | D-01 / D-02；§2.2 分支规则 |
 | F-02 | §2、§4；确认方案以现有 CI 为起点 |
 | F-03 | §1.2、§4.3、§8；问题分类与排除方案 |
 
@@ -303,4 +303,4 @@ rg -n '"test"|"test:electron"|"test:renderer"|"test:shell-lifecycle"|"check:agen
 
 ### 编写边界
 
-本文记录 CI 可靠性改进的规格、决策与实现核验。D-01 / D-02 已批准 PR + 必需 CI 检查，并保留管理员紧急绕过。代码已在 PR #3 实施；完整 CI 成功后仍须启用并核验仓库规则，更新本状态与复盘关闭证据。
+本文记录 CI 可靠性改进的规格、决策与实现核验。D-01 / D-02 已批准 PR + 必需 CI 检查，并保留管理员紧急绕过；当前 PR head `8cb4fecd` 全部检查成功，仓库规则已启用并核验。PR 保持 draft，未合并。
