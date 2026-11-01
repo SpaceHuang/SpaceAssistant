@@ -3054,7 +3054,7 @@ describe('evaluateToolCallGate', () => {
       const approval = new AgentChannel({ lane: 'wechat', requestId: 'attachment-materials', sessionId: 's', toolName: 'wechat_reply', policy: { kind: 'agent' },
         invokeApproval: async (invocation) => { rendered = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
       expect(await approval.request({ facts: gate.facts, riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : 'medium', memoryTiers: [], timeoutMs: 5000 })).toMatchObject({ kind: 'approved' })
-      expect(rendered).toContain(attachment)
+      expect(rendered).toContain(JSON.stringify(attachment).slice(1, -1))
       expect(rendered).toContain('report.txt')
       expect(rendered).toContain('owner')
       expect(rendered).toContain('ordinary report content')
@@ -3226,7 +3226,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each([
-    { path: '/etc/spaceassistant-policy-test-new-file', zone: 'system-dir', scope: 'outside-workdir', decision: { type: 'deny', ruleId: 'remote-outside-write-deny' } },
+    { path: systemMissingPath('spaceassistant-policy-test-new-file'), zone: 'system-dir', scope: 'outside-workdir', decision: { type: 'deny', ruleId: 'remote-outside-write-deny' } },
     { path: '.env', zone: 'sensitive-file', scope: 'inside-workdir', decision: { type: 'require-confirm', ruleId: 'im-write-sensitive-path-confirm' } }
   ] as const)('远程写入 $zone 目标按真实工作目录范围裁决', async ({ path: target, zone, scope, decision }) => {
     const workDir = await fs.realpath(await makeTempDir('remote-write-special-work-'))
