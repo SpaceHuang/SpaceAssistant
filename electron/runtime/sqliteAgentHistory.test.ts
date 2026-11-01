@@ -1039,6 +1039,26 @@ describe('SqliteAgentHistory', () => {
     db.close()
   })
 
+  it('rejects a tool replay whose source model turn did not call that tool ID', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'mismatched-tool-replay-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await history.appendBatch([{
+      ...event('mismatched-tool-source', 1), invocationId: 'mismatched-tool-replay-invocation', kind: 'model-response-committed',
+      payload: { modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'expected-call', name: 'lookup', input: {} }] } }
+    }], 0)
+    await expect(history.appendBatch([{
+      ...event('mismatched-tool-result', 2), invocationId: 'mismatched-tool-replay-invocation', kind: 'replay-message-committed',
+      payload: { sourceModelTurn: 1, message: { role: 'tool', toolCallId: 'different-call', content: 'blocked', isError: true } }
+    }], 1)).rejects.toThrow('canonical replay message is invalid')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('mismatched-tool-result')).toEqual({ count: 0 })
+    db.close()
+  })
+
   it('rejects a canonical replay message with an empty stable ID before persisting it', async () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { runAgentTurn } from '../../packages/agent-sdk/src/turn'
 import { ModelProviderRegistry, type CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
 import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
@@ -12,6 +14,7 @@ import { getDbConnection, openDatabase } from '../database'
 import { createSession } from '../database/operations'
 import { commitSessionTranscript, readSessionTranscript } from '../database/sessionTranscript'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { createSpillStore } from '../storage/spillStore'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { restoreLegacySessionContextSnapshot, restoreSessionContext, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
@@ -194,6 +197,99 @@ describe('SDK session context SQLite replay contract', () => {
       expect(restoreSessionContext({ committedVersion, events: (await new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
         .read('rejected-invocation')).events }).committed).toEqual(warm?.committed)
     } finally {
+      temp.cleanup(db)
+    }
+  })
+
+  it('persists the tool result from output-limit recovery before the continuation message', async () => {
+    const temp = createTempDatabase('session-context-output-limit-tool-replay-')
+    let db = temp.db
+    const session = createSession(db, { name: 'output-limit-tool-replay', model: 'test' })
+    const registry = new ModelProviderRegistry()
+    let modelTurn = 0
+    registry.register(route, { providerId: 'output-limit-tool-provider', stream: async function* () {
+      modelTurn += 1
+      if (modelTurn === 1) {
+        yield { type: 'tool-call', toolCallId: 'truncated-call', toolName: 'lookup', input: {} }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'length' }
+      } else {
+        yield { type: 'text-delta', text: 'truncation understood' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+    const capabilities = new CapabilityRegistry()
+    let warm: SessionContextState | undefined
+    try {
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+      await runAgentTurn({ registry, routeId: route.routeId, invocationId: 'output-limit-invocation', turnId: 'output-limit-turn', sessionId: session.id,
+        history, request: { messages: [{ role: 'user', id: 'output-limit-user', content: 'try lookup' }], maxTokens: 32 },
+        sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2, maxModelTurns: 2,
+        recoverOutputLimit: async () => ({ continuation: { role: 'user', content: 'retry the complete call' } }),
+        safetyGate: new SafetyGate({ capabilities, permitStore: new InMemorySafetyPermitStore(), policy: createAgentSdkSafetyPolicy() }),
+        prepareTool: async () => { throw new Error('truncated tools are not dispatched') }, toolExecution: createToolExecutionPort(),
+        onSessionContextCommitted: (state) => { warm = state } })
+      expect(warm?.committed.map((message) => message.role)).toEqual(['user', 'assistant', 'tool', 'user', 'assistant'])
+      const version = readSessionTranscript(db, session.id).version
+      expect(restoreSessionContext({ committedVersion: version, events: (await history.read('output-limit-invocation')).events }).committed).toEqual(warm?.committed)
+      db.close()
+      db = openDatabase(temp.dbPath)
+      const reopened = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+      expect(restoreSessionContext({ committedVersion: version, events: (await reopened.read('output-limit-invocation')).events }).committed).toEqual(warm?.committed)
+      expect(readSessionTranscript(db, session.id).messages).toEqual(warm?.committed)
+    } finally {
+      temp.cleanup(db)
+    }
+  })
+
+  it.each(['text', 'thinking'] as const)('accepts a rejected tool result after a large %s response was spilled', async (largeContentKind) => {
+    const temp = createTempDatabase(`session-context-spilled-rejection-${largeContentKind}-`)
+    let db = temp.db
+    const session = createSession(db, { name: 'spilled-rejection', model: 'test' })
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    const registry = new ModelProviderRegistry()
+    let modelTurn = 0
+    registry.register(route, { providerId: 'spilled-rejection-provider', stream: async function* () {
+      modelTurn += 1
+      if (modelTurn === 1) {
+        yield largeContentKind === 'text'
+          ? { type: 'text-delta', text: 'x'.repeat(70_000) }
+          : { type: 'thinking-delta', text: 'x'.repeat(70_000) }
+        yield { type: 'tool-call', toolCallId: 'spilled-call', toolName: 'lookup', input: {} }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: 'rejection understood' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('spilled-rejection-invocation', ['lookup'])
+    let warm: SessionContextState | undefined
+    try {
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id, createSpillStore(spillRoot))
+      await runAgentTurn({ registry, routeId: route.routeId, invocationId: 'spilled-rejection-invocation', turnId: 'spilled-rejection-turn', sessionId: session.id,
+        history, request: { messages: [{ role: 'user', id: 'spilled-rejection-user', content: 'try lookup' }], maxTokens: 32 },
+        sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2, maxModelTurns: 2,
+        safetyGate: new SafetyGate({ capabilities, permitStore: new InMemorySafetyPermitStore(), policy: createAgentSdkSafetyPolicy() }),
+        prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+          capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+        toolExecution: createToolExecutionPort(), beforeToolDispatch: async () => ({ kind: 'reject', reasonCode: 'TEST_REJECT', message: 'lookup blocked' }),
+        onSessionContextCommitted: (state) => { warm = state } })
+      expect(warm?.committed.filter((message) => message.role === 'tool')).toMatchObject([
+        { role: 'tool', toolCallId: 'spilled-call', content: 'lookup blocked', isError: true }
+      ])
+      const version = readSessionTranscript(db, session.id).version
+      expect(restoreSessionContext({ committedVersion: version, events: (await history.read('spilled-rejection-invocation')).events }).committed).toEqual(warm?.committed)
+      db.close()
+      db = openDatabase(temp.dbPath)
+      const reopened = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id, createSpillStore(spillRoot))
+      expect(restoreSessionContext({ committedVersion: version, events: (await reopened.read('spilled-rejection-invocation')).events }).committed).toEqual(warm?.committed)
+      expect(readSessionTranscript(db, session.id).messages).toEqual(warm?.committed)
+    } finally {
+      await fs.rm(spillRoot, { recursive: true, force: true })
       temp.cleanup(db)
     }
   })

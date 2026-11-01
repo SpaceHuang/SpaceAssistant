@@ -1013,6 +1013,12 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   let outputRecoveryAttempts = 0
   let dispatchedToolRounds = 0
   const notDispatchedToolCallIds = new Set<string>()
+  const createNotDispatchedToolReplayEvents = (messages: readonly CanonicalTurnMessage[], sourceModelTurn: number) => messages
+    .filter((message): message is Extract<CanonicalTurnMessage, { role: 'tool' }> =>
+      message.role === 'tool' && notDispatchedToolCallIds.has(message.toolCallId))
+    .map((message) => ({ kind: 'replay-message-committed' as const, payload: {
+      message: structuredClone(message), sourceModelTurn
+    } }))
   let baseRequestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...input.request }
   let activeWindowId = input.windowId ?? ''
   let contextEpoch = 0
@@ -1776,6 +1782,11 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       if (recoveryMessage && (recoveryMessage.role !== 'user' || typeof recoveryMessage.content !== 'string' || !recoveryMessage.content.trim())) throw new Error('invalid output recovery continuation message')
       const toolCallErrorContent = recovery?.toolCallErrorContent ?? 'Tool call was not dispatched because the model output reached its limit.'
       for (const tool of toolCalls) notDispatchedToolCallIds.add(tool.toolCallId)
+      const failedToolMessages: CanonicalTurnMessage[] = toolCalls.map((tool) => ({
+        role: 'tool', toolCallId: tool.toolCallId,
+        content: toolCallErrorContent,
+        isError: true
+      }))
       const recoveryEvents = [
         ...await Promise.all(toolCalls.map(async (tool) => {
           const result = { success: false, error: 'model_output_token_limit', userMessage: toolCallErrorContent, notExecuted: true, notExecutedReason: 'model_output_truncated' }
@@ -1792,6 +1803,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             ...(sessionLedger ? { sessionLedger } : {})
           } }
         })),
+        ...createNotDispatchedToolReplayEvents(failedToolMessages, modelTurns),
         ...(recoveryMessage && recovery?.retryLocation ? [{ kind: 'provider-retry-scheduled' as const, payload: {
           requestId: `${invocationId}:round:${modelTurns}`, modelTurn: modelTurns, routeId: input.routeId,
           retryAttempt: recoveryAttempt, code: 'model_output_token_limit', backoffMs: 0,
@@ -1805,11 +1817,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         ...(recoveryMessage ? [{ kind: 'replay-message-committed' as const, payload: { message: recoveryMessage } }] : [])
       ]
       const committedRecoveryEvents = recoveryEvents.length ? await appendHistory(recoveryEvents) : []
-      const failedToolMessages: CanonicalTurnMessage[] = toolCalls.map((tool) => ({
-        role: 'tool', toolCallId: tool.toolCallId,
-        content: toolCallErrorContent,
-        isError: true
-      }))
       const committedContent = committedMessage.role === 'assistant' ? committedMessage.content : undefined
       const hasCommittedAssistantContent = typeof committedContent === 'string'
         ? committedContent.length > 0
@@ -2646,11 +2653,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       const result = settled!.status === 'fulfilled'
         ? settled!.value
         : deniedToolResults.get(tool?.toolCallId ?? '')!
-      if (tool && result.role === 'tool' && notDispatchedToolCallIds.has(tool.toolCallId)) {
-        const assistantMessage = [...messages].reverse().find((message) => message.role === 'assistant' && message.toolCalls?.some((call) => call.id === tool.toolCallId))
-        if (!assistantMessage) throw new Error('not-dispatched tool result has no committed assistant call')
-        await appendHistory([{ kind: 'replay-message-committed', payload: { message: structuredClone(result), assistantMessage: structuredClone(assistantMessage), source: 'not-dispatched-tool-result' } }])
-      }
+      const replayEvents = createNotDispatchedToolReplayEvents([result], modelTurns)
+      if (replayEvents.length) await appendHistory(replayEvents)
       appendRuntimeMessage(result)
       if (tool && userApprovedToolCalls.has(tool.toolCallId)) {
         appendRuntimeMessage(createApprovalSystemMessage())
