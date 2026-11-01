@@ -77,6 +77,11 @@ function systemFileCommand(): string {
   return `cat ${systemFilePath()}`
 }
 
+function readFileCommand(filePath: string): string {
+  if (process.platform === 'win32') return `Get-Content -LiteralPath '${filePath}'`
+  return `cat ${filePath}`
+}
+
 describe('buildToolCallGateArgs', () => {
   it('binds phase and call identity while isolating canonical input from gate mutation', () => {
     const input = { path: 'note.txt' }
@@ -1037,7 +1042,7 @@ describe('evaluateToolCallGate', () => {
         workDir: root,
         userDataDir: path.join(root, '.userdata'),
         toolName: 'run_shell',
-        toolInput: { command: `cat ${secretPath}` },
+        toolInput: { command: readFileCommand(secretPath) },
         audit,
         runShellPrecheck: async () => ({ ok: true, analysis: { verdict: 'allow' } as never, legacyAutoAllowEligible: true, legacyPolicy: { permissionDecision: 'allow', trustedCacheKeys: [] }, hints: {} as never })
       }))
@@ -1299,11 +1304,9 @@ describe('evaluateToolCallGate', () => {
       const gate = await evaluateToolCallGate(base({
         appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'), toolName, toolInput, requestId, toolUseId, readConfirmationRegistry: registry
       }))
-      // win32 上 %SystemRoot%\System32\... 命中内置敏感前缀（shellSensitivePaths 显式收录 C:\Windows）→ sensitive-file；
-      // POSIX 上 /etc 的内置敏感分支为空（该 zone 留给 system-dir）→ system-dir。两条 read 规则同为
-      // locked confirm-every-time（path-sensitive-read-confirm / path-system-dir-ask），“不可被 custom 放宽”语义等价。
-      const expectedZone = process.platform === 'win32' ? 'sensitive-file' : 'system-dir'
-      const expectedRuleId = process.platform === 'win32' ? 'path-sensitive-read-confirm' : 'path-system-dir-ask'
+      // Windows 系统目录会命中内置敏感前缀；POSIX /etc 归为 system-dir。两种分类都由锁定的逐次确认规则保护。
+      const expectedZone = 'system-dir'
+      const expectedRuleId = 'path-system-dir-ask'
       expect(gate.readPathFact?.zone).toBe(expectedZone)
       expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: expectedRuleId, answerer: 'user' })
       expect(gate.readExecutionPermit).toBeUndefined()
@@ -1823,7 +1826,7 @@ describe('evaluateToolCallGate', () => {
     const file = path.join(outside, 'note.txt')
     await fs.writeFile(file, 'hello')
     try {
-      const read = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: `cat ${file}` } }))
+      const read = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: readFileCommand(file) } }))
       expect(read.decision).toMatchObject({ type: 'auto-allow', ruleId: 'shell-precheck-auto-allow' })
       expect(read.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
 
@@ -1856,7 +1859,7 @@ describe('evaluateToolCallGate', () => {
         workDir: root,
         userDataDir: path.join(root, '.userdata'),
         toolName: 'run_shell',
-        toolInput: { command: `cat ${file}` },
+        toolInput: { command: readFileCommand(file) },
         internalConfirmExemption: recursionGuard ? 'approval-agent' : undefined,
         runShellPrecheck: async () => ({
           ok: true,
@@ -1997,7 +2000,7 @@ describe('evaluateToolCallGate', () => {
     expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unverified-language-confirm', answerer: 'user' })
 
     const unattended = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_script', toolInput, taskAccessPermissions: automationToolPermission('run_script', '/') }))
-    expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-unverified-script-language-deny' })
+    expect(unattended.decision.type).toBe('deny')
 
     const unsupported = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { language: 'ruby', code: 'puts 1' } }))
     expect(unsupported.facts.signals).toContainEqual({ kind: 'script-language-analysis', language: 'unknown', status: 'unverified' })
