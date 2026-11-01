@@ -128,6 +128,7 @@ export interface ToolExecutionContext {
   policyRevision?: string
   appDatabase?: AppDatabase
   sessionQueries?: SessionQueries
+  runtimeTriggers?: import('../capabilities/types').RuntimeTriggerCapabilityPort
   ensureChatBodyV1?: (input: { sessionId: string; signal?: AbortSignal }) => Promise<unknown>
   sessionCommands?: Pick<SessionCommands, 'recordRemoteSessionActivity' | 'updateSettings'>
   workDirManager?: WorkDirManager

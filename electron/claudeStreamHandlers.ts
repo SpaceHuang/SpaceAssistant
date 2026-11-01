@@ -12,6 +12,7 @@ import { requireInvocationAnthropicRoute } from './runtime/invocationProviderRou
 import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { runToolChatSession, DESKTOP_TOOL_LOOP_MAX_ROUNDS } from './toolChatLoop'
 import { assembleInvocation } from './runtime/invocationAssembler'
+import { formatRuntimeTriggerSourceContext } from './triggers/sourceContext'
 import { createAgentSdkSessionEventProjector } from './runtime/agentSdkSessionEventProjection'
 import { isAppLocale } from '../src/shared/locale'
 import { buildApprovalConversationContext, buildApprovalTaskEvidence, buildApprovalTaskIdentity,
@@ -71,6 +72,16 @@ export type ClaudeStreamDeps = {
   notifyMainWindow?: (channel: string, payload: unknown) => void
   turnRuntime?: TurnRuntime
   sessionStorage?: SessionStorage
+  runtimeTriggers?: import('./capabilities/types').RuntimeTriggerCapabilityPort
+  /** Trusted SQLite admission material for the first runtime-trigger source context. */
+  runtimeTriggerAdmission?: (input: { sessionId: string; turnId: string; requestId: string }) => import('./sessionStorage/public/model').RuntimeTriggerHistoryAdmission | undefined
+  /** Current-authorized source facts held only in memory until History commits the admission receipt. */
+  runtimeTriggerSourceContext?: (input: { sessionId: string; turnId: string; requestId: string }) => { triggerId: string; event: Readonly<Record<string, unknown>> } | undefined
+  /** Main-process trusted lifecycle assembler for SDK-hosted turns. */
+  runtimeTriggerLifecycle?: (input: { sessionId: string; turnId: string; history: import('./sessionStorage/public/ports').SessionHistoryPort }) => Readonly<{
+    hooks: import('../packages/agent-sdk/src/turn').AgentTurnLifecycleHooks
+    limits: import('../packages/agent-sdk/src/turn').AgentTurnLifecycleLimits
+  }> | undefined
 }
 
 const automaticSummaryCache = new SessionContextSummaryCache()
@@ -503,6 +514,13 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         // 仅比较 replay surface，避免其有损投影本身触发误切换。
         const replayApplied = JSON.stringify(replayedMessages) !== JSON.stringify(replaySurface)
         if (replayApplied) builtMessages = restoreReplaySurface(builtMessages, replayedMessages)
+        const runtimeTriggerSource = deps.runtimeTriggerSourceContext?.({ sessionId, turnId, requestId })
+        if (runtimeTriggerSource) {
+          builtMessages = [...builtMessages, {
+            id: `runtime-trigger-source:${runtimeTriggerSource.triggerId}`, role: 'user',
+            content: formatRuntimeTriggerSourceContext(runtimeTriggerSource), timestamp: Date.now()
+          }]
+        }
         const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(builtMessages, {
           sessionId,
           requiredUserMessageId: authoritative.currentUserMessageId
@@ -594,7 +612,12 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           getApiKey,
           appDb: deps.getAppDatabase(),
           sessionStorage,
-          historyForSession: (scopeSessionId: string) => sessionStorage.execution.historyFor({ sessionId: scopeSessionId }),
+          ...(deps.runtimeTriggers ? { runtimeTriggers: deps.runtimeTriggers } : {}),
+          historyForSession: (scopeSessionId: string) => {
+            const admission = scopeSessionId === sessionId
+              ? deps.runtimeTriggerAdmission?.({ sessionId, turnId, requestId }) : undefined
+            return sessionStorage.execution.historyFor({ sessionId: scopeSessionId, ...(admission ? { runtimeTriggerAdmission: admission } : {}) })
+          },
           ...(session ? { sessionEventLocation: { workDir: deps.getWorkDir(), sessionId, createdAt: session.createdAt } } : {}),
           currentUserMessageId: authoritative.currentUserMessageId,
           historyFacts,
@@ -832,8 +855,11 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             deps.emitFactEvent?.(requestId, fact)
           }
         })
+        const triggerAdmission = deps.runtimeTriggerAdmission?.({ sessionId, turnId, requestId })
+        const triggerLifecycleHistory = sessionStorage.execution.historyFor({ sessionId, ...(triggerAdmission ? { runtimeTriggerAdmission: triggerAdmission } : {}) })
+        const triggerLifecycle = deps.runtimeTriggerLifecycle?.({ sessionId, turnId, history: triggerLifecycleHistory })
         const hostedHandoffOptions = {
-          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, ...(turnPorts.planContextReplacement ? { planContextReplacement: turnPorts.planContextReplacement } : {}), ...(authoritative.executionConfig?.continuationContext ? { continuationContext: authoritative.executionConfig.continuationContext } : {}), refreshExecutionContext: (_call, stage, current) => {
+          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, ...(triggerLifecycle ? { lifecycleHooks: triggerLifecycle.hooks, lifecycleLimits: triggerLifecycle.limits } : {}), ...(turnPorts.planContextReplacement ? { planContextReplacement: turnPorts.planContextReplacement } : {}), ...(authoritative.executionConfig?.continuationContext ? { continuationContext: authoritative.executionConfig.continuationContext } : {}), refreshExecutionContext: (_call, stage, current) => {
             const toolsConfig = deps.getToolsConfig()
             const browserConfig = deps.getBrowserConfig()
             const shellConfig = deps.getShellConfig()

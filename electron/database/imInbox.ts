@@ -71,7 +71,7 @@ export type ImInboxMessageContext = { messageId: string; channel: ImInboxChannel
 
 export type ImFactScope = Readonly<{ channel: ImInboxChannel; accountId: string; conversationId: string }>
 export type ImFactFrontier = Readonly<{ through: number; coverageRevision: number }>
-export type ImFactPageItem = Readonly<{ messageId: string; acceptedSeq: number; channel: ImInboxChannel; accountId: string; conversationId: string; senderId: string; platformMessageId: string; timestamp: number }>
+export type ImFactPageItem = Readonly<{ messageId: string; acceptedSeq: number; channel: ImInboxChannel; accountId: string; conversationId: string; senderId: string; platformMessageId: string; timestamp: number; contextToken?: string; trackId?: string; trackEventId?: string }>
 
 function imFactCoverageKey(scope: ImFactScope): string {
   return `${SCHEMA_META_KEYS.imFactCoverageRevisionPrefix}${scope.channel.length}:${scope.channel}${scope.accountId.length}:${scope.accountId}${scope.conversationId.length}:${scope.conversationId}`
@@ -100,16 +100,18 @@ export function readImFactPage(db: AppDatabase, input: { scope: ImFactScope; aft
   return runInTransaction(conn, () => {
     const revision = conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(imFactCoverageKey(input.scope)) as { value: string } | undefined
     if (!revision || Number(revision.value) !== input.coverageRevision) throw new Error('TRIGGER_SOURCE_GAP:im-coverage-changed')
-    const rows = conn.prepare(`SELECT context.message_id,context.channel,context.platform_message_id,context.account_id,context.conversation_id,context.sender_id,context.accepted_seq,messages.timestamp
+    const rows = conn.prepare(`SELECT context.message_id,context.channel,context.platform_message_id,context.account_id,context.conversation_id,context.sender_id,context.accepted_seq,messages.timestamp,context.context_token,context.track_id,context.track_event_id
       FROM im_inbox_message_context AS context JOIN messages ON messages.id=context.message_id
       WHERE context.channel=? AND context.account_id=? AND context.conversation_id=? AND context.accepted_seq>? AND context.accepted_seq<=?
       ORDER BY context.accepted_seq ASC LIMIT ?`).all(input.scope.channel, input.scope.accountId, input.scope.conversationId, input.after, input.through, input.limit + 1) as Array<{
-        message_id: string; channel: ImInboxChannel; platform_message_id: string; account_id: string; conversation_id: string; sender_id: string; accepted_seq: number; timestamp: number
+        message_id: string; channel: ImInboxChannel; platform_message_id: string; account_id: string; conversation_id: string; sender_id: string; accepted_seq: number; timestamp: number; context_token: string | null; track_id: string | null; track_event_id: string | null
       }>
     const hasMore = rows.length > input.limit
     const page = hasMore ? rows.slice(0, input.limit) : rows
     return { items: page.map((row) => ({ messageId: row.message_id, channel: row.channel, platformMessageId: row.platform_message_id,
-      accountId: row.account_id, conversationId: row.conversation_id, senderId: row.sender_id, acceptedSeq: row.accepted_seq, timestamp: row.timestamp })),
+      accountId: row.account_id, conversationId: row.conversation_id, senderId: row.sender_id, acceptedSeq: row.accepted_seq, timestamp: row.timestamp,
+      ...(row.context_token !== null ? { contextToken: row.context_token } : {}), ...(row.track_id !== null ? { trackId: row.track_id } : {}),
+      ...(row.track_event_id !== null ? { trackEventId: row.track_event_id } : {}) })),
       ...(hasMore && page.length ? { nextAfter: page[page.length - 1]!.accepted_seq } : {}) }
   })
 }
@@ -191,7 +193,7 @@ export function appendImInboxMessage(
         conn.prepare(`INSERT INTO schema_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
           .run(SCHEMA_META_KEYS.imFactNextSeq, String(next))
         const coverageKey = imFactCoverageKey({ channel: input.channel, accountId: input.accountId, conversationId: input.conversationId })
-        conn.prepare(`INSERT INTO schema_meta(key,value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1`).run(coverageKey)
+        conn.prepare(`INSERT OR IGNORE INTO schema_meta(key,value) VALUES(?, '0')`).run(coverageKey)
         conn.prepare(`INSERT INTO im_inbox_message_context(message_id,channel,platform_message_id,context_token,created_at,track_id,track_event_id,account_id,conversation_id,sender_id,accepted_seq)
           VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(result.persisted.message.id, input.channel, input.channelMessageId, contextToken, Date.now(), input.trackId ?? null, input.trackEventId ?? null,
           input.accountId, input.conversationId, input.senderId, next)

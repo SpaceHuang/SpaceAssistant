@@ -26,6 +26,16 @@ function storage(): TurnStorage {
 }
 
 describe('TurnRuntime', () => {
+  it('fails closed before source/provider dispatch when a trigger start authorization is revoked', async () => {
+    const source = vi.fn(async () => ({ outcome: 'completed' as const }))
+    const runtime = new TurnRuntime({ storage: storage(), deps: { now: () => 1, id: () => 'auth-gate-id' }, source: source as never,
+      authorizeRuntimeTriggerStart: () => false })
+    const turn = runtime.prepare({ mode: 'create-user', requestId: 'runtime-trigger:trigger-1', sessionId: 's1', input: { text: 'neutral marker' }, config: {} })
+    await expect(runtime.execute(turn.turnId, turn.startToken)).rejects.toThrow('RUNTIME_TRIGGER_AUTHORIZATION_REVOKED')
+    expect(source).not.toHaveBeenCalled()
+    expect(runtime.getTurn(turn.turnId)?.assistantMessage.status).toBe('cancelled')
+  })
+
   it.each([
     ['no-tools', [{ type: 'content-delta', text: 'answer' }, { type: 'source-completed' }]],
     ['tools', [

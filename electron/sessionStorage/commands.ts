@@ -9,6 +9,7 @@ import { SESSION_META_TITLE_GENERATED, SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTE
 import type { SessionCommands } from './public/ports'
 import type { RuntimeTriggerRecord, RuntimeTriggerPatch } from './public/model'
 import { classifyQueueInputSource } from '../database/queueInputSource'
+import { serializeQueueScope } from '../../src/shared/queueScope'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../../src/shared/planTypes'
 
@@ -47,6 +48,11 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
         : getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE owner_session_id=? ORDER BY created_at,id LIMIT ?`).all(ownerSessionId,limit + 1)
       return (rows as TriggerRow[]).map(decodeRuntimeTriggerRow)
     },
+    listByState: (state, limit = 4_096) => {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4_096) throw new TypeError('invalid runtime trigger recovery limit')
+      const rows = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE state=? ORDER BY created_at,id LIMIT ?`).all(state, limit) as TriggerRow[]
+      return rows.map(decodeRuntimeTriggerRow)
+    },
     countActive: (input = {}) => Number(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM runtime_triggers WHERE state IN ('waiting','matched') AND expires_at>?${input.ownerSessionId ? ' AND owner_session_id=?' : ''}`).get(...(input.ownerSessionId ? [input.now ?? Date.now(), input.ownerSessionId] : [input.now ?? Date.now()]))?.count ?? 0),
     findActiveSyncTarget: (receiverSessionId) => {
       const row = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE receiver_session_id=? AND state IN ('waiting','matched') AND json_extract(definition_json,'$.condition.type')='session_steps' AND json_extract(definition_json,'$.condition.mode')='sync'`).get(receiverSessionId) as TriggerRow | undefined
@@ -70,7 +76,12 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
       const values = entries.map(([key,value]) => key === 'event' || key === 'result' ? value === undefined ? null : JSON.stringify(value) : (value ?? null) as string | number | null)
       const conn = getDbConnection(db)
       return runInTransaction(conn, () => {
-        const changed = conn.prepare(`UPDATE runtime_triggers SET ${assignments},revision=revision+1 WHERE id=? AND revision=?`).run(...values,id,expectedRevision)
+        const transition = patch.state === undefined
+          ? "state IN ('waiting','matched')"
+          : patch.state === 'matched' ? "state='waiting'"
+            : ['cancelled','expired','failed'].includes(patch.state) ? "state IN ('waiting','matched')"
+              : patch.state === 'completed' ? "state='matched'" : '0'
+        const changed = conn.prepare(`UPDATE runtime_triggers SET ${assignments},revision=revision+1 WHERE id=? AND revision=? AND ${transition}`).run(...values,id,expectedRevision)
         return Number(changed.changes) === 1 ? readRuntimeTrigger(id) : null
       })
     }
@@ -92,6 +103,37 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
           const deleted = deleteQueuedUserMessageInScope(db, receipt.queuedMessageId, queueScope)
           return deleted.ok
         })
+      },
+      cancelUndispatchedRuntimeInput: ({ sessionId, requestId, queueScope, expectedTurnId }) => {
+        if (!requestId.startsWith('runtime-trigger:')) return false
+        const conn = getDbConnection(db)
+        const cancelled = runInTransaction(conn, () => {
+          const receipt = getQueueInputReceiptInScope(db, sessionId, requestId, queueScope)
+          if (!receipt?.queuedMessageId || classifyQueueInputSource(db, { sessionId, requestId, queueScope, queuedMessageId: receipt.queuedMessageId }) !== 'runtime-trigger') return false
+          const scope = serializeQueueScope(queueScope)
+          if (receipt.state === 'queued') {
+            const deleted = deleteQueuedUserMessageInScope(db, receipt.queuedMessageId, queueScope)
+            return deleted.ok
+          }
+          if (receipt.state !== 'claimed' || !receipt.turnId || (expectedTurnId && receipt.turnId !== expectedTurnId)) return false
+          const turn = conn.prepare(`SELECT state,version,assistant_message_id,user_message_id,request_id,session_id FROM turns WHERE turn_id=?`)
+            .get(receipt.turnId) as { state: string; version: number; assistant_message_id: string; user_message_id: string; request_id: string; session_id: string } | undefined
+          if (!turn || turn.session_id !== sessionId || turn.request_id !== requestId || turn.user_message_id !== receipt.queuedMessageId ||
+            !['prepared', 'configuring'].includes(turn.state)) return false
+          const changed = conn.prepare(`UPDATE turns SET state='terminal',outcome='cancelled',version=version+1,updated_at=?
+            WHERE turn_id=? AND session_id=? AND request_id=? AND state IN ('prepared','configuring')`).run(Date.now(), receipt.turnId, sessionId, requestId)
+          if (Number(changed.changes) !== 1) return false
+          conn.prepare("UPDATE messages SET status='cancelled' WHERE id=? AND session_id=? AND status IN ('sent','streaming')")
+            .run(receipt.queuedMessageId, sessionId)
+          conn.prepare("UPDATE messages SET status='cancelled' WHERE id=? AND session_id=? AND role='assistant' AND status='streaming'")
+            .run(turn.assistant_message_id, sessionId)
+          const receiptChanged = conn.prepare(`UPDATE queue_input_requests SET state='cancelled',updated_at=?
+            WHERE session_id=? AND request_id=? AND queued_message_id=? AND turn_id=? AND queue_scope=? AND state='claimed'`)
+            .run(Date.now(), sessionId, requestId, receipt.queuedMessageId, receipt.turnId, scope)
+          return Number(receiptChanged.changes) === 1
+        })
+        if (cancelled) db.save()
+        return cancelled
       }
     },
     runtimeTriggers,

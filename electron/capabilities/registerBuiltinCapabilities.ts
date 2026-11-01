@@ -3,6 +3,7 @@ import { capabilityRegistry } from './registry'
 import { createEnvCapabilities } from './handlers/env'
 import { createSessionCapabilities } from './handlers/session'
 import { createMcpCapabilities } from './handlers/mcp'
+import { createRuntimeTriggerCapabilities } from './handlers/runtimeTrigger'
 
 /**
  * 内置能力注册（进程级单例）。新增能力在此追加一条描述符即可，
@@ -13,7 +14,8 @@ export function registerBuiltinCapabilities(): void {
   const builtin: CapabilityDescriptor[] = [
     ...createEnvCapabilities(),
     ...createSessionCapabilities(),
-    ...createMcpCapabilities()
+    ...createMcpCapabilities(),
+    ...createRuntimeTriggerCapabilities()
   ]
   for (const descriptor of builtin) {
     capabilityRegistry.register(descriptor)

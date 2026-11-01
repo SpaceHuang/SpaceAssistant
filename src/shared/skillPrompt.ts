@@ -119,7 +119,7 @@ export function buildToolCapabilityConventionHint(toolNames: readonly string[], 
     : 'run_shell 当前未启用；需要执行 shell 时请遵循 Skill 的 fallback，不要编造或调用该工具。'
   // 能力集合提示按工具面条件注入、使用 compat 名（评审 S6）：工具被禁用/远程 lane 时不诱导模型调用
   const toolkit = toolNames.includes('toolkit_find')
-    ? '产品提供能力集合（toolkit_find / toolkit_call）：需要了解运行环境（产品/系统/开发环境/工作目录/时间/浏览器依赖）或执行产品功能（MCP 管理、会话状态/列表/消息）时，先用 toolkit_find 按用途描述查询用法，再用 toolkit_call 以返回的能力 id 调用；能力不足时如实报告，不要编造。'
+    ? '产品提供能力集合（toolkit_find / toolkit_call）：需要了解运行环境（产品/系统/开发环境/工作目录/时间/浏览器依赖）或执行产品功能（MCP 管理、会话状态/列表/消息、运行时触发）时，先用 toolkit_find 按用途描述查询用法，再用 toolkit_call 以返回的能力 id 调用；登记触发器前先查 action.runtime_trigger.targets，使用真实目标 ID 和稳定 clientKey；需要状态用 get/list，取消前先读最新 revision；能力不足时如实报告，不要编造。'
     : ''
   // FR7：延迟模式约定（compat 名口径，tool_search 无点号恒等映射）
   const deferred = options?.mcpDeferredCount && toolNames.includes('tool_search')

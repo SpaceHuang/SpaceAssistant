@@ -24,7 +24,7 @@ export type RuntimeTriggerServiceOptions = Readonly<{
   authorizeTarget: (input: { ownerSessionId: string; target: RuntimeTriggerTargetDto }) => boolean
   listTargets?: (ownerSessionId: string) => readonly RuntimeTriggerTargetDto[]
   cancelSyncWait?: (record: RuntimeTriggerRecord) => void
-  resolveBaseline?: (input: { ownerSessionId: string; condition: RuntimeTriggerCondition }) => Readonly<Record<string, unknown>>
+  resolveBaseline?: (input: { ownerSessionId: string; condition: RuntimeTriggerCondition }) => Readonly<Record<string, unknown>> | Promise<Readonly<Record<string, unknown>>>
 }>
 
 function fail(code: RuntimeTriggerFailure['code'], caseId: string): never { throw new RuntimeTriggerServiceError(runtimeTriggerFailure(code, caseId)) }
@@ -62,7 +62,7 @@ export function createRuntimeTriggerService(commands: SessionCommands, options: 
     if (!options.authorize({ ownerSessionId, receiverSessionId, condition })) fail('TRIGGER_NOT_FOUND_OR_FORBIDDEN', 'session-not-authorized')
   }
   return {
-    register(input: { ownerSessionId: string; params: unknown }): RuntimeTriggerOperationDto {
+    async register(input: { ownerSessionId: string; params: unknown }): Promise<RuntimeTriggerOperationDto> {
       const ownerSessionId = input.ownerSessionId
       if (!ownerSessionId?.trim()) fail('TRIGGER_NOT_FOUND_OR_FORBIDDEN', 'owner-not-authorized')
       const params = parseRuntimeTriggerRegisterParams(input.params)
@@ -77,7 +77,9 @@ export function createRuntimeTriggerService(commands: SessionCommands, options: 
         return { trigger: toDto(prior), replayed: true }
       }
       if (!Number.isSafeInteger(params.expiresAt) || params.expiresAt <= timestamp || params.expiresAt - timestamp > maxLifetime) fail('TRIGGER_INVALID', 'expiry-out-of-range')
-      const baseline = options.resolveBaseline?.({ ownerSessionId, condition }) ?? {}
+      let baseline: Readonly<Record<string, unknown>>
+      try { baseline = await options.resolveBaseline?.({ ownerSessionId, condition }) ?? {} }
+      catch { fail('TRIGGER_SOURCE_GAP', 'source-baseline-unavailable') }
       const definition = { version: 1 as const, condition, sourceBaseline: structuredClone(baseline) }
       if (condition.type === 'session_steps' && condition.mode === 'sync') {
         const activeSync = commands.runtimeTriggers.findActiveSyncTarget(params.receiverSessionId)
@@ -136,11 +138,20 @@ export function createRuntimeTriggerService(commands: SessionCommands, options: 
     match(input: { triggerId: string; expectedRevision: number; event: Readonly<Record<string, unknown>> }): RuntimeTriggerRecord | null {
       const record = readRuntimeTrigger(commands, input.triggerId)
       if (!record || record.state !== 'waiting') return null
-      if (record.expiresAt <= now()) {
-        updateRuntimeTrigger(commands, record.id, input.expectedRevision, { state: 'expired', updatedAt: now() })
+      const timestamp = now()
+      const sourceAt = Number.isSafeInteger(input.event.occurredAt) ? Number(input.event.occurredAt) : timestamp
+      if (record.definition.condition.type === 'time') {
+        const scheduledAt = Date.parse(record.definition.condition.at)
+        if (!Number.isFinite(scheduledAt) || scheduledAt > record.expiresAt) {
+          updateRuntimeTrigger(commands, record.id, input.expectedRevision, { state: 'expired', updatedAt: timestamp })
+          return null
+        }
+        if (timestamp < scheduledAt || sourceAt !== scheduledAt) return null
+      } else if (sourceAt > record.expiresAt) {
+        updateRuntimeTrigger(commands, record.id, input.expectedRevision, { state: 'expired', updatedAt: timestamp })
         return null
       }
-      return updateRuntimeTrigger(commands, record.id, input.expectedRevision, { state: 'matched', matchedAt: now(), event: structuredClone(input.event), updatedAt: now() })
+      return updateRuntimeTrigger(commands, record.id, input.expectedRevision, { state: 'matched', matchedAt: timestamp, event: structuredClone(input.event), updatedAt: timestamp })
     },
     expire(input: { triggerId: string; expectedRevision: number }): RuntimeTriggerOperationDto {
       const record = readRuntimeTrigger(commands, input.triggerId)

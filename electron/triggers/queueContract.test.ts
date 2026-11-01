@@ -8,6 +8,11 @@ import { buildImQueueScope } from '../../src/shared/queueScope'
 import { classifyQueueInputSource } from './queueContract'
 import { insertRuntimeTrigger } from './store'
 
+function authorization(id: string, ownerSessionId: string, receiverSessionId: string, queueScope: { kind: 'desktop' } | { kind: 'im'; channel: 'feishu' | 'wechat'; sessionId: string }) {
+  return { authorization: { bindingVersion: 1, requestId: `runtime-trigger:${id}`, ownerSessionId, receiverSessionId, queueScope,
+    sourceIdentity: { kind: 'test-source' }, payloadDigest: 'source-digest', policyRevision: 'policy-1', authorizationGeneration: 'auth-1', runtimeGeneration: 'runtime-1' } }
+}
+
 describe('trusted queue input source classification', () => {
   it('requires a real receipt and trigger record; a runtime prefix alone is invalid', () => {
     const db = createMemoryAppDb()
@@ -20,9 +25,12 @@ describe('trusted queue input source classification', () => {
       expect(classifyQueueInputSource(db, { sessionId: receiver, queueScope: scope, requestId: queued.receipt.requestId, queuedMessageId: queued.persisted.message.id })).toBe('invalid')
       insertRuntimeTrigger(commands, { id: 'trigger-1', ownerSessionId: owner, receiverSessionId: receiver, clientKey: 'key',
         definition: { version: 1, condition: { type: 'turn_completed', targetSessionId: owner, turnId: 'turn-1' }, sourceBaseline: {} },
-        state: 'matched', createdAt: 1, expiresAt: 9, attempts: 0, revision: 1, updatedAt: 1 })
-      const valid = enqueueQueuedUserMessageInScope(db, { sessionId: receiver, requestId: 'runtime-trigger:trigger-1', content: 'wake', queueScope: scope })
+        state: 'matched', result: authorization('trigger-1', owner, receiver, scope), createdAt: 1, expiresAt: 9, attempts: 0, revision: 1, updatedAt: 1 })
+      const valid = enqueueQueuedUserMessageInScope(db, { sessionId: receiver, requestId: 'runtime-trigger:trigger-1', content: '运行时事件待处理：trigger-1', queueScope: scope })
       expect(classifyQueueInputSource(db, { sessionId: receiver, queueScope: scope, requestId: valid.receipt.requestId, queuedMessageId: valid.persisted.message.id })).toBe('runtime-trigger')
+      getDbConnection(db).prepare("UPDATE runtime_triggers SET result_json='{}' WHERE id='trigger-1'").run()
+      expect(classifyQueueInputSource(db, { sessionId: receiver, queueScope: scope, requestId: valid.receipt.requestId, queuedMessageId: valid.persisted.message.id })).toBe('invalid')
+      getDbConnection(db).prepare('UPDATE runtime_triggers SET result_json=? WHERE id=?').run(JSON.stringify(authorization('trigger-1', owner, receiver, scope)), 'trigger-1')
       expect(classifyQueueInputSource(db, { sessionId: receiver, queueScope: scope, requestId: valid.receipt.requestId, queuedMessageId: valid.persisted.message.id, declaresPlatformSource: true })).toBe('invalid')
       expect(listQueuedUserMessages(db, { sessionId: receiver, queueScope: scope })).toEqual([])
       expect(listQueuedUserMessages(db, { sessionId: receiver, queueScope: scope, source: 'runtime-trigger' })).toHaveLength(1)
@@ -48,6 +56,28 @@ describe('trusted queue input source classification', () => {
     } finally { db.close() }
   })
 
+  it('cancels a claimed but undispatched prepared trigger turn without making its receipt reclaimable', () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'owner' }).id
+      const receiver = createSession(db, { name: 'receiver' }).id
+      const commands = createSessionCommands(db)
+      const scope = { kind: 'desktop' } as const
+      insertRuntimeTrigger(commands, { id: 'cancel-trigger', ownerSessionId: owner, receiverSessionId: receiver, clientKey: 'key',
+        definition: { version: 1, condition: { type: 'turn_completed', targetSessionId: owner, turnId: 'source-turn' }, sourceBaseline: {} },
+        state: 'matched', result: authorization('cancel-trigger', owner, receiver, scope), createdAt: 1, expiresAt: 9, attempts: 0, revision: 1, updatedAt: 1 })
+      const queued = enqueueQueuedUserMessageInScope(db, { sessionId: receiver, requestId: 'runtime-trigger:cancel-trigger', content: '运行时事件待处理：cancel-trigger', queueScope: scope })
+      claimQueuedTurnAtomicallyInScope(db, { sessionId: receiver, userMessageId: queued.persisted.message.id, turnId: 'prepared-trigger-turn',
+        assistantMessageId: 'prepared-trigger-assistant', requestId: queued.receipt.requestId, queueScope: scope, source: 'runtime-trigger' })
+      expect(commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId: receiver, requestId: queued.receipt.requestId, queueScope: scope, expectedTurnId: 'prepared-trigger-turn' })).toBe(true)
+      expect(commands.scopedQueue.readReceipt({ sessionId: receiver, requestId: queued.receipt.requestId, queueScope: scope })).toMatchObject({ state: 'cancelled', turnId: 'prepared-trigger-turn' })
+      expect(getDbConnection(db).prepare("SELECT state,outcome FROM turns WHERE turn_id='prepared-trigger-turn'").get()).toEqual({ state: 'terminal', outcome: 'cancelled' })
+      expect(commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId: receiver, requestId: queued.receipt.requestId, queueScope: scope })).toBe(false)
+      expect(() => claimQueuedTurnAtomicallyInScope(db, { sessionId: receiver, userMessageId: queued.persisted.message.id, turnId: 'second-turn',
+        assistantMessageId: 'second-assistant', requestId: queued.receipt.requestId, queueScope: scope, source: 'runtime-trigger' })).toThrow()
+    } finally { db.close() }
+  })
+
   it('keeps a runtime-trigger receipt out of every IM inbox consumer even in the same IM scope', () => {
     const db = createMemoryAppDb()
     try {
@@ -57,8 +87,8 @@ describe('trusted queue input source classification', () => {
       const scope = buildImQueueScope('wechat', receiver)
       insertRuntimeTrigger(commands, { id: 'trigger-in-im-scope', ownerSessionId: owner, receiverSessionId: receiver, clientKey: 'key',
         definition: { version: 1, condition: { type: 'turn_completed', targetSessionId: owner, turnId: 'turn-1' }, sourceBaseline: {} },
-        state: 'matched', createdAt: 1, expiresAt: 9, attempts: 0, revision: 1, updatedAt: 1 })
-      const queued = enqueueQueuedUserMessageInScope(db, { sessionId: receiver, requestId: 'runtime-trigger:trigger-in-im-scope', content: 'wake', queueScope: scope })
+        state: 'matched', result: authorization('trigger-in-im-scope', owner, receiver, scope), createdAt: 1, expiresAt: 9, attempts: 0, revision: 1, updatedAt: 1 })
+      const queued = enqueueQueuedUserMessageInScope(db, { sessionId: receiver, requestId: 'runtime-trigger:trigger-in-im-scope', content: '运行时事件待处理：trigger-in-im-scope', queueScope: scope })
       expect(classifyQueueInputSource(db, { sessionId: receiver, queueScope: scope, requestId: queued.receipt.requestId, queuedMessageId: queued.persisted.message.id })).toBe('runtime-trigger')
       expect(listImInboxMessages(db, { queueScope: scope })).toEqual([])
       expect(claimImInboxMessage(db, { queueScope: scope, messageId: queued.persisted.message.id, ownerId: 'inbox-owner' })).toBeNull()

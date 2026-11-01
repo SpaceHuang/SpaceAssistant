@@ -10,7 +10,7 @@ import type { EnqueueResult, MessageEntry, RemoteSessionIdentityUpdate, Continua
   ImAcceptedFactScope, ImAcceptedFactFrontier, ImAcceptedFactPage,
   RuntimeTriggerRecord, RuntimeTriggerPatch, QueueInputReceiptSnapshot, ScopedQueueInput, QueueInputSource,
 } from './model'
-import type { HistoryPort, HistorySnapshot } from '../../../packages/agent-sdk/src/history'
+import type { HistoryEvent, HistoryPort, HistorySnapshot } from '../../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../../packages/agent-sdk/src/model'
 import type { CompactionReplay } from '../../../src/shared/compactionEvents'
 import type { TurnExecutionConfig } from '../../../src/shared/assistantFactAggregator'
@@ -23,6 +23,7 @@ export type SessionTurnSnapshot = Readonly<{
 
 /** Session-scoped extension of the SDK History capability. */
 export type SessionHistoryPort = HistoryPort & Readonly<{
+  readEventsAfter(invocationId: string, afterSequence: number, limit?: number): Promise<{ version: number; events: HistoryEvent[] }>
   listInvocationIds(): string[]
   readLatestInvocationForSession(
     sessionId: string,
@@ -72,11 +73,13 @@ export interface SessionCommands {
     enqueue(input: ScopedQueueInput): EnqueueResult
     readReceipt(input: { sessionId: string; requestId: string; queueScope: import('../../../src/shared/queueScope').QueueScope }): QueueInputReceiptSnapshot | undefined
     cancelUnstartedInput(input: { sessionId: string; requestId: string; queueScope: import('../../../src/shared/queueScope').QueueScope; expectedSource: QueueInputSource }): boolean
+    cancelUndispatchedRuntimeInput(input: { sessionId: string; requestId: string; queueScope: import('../../../src/shared/queueScope').QueueScope; expectedTurnId?: string }): boolean
   }>
   readonly runtimeTriggers: Readonly<{
     read(triggerId: string): RuntimeTriggerRecord | null
     findByClientKey(ownerSessionId: string, clientKey: string): RuntimeTriggerRecord | null
     listByOwner(input: { ownerSessionId: string; cursor?: { createdAt: number; id: string }; limit: number }): readonly RuntimeTriggerRecord[]
+    listByState(state: 'waiting' | 'matched', limit?: number): readonly RuntimeTriggerRecord[]
     countActive(input?: { ownerSessionId?: string; now?: number }): number
     findActiveSyncTarget(receiverSessionId: string): RuntimeTriggerRecord | null
     insert(record: RuntimeTriggerRecord): RuntimeTriggerRecord

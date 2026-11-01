@@ -1,6 +1,11 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
+import { openDatabase } from '../database'
 import { runMigrations } from '../database/migrations'
 import { DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from '../database/schema'
 import { appendMessage, createSession } from '../database/operations'
@@ -74,5 +79,43 @@ describe('runtime trigger migration', () => {
     conn.exec('DROP TRIGGER reject_migration')
     expect(() => runMigrations(conn)).not.toThrow()
     expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: String(DB_SCHEMA_VERSION) })
+  })
+
+  it('restores a closed whole-database v120 copy after an upgraded copy cannot be used by old code', () => {
+    const database = createTempDatabase('runtime-trigger-whole-db-restore-')
+    databases.push(database)
+    const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-trigger-backup-'))
+    const backupPath = path.join(backupDir, 'before-upgrade.db')
+    const conn = getDbConnection(database.db)
+    conn.exec('DROP TABLE runtime_triggers')
+    conn.exec('DROP INDEX IF EXISTS idx_runtime_triggers_state_due')
+    conn.exec('DROP INDEX IF EXISTS idx_runtime_triggers_owner_created')
+    conn.exec('DROP INDEX IF EXISTS idx_runtime_triggers_active_sync_target')
+    conn.exec('DROP INDEX IF EXISTS idx_im_inbox_accepted_seq')
+    conn.exec('DROP TRIGGER IF EXISTS bump_im_fact_coverage_after_delete')
+    conn.exec('DROP TRIGGER IF EXISTS guard_im_fact_identity_immutable')
+    for (const column of ['account_id', 'conversation_id', 'sender_id', 'accepted_seq']) conn.exec(`ALTER TABLE im_inbox_message_context DROP COLUMN ${column}`)
+    conn.prepare('UPDATE schema_meta SET value=? WHERE key=?').run('120', SCHEMA_META_KEYS.schemaVersion)
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '120' })
+    conn.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    database.db.close()
+    database.db = { close: () => undefined } as typeof database.db
+    fs.copyFileSync(database.dbPath, backupPath)
+
+    const upgraded = openDatabase(database.dbPath)
+    expect(Number((getDbConnection(upgraded).prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion) as { value: string }).value))
+      .toBe(DB_SCHEMA_VERSION)
+    expect(getDbConnection(upgraded).prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_triggers'").get()).toBeTruthy()
+    upgraded.close()
+
+    // Rollback is replacement from the closed, consistent whole-database copy, never schema surgery.
+    for (const suffix of ['-wal', '-shm']) fs.rmSync(`${database.dbPath}${suffix}`, { force: true })
+    fs.copyFileSync(backupPath, database.dbPath)
+    const restoredConn = new DatabaseSync(database.dbPath)
+    expect(restoredConn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '120' })
+    expect(restoredConn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_triggers'").get()).toBeUndefined()
+    restoredConn.close()
+    database.db = { close: () => undefined } as typeof database.db
+    fs.rmSync(backupDir, { recursive: true, force: true })
   })
 })

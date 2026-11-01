@@ -32,7 +32,7 @@ describe('IM Inbox persistence', () => {
     } finally { db.close() }
   })
 
-  it('records immutable accepted IM identity with a non-reused sequence and per-stream coverage revision', () => {
+  it('records immutable accepted IM identity and changes coverage revision only when accepted facts are deleted', () => {
     const db = createMemoryAppDb()
     try {
       const sessionId = createSession(db, { name: 'accepted-im-facts' }).id
@@ -45,14 +45,15 @@ describe('IM Inbox persistence', () => {
         .toEqual({ account_id: 'fixture-account', conversation_id: sessionId, sender_id: 'fixture-sender', accepted_seq: 1 })
       expect(conn.prepare('SELECT accepted_seq FROM im_inbox_message_context WHERE message_id=?').get(second.messageId)).toEqual({ accepted_seq: 2 })
       const coverageKey = `im_fact_coverage_revision:${'feishu'.length}:feishu${'fixture-account'.length}:fixture-account${sessionId.length}:${sessionId}`
-      expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(coverageKey)).toEqual({ value: '2' })
+      expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(coverageKey)).toEqual({ value: '0' })
       expect(firstContext?.platformMessageId).toBe('fact-1')
       expect(() => conn.prepare('UPDATE im_inbox_message_context SET sender_id=? WHERE message_id=?').run('other', first.messageId))
         .toThrow('accepted IM fact identity is immutable')
       conn.prepare('DELETE FROM messages WHERE id=?').run(first.messageId)
-      expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(coverageKey)).toEqual({ value: '3' })
+      expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(coverageKey)).toEqual({ value: '1' })
       const third = appendImInboxMessage(db, { sessionId, channel: 'feishu', queueScope, channelMessageId: 'fact-3', content: 'three' })
       expect(conn.prepare('SELECT accepted_seq FROM im_inbox_message_context WHERE message_id=?').get(third.messageId)).toEqual({ accepted_seq: 3 })
+      expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(coverageKey)).toEqual({ value: '1' })
     } finally { db.close() }
   })
 

@@ -41,6 +41,7 @@ import { UTF8_CONTRACT } from '../processOutput/contracts'
 import { createChildStreamDecoder } from '../processOutput/decodeChildOutput'
 import { processTreeKiller, runCommandWithTimeout } from '../spawnUtil'
 import { ProcessSupervisor, type ProcessKiller, type ProcessTerminationResult } from '../shell/processSupervisor'
+import { beginManagedProcess, finishManagedProcess, type ManagedProcessHandle } from '../triggers/processSource'
 import { snapshotEnvForLog } from '../shell/envSnapshot'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import {
@@ -2502,6 +2503,7 @@ export const runScriptExecutor: ToolExecutor = {
         shell: false,
         detached: process.platform === 'darwin'
       })
+      const managedProcess: ManagedProcessHandle = beginManagedProcess({ sessionId: ctx.sessionId, toolName: 'run_script' })
       logAgentEvent('info', 'script.exec.spawned', { ...scriptBaseLog, pid: proc.pid ?? null })
       const supervisor = new ProcessSupervisor(proc, processTreeKiller)
       const onDataOut = (b: Buffer) => {
@@ -2524,6 +2526,7 @@ export const runScriptExecutor: ToolExecutor = {
       }
       ctx.signal.addEventListener('abort', onAbort)
       proc.on('error', (err) => {
+        finishManagedProcess(managedProcess, { exitCode: null, signal: null, reason: 'spawn_error', occurredAt: Date.now() })
         clearTimeout(killTimer)
         ctx.signal.removeEventListener('abort', onAbort)
         logAgentEvent('error', 'script.exec.finish', {
@@ -2539,7 +2542,7 @@ export const runScriptExecutor: ToolExecutor = {
           success: false,
           error: 'SCRIPT_SPAWN_ERROR',
           userMessage: toToolUserError(err, { toolName: 'run_script', scriptLanguage: language }),
-          data: { processResult: null, status: 'spawn_failed', executable: command, cwd: '<workdir>' },
+          data: { processResult: null, status: 'spawn_failed', executable: command, cwd: '<workdir>', managedProcessId: managedProcess.managedProcessId },
           duration: Date.now() - started
         })
       })
@@ -2551,13 +2554,17 @@ export const runScriptExecutor: ToolExecutor = {
         const stdoutSafe = sanitizeToolOutput(stdout, 'run_script')
         const stderrSafe = sanitizeToolOutput(stderr, 'run_script')
         const status = ctx.signal.aborted ? 'cancelled' : timedOut ? 'timed_out' : signal ? 'signalled' : code === 0 ? 'succeeded' : 'failed'
+        finishManagedProcess(managedProcess, { exitCode: signal ? null : code, signal: signal ?? null,
+          reason: ctx.signal.aborted ? 'cancelled' : timedOut ? 'timeout' : signal ? 'signal' : 'process_exit', occurredAt: Date.now(),
+          outputRef: { bytes: Buffer.byteLength(stdoutSafe.text + stderrSafe.text, 'utf8'), truncated: stdout.includes('[输出被截断]') || stderr.includes('[输出被截断]') } })
         const data = {
           stdout: stdoutSafe.text,
           stderr: stderrSafe.text,
           exitCode: signal ? null : code,
           signal: signal ?? undefined,
           status,
-          terminationReason: ctx.signal.aborted ? 'user_cancel' : timedOut ? 'timeout' : signal ? 'external_signal' : 'process_exit'
+          terminationReason: ctx.signal.aborted ? 'user_cancel' : timedOut ? 'timeout' : signal ? 'external_signal' : 'process_exit',
+          managedProcessId: managedProcess.managedProcessId
         }
         // P0-D3 组 1：finish 与 shell.exec.finish 字段对齐（exitCode/status/字节口径/时长），
         // 文本正文与秘密不落盘（allowlist 之外的 stdout/stderr 会被丢弃）。

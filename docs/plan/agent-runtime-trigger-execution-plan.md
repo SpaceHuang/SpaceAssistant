@@ -1,6 +1,6 @@
 # Agent Runtime 通用触发器执行计划
 
-> 日期：2026-11-01。状态：实施中；P1（T00～T09）已完成，P2（T10～T18）待启动。
+> 日期：2026-11-01。状态：实施中；P1（T00～T09）已完成，P2（T10～T15 已完成，T16 进行中，T17 已开工但待 T16 收口，T18 待执行）。
 > 规格唯一来源：[首版简化技术方案](../develop/tools-mcp/in-flight/agent-runtime-trigger-technical-design.md)，采用含 §4.1 自省工具箱入口及 §7.2 非追溯撤权边界的本轮版本。
 > 写作依据：[执行计划指南](../rules/execution-plan-writing-guide.md)。需求、不变量、合同、迁移语义及验收定义均以方案为准；本文只维护任务、依赖和实施证据。
 
@@ -76,7 +76,7 @@ P1 的验收是基础合同的 fixtures，不能提前宣称五源端到端 AC �
 | T12 | T10 | 无 |
 | T13 | T10 | 无 |
 | T14 | T10 | 无 |
-| T15 | T11、T12、T13、T14 | C-LIMITS：项目负责人明确确认 callbackTimeoutMs/maxPauseMs 两个有限正数，记录数值、单位及确认来源；未取得则本任务未开始，禁止以 fixture 数值补位 |
+| T15 | T11、T12、T13、T14 | C-LIMITS：已由用户在本会话确认 callbackTimeoutMs=5000ms、maxPauseMs=60000ms；首次生产 runtime limits 装配仍须有代码与测试证据 |
 | T16 | T15 | 无 |
 | T17 | T16 | 无 |
 | T18 | T17 | 无 |
@@ -140,55 +140,56 @@ P1 的验收是基础合同的 fixtures，不能提前宣称五源端到端 AC �
 
 ## 4. P2：五源与队列接线【机｜人工可跳过】
 
-- [ ] **T10 接通公共 History 的 settled 计数和准确 Turn 对账**
+- [x] **T10 接通公共 History 的 settled 计数和准确 Turn 对账**
   - 范围：`electron/triggers/` sources、公共 History 适配、宿主 Turn 终态订阅；拟新增 `electron/triggers/sources.test.ts`。
   - 产物：复用 P1 证明可读的事实，重建 step baseline/增量缓存和准确 Turn 结果；不复制进度表。
   - 完成判据：模型接受响应及整组工具才算一步；并行工具、重试、拒绝工具、未确定提交、压缩/重启、登记时未结算步骤均依方案处理；重复扫描不增；Turn 登记与终态前后顺序及 SDK/宿主终态不同步均可对账，缺覆盖明确失败。
   - 验证：`npm exec vitest run electron/triggers/sources.test.ts`；对应 AC-02/03/09/11。证据：T10.md。
 
-- [ ] **T11 接入两渠道 IM 触发匹配与补扫**
+- [x] **T11 接入两渠道 IM 触发匹配与补扫**
   - 范围：触发域 IM adapter、两渠道模拟接纳到匹配的集成测试及 imFacts 测试；生产 append 签名、全部调用方及严格校验已在 T03 完成，本任务不再承担其切换。
   - 产物：使用 T03 已接入的准确账户/聊天/发送者身份和原序号，以及 T07 分页事实读口，补扫并按字面条件匹配；不改变 P1 已生效的写入合同。
   - 完成判据：两渠道模拟输入均验证准确 scope、senderIds/bodyContains、正文及回复引用；先登记/先接纳双顺序、已 ack/多页/重开库可补扫；上下文缺字段整体回滚；原入站 guard 与 wake 不绕过、不改平台 ack 所有权。
   - 验证：`npm exec vitest run electron/triggers/imFacts.test.ts electron/triggers/sources.test.ts`，合并 T00 查明的两渠道接纳测试；V-STORE/V-SEC。对应 AC-05/09/11/12，关闭 U-02 引用 T03 全部 append 调用方证据，并补本任务匹配/正文集成证据。证据：T11.md。
 
-- [ ] **T12 接入受管 shell/script 进程退出事实**
+- [x] **T12 接入受管 shell/script 进程退出事实**
   - 范围：`electron/tools/runShellExecutor.ts`、`electron/tools/builtinExecutors.ts` run_script、`electron/shell/` 既有 supervisor 与触发域 process adapter；拟新增 `electron/triggers/processSource.test.ts`。
   - 产物：opaque managedProcessId、runtime generation 和内存退出事实通知；targets 可枚举当前有权且运行中的身份。
   - 完成判据：shell 与 script 两入口都有正常/异常退出、spawn 失败、信号、重复 close；拒绝任意 PID；旧代/重启无法证明结果则 SOURCE_GAP，不推断成功；输出引用遵循既有权限和截断，不新增持久进程表。
   - 验证：`npm exec vitest run electron/triggers/processSource.test.ts electron/tools/runShellExecutor.test.ts`，合并实际 run_script 边界测试。对应 AC-04/09/11/12。证据：T12.md。
 
-- [ ] **T13 接入绝对时间与异步事件匹配**
+- [x] **T13 接入绝对时间与异步事件匹配**
   - 范围：触发域 sources/service、既有重试算法只读复用；sources 测试。
   - 产物：1 秒定时扫描及 async CAS 命中；过期/离线定时合同的假时钟实现。
   - 完成判据：准确时区、at 与 expiresAt 边界、登记已到时、离线跨期限按方案补一次；扫描重复/乱序最多一次；同步项只计算候选，不能由扫描写 matched/投递或宣称已暂停。
   - 验证：`npm exec vitest run electron/triggers/sources.test.ts electron/triggers/protocol.test.ts`；对应 AC-06/07/09/10/14 的匹配部分。证据：T13.md。
 
-- [ ] **T14 绑定在线 postStep 的同步命中与暂停接纳**
+- [x] **T14 绑定在线 postStep 的同步命中与暂停接纳**
   - 范围：触发域 runtime lifecycle adapter、SDK 中性 hook 宿主适配、拟新增 `electron/triggers/syncCheckpoint.test.ts`。
   - 产物：准确 stepKey/Turn/execution generation 的在线 CAS；wait 被 SDK 调用后才认可暂停接纳并允许后续投递；等待函数/abort 记账。
   - 完成判据：扫描先/后 postStep、matched 后回调超时、未调用 wait、checkpoint 越过、旧代恢复均按方案收敛；订阅后重新读真实 receiver 终态以覆盖先完成窗口。此任务用可信 receiver 事实 fixture 验证，不依赖尚未实现的实际投递；真实链路在 T16 验证。
   - 验证：`npm exec vitest run electron/triggers/syncCheckpoint.test.ts packages/agent-sdk/test/turn.test.ts`；对应 AC-07/09/10/14。证据：T14.md。
 
-- [ ] **T15 接通幂等队列投递与共同启动授权屏障**
+- [x] **T15 接通幂等队列投递与共同启动授权屏障**
   - 范围：触发域 delivery、`electron/turnRuntime.ts`、宿主 History 装配及 `electron/runtime/sqliteAgentHistory.ts` 原子 append 入口、宿主 provider/tool dispatch 适配、`electron/sessionStorage/`、原 wake dispatcher 的资格接入；拟新增 `electron/triggers/delivery.test.ts`、`electron/triggers/authorization.test.ts`。
   - 产物：核验 §2 C-LIMITS 并首次装配实际 runtime limits（此前 T02/T14 仅使用显式 fixture 输入）；固定 requestId 的中性标记、既有 enqueue/receipt、receiver 真实 Turn 关联；桌面/IM/trigger 共用资格；授权绑定、policy 更新决策与首次 context/admission 同事务 final-check；取消未派发队列及已准备 Turn。
   - 完成判据：忙碌只排队不耗 retry，renderer 未连接仍可启动准确 receiver；队列不存 raw。撤权覆盖入队后/资格后/异步装配后/原子接纳事务前的交错，事务内核验当前批准材料并同 connection 提交 context 与 result_json.admission；首次接纳前失败 model/tool dispatch=0、receipt 不可重领；已合法接纳的历史不因来源撤权取消或重新验源，显式用户取消仍有效；提交后但 provider 前撤权不拒绝已有历史；新来源读取各自检查当前权限。未接纳时原子拒绝失败 catch 携带的 raw transcript，不生成新投影，宿主原终态接口收尾且保留旧 transcript；缺/错凭据拒绝恢复，不据 model-request-started/physical 猜接纳。取消来源撤权在 provider 适配器内拒绝的路径，既有其他派发前拒绝进入 not-dispatched，不伪报 physical=true。final-check 不重新判断业务风险，证据标注 facts/policy/final-check 阶段及现有 rule/trace。
   - 验证：`npm exec vitest run electron/triggers/delivery.test.ts electron/triggers/authorization.test.ts electron/triggers/queueContract.test.ts`、V-STORE/V-SEC。对应 AC-08/11/12/13；B-02/A-02 回归。证据：T15.md。
 
-- [ ] **T16 装配全部宿主入口和恢复补扫**
+- [x] **T16 装配全部宿主入口和恢复补扫**
   - 范围：T00 定位的桌面/remote/handoff/continuation/恢复装配、应用启动/关闭、触发域 recovery；拟新增 `electron/triggers/recovery.test.ts`。
   - 产物：五源与实际 receiver Turn 终态全链路；启动补扫/失败重试/取消/删除/关闭收敛；真实来源输入按原 SDK 一致性校验，在宿主原子接纳事务中保存；恢复核对 trigger/request/receiver/turn/invocation/contextEventId/digest 与 admission 一致，在线 lifecycle hooks 统一装配。
   - 完成判据：按方案 §5～7 在命中、入队前后、receipt 后、领取/prepare/dispatch 前后、终态前后注入故障重开库；固定 requestId 无第二条消息，删除/编辑不能补新消息；已消费 IM 可恢复，同步无在线 waiter 不伪装恢复；真实 sync wait 先于投递，receiver 先完成不漏通知；跨会话环期限收敛。整库导入不从消息生成登记。补 S-01 故障：raw 内存准备后撤权、context INSERT 后 admission 前退出回滚、双提交后 provider 前退出/撤权、调用 provider 后退出、凭据孤立/摘要不符、SDK catch 再提 raw；分别断言无未接纳正文落入普通历史/检索/下一轮、已接纳可恢复不追溯、无盲目重派发，接纳失败 provider=0且不伪报 physical 派发。
   - 验证：`npm exec vitest run electron/triggers/recovery.test.ts electron/triggers/delivery.test.ts electron/triggers/syncCheckpoint.test.ts`、V-SDK/V-STORE/V-SEC。对应 AC-02/03/05/07/08/09/10/12/13/14。证据：T16.md。
 
-- [ ] **T17 注册自省能力并补齐入口引导**
+- [x] **T17 注册自省能力并补齐入口引导**
   - 范围：`electron/capabilities/handlers/` 触发器描述符（拟新增）、`registerBuiltinCapabilities.ts`、CapabilityContext 构造、`src/shared/skillPrompt.ts`、既有 capability/toolkit/match 测试及拟新增 `electron/capabilities/handlers/runtimeTrigger.test.ts`。
   - 产物：方案 §4.1 五个 action.runtime_trigger 能力的 params/returns/关键词/下一步说明，以及桌面和远程共同提示；继续复用 toolkit_find/toolkit_call。
   - 完成判据：自然用途查询覆盖五类事件且给出可调用 ID/参数；targets→register→事件唤醒示例可用；get/list/cancel revision 引导准确；owner 只能由宿主注入；变更操作经原 policy/trace，不套 read 免审；网关 schema 不变，不注册旧 runtime_trigger 顶层工具。
   - 验证：`npm exec vitest run electron/capabilities/handlers/runtimeTrigger.test.ts electron/capabilities/match.test.ts electron/capabilities/toolkitTool.test.ts electron/capabilities/callCapability.test.ts`，合并 T00 定位的 skillPrompt 测试；V-SHARED/V-SEC。对应 AC-01/10/11/12。证据：T17.md。
+  - 执行偏差记录：能力与入口实现曾早于 T16 收口；随后已完成真实 receiver 唤醒/恢复装配，并按 T16→T17 依赖顺序关闭。历史偏差见 §7 执行进度。
 
-- [ ] **T18 核验 P2 集成与随机不变量并提交**
+- [x] **T18 核验 P2 集成与随机不变量并提交**
   - 范围：触发域 recovery/protocol/delivery 测试、旧 IM 集成测试、本阶段证据；不增加产品能力。
   - 产物：register/event/cancel/restart/queue/complete 固定 seed 随机操作集、五源到 receiver 终态本地集成记录；`P2.md`。
   - 完成判据：每步断言方案 INV-01～06；重放失败 seed 可复现；B-01/B-02、A-01/A-02/A-04 反例分别引用 T11/T15/T14/T04/T07/T16 证据；旧 A-03/R-01 不再适用，S-01 通过 T15/T16 的接纳/故障证据核验，非追溯历史边界由普通历史回归证明，不以评审结论代替测试；旧两渠道 wake/inbox 行为无回归。提交完整集成，不提前声称负载指标达成。
@@ -196,7 +197,7 @@ P1 的验收是基础合同的 fixtures，不能提前宣称五源端到端 AC �
 
 ## 5. P3：完整验收与交付【机｜人工可跳过】
 
-- [ ] **T19 补齐全 AC、负载与旧数据对拍**
+- [～] **T19 补齐全 AC、负载与旧数据对拍**
   - 范围：触发域测试、历史/队列/迁移 fixtures；拟新增 `electron/triggers/capacity.test.ts`，必要的局部缺陷修复归对应实现模块，不扩边界。
   - 产物：AC-01～14 用例索引；4096 等待项/每 owner 128、期限/重试限额、本地时延、历史重建/每步增量成本报告；投递/重复/恢复指标报告。
   - 完成判据：按方案分母/排除口径测量，不把 SOURCE_GAP 计为恢复成功；本地时间指标说明机器、负载、样本与计时起止。原 schema fixture→升级、普通历史、队列与导出/恢复对拍；已合法接纳来源后撤权，下一轮/同轮重试/重启恢复/压缩沿用旧历史，而新来源访问被拒绝；U-03 有数据，U-04 仍明确未实测。失败先修对应模块，不能删 AC 或放宽指标。
@@ -266,6 +267,13 @@ P1 的验收是基础合同的 fixtures，不能提前宣称五源端到端 AC �
 | E-02：P1 新约束依赖 P2 调用方 | 严格 append 签名、所有生产调用方与事务校验前移 T03；P1 新接纳完整身份/序号，迁移旧行 NULL 明确缺覆盖；T09 只取 T03 及本阶段回归/编译证据。T11 仅匹配/补扫集成，不再承担生产写入切换 | 编排已修订，待复审；非实施通过 |
 
 本轮移除 T05/T06 后为 21 项有效任务，唯一依赖表未增加环；额外人工证据显式列出，未伪装成本机测试产物。
+
+### 2026-11-02 执行进度
+
+- P1 已在两个独立阶段提交完成；P2 的 T10–T18 已完成并有证据；P3 正在补齐 T19 全 AC/容量和 T20 关停与整库恢复。
+- 固定 seed `0x51a7` 在 terminal 状态复活检查失败，证明公共 SQLite trigger update 缺少状态转移条件；修复后相同 seed 通过。代码与测试细节见 T16.md、P2.md。
+- T17 按依赖晚于 T16 收口；此前先行编辑能力与提示，现已补齐主进程 receiver/recovery 接线再关闭任务。
+- 本轮 T16/T17 源码交付按本机 Electron/SQLite 测试验收；真实 IM 账号/远程授权服务、生产库及打包跨平台不在本地可单测范围，T19/T20/T21 将继续明确外部边界。
 
 ### 非追溯撤权修订
 

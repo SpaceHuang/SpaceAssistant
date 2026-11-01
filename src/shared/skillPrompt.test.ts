@@ -15,6 +15,8 @@ describe('skillPrompt', () => {
     expect(withToolkit).toContain('toolkit_find')
     expect(withToolkit).toContain('toolkit_call')
     expect(withToolkit).not.toContain('toolkit.find')
+    expect(withToolkit).toContain('action.runtime_trigger.targets')
+    expect(withToolkit).toContain('clientKey')
     const withoutToolkit = buildToolCapabilityConventionHint(['run_shell'])
     expect(withoutToolkit).not.toContain('toolkit')
   })

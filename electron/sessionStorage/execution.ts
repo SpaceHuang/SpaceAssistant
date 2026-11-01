@@ -18,7 +18,7 @@ import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { getProjectedTurnContext } from './infrastructure/sqlite/sessionTranscriptProjection'
 import { readCanonicalApiContextIfEligible } from './certification'
 import { shadowAcceptedTurnContext } from './infrastructure/sqlite/sessionStorageShadow'
-import type { ContinuationIntentAcceptance, EnqueueResult } from './public/model'
+import type { ContinuationIntentAcceptance, EnqueueResult, RuntimeTriggerHistoryAdmission } from './public/model'
 import type { PreparedIdentity, ContinuationRecordSnapshot, SessionExecutionStore } from './application/ports'
 import type { SessionHistoryPort } from './public/ports'
 import type { SessionQueries } from './public/ports'
@@ -108,7 +108,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       turnId: input.turn.turnId, history: createSessionHistoryPort(db, input.turn.sessionId) }).prepareTurn(input, coordinator.prepareAtomic),
     claimQueuedTurn: (input) => createSessionCommitService({ sessionId: input.sessionId, invocationId: input.requestId,
       turnId: input.turnId, history: createSessionHistoryPort(db, input.sessionId) }).claimQueuedTurn(input, coordinator.claimQueuedAtomic),
-    historyFor: ({ sessionId }) => createSessionHistoryPort(db, sessionId, options.requestBodySourceBackfill),
+    historyFor: ({ sessionId, runtimeTriggerAdmission }) => createSessionHistoryPort(db, sessionId, options.requestBodySourceBackfill, runtimeTriggerAdmission),
     acceptPrepared: ({ prepared, lane, config }: { prepared: PreparedIdentity; lane: NonNullable<TurnExecutionConfig['lane']>; config: TurnExecutionConfig }): AcceptedTurn => {
       if (!prepared.userMessage?.id) throw new Error('TURN_USER_MESSAGE_MISSING')
       const transcript = readSessionTranscript(db, prepared.sessionId)
@@ -451,7 +451,8 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
   return frozenExecution
 }
 
-function createSessionHistoryPort(db: AppDatabase, sessionId: string, requestBodySourceBackfill?: () => void): SessionHistoryPort {
+function createSessionHistoryPort(db: AppDatabase, sessionId: string, requestBodySourceBackfill?: () => void,
+  runtimeTriggerAdmission?: RuntimeTriggerHistoryAdmission): SessionHistoryPort {
   if (!sessionId.trim()) throw new Error('SESSION_SCOPE_REQUIRED')
   // 短寿命即用即抛：本 port 由调用方按次现建（historyFor 每次 createSessionHistoryPort），
   // 不跨压缩换入持有，故此处函数体内现取连接即安全；勿将其提升为长寿命单例。
@@ -460,11 +461,26 @@ function createSessionHistoryPort(db: AppDatabase, sessionId: string, requestBod
     listInvocationIds: () => history.listInvocationIdsForSession(sessionId),
     appendBatch: async (events: Parameters<HistoryPort['appendBatch']>[0], expectedVersion: number,
       transcriptCommit?: Parameters<HistoryPort['appendBatch']>[2]) => {
+      const contextEvent = events.find((event) => event.kind === 'invocation-context-committed')
+      if (contextEvent && runtimeTriggerAdmission?.contextEventId && runtimeTriggerAdmission.contextEventId !== contextEvent.eventId) {
+        throw new Error('runtime trigger context event identity mismatch')
+      }
+      const contextEventId = contextEvent?.eventId ?? runtimeTriggerAdmission?.contextEventId
+      if (runtimeTriggerAdmission && !contextEventId) throw new Error('runtime trigger raw transcript cannot commit before admission')
+      if (runtimeTriggerAdmission && contextEventId) {
+        const boundHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId, undefined,
+          { ...runtimeTriggerAdmission, contextEventId })
+        const result = await boundHistory.appendBatch(events, expectedVersion, transcriptCommit)
+        try { requestBodySourceBackfill?.() } catch { /* Maintenance scheduling must not alter the committed write. */ }
+        return result
+      }
+      if (runtimeTriggerAdmission && transcriptCommit) throw new Error('runtime trigger raw transcript cannot commit before admission')
       const result = await history.appendBatch(events, expectedVersion, transcriptCommit)
       try { requestBodySourceBackfill?.() } catch { /* Maintenance scheduling must not alter the committed write. */ }
       return result
     },
     read: (invocationId: string) => history.read(invocationId),
+    readEventsAfter: (invocationId: string, afterSequence: number, limit?: number) => history.readEventsAfter(invocationId, afterSequence, limit),
     readLatestEvent: (invocationId: string) => history.readLatestEvent(invocationId),
     findByIdempotencyKey: (invocationId: string, idempotencyKey: string) => history.findByIdempotencyKey(invocationId, idempotencyKey),
     prepareTransitionState: (snapshot: import('../../packages/agent-sdk/src/history').HistorySnapshot) => history.prepareTransitionState(snapshot),

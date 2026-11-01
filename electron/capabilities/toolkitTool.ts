@@ -52,6 +52,7 @@ export function buildCapabilityContext(ctx: ToolExecutionContext): CapabilityCon
       return stagehandService.detectDependencies(force)
     },
     ...(ctx.appDatabase ? { mcpConfig: createMcpCapabilityConfigPort(ctx.appDatabase) } : {}),
+    ...(ctx.runtimeTriggers ? { runtimeTriggers: ctx.runtimeTriggers } : {}),
     sessionQueries: ctx.sessionQueries,
     ensureChatBodyV1: ctx.ensureChatBodyV1,
     workDirManager: ctx.workDirManager,

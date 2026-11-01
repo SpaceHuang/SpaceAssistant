@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import {
   HistoryBatchError,
@@ -124,6 +125,26 @@ function isCanonicalWriteFence(value: unknown): boolean {
   return typeof value.sessionGeneration === 'string' && Number.isSafeInteger(value.sessionSeq) &&
     Number.isSafeInteger(value.commitOrder) && (value.watermarkEventId === null || typeof value.watermarkEventId === 'string') &&
     (value.watermarkInvocationId === null || typeof value.watermarkInvocationId === 'string')
+}
+
+/** Trusted host material for the first source-bearing context append; never constructed from agent input. */
+export type RuntimeTriggerAdmissionBinding = Readonly<{
+  triggerId: string
+  requestId: string
+  receiverSessionId: string
+  turnId: string
+  invocationId: string
+  contextEventId: string
+  payloadDigest: string
+  authorizationGeneration: string
+  policyRevision: string
+  runtimeGeneration: string
+  finalCheck: (conn: DatabaseSync) => boolean
+}>
+export type RuntimeTriggerAdmissionTemplate = Omit<RuntimeTriggerAdmissionBinding, 'contextEventId'> & Readonly<{ contextEventId?: string }>
+
+function sha256(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
 export function mirrorCanonicalContextMessages(
@@ -303,7 +324,8 @@ export class SqliteAgentHistory implements HistoryPort {
   private readonly spillStore?: SpillStore
   private readonly processGeneration: number
 
-  constructor(private readonly conn: DatabaseSync, private readonly schemaVersion = 1, private readonly now: () => number = Date.now, private readonly sessionId?: string, spillStore?: SpillStore) {
+  constructor(private readonly conn: DatabaseSync, private readonly schemaVersion = 1, private readonly now: () => number = Date.now, private readonly sessionId?: string, spillStore?: SpillStore,
+    private readonly runtimeTriggerAdmission?: RuntimeTriggerAdmissionBinding) {
     this.spillStore = spillStore ?? createSpillStoreForDatabase(conn)
     this.processGeneration = currentProcessGeneration(conn)
   }
@@ -611,6 +633,69 @@ export class SqliteAgentHistory implements HistoryPort {
       }
     }
     return runInTransaction(this.conn, () => {
+      const triggerBinding = this.runtimeTriggerAdmission
+      const triggerAdmissionEvent = triggerBinding
+        ? events.find((event) => event.kind === 'invocation-context-committed' && event.eventId === triggerBinding.contextEventId)
+        : undefined
+      let admissionToCommit: Record<string, unknown> | undefined
+      let triggerRevision = -1
+      if (triggerBinding) {
+        if (triggerBinding.requestId !== `runtime-trigger:${triggerBinding.triggerId}`) throw new HistoryBatchError('runtime trigger admission request identity mismatch')
+        if (this.sessionId !== triggerBinding.receiverSessionId || events.some((event) => event.invocationId !== triggerBinding.invocationId || event.turnId !== triggerBinding.turnId)) {
+          throw new HistoryBatchError('runtime trigger admission identity mismatch')
+        }
+        if (events.some((event) => event.kind === 'invocation-context-committed' && event.eventId !== triggerBinding.contextEventId)) {
+          throw new HistoryBatchError('runtime trigger context event identity mismatch')
+        }
+        const row = this.conn.prepare('SELECT owner_session_id,state,result_json,revision,receiver_session_id FROM runtime_triggers WHERE id=? AND receiver_session_id=?')
+          .get(triggerBinding.triggerId, triggerBinding.receiverSessionId) as { owner_session_id: string; state: string; result_json: string | null; revision: number; receiver_session_id: string } | undefined
+        if (!row) throw new HistoryBatchError('runtime trigger admission record missing')
+        triggerRevision = row.revision
+        const result = row.result_json ? JSON.parse(row.result_json) as Record<string, unknown> : {}
+        const authorization = isRecord(result.authorization) ? result.authorization : undefined
+        if (!authorization || authorization.bindingVersion !== 1 || authorization.requestId !== triggerBinding.requestId ||
+          authorization.ownerSessionId !== row.owner_session_id || authorization.receiverSessionId !== triggerBinding.receiverSessionId ||
+          authorization.payloadDigest !== triggerBinding.payloadDigest || authorization.authorizationGeneration !== triggerBinding.authorizationGeneration ||
+          authorization.policyRevision !== triggerBinding.policyRevision || authorization.runtimeGeneration !== triggerBinding.runtimeGeneration) {
+          throw new HistoryBatchError('runtime trigger authorization binding inconsistent')
+        }
+        const priorAdmission = result.admission as Record<string, unknown> | undefined
+        const contextPayload = triggerAdmissionEvent && isRecord(triggerAdmissionEvent.payload) ? triggerAdmissionEvent.payload : undefined
+        if (priorAdmission) {
+          const storedContextRow = this.conn.prepare('SELECT payload_json FROM agent_history_events WHERE invocation_id=? AND event_id=? AND kind=?')
+            .get(triggerBinding.invocationId, triggerBinding.contextEventId, 'invocation-context-committed') as { payload_json: string } | undefined
+          let storedContext: unknown
+          try { storedContext = storedContextRow ? JSON.parse(storedContextRow.payload_json) : undefined } catch { storedContext = undefined }
+          if (priorAdmission.version !== 1 || priorAdmission.triggerId !== triggerBinding.triggerId ||
+            priorAdmission.requestId !== triggerBinding.requestId || priorAdmission.receiverSessionId !== triggerBinding.receiverSessionId ||
+            priorAdmission.turnId !== triggerBinding.turnId || priorAdmission.invocationId !== triggerBinding.invocationId ||
+            priorAdmission.contextEventId !== triggerBinding.contextEventId || !storedContextRow || priorAdmission.contextDigest !== sha256(storedContext) ||
+            (contextPayload && priorAdmission.contextDigest !== sha256(contextPayload)) ||
+            priorAdmission.payloadDigest !== triggerBinding.payloadDigest || priorAdmission.authorizationGeneration !== triggerBinding.authorizationGeneration ||
+            priorAdmission.policyRevision !== triggerBinding.policyRevision || priorAdmission.runtimeGeneration !== triggerBinding.runtimeGeneration) {
+            throw new HistoryBatchError('runtime trigger admission inconsistent')
+          }
+        } else if (triggerAdmissionEvent) {
+          const initialContext = contextPayload
+          if (!initialContext) throw new HistoryBatchError('runtime trigger context payload invalid')
+          const alreadyStored = this.conn.prepare('SELECT 1 FROM agent_history_events WHERE invocation_id=? AND event_id=?')
+            .get(triggerBinding.invocationId, triggerBinding.contextEventId)
+          // final-check: synchronously revalidate the approved identity/material on this connection;
+          // append and admission then commit below in this same transaction, with no risk recomputation.
+          if (alreadyStored || row.state !== 'matched' || !triggerBinding.finalCheck(this.conn)) {
+            throw new HistoryBatchError('runtime trigger authorization final-check rejected')
+          }
+          const requestSnapshot = initialContext.requestSnapshot
+          admissionToCommit = { version: 1, triggerId: triggerBinding.triggerId, requestId: triggerBinding.requestId,
+            receiverSessionId: triggerBinding.receiverSessionId, turnId: triggerBinding.turnId, invocationId: triggerBinding.invocationId,
+            contextEventId: triggerBinding.contextEventId, contextDigest: sha256(initialContext), payloadDigest: triggerBinding.payloadDigest,
+            requestDigest: sha256(requestSnapshot), authorizationGeneration: triggerBinding.authorizationGeneration,
+            policyRevision: triggerBinding.policyRevision, runtimeGeneration: triggerBinding.runtimeGeneration, acceptedAt: this.now() }
+          if (transcriptCommit) throw new HistoryBatchError('runtime trigger raw transcript cannot commit before admission')
+        } else {
+          throw new HistoryBatchError('runtime trigger history cannot advance before admission')
+        }
+      }
       if (this.sessionId && expectedSessionGeneration) {
         const liveGeneration = (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
         if (!liveGeneration || liveGeneration !== expectedSessionGeneration) {
@@ -675,6 +760,15 @@ export class SqliteAgentHistory implements HistoryPort {
         ...(projectionTargets.length ? { projectionTargets } : {}),
         ...(this.sessionId ? { sessionId: this.sessionId } : {})
       })
+      if (admissionToCommit && triggerBinding) {
+        const result = this.conn.prepare('SELECT result_json FROM runtime_triggers WHERE id=?').get(triggerBinding.triggerId) as { result_json: string | null }
+        const currentResult = result.result_json ? JSON.parse(result.result_json) as Record<string, unknown> : {}
+        const updated = this.conn.prepare(`UPDATE runtime_triggers SET result_json=?,revision=revision+1,updated_at=?
+          WHERE id=? AND receiver_session_id=? AND state='matched' AND revision=?`)
+          .run(JSON.stringify({ ...currentResult, admission: admissionToCommit }), this.now(), triggerBinding.triggerId,
+            triggerBinding.receiverSessionId, triggerRevision)
+        if (Number(updated.changes) !== 1) throw new HistoryBatchError('runtime trigger admission commit conflict')
+      }
       if (this.sessionId) {
         for (const event of events) {
           if (event.kind === 'replay-message-committed') {
@@ -1542,6 +1636,32 @@ export class SqliteAgentHistory implements HistoryPort {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'SPILL_CONTENT_UNAVAILABLE') throw error
       throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error))
     }
+  }
+
+  /** Bounded append-only reader for hosted lifecycle consumers; it never loads the prior History prefix. */
+  async readEventsAfter(invocationId: string, afterSequence: number, limit = 1_000): Promise<{ version: number; events: HistoryEvent[] }> {
+    if (!invocationId.trim() || !Number.isSafeInteger(afterSequence) || afterSequence < 0 ||
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) throw new TypeError('invalid history append page')
+    const stream = this.conn.prepare('SELECT invocation_id,version,schema_version,session_id FROM agent_history_streams WHERE invocation_id=?')
+      .get(invocationId) as StreamRow | undefined
+    if (!stream) return { version: 0, events: [] }
+    if (this.sessionId && stream.session_id !== this.sessionId) throw new HistoryBatchError(`invocation ${invocationId} does not belong to this session`)
+    if (stream.schema_version !== this.schemaVersion || afterSequence > stream.version) throw new HistoryBatchError('history append cursor is invalid')
+    const rows = this.conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,session_id
+      FROM agent_history_events WHERE invocation_id=? AND sequence>? ORDER BY sequence ASC LIMIT ?`)
+      .all(invocationId, afterSequence, limit) as EventRow[]
+    if (rows.some((row, index) => row.sequence !== afterSequence + index + 1 || row.schema_version !== stream.schema_version ||
+      (row.session_id != null && row.session_id !== stream.session_id))) throw new HistoryCorruptionError(invocationId, 'history append page is not contiguous')
+    const events = await Promise.all(rows.map(async (row) => {
+      try {
+        const event = fromRow(row)
+        validateHistoryBatch([event])
+        return this.spillStore ? await this.hydrateLargeToolResult(event) : event
+      } catch (error) {
+        throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error))
+      }
+    }))
+    return { version: stream.version, events }
   }
 
   async prepareTransitionState(snapshot: HistorySnapshot): Promise<void> {

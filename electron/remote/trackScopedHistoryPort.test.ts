@@ -12,6 +12,7 @@ function makeHistory(): SessionHistoryPort {
     listInvocationIds: vi.fn(() => ['turn-a', 'turn-b']),
     appendBatch: vi.fn(async () => ({ version: 1, duplicate: false })),
     read: vi.fn(async (invocationId: string) => snapshot(invocationId)),
+    readEventsAfter: vi.fn(async () => ({ version: 0, events: [] })),
     readLatestInvocationForSession: vi.fn(async () => ({ kind: 'completed' as const, snapshot: snapshot('turn-b') }))
   }
 }
@@ -27,7 +28,9 @@ describe('Track-scoped HistoryPort', () => {
       sessionId: 'session-1', allowedInvocationIds: ['turn-a1', 'turn-a2']
     })
     await expect(scoped.read('turn-a1')).resolves.toMatchObject({ invocationId: 'turn-a1' })
+    await expect(scoped.readEventsAfter('turn-a1', 0)).resolves.toEqual({ version: 0, events: [] })
     await expect(scoped.read('turn-b1')).rejects.toThrow('TRACK_HISTORY_INVOCATION_OUT_OF_SCOPE')
+    await expect(scoped.readEventsAfter('turn-b1', 0)).rejects.toThrow('TRACK_HISTORY_INVOCATION_OUT_OF_SCOPE')
     const event: HistoryEvent = { eventId: 'e1', idempotencyKey: 'i1', invocationId: 'turn-b1', turnId: 'turn-b1', sequence: 1, schemaVersion: 1, kind: 'invocation-context-committed', payload: {} }
     await expect(scoped.appendBatch([event], 0)).rejects.toThrow('TRACK_HISTORY_INVOCATION_OUT_OF_SCOPE')
     expect(history.appendBatch).not.toHaveBeenCalled()

@@ -79,6 +79,7 @@ import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessi
 import type { ContinuationIntentAcceptance, ContinuationSourceRef, PreparedChatBodyView } from '../sessionStorage/public/model'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import { createSessionSwitchRequestSequence } from './sessionSwitchTraceSequence'
+import { createRuntimeTriggerReceiverStarter, runtimeTriggerQueueLane } from '../triggers/receiverStarter'
 
 const nextSessionSwitchRequestOrdinal = createSessionSwitchRequestSequence()
 
@@ -874,12 +875,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           (intent.mode === 'reuse-user' && reusedUserMessage?.attachments?.length) ||
           routeRead.hasVision
         )
+        const turnLane = intent.mode === 'reuse-user' ? runtimeTriggerQueueLane(intent.queueScope ?? { kind: 'desktop' }) : 'desktop'
         const baseConfig = await resolveTrustedTurnExecutionConfig(
           ctx.db,
           sessionQueries,
           sessionCommands,
           intent.sessionId,
-          'desktop',
+          turnLane,
           { projectMemoryEnabled: true },
           { requiresVision }
         )
@@ -918,7 +920,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         }
         const config = {
           ...baseConfig,
-          continuationSafetySnapshot: resolveContinuationSafetySnapshot(ctx, intent.sessionId, 'desktop'),
+          continuationSafetySnapshot: resolveContinuationSafetySnapshot(ctx, intent.sessionId, turnLane),
           ...(system ? { system } : {}),
           ...(skillFragments.length ? { skillFragments } : {})
         }
@@ -1004,6 +1006,11 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     })()
     return { ok: true as const, accepted: true as const, turnId: payload.turnId }
   }
+
+  ctx.publishRuntimeTriggerReceiverStarter?.(createRuntimeTriggerReceiverStarter({
+    prepare: (intent) => prepareTurnInternal(intent),
+    dispatch: (sender, payload) => executeTurnInternal(sender, payload)
+  }))
 
   ipcMain.handle('chat:execute-turn', (event, payload: TurnExecutePayload) => executeTurnInternal(event.sender, payload))
 

@@ -284,4 +284,11 @@ describe('buildCapabilityContext 适配（评审 S2）', () => {
     expect(ctx.locale).toBe('zh-CN')
     expect(ctx.lane).toBe('desktop')
   })
+
+  it('只透传宿主装配的 runtime trigger capability service', () => {
+    const runtimeTriggers = { register: vi.fn() }
+    const ctx = buildCapabilityContext({ workDir: '/w', userDataDir: '/u', sessionId: 's1', requestId: 'r1',
+      signal: new AbortController().signal, runtimeTriggers } as unknown as import('../tools/types').ToolExecutionContext)
+    expect(ctx.runtimeTriggers).toBe(runtimeTriggers)
+  })
 })
