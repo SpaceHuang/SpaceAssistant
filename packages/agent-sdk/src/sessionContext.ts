@@ -42,7 +42,11 @@ const ownMessages = (messages: readonly CanonicalModelMessage[]): readonly Canon
 const freezeMessages = (messages: readonly CanonicalModelMessage[]): readonly CanonicalModelMessage[] =>
   Object.isFrozen(messages) ? messages : Object.freeze(messages)
 
+const ownedReadonlyMaps = new WeakSet<object>()
+const ownedReadonlySets = new WeakSet<object>()
+
 function readonlyMap<K, V>(source: ReadonlyMap<K, V>): ReadonlyMap<K, V> {
+  if (ownedReadonlyMaps.has(source as object)) return source
   const map = new Map(source)
   const view = {
     get size() { return map.size },
@@ -54,10 +58,13 @@ function readonlyMap<K, V>(source: ReadonlyMap<K, V>): ReadonlyMap<K, V> {
     forEach: (callback: (value: V, key: K, map: ReadonlyMap<K, V>) => void, thisArg?: unknown) => map.forEach((value, key) => callback.call(thisArg, value, key, view)),
     [Symbol.iterator]: () => map[Symbol.iterator]()
   }
-  return Object.freeze(view) as ReadonlyMap<K, V>
+  Object.freeze(view)
+  ownedReadonlyMaps.add(view)
+  return view as ReadonlyMap<K, V>
 }
 
 function readonlySet<T>(source: ReadonlySet<T>): ReadonlySet<T> {
+  if (ownedReadonlySets.has(source as object)) return source
   const set = new Set(source)
   const view = {
     get size() { return set.size },
@@ -68,7 +75,9 @@ function readonlySet<T>(source: ReadonlySet<T>): ReadonlySet<T> {
     forEach: (callback: (value: T, value2: T, set: ReadonlySet<T>) => void, thisArg?: unknown) => set.forEach((value) => callback.call(thisArg, value, value, view)),
     [Symbol.iterator]: () => set[Symbol.iterator]()
   }
-  return Object.freeze(view) as ReadonlySet<T>
+  Object.freeze(view)
+  ownedReadonlySets.add(view)
+  return view as ReadonlySet<T>
 }
 
 const freezeState = (state: SessionContextState): SessionContextState => Object.freeze({
