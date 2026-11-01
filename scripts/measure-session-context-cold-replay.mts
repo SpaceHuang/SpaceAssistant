@@ -112,11 +112,12 @@ try {
     assert.deepEqual(transcript?.messages, restored.committed, `warm/cold transcript mismatch at ${rounds} rounds`)
     const sortedTotalSamples = [...totalSamples].sort((left, right) => left - right)
     const totalReadP95Ms = sortedTotalSamples[Math.ceil(sortedTotalSamples.length * 0.95) - 1]!
-    const maxContinuousBlockMs = Math.max(...totalSamples, maxEventLoopDelayMs)
-    assert.ok(maxContinuousBlockMs <= 50, `${rounds * 4096} byte cold replay blocked main thread for ${maxContinuousBlockMs.toFixed(1)} ms`)
+    const maxReadSampleMs = Math.max(...totalSamples)
+    const maxContinuousBlockMs = Math.max(maxReadSampleMs, maxEventLoopDelayMs)
     console.log(JSON.stringify({ rounds, rows: transcript!.messages.length, historyEventRows: rows.length, historyBytes: rounds * 4096,
       sqlMs, parseMs, reduceMs, totalReadSampleCount: totalSamples.length, eventLoopDelayMs: maxEventLoopDelayMs,
-      totalReadP95Ms, maxContinuousBlockMs, reducerMessageCount: restored.committed.length }))
+      totalReadP95Ms, maxReadSampleMs, maxContinuousBlockMs, reducerMessageCount: restored.committed.length }))
+    assert.ok(maxContinuousBlockMs <= 50, `${rounds * 4096} byte cold replay blocked main thread for ${maxContinuousBlockMs.toFixed(1)} ms (read=${maxReadSampleMs.toFixed(1)} ms, event-loop=${maxEventLoopDelayMs.toFixed(1)} ms)`)
   }
 } finally {
   db.close()

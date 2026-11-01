@@ -104,7 +104,19 @@ const freezeState = (state: SessionContextState): SessionContextState => Object.
 
 /** Convert the legacy full-context events into one canonical state for both recovery and live turns. */
 export function restoreSessionContext(input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>): SessionContextState {
-  const simpleRestored = restoreSimpleCompletedSessionContext(input)
+  return restoreSessionContextWithOwnership(input, false)
+}
+
+/** Restore detached database-decoded events without cloning their message payloads. */
+export function restoreSessionContextFromOwnedEvents(input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>): SessionContextState {
+  return restoreSessionContextWithOwnership(input, true)
+}
+
+function restoreSessionContextWithOwnership(
+  input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>,
+  eventsAreOwned: boolean
+): SessionContextState {
+  const simpleRestored = restoreSimpleCompletedSessionContext(input, undefined, eventsAreOwned)
   if (simpleRestored) return simpleRestored
   let state = freezeState({ committedVersion: input.committedVersion, committed: [], working: [], failure: [], parkBaseline: [], pendingTools: new Map(), completedToolResults: new Map(), approvedToolCallIds: new Set(), requestSystem: '' })
   let simpleRun: ContextReplayEvent[] = []
@@ -112,7 +124,7 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
   let currentTurnIsSimple = true
   const flushSimpleRun = () => {
     if (!simpleRun.length) return
-    state = restoreSimpleCompletedSessionContext({ committedVersion: input.committedVersion, events: simpleRun }, state)
+    state = restoreSimpleCompletedSessionContext({ committedVersion: input.committedVersion, events: simpleRun }, state, eventsAreOwned)
       ?? restoreSessionContextGeneric({ committedVersion: input.committedVersion, events: simpleRun }, state)
     simpleRun = []
   }
@@ -253,7 +265,8 @@ function restoreSessionContextGeneric(
 /** Fast path for ordinary completed turns: append to one private buffer, freeze only the final result. */
 function restoreSimpleCompletedSessionContext(
   input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>,
-  initialState?: SessionContextState
+  initialState?: SessionContextState,
+  eventsAreOwned = false
 ): SessionContextState | undefined {
   const events = input.events
   if (events.length === 0 || events.at(-1)?.kind !== 'invocation-completed') return undefined
@@ -319,7 +332,7 @@ function restoreSimpleCompletedSessionContext(
       if (typeof payload.system === 'string') requestSystem = payload.system
     } else if (event.kind === 'model-response-committed') {
       const message = (event.payload as { message: CanonicalModelMessage }).message
-      buffer.push(ownMessage(message))
+      buffer.push(eventsAreOwned ? deepFreeze(message) : ownMessage(message))
     } else if (event.kind === 'invocation-completed') {
       if (hasSystemMessage) {
         for (let index = buffer.length - 1; index >= 0; index -= 1) if (buffer[index]?.role === 'system') buffer.splice(index, 1)

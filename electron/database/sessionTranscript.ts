@@ -6,7 +6,7 @@ import { runInTransaction } from './transaction'
 import path from 'node:path'
 import { readSourceTruthSpillSync, type SpillDescriptor } from '../storage/spillProtocol'
 import { assertSpillReferencePayloadStrict, replaceSpillReferenceOwnerInTransaction, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
-import { restoreLegacySessionContextSnapshot, restoreSessionContext, SESSION_CONTEXT_NEUTRAL_HISTORY_KINDS } from '../../packages/agent-sdk/src/sessionContext'
+import { restoreLegacySessionContextSnapshot, restoreSessionContextFromOwnedEvents, SESSION_CONTEXT_NEUTRAL_HISTORY_KINDS } from '../../packages/agent-sdk/src/sessionContext'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
@@ -131,7 +131,7 @@ export function readSessionTranscript(db: AppDatabase, sessionId: string, option
     const spillRoot = main?.file ? path.join(path.dirname(main.file), 'spill') : undefined
     const events = eventRows.map((event) => ({ eventId: event.event_id, turnId: event.turn_id,
       kind: event.kind, payload: hydrateTranscriptSpills(JSON.parse(event.payload_json) as unknown, spillRoot) }))
-    const restored = restoreSessionContext({ committedVersion: version, events })
+    const restored = restoreSessionContextFromOwnedEvents({ committedVersion: version, events })
     const terminal = events.find((event) => event.eventId === receiptTerminalRow!.event_id)
     const terminalSelection = terminal?.payload && typeof terminal.payload === 'object'
       ? (terminal.payload as { contextSelection?: { contextProtocol?: unknown; target?: unknown; baseVersion?: unknown } }).contextSelection

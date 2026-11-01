@@ -1,11 +1,31 @@
 import { describe, expect, it } from 'vitest'
-import { applyContextEvent, beginContextTurn, commitContextTurn, createApprovalSystemMessage, createContextSelectionIntent, restoreLegacySessionContextSnapshot, restoreLegacySessionContextEvents, restoreSessionContext, selectContextCommit } from '../src/sessionContext'
+import { applyContextEvent, beginContextTurn, commitContextTurn, createApprovalSystemMessage, createContextSelectionIntent, restoreLegacySessionContextSnapshot, restoreLegacySessionContextEvents, restoreSessionContext, restoreSessionContextFromOwnedEvents, selectContextCommit } from '../src/sessionContext'
 import type { CanonicalModelMessage } from '../src/model'
 
 const user = (id: string, content: string): CanonicalModelMessage => ({ role: 'user', id, content })
 const assistant = (id: string, content: string): CanonicalModelMessage => ({ role: 'assistant', id, content })
 
 describe('shared session context rules', () => {
+  it('reuses and freezes detached history messages while the general restore API owns its inputs', () => {
+    const makeEvents = () => {
+      const message = { role: 'assistant' as const, content: 'detached answer' }
+      return { message, events: [
+        { kind: 'invocation-context-committed', payload: { contextProtocol: 2, inputMode: 'baseline', messages: [], inputMessages: [], failureInputMessages: [], scope: { kind: 'session', sessionId: 'owned' } } },
+        { kind: 'model-response-committed', payload: { message } },
+        { kind: 'invocation-completed', payload: { status: 'completed', contextSelection: { contextProtocol: 2, target: 'working' } } }
+      ] as import('../src/history').HistoryEvent[] }
+    }
+    const detached = makeEvents()
+    const owned = restoreSessionContextFromOwnedEvents({ committedVersion: 1, events: detached.events })
+    expect(owned.committed.at(-1)).toBe(detached.message)
+    expect(Object.isFrozen(detached.message)).toBe(true)
+
+    const callerOwned = makeEvents()
+    const copied = restoreSessionContext({ committedVersion: 1, events: callerOwned.events })
+    expect(copied.committed.at(-1)).not.toBe(callerOwned.message)
+    expect(Object.isFrozen(callerOwned.message)).toBe(false)
+  })
+
   it('restores long completed delta histories in order without retaining per-turn system state', () => {
     const events = Array.from({ length: 300 }, (_, index) => {
       const invocationId = `linear-invocation-${index}`
