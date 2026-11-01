@@ -12,6 +12,7 @@ import { getDbConnection, openDatabase } from '../database'
 import { createSession } from '../database/operations'
 import { commitSessionTranscript, readSessionTranscript } from '../database/sessionTranscript'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import type { SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
 
@@ -97,6 +98,7 @@ describe('SDK session context SQLite replay contract', () => {
       if (modelTurn === 1) {
         yield { type: 'tool-call', toolCallId: 'tool-a', toolName: 'lookup', input: { order: 1 } }
         yield { type: 'tool-call', toolCallId: 'tool-b', toolName: 'lookup', input: { order: 2 } }
+        yield { type: 'tool-call', toolCallId: 'tool-c', toolName: 'lookup', input: { order: 3 } }
         yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
         yield { type: 'finish', reason: 'tool-calls' }
       } else {
@@ -109,26 +111,36 @@ describe('SDK session context SQLite replay contract', () => {
     const capabilities = new CapabilityRegistry()
     capabilities.define('multi-tool-invocation', ['lookup'])
     const safetyGate = new SafetyGate({ capabilities, permitStore: permits,
-      policy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'auth-v1' }) } })
+      policy: { evaluate: async (binding) => binding.toolCallId === 'tool-a' && binding.phase === 'initial-compat'
+        ? { kind: 'ask' as const, confirmationId: 'approve-tool-a', answerer: 'user' as const, reasonCode: 'USER_APPROVAL' }
+        : { kind: 'allow' as const, authorizationVersion: 'auth-v1' } } })
     const toolExecution = createPermitBoundToolExecutionPort({ permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
       resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
       execute: async (call) => ({ output: `result-${call.toolCallId}` }) })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
     let context: SessionContextState | undefined
 
     try {
       await runAgentTurn({ registry, routeId: route.routeId, invocationId: 'multi-tool-invocation', turnId: 'multi-tool-turn', sessionId: session.id,
-        history: new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id), request: { messages: [{ role: 'user', id: 'user-tools', content: 'run tools' }], maxTokens: 32 },
+        history, request: { messages: [{ role: 'user', id: 'user-tools', content: 'run tools' }], maxTokens: 32 },
         sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2, maxModelTurns: 2, safetyGate,
         prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName,
           phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
-        toolExecution, onSessionContextCommitted: (next) => { context = next } })
+        toolExecution, confirmation: async () => ({ kind: 'approved', receipt: 'approved-tool-a', answerer: 'user' }),
+        onSessionContextCommitted: (next) => { context = next } })
       const warm = context!.committed
       const warmToolResults = warm.filter((message) => message.role === 'tool')
       expect(warmToolResults).toMatchObject([
         { role: 'tool', toolCallId: 'tool-a', content: 'result-tool-a' },
-        { role: 'tool', toolCallId: 'tool-b', content: 'result-tool-b' }
+        { role: 'tool', toolCallId: 'tool-b', content: 'result-tool-b' },
+        { role: 'tool', toolCallId: 'tool-c', content: 'result-tool-c' }
       ])
-      expect(warmToolResults).toHaveLength(2)
+      expect(warmToolResults).toHaveLength(3)
+      expect((await history.read('multi-tool-invocation')).events).toContainEqual(expect.objectContaining({
+        kind: 'approval-resolved', payload: expect.objectContaining({ toolCallId: 'tool-a', approved: true, answerer: 'user' })
+      }))
+      expect(context!.pendingTools.size).toBe(0)
+      expect(context!.completedToolResults.size).toBe(0)
       expect(readSessionTranscript(db, session.id).messages).toEqual(warm)
       db.close()
       db = openDatabase(temp.dbPath)
@@ -140,7 +152,7 @@ describe('SDK session context SQLite replay contract', () => {
 
   it('uses a full baseline when the SDK first introduces an existing legacy transcript to protocol 2', async () => {
     const temp = createTempDatabase('session-context-legacy-upgrade-')
-    const db = temp.db
+    let db = temp.db
     const session = createSession(db, { name: 'context-legacy-upgrade', model: 'test' })
     const prior: CanonicalModelMessage[] = [
       { role: 'user', id: 'legacy-user', content: 'legacy question' },
@@ -157,15 +169,25 @@ describe('SDK session context SQLite replay contract', () => {
     const current: CanonicalModelMessage = { role: 'user', id: 'new-user', content: 'new question' }
     let warm: SessionContextState | undefined
     try {
+      const execution = createSqliteSessionStorage(db).execution
+      const prepared = await execution.prepareHostedContext({ sessionId: session.id, scopeKey: 'session' })
+      expect(prepared).toMatchObject({ version: 1, warm: false })
       await runAgentTurn({ registry, routeId: route.routeId, invocationId: 'legacy-upgrade-invocation', turnId: 'legacy-upgrade-turn',
         sessionId: session.id, sessionTranscriptBaseVersion: 1, sessionTranscriptCommitProtocol: 2,
         history: new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id),
+        sessionContext: prepared.context, sessionContextInputMessages: [current], sessionContextFailureInputMessages: [current],
+        sessionContextBaselineRequired: prepared.baselineRequired,
+        requiredUserMessage: { id: 'new-user', message: current },
         request: { messages: [...prior, current], maxTokens: 32 }, maxModelTurns: 1,
         safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: new InMemorySafetyPermitStore(),
           policy: createAgentSdkSafetyPolicy() }), prepareTool: async () => { throw new Error('tools are unused') },
         toolExecution: createToolExecutionPort(), onSessionContextCommitted: (state) => { warm = state } })
       const expected = [...prior, current, { role: 'assistant', content: 'new answer' }]
       expect(warm?.committed).toEqual(expected)
+      expect(readSessionTranscript(db, session.id).messages).toEqual(expected)
+      expect(await execution.prepareHostedContext({ sessionId: session.id, scopeKey: 'session' })).toMatchObject({ baselineRequired: false })
+      db.close()
+      db = openDatabase(temp.dbPath)
       expect(readSessionTranscript(db, session.id).messages).toEqual(expected)
     } finally {
       temp.cleanup(db)

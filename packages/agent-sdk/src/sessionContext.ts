@@ -261,8 +261,8 @@ export function applyContextEvent(state: SessionContextState, event: SessionCont
   const alreadyReduced = new Set<string>()
   for (let cursor = index + 1; cursor < state.working.length; cursor += 1) {
     const message = state.working[cursor]
-    if (message?.role !== 'tool') break
-    if (orderedCalls.some((call) => call.id === message.toolCallId)) alreadyReduced.add(message.toolCallId)
+    if (message?.role === 'assistant') break
+    if (message?.role === 'tool' && orderedCalls.some((call) => call.id === message.toolCallId)) alreadyReduced.add(message.toolCallId)
   }
   const resultMessages: CanonicalModelMessage[] = []
   for (const call of orderedCalls) {

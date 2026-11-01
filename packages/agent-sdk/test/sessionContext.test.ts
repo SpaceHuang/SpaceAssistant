@@ -75,6 +75,24 @@ describe('shared session context rules', () => {
     expect(createContextSelectionIntent(outcome)).toEqual({ contextProtocol: 2, target })
   })
 
+  it('keeps later tool results ordered when an approval record separates earlier results', () => {
+    const calls = ['a', 'b', 'c'].map((id) => ({ id, name: `tool-${id}`, input: {} }))
+    let next = beginContextTurn(restoreSessionContext({ committedVersion: 0, events: [] }), {
+      invocationId: 'inv-approved-tools', baseVersion: 0, inputMessages: [], failureInputMessages: [], requestSystem: ''
+    })
+    next = applyContextEvent(next, { kind: 'model-response-committed', message: { role: 'assistant', content: '', toolCalls: calls } })
+    for (const toolCall of calls) next = applyContextEvent(next, { kind: 'tool-call-started', toolCall })
+    next = applyContextEvent(next, { kind: 'approval-resolved', toolCallId: 'a', approved: true })
+    next = applyContextEvent(next, { kind: 'tool-call-finished', toolCallId: 'a', message: { role: 'tool', toolCallId: 'a', content: 'a', isError: false } })
+    next = applyContextEvent(next, { kind: 'model-response-committed', message: createApprovalSystemMessage() })
+    for (const id of ['b', 'c']) next = applyContextEvent(next, { kind: 'tool-call-finished', toolCallId: id,
+      message: { role: 'tool', toolCallId: id, content: id, isError: false } })
+    expect(selectContextCommit(next, { kind: 'completed' }).messages.filter((message) => message.role === 'tool'))
+      .toMatchObject([{ toolCallId: 'a' }, { toolCallId: 'b' }, { toolCallId: 'c' }])
+    expect(next.pendingTools.size).toBe(0)
+    expect(next.completedToolResults.size).toBe(0)
+  })
+
   it('keeps the turn-entry park baseline immutable across compaction and failed tool facts', () => {
     const committed = [user('u0', 'earlier')]
     const restored = restoreSessionContext({ committedVersion: 4, events: [{ eventId: 'seed', idempotencyKey: 'seed', invocationId: 'inv-seed', turnId: 'turn-seed', sequence: 1, schemaVersion: 1, kind: 'session-input-committed', payload: { messages: committed } }] })

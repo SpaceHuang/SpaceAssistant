@@ -191,6 +191,7 @@ export function createHostedTurnHandoff(input: {
     let queuedOwnership: { sessionId: string; turnId: string; ownerId: string } | undefined
     let sessionContext: SessionContextState | undefined
     let contextGeneration: string | undefined
+    let sessionContextBaselineRequired = false
     let contextPublished = false
     let keepClaimedForReconciliation = false
     let executionStarted = false
@@ -233,6 +234,7 @@ export function createHostedTurnHandoff(input: {
           ...(preparedContext.lastTurnId ? { lastTurnId: preparedContext.lastTurnId } : {}), messages: preparedContext.context.committed }
         sessionContext = preparedContext.context
         contextGeneration = preparedContext.generation
+        sessionContextBaselineRequired = preparedContext.baselineRequired
       }
       if (checkpoint.status !== 'ready') throw new Error('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED')
       if (checkpoint.version > 0) {
@@ -426,6 +428,7 @@ export function createHostedTurnHandoff(input: {
         routeId: input.routeId,
         request: handoff.signal ? { ...request, signal: handoff.signal } : request,
         ...(sessionContext ? { sessionContext } : {}),
+        ...(sessionContextBaselineRequired ? { sessionContextBaselineRequired: true } : {}),
         ...(sessionContext && handoff.requiredUserMessage ? { sessionContextInputMessages: [handoff.requiredUserMessage.message], sessionContextFailureInputMessages: [handoff.requiredUserMessage.message] } : {}),
         ...(sessionContext && contextGeneration ? { onSessionContextCommitted: (context: SessionContextState) => {
           contextPublished = input.sessionExecution!.commitHostedContext({ sessionId: input.sessionId!, generation: contextGeneration!, scopeKey: 'session', context })

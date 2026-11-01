@@ -150,16 +150,20 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       const generation = control.generation
       const cached = hostedContextBySession.get(sessionId)
       if (control.status === 'ready' && cached?.generation === generation && cached.version === control.version && cached.scopeKey === scopeKey) {
-        return { ...control, generation, context: cached.context, warm: true }
+        return { ...control, generation, context: cached.context, warm: true, baselineRequired: false }
       }
       hostedContextBySession.delete(sessionId)
+      const hasProtocol2Baseline = Boolean(liveConn().prepare(`SELECT 1 AS found FROM session_turn_commit_receipts receipt
+        JOIN agent_history_events terminal ON terminal.session_id=receipt.session_id AND terminal.session_seq=receipt.event_end
+        WHERE receipt.session_id=? AND json_extract(terminal.payload_json,'$.contextSelection.contextProtocol')=2 LIMIT 1`).get(sessionId))
+      const baselineRequired = control.version > 0 && !hasProtocol2Baseline
       const snapshot = control.status === 'ready' ? readSessionTranscript(db, sessionId) : undefined
       const context = restoreLegacySessionContextSnapshot({
         invocationId: `session-context:${sessionId}`, turnId: `session-context:${sessionId}`,
         committedVersion: control.version,
         messages: (snapshot?.messages ?? []) as CanonicalModelMessage[], scope: { kind: 'session', sessionId }
       })
-      return { ...control, generation, context, warm: false }
+      return { ...control, generation, context, warm: false, baselineRequired }
     },
     commitHostedContext: ({ sessionId, generation, scopeKey, context }) => {
       const control = readSessionTranscriptControl(db, sessionId)

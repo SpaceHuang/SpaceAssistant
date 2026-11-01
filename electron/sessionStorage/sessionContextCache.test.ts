@@ -12,7 +12,7 @@ describe('hosted session context cache', () => {
       const session = createSession(db, { name: 'context cache', model: 'test' })
       const execution = createSessionExecutionStore(db)
       const cold = await execution.prepareHostedContext({ sessionId: session.id, scopeKey: 'session' })
-      expect(cold).toMatchObject({ version: 0, status: 'ready', warm: false })
+      expect(cold).toMatchObject({ version: 0, status: 'ready', warm: false, baselineRequired: false })
       expect(execution.commitHostedContext({ sessionId: session.id, generation: cold.generation, scopeKey: 'session', context: cold.context })).toBe(true)
 
       expect(await execution.prepareHostedContext({ sessionId: session.id, scopeKey: 'session' })).toMatchObject({ warm: true })
@@ -29,7 +29,7 @@ describe('hosted session context cache', () => {
 
       expect(commitSessionTranscript(db, { sessionId: session.id, turnId: 'context-cache-commit', baseVersion: 0,
         outcome: 'completed', messages: [{ role: 'user', content: 'advance version' }] })).toMatchObject({ committed: true, version: 1 })
-      expect(await execution.prepareHostedContext({ sessionId: session.id, scopeKey: 'session' })).toMatchObject({ version: 1, warm: false })
+      expect(await execution.prepareHostedContext({ sessionId: session.id, scopeKey: 'session' })).toMatchObject({ version: 1, warm: false, baselineRequired: true })
     } finally {
       db.close()
     }

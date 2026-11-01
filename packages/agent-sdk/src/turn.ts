@@ -215,6 +215,7 @@ export async function runHostedAgentTurn(input: {
   sessionContext?: SessionContextState
   sessionContextInputMessages?: readonly CanonicalTurnMessage[]
   sessionContextFailureInputMessages?: readonly CanonicalTurnMessage[]
+  sessionContextBaselineRequired?: boolean
   onSessionContextCommitted?(state: SessionContextState): void
   contextProjectionCommitter?: ContextProjectionCommitter
   sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]
@@ -237,7 +238,7 @@ export async function runHostedAgentTurn(input: {
   if (ports.invocationId !== input.invocationId) throw new Error('host returned ports for a different invocation')
   if (input.turnId && ports.turnId !== input.turnId) throw new Error('host returned ports for a different turn')
   if (ports.routeId !== input.routeId) throw new Error('host returned ports for a different route')
-  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, assistantMessageId: input.assistantMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), ...(input.contextProjectionCommitter ?? ports.contextProjectionCommitter ? { contextProjectionCommitter: input.contextProjectionCommitter ?? ports.contextProjectionCommitter } : {}), ...(input.sessionContext ? { sessionContext: input.sessionContext } : {}), ...(input.sessionContextInputMessages ? { sessionContextInputMessages: input.sessionContextInputMessages } : {}), ...(input.sessionContextFailureInputMessages ? { sessionContextFailureInputMessages: input.sessionContextFailureInputMessages } : {}), ...(input.onSessionContextCommitted ? { onSessionContextCommitted: input.onSessionContextCommitted } : {}), maxToolRounds: ports.maxToolRounds, observer: input.observer ?? ports.observer })
+  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, assistantMessageId: input.assistantMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), ...(input.contextProjectionCommitter ?? ports.contextProjectionCommitter ? { contextProjectionCommitter: input.contextProjectionCommitter ?? ports.contextProjectionCommitter } : {}), ...(input.sessionContext ? { sessionContext: input.sessionContext } : {}), ...(input.sessionContextInputMessages ? { sessionContextInputMessages: input.sessionContextInputMessages } : {}), ...(input.sessionContextFailureInputMessages ? { sessionContextFailureInputMessages: input.sessionContextFailureInputMessages } : {}), ...(input.sessionContextBaselineRequired ? { sessionContextBaselineRequired: true } : {}), ...(input.onSessionContextCommitted ? { onSessionContextCommitted: input.onSessionContextCommitted } : {}), maxToolRounds: ports.maxToolRounds, observer: input.observer ?? ports.observer })
 }
 
 export type { CanonicalContentBlock, CanonicalToolCall } from './model'
@@ -452,6 +453,7 @@ export type RunAgentTurnInput = {
   sessionContext?: SessionContextState
   sessionContextInputMessages?: readonly CanonicalTurnMessage[]
   sessionContextFailureInputMessages?: readonly CanonicalTurnMessage[]
+  sessionContextBaselineRequired?: boolean
   onSessionContextCommitted?(state: SessionContextState): void
   /** Internal isolated path; default product callers keep protocol 1 until P1-08. */
   sessionTranscriptCommitProtocol?: 2
@@ -770,7 +772,7 @@ async function ensureInitialHistoryContext(input: RunAgentTurnInput, call: Prepa
     !input.request.messages.some((message) => JSON.stringify(message) === JSON.stringify(requiredUserMessage.message)))) {
       throw new Error('required user message must exactly match a message in the history base')
   }
-  const contextInputs = resolvePersistedContextInputs(input, call.request.messages)
+  const contextInputs = resolvePersistedContextInputs(input, call.request.messages, input.sessionContextBaselineRequired === true)
   await appendHistory([{
     kind: 'invocation-context-committed',
     payload: {
@@ -799,10 +801,10 @@ function stripCommittedPrefix(messages: readonly CanonicalTurnMessage[], committ
   return startsWithMessages(messages, committed) ? messages.slice(committed.length) : messages
 }
 
-function resolvePersistedContextInputs(input: RunAgentTurnInput, requestMessages: readonly CanonicalTurnMessage[]): {
+function resolvePersistedContextInputs(input: RunAgentTurnInput, requestMessages: readonly CanonicalTurnMessage[], baselineRequired = false): {
   mode: 'baseline' | 'delta'; inputMessages: readonly CanonicalTurnMessage[]; failureInputMessages: readonly CanonicalTurnMessage[]
 } {
-  if (!input.sessionContext) return { mode: 'baseline', inputMessages: requestMessages,
+  if (!input.sessionContext || baselineRequired) return { mode: 'baseline', inputMessages: requestMessages,
     failureInputMessages: input.sessionTranscriptFailureMessages ?? requestMessages }
   const rawInput = input.sessionContextInputMessages ?? (input.requiredUserMessage ? [input.requiredUserMessage.message] : requestMessages)
   const rawFailure = input.sessionContextFailureInputMessages ?? rawInput

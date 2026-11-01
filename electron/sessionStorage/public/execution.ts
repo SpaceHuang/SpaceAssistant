@@ -81,7 +81,7 @@ export interface SessionExecutionStore {
   readHostedTranscript(sessionId: string): HostedTranscriptSnapshot
   prepareHostedContext(input: Readonly<{ sessionId: string; scopeKey: string }>): Promise<Readonly<{
     generation: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked'
-    context: SessionContextState; warm: boolean
+    context: SessionContextState; warm: boolean; baselineRequired: boolean
   }>>
   commitHostedContext(input: Readonly<{ sessionId: string; generation: string; scopeKey: string; context: SessionContextState }>): boolean
   invalidateHostedContext(sessionId: string): void
