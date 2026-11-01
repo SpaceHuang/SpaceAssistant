@@ -60,6 +60,36 @@ describe('SQLite session storage public queries', () => {
     })
   })
 
+  it('rejects a persisted admission whose request digest no longer matches its committed context', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'runtime-trigger-request-digest' })
+    const storage = createSqliteSessionStorage(db)
+    const service = createRuntimeTriggerService(storage.commands, { authorize: () => true, authorizeTarget: () => true })
+    const scheduledAt = Date.now() - 1_000
+    const registered = await service.register({ ownerSessionId: session.id, params: { clientKey: 'request-digest', receiverSessionId: session.id,
+      expiresAt: Date.now() + 60_000, condition: { type: 'time', at: new Date(scheduledAt).toISOString(), taskPrompt: 'wake' } } })
+    const requestId = `runtime-trigger:${registered.trigger.triggerId}`
+    const authorization = { bindingVersion: 1 as const, requestId, ownerSessionId: session.id, receiverSessionId: session.id,
+      queueScope: { kind: 'desktop' as const }, sourceIdentity: { type: 'time' }, payloadDigest: 'source-digest', policyRevision: 'policy-1',
+      authorizationGeneration: 'auth-1', runtimeGeneration: 'runtime-1' }
+    storage.commands.runtimeTriggers.update(registered.trigger.triggerId, 1, { result: { authorization } })
+    const matched = service.match({ triggerId: registered.trigger.triggerId, expectedRevision: 2, event: { type: 'time', occurredAt: scheduledAt } })!
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id, undefined, { triggerId: matched.id, requestId,
+      receiverSessionId: session.id, turnId: 'digest-turn', invocationId: 'digest-turn', contextEventId: 'digest-context',
+      payloadDigest: authorization.payloadDigest, policyRevision: authorization.policyRevision,
+      authorizationGeneration: authorization.authorizationGeneration, runtimeGeneration: authorization.runtimeGeneration, finalCheck: () => true })
+    const context = { invocationId: 'digest-turn', turnId: 'digest-turn', sequence: 1, schemaVersion: 1, eventId: 'digest-context',
+      idempotencyKey: 'digest-context', kind: 'invocation-context-committed' as const, payload: { requestSnapshot: { requestId }, messages: [] } }
+    await history.appendBatch([context], 0)
+    const current = storage.commands.runtimeTriggers.read(matched.id)!
+    storage.commands.runtimeTriggers.update(matched.id, current.revision, { result: { ...current.result,
+      admission: { ...current.result?.admission, requestDigest: 'tampered-request-digest' } } })
+    const next = { invocationId: 'digest-turn', turnId: 'digest-turn', sequence: 2, schemaVersion: 1, eventId: 'after-digest-tamper',
+      idempotencyKey: 'after-digest-tamper', kind: 'model-request-started' as const, payload: { requestId: 'next-request' } }
+    await expect(history.appendBatch([next], 1)).rejects.toThrow(/admission inconsistent/i)
+    await expect(history.read('digest-turn')).resolves.toMatchObject({ version: 1, events: [context] })
+  })
+
   it('rolls back first context when final authorization fails and refuses raw transcript before admission', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'runtime-trigger-admission-rollback' })

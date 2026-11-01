@@ -670,6 +670,7 @@ export class SqliteAgentHistory implements HistoryPort {
             priorAdmission.requestId !== triggerBinding.requestId || priorAdmission.receiverSessionId !== triggerBinding.receiverSessionId ||
             priorAdmission.turnId !== triggerBinding.turnId || priorAdmission.invocationId !== triggerBinding.invocationId ||
             priorAdmission.contextEventId !== triggerBinding.contextEventId || !storedContextRow || priorAdmission.contextDigest !== sha256(storedContext) ||
+            priorAdmission.requestDigest !== sha256(isRecord(storedContext) ? storedContext.requestSnapshot : undefined) ||
             (contextPayload && priorAdmission.contextDigest !== sha256(contextPayload)) ||
             priorAdmission.payloadDigest !== triggerBinding.payloadDigest || priorAdmission.authorizationGeneration !== triggerBinding.authorizationGeneration ||
             priorAdmission.policyRevision !== triggerBinding.policyRevision || priorAdmission.runtimeGeneration !== triggerBinding.runtimeGeneration) {
