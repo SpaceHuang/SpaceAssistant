@@ -62,14 +62,14 @@ async function makeTempDir(prefix: string): Promise<string> {
 
 function systemFilePath(): string {
   if (process.platform !== 'win32') return '/etc/hosts'
-  const windowsRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
-  return path.join(windowsRoot, 'System32', 'kernel32.dll')
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
+  return path.join(programFiles, 'Git', 'cmd', 'git.exe')
 }
 
 function systemMissingPath(name: string): string {
   if (process.platform !== 'win32') return path.join('/etc', name)
-  const windowsRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
-  return path.join(windowsRoot, 'System32', name)
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
+  return path.join(programFiles, name)
 }
 
 function systemFileCommand(): string {
@@ -1276,7 +1276,7 @@ describe('evaluateToolCallGate', () => {
     const root = await fs.realpath(await makeTempDir('read-policy-system-root-'))
     const windowsRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
     const systemDir = process.platform === 'win32' ? path.join(windowsRoot, 'System32') : '/etc'
-    const systemFile = process.platform === 'win32' ? path.join(windowsRoot, 'System32', 'kernel32.dll') : '/etc/hosts'
+    const systemFile = process.platform === 'win32' ? path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'cmd', 'git.exe') : '/etc/hosts'
     try {
       await fs.access(systemDir)
       await fs.access(systemFile)
