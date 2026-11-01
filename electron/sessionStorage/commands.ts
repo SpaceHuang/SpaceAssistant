@@ -1,16 +1,100 @@
 import type { AppDatabase } from '../database/sqliteStore'
-import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getSession, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage, updateMessageContentIfStreaming } from '../database/operations'
+import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, deleteQueuedUserMessageInScope, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getQueueInputReceiptInScope, getSession, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage, updateMessageContentIfStreaming } from '../database/operations'
 import { updateMessageContent } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
+import { runInTransaction } from '../database/transaction'
 import { getProjectedMessage } from './infrastructure/sqlite/sessionTranscriptProjection'
 import { writeCanonicalBackedMessageContent } from './infrastructure/sqlite/sessionContentWriteAuthority'
 import { SESSION_META_TITLE_GENERATED, SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED, SESSION_META_TITLE_USER_CUSTOM } from '../sessionMetadataKeys'
 import type { SessionCommands } from './public/ports'
+import type { RuntimeTriggerRecord, RuntimeTriggerPatch } from './public/model'
+import { classifyQueueInputSource } from '../database/queueInputSource'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../../src/shared/planTypes'
 
+type TriggerRow = { id:string; owner_session_id:string; receiver_session_id:string; client_key:string; definition_json:string; state:RuntimeTriggerRecord['state']; created_at:number; expires_at:number; matched_at:number|null; event_json:string|null; message_id:string|null; attempts:number; next_attempt_at:number|null; result_json:string|null; revision:number; updated_at:number }
+function decodeTriggerJsonObject(raw: string | null, field: string): Record<string, unknown> | undefined {
+  if (raw === null) return undefined
+  try { const value: unknown = JSON.parse(raw); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); return value as Record<string, unknown> }
+  catch { throw new Error(`RUNTIME_TRIGGER_${field.toUpperCase()}_JSON_INVALID`) }
+}
+function decodeRuntimeTriggerRow(row: TriggerRow): RuntimeTriggerRecord {
+  let definition: unknown
+  try { definition = JSON.parse(row.definition_json) } catch { throw new Error('RUNTIME_TRIGGER_DEFINITION_JSON_INVALID') }
+  if (!definition || typeof definition !== 'object' || Array.isArray(definition) || (definition as { version?: unknown }).version !== 1) throw new Error('RUNTIME_TRIGGER_DEFINITION_VERSION_UNSUPPORTED')
+  const event = decodeTriggerJsonObject(row.event_json, 'event')
+  const result = decodeTriggerJsonObject(row.result_json, 'result')
+  return { id:row.id,ownerSessionId:row.owner_session_id,receiverSessionId:row.receiver_session_id,clientKey:row.client_key,definition:definition as RuntimeTriggerRecord['definition'],state:row.state,createdAt:row.created_at,expiresAt:row.expires_at,
+    ...(row.matched_at !== null ? { matchedAt:row.matched_at } : {}),...(event ? { event } : {}),...(row.message_id !== null ? { messageId:row.message_id } : {}),attempts:row.attempts,
+    ...(row.next_attempt_at !== null ? { nextAttemptAt:row.next_attempt_at } : {}),...(result ? { result } : {}),revision:row.revision,updatedAt:row.updated_at }
+}
+
 export function createSessionCommands(db: AppDatabase): SessionCommands {
+  const readRuntimeTrigger = (id: string): RuntimeTriggerRecord | null => {
+    const row = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE id=?`).get(id) as TriggerRow | undefined
+    return row ? decodeRuntimeTriggerRow(row) : null
+  }
+  const runtimeTriggers: SessionCommands['runtimeTriggers'] = {
+    read: readRuntimeTrigger,
+    findByClientKey: (ownerSessionId, clientKey) => {
+      const row = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE owner_session_id=? AND client_key=?`).get(ownerSessionId, clientKey) as TriggerRow | undefined
+      return row ? decodeRuntimeTriggerRow(row) : null
+    },
+    listByOwner: ({ ownerSessionId, cursor, limit }) => {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new TypeError('invalid runtime trigger page limit')
+      const rows = cursor
+        ? getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE owner_session_id=? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?`).all(ownerSessionId,cursor.createdAt,cursor.createdAt,cursor.id,limit + 1)
+        : getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE owner_session_id=? ORDER BY created_at,id LIMIT ?`).all(ownerSessionId,limit + 1)
+      return (rows as TriggerRow[]).map(decodeRuntimeTriggerRow)
+    },
+    countActive: (input = {}) => Number(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM runtime_triggers WHERE state IN ('waiting','matched') AND expires_at>?${input.ownerSessionId ? ' AND owner_session_id=?' : ''}`).get(...(input.ownerSessionId ? [input.now ?? Date.now(), input.ownerSessionId] : [input.now ?? Date.now()]))?.count ?? 0),
+    findActiveSyncTarget: (receiverSessionId) => {
+      const row = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE receiver_session_id=? AND state IN ('waiting','matched') AND json_extract(definition_json,'$.condition.type')='session_steps' AND json_extract(definition_json,'$.condition.mode')='sync'`).get(receiverSessionId) as TriggerRow | undefined
+      return row ? decodeRuntimeTriggerRow(row) : null
+    },
+    insert: (input) => {
+      const conn = getDbConnection(db)
+      return runInTransaction(conn, () => {
+        conn.prepare(`INSERT INTO runtime_triggers(id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+          .run(input.id,input.ownerSessionId,input.receiverSessionId,input.clientKey,JSON.stringify(input.definition),input.state,input.createdAt,input.expiresAt,input.matchedAt ?? null,input.event ? JSON.stringify(input.event) : null,input.messageId ?? null,input.attempts,input.nextAttemptAt ?? null,input.result ? JSON.stringify(input.result) : null,input.revision,input.updatedAt)
+        const inserted = readRuntimeTrigger(input.id)
+        if (!inserted) throw new Error('RUNTIME_TRIGGER_INSERT_NOT_READABLE')
+        return inserted
+      })
+    },
+    update: (id, expectedRevision, patch) => {
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || Object.keys(patch).length === 0) throw new TypeError('invalid runtime trigger update')
+      const columns: Record<keyof RuntimeTriggerPatch, string> = { state:'state',matchedAt:'matched_at',event:'event_json',messageId:'message_id',attempts:'attempts',nextAttemptAt:'next_attempt_at',result:'result_json',updatedAt:'updated_at' }
+      const entries = Object.entries(patch) as Array<[keyof RuntimeTriggerPatch, RuntimeTriggerPatch[keyof RuntimeTriggerPatch]]>
+      const assignments = entries.map(([key]) => `${columns[key]}=?`).join(',')
+      const values = entries.map(([key,value]) => key === 'event' || key === 'result' ? value === undefined ? null : JSON.stringify(value) : (value ?? null) as string | number | null)
+      const conn = getDbConnection(db)
+      return runInTransaction(conn, () => {
+        const changed = conn.prepare(`UPDATE runtime_triggers SET ${assignments},revision=revision+1 WHERE id=? AND revision=?`).run(...values,id,expectedRevision)
+        return Number(changed.changes) === 1 ? readRuntimeTrigger(id) : null
+      })
+    }
+  }
   const commands: SessionCommands = {
+    scopedQueue: {
+      enqueue: (input) => enqueueQueuedUserMessageInScope(db, input),
+      readReceipt: ({ sessionId, requestId, queueScope }) => {
+        const receipt = getQueueInputReceiptInScope(db, sessionId, requestId, queueScope)
+        return receipt ? { sessionId: receipt.sessionId, requestId: receipt.requestId, fingerprint: receipt.fingerprint,
+          ...(receipt.queuedMessageId ? { queuedMessageId: receipt.queuedMessageId } : {}), ...(receipt.turnId ? { turnId: receipt.turnId } : {}), state: receipt.state } : undefined
+      },
+      cancelUnstartedInput: ({ sessionId, requestId, queueScope, expectedSource }) => {
+        const conn = getDbConnection(db)
+        return runInTransaction(conn, () => {
+          const receipt = getQueueInputReceiptInScope(db, sessionId, requestId, queueScope)
+          if (!receipt?.queuedMessageId || receipt.state !== 'queued' || !['runtime-trigger', 'ordinary-desktop', 'platform-im'].includes(expectedSource)) return false
+          if (classifyQueueInputSource(db, { sessionId, queueScope, requestId, queuedMessageId: receipt.queuedMessageId }) !== expectedSource) return false
+          const deleted = deleteQueuedUserMessageInScope(db, receipt.queuedMessageId, queueScope)
+          return deleted.ok
+        })
+      }
+    },
+    runtimeTriggers,
     appendNonTurnMessage: (message) => appendMessage(db, message),
     updateStreamingMessage: (messageId, patch) => updateMessageContentIfStreaming(db, messageId, patch),
     createSession: (input) => createSession(db, {

@@ -33,6 +33,7 @@ import { parseQueueScope, serializeQueueScope, type QueueScope } from '../../src
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
 import { deleteSpillReferenceOwnerInTransaction, spillHistoryOwnerKey, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
+import { classifyQueueInputSource, type QueueInputSource } from './queueInputSource'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
@@ -973,7 +974,7 @@ export function enqueueQueuedUserMessage(
 
 export function claimQueuedTurnAtomicallyInScope(
   db: AppDatabase,
-  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope: QueueScope }
+  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope: QueueScope; source?: QueueInputSource }
 ): { user: PersistedMessageEntry; assistant: PersistedMessageEntry; executionConfig?: TurnExecutionConfig } {
   const conn = getDbConnection(db)
   const serializedScope = serializeQueueScope(input.queueScope)
@@ -985,6 +986,10 @@ export function claimQueuedTurnAtomicallyInScope(
     const row = conn.prepare(`SELECT * FROM messages WHERE id = ? AND session_id = ? AND queue_scope = ? AND role = 'user' AND status IN ${claimableStatus}`)
       .get(input.userMessageId, input.sessionId, serializedScope) as MessageRow | undefined
     if (!row) throw new Error('QUEUE_MESSAGE_NOT_CLAIMABLE')
+    const expectedSource = input.source ?? (input.queueScope.kind === 'im' ? 'platform-im' : 'ordinary-desktop')
+    if (classifyQueueInputSource(db, { sessionId: input.sessionId, queueScope: input.queueScope, queuedMessageId: input.userMessageId }) !== expectedSource) {
+      throw new Error('QUEUE_INPUT_SOURCE_INVALID')
+    }
     const userResult = updateMessageContent(db, input.userMessageId, { status: 'sent' })
     if (!userResult) throw new Error('QUEUE_MESSAGE_NOT_CLAIMABLE')
     const assistant = appendMessage(db, { id: input.assistantMessageId, sessionId: input.sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming' })
@@ -1006,7 +1011,7 @@ export function claimQueuedTurnAtomicallyInScope(
 
 export function claimQueuedTurnAtomically(
   db: AppDatabase,
-  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope?: QueueScope }
+  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope?: QueueScope; source?: QueueInputSource }
 ): { user: PersistedMessageEntry; assistant: PersistedMessageEntry; executionConfig?: TurnExecutionConfig } {
   if (input.queueScope) return claimQueuedTurnAtomicallyInScope(db, { ...input, queueScope: input.queueScope })
   return desktopQueueCompatibility.claim(db, input)
@@ -1667,7 +1672,7 @@ export type QueuedMessageEntry = {
 
 export function listQueuedUserMessages(
   db: AppDatabase,
-  input: { sessionId: string; queueScope: QueueScope }
+  input: { sessionId: string; queueScope: QueueScope; source?: QueueInputSource }
 ): QueuedMessageEntry[] {
   const conn = getDbConnection(db)
   const scope = serializeQueueScope(input.queueScope)
@@ -1677,14 +1682,15 @@ export function listQueuedUserMessages(
     FROM messages
     WHERE messages.session_id=? AND messages.queue_scope=? AND messages.status='queued' AND messages.role='user'
     ORDER BY messages.sequence ASC, messages.id ASC`).all(input.sessionId, scope) as Array<MessageRow & { queue_request_id?: string }>
-  return rows.map((row) => ({
+  const expectedSource = input.source ?? (input.queueScope.kind === 'im' ? 'platform-im' : 'ordinary-desktop')
+  return rows.filter((row) => row.queue_request_id && classifyQueueInputSource(db, { sessionId: input.sessionId, queueScope: input.queueScope, requestId: row.queue_request_id, queuedMessageId: row.id }) === expectedSource).map((row) => ({
     message: rowToStoredMessage(row), sequence: row.sequence,
     ...(row.queue_request_id ? { requestId: row.queue_request_id } : {})
   }))
 }
 
-export function getNextQueuedMessageInScope(db: AppDatabase, sessionId: string, queueScope: QueueScope): QueuedMessageEntry | null {
-  return listQueuedUserMessages(db, { sessionId, queueScope })[0] ?? null
+export function getNextQueuedMessageInScope(db: AppDatabase, sessionId: string, queueScope: QueueScope, source?: QueueInputSource): QueuedMessageEntry | null {
+  return listQueuedUserMessages(db, { sessionId, queueScope, source })[0] ?? null
 }
 
 export function reorderQueuedUserMessagesInScope(
@@ -1696,6 +1702,9 @@ export function reorderQueuedUserMessagesInScope(
   return runInTransaction(conn, () => {
     const rows = conn.prepare("SELECT * FROM messages WHERE session_id = ? AND queue_scope = ? AND role = 'user' AND status = 'queued' ORDER BY sequence ASC, id ASC")
       .all(input.sessionId, serializedScope) as MessageRow[]
+    if (rows.some((row) => classifyQueueInputSource(db, { sessionId: input.sessionId, queueScope: input.queueScope, queuedMessageId: row.id }) !== 'ordinary-desktop')) {
+      return { ok: false, error: 'queue_changed' }
+    }
     const currentIds = rows.map((row) => row.id)
     if (input.messageIds.length !== currentIds.length || new Set(input.messageIds).size !== currentIds.length || input.messageIds.some((id) => !currentIds.includes(id))) {
       return { ok: false, error: 'queue_changed' }

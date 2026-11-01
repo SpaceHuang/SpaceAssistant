@@ -171,6 +171,89 @@ export type AgentTurnResult = Readonly<{
   notDispatchedToolCallIds?: readonly string[]
 }>
 
+export type AgentTurnPauseRequest = Readonly<{
+  timeoutMs: number
+  onTimeout: 'continue' | 'fail'
+  wait(signal: AbortSignal): Promise<void>
+}>
+export type AgentTurnLifecycleHooks = Readonly<{
+  postStep?(step: Readonly<{ invocationId: string; turnId: string; stepKey: string; modelTurn: number; historyVersion: number; hasNextStep: boolean; executionGeneration: number; signal: AbortSignal }>): void | AgentTurnPauseRequest | Promise<void | AgentTurnPauseRequest>
+  postTurn?(terminal: Readonly<{ invocationId: string; turnId: string; terminalKey: string; status: 'completed' | 'failed' | 'interrupted'; historyVersion: number; signal: AbortSignal }>): void | Promise<void>
+}>
+export type AgentTurnLifecycleLimits = Readonly<{ callbackTimeoutMs: number; maxPauseMs: number }>
+
+export class AgentTurnLifecycleHookTimedOutError extends Error {
+  readonly code = 'LIFECYCLE_CALLBACK_TIMEOUT'
+  constructor() { super('agent turn lifecycle hook timed out'); this.name = 'AgentTurnLifecycleHookTimedOutError' }
+}
+export class AgentTurnPauseTimedOutError extends Error {
+  readonly code = 'LIFECYCLE_PAUSE_TIMEOUT'
+  constructor() { super('agent turn lifecycle pause timed out'); this.name = 'AgentTurnPauseTimedOutError' }
+}
+
+function validateLifecycleLimits(limits: AgentTurnLifecycleLimits): void {
+  if (!Number.isFinite(limits.callbackTimeoutMs) || limits.callbackTimeoutMs <= 0 || !Number.isFinite(limits.maxPauseMs) || limits.maxPauseMs <= 0) {
+    throw new Error('lifecycle limits must be finite positive numbers')
+  }
+}
+
+async function runBoundedLifecycleCallback<T>(callback: (signal: AbortSignal) => Promise<T> | T, timeoutMs: number, parentSignal?: AbortSignal): Promise<T> {
+  const controller = new AbortController()
+  const abortFromParent = () => controller.abort(parentSignal?.reason)
+  parentSignal?.addEventListener('abort', abortFromParent, { once: true })
+  if (parentSignal?.aborted) abortFromParent()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let removeAbort = () => {}
+  const aborted = new Promise<never>((_, reject) => {
+    const onAbort = () => reject(parentSignal?.aborted ? abortErrorForSignal(parentSignal) : new AgentTurnLifecycleHookTimedOutError())
+    removeAbort = () => controller.signal.removeEventListener('abort', onAbort)
+    controller.signal.addEventListener('abort', onAbort, { once: true })
+    timer = setTimeout(() => controller.abort('lifecycle-hook-timeout'), timeoutMs)
+  })
+  aborted.catch(() => {})
+  const work = Promise.resolve().then(() => callback(controller.signal))
+  work.catch(() => {})
+  try { return await Promise.race([work, aborted]) }
+  finally {
+    if (timer) clearTimeout(timer)
+    removeAbort()
+    parentSignal?.removeEventListener('abort', abortFromParent)
+  }
+}
+
+async function waitForLifecyclePause(request: AgentTurnPauseRequest, limits: AgentTurnLifecycleLimits, parentSignal?: AbortSignal): Promise<void> {
+  if (!Number.isFinite(request.timeoutMs) || request.timeoutMs < 0 || request.timeoutMs > limits.maxPauseMs) throw new Error('lifecycle pause timeout is outside configured limits')
+  if (parentSignal?.aborted) throw abortErrorForSignal(parentSignal)
+  if (request.timeoutMs === 0) {
+    if (request.onTimeout === 'fail') throw new AgentTurnPauseTimedOutError()
+    return
+  }
+  const controller = new AbortController()
+  const abortFromParent = () => controller.abort(parentSignal?.reason)
+  parentSignal?.addEventListener('abort', abortFromParent, { once: true })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let removeAbort = () => {}
+  const aborted = new Promise<never>((_, reject) => {
+    const onAbort = () => reject(parentSignal?.aborted ? abortErrorForSignal(parentSignal) : new AgentTurnPauseTimedOutError())
+    removeAbort = () => controller.signal.removeEventListener('abort', onAbort)
+    controller.signal.addEventListener('abort', onAbort, { once: true })
+    timer = setTimeout(() => controller.abort('lifecycle-pause-timeout'), request.timeoutMs)
+  })
+  aborted.catch(() => {})
+  const work = Promise.resolve().then(() => request.wait(controller.signal))
+  work.catch(() => {})
+  try {
+    await Promise.race([work, aborted])
+  } catch (error) {
+    if (error instanceof AgentTurnPauseTimedOutError && request.onTimeout === 'continue') return
+    throw error
+  } finally {
+    if (timer) clearTimeout(timer)
+    removeAbort()
+    parentSignal?.removeEventListener('abort', abortFromParent)
+  }
+}
+
 class DeferredTurnParkedError extends Error {
   constructor() { super('INVOCATION_PARKED_FOR_DEFERRED_APPROVAL'); this.name = 'DeferredTurnParkedError' }
 }
@@ -220,6 +303,8 @@ export async function runHostedAgentTurn(input: {
   contextProjectionCommitter?: ContextProjectionCommitter
   sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]
   observer?: AgentTurnObserver
+  lifecycleHooks?: AgentTurnLifecycleHooks
+  lifecycleLimits?: AgentTurnLifecycleLimits
 }): Promise<AgentTurnResult> {
   if (!input.routeId.trim()) throw new Error('hosted turn routeId is required')
   if (input.currentUserMessageId && !input.requiredUserMessage) {
@@ -238,7 +323,7 @@ export async function runHostedAgentTurn(input: {
   if (ports.invocationId !== input.invocationId) throw new Error('host returned ports for a different invocation')
   if (input.turnId && ports.turnId !== input.turnId) throw new Error('host returned ports for a different turn')
   if (ports.routeId !== input.routeId) throw new Error('host returned ports for a different route')
-  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, assistantMessageId: input.assistantMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), ...(input.contextProjectionCommitter ?? ports.contextProjectionCommitter ? { contextProjectionCommitter: input.contextProjectionCommitter ?? ports.contextProjectionCommitter } : {}), ...(input.sessionContext ? { sessionContext: input.sessionContext } : {}), ...(input.sessionContextInputMessages ? { sessionContextInputMessages: input.sessionContextInputMessages } : {}), ...(input.sessionContextFailureInputMessages ? { sessionContextFailureInputMessages: input.sessionContextFailureInputMessages } : {}), ...(input.sessionContextBaselineRequired ? { sessionContextBaselineRequired: true } : {}), ...(input.onSessionContextCommitted ? { onSessionContextCommitted: input.onSessionContextCommitted } : {}), maxToolRounds: ports.maxToolRounds, observer: input.observer ?? ports.observer })
+  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, assistantMessageId: input.assistantMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), ...(input.contextProjectionCommitter ?? ports.contextProjectionCommitter ? { contextProjectionCommitter: input.contextProjectionCommitter ?? ports.contextProjectionCommitter } : {}), ...(input.sessionContext ? { sessionContext: input.sessionContext } : {}), ...(input.sessionContextInputMessages ? { sessionContextInputMessages: input.sessionContextInputMessages } : {}), ...(input.sessionContextFailureInputMessages ? { sessionContextFailureInputMessages: input.sessionContextFailureInputMessages } : {}), ...(input.sessionContextBaselineRequired ? { sessionContextBaselineRequired: true } : {}), ...(input.onSessionContextCommitted ? { onSessionContextCommitted: input.onSessionContextCommitted } : {}), ...(input.lifecycleHooks ? { lifecycleHooks: input.lifecycleHooks } : {}), ...(input.lifecycleLimits ? { lifecycleLimits: input.lifecycleLimits } : {}), maxToolRounds: ports.maxToolRounds, observer: input.observer ?? ports.observer })
 }
 
 export type { CanonicalContentBlock, CanonicalToolCall } from './model'
@@ -465,6 +550,8 @@ export type RunAgentTurnInput = {
   /** Provider 流空闲超时（无进展护栏）：相邻 chunk（含首字节）间隔超过该毫秒数即抛
    *  ModelStreamIdleTimeoutError 并走 recoverProviderAttempt 重试；缺省 120s，0/负值关闭。 */
   providerStreamIdleTimeoutMs?: number
+  lifecycleHooks?: AgentTurnLifecycleHooks
+  lifecycleLimits?: AgentTurnLifecycleLimits
 }
 
 type AppendTurnHistory = (events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[], transcriptCommit?: import('./history').SessionTranscriptCommitIntent) => Promise<readonly HistoryEvent[]>
@@ -499,6 +586,8 @@ class AgentTurnHistoryAlreadyTerminalError extends Error {
 }
 
 export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnResult> {
+  if (input.lifecycleHooks && (!input.history || !input.lifecycleLimits)) throw new Error('lifecycle hooks require History and explicit lifecycle limits')
+  if (input.lifecycleLimits) validateLifecycleLimits(input.lifecycleLimits)
   if (input.observer?.criticalModelResponseProjection && !input.observer.onModelResponseCommitted) {
     throw new Error('critical model response projection requires onModelResponseCommitted')
   }
@@ -550,6 +639,18 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
         } catch { /* The append error remains authoritative when its outcome cannot be read. */ }
       }
       throw error
+    }
+  }
+  const invokePostTurn = async (status: 'completed' | 'failed' | 'interrupted', terminalKind: 'invocation-completed' | 'invocation-failed' | 'invocation-interrupted'): Promise<void> => {
+    if (!input.lifecycleHooks?.postTurn || !input.lifecycleLimits || !input.history) return
+    const snapshot = await input.history.read(input.invocationId)
+    const terminal = [...snapshot.events].reverse().find((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted')
+    if (!terminal || terminal.kind !== terminalKind) return
+    const turnId = input.turnId ?? input.invocationId
+    try {
+      await runBoundedLifecycleCallback((signal) => input.lifecycleHooks!.postTurn!({ invocationId: input.invocationId, turnId, terminalKey: terminal.eventId, status, historyVersion: snapshot.version, signal }), input.lifecycleLimits.callbackTimeoutMs, input.request.signal)
+    } catch (error) {
+      await observe(input.observer, 'history-terminal', () => input.observer?.onObservationError?.(error, 'history-terminal'))
     }
   }
   let lastValidUsage: Extract<StreamChunk, { type: 'usage' }> | undefined
@@ -604,6 +705,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
       input.onSessionContextCommitted(commitContextTurn(contextRef.current, { kind: 'completed' }, input.sessionTranscriptBaseVersion! + 1))
     }
     await observe(input.observer, 'turn-finished', () => input.observer?.onTurnFinished?.(result))
+    await invokePostTurn('completed', 'invocation-completed')
     return result
   } catch (error) {
     let failureSettlementUncertain = false
@@ -735,6 +837,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
         if (transcriptCommit && contextRef.current && input.onSessionContextCommitted && input.sessionTranscriptBaseVersion !== undefined) {
           input.onSessionContextCommitted(commitContextTurn(contextRef.current, { kind: 'failed' }, input.sessionTranscriptBaseVersion + 1))
         }
+        await invokePostTurn(status, terminalKind)
       } catch { /* Preserve the original turn failure when terminal persistence also fails. */ }
     }
     await observe(input.observer, 'turn-failed', () => input.observer?.onTurnFailed?.({ error, status }))
@@ -1055,6 +1158,21 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   let pinnedProvider: ModelProvider | undefined
   const monotonicNow = input.monotonicNow ?? (() => performance.now())
   let waitBudgetRemainingMs = 60_000
+  let executionGeneration = 0
+
+  const publishCompletedStep = async (modelTurn: number, hasNextStep: boolean): Promise<void> => {
+    if (!input.lifecycleHooks?.postStep || !input.lifecycleLimits || !input.history || !writer) return
+    throwIfAborted(input.request.signal)
+    const historyVersion = await writer.currentOrPersistedVersion()
+    const stepKey = `${invocationId}:turn:${modelTurn}`
+    const request = await runBoundedLifecycleCallback(
+      (signal) => input.lifecycleHooks!.postStep!({ invocationId, turnId: input.turnId ?? invocationId, stepKey, modelTurn, historyVersion, hasNextStep, executionGeneration, signal }),
+      input.lifecycleLimits.callbackTimeoutMs, input.request.signal
+    )
+    throwIfAborted(input.request.signal)
+    if (request) await waitForLifecyclePause(request, input.lifecycleLimits, input.request.signal)
+    throwIfAborted(input.request.signal)
+  }
 
   for (let modelTurns = 1; modelTurns <= input.maxModelTurns; modelTurns += 1) {
     observedAttemptUsages = new Map<number, Extract<StreamChunk, { type: 'usage' }>>()
@@ -1928,6 +2046,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     }
 
     if (toolCalls.length === 0) {
+      await publishCompletedStep(modelTurns, false)
       const result = { text, messages, modelTurns, finishReason: collected.finish.reason, usage: { inputTokens, outputTokens, ...(cacheReadInputTokens ? { cacheReadInputTokens } : {}), ...(cacheCreationInputTokens ? { cacheCreationInputTokens } : {}) },
         ...(notDispatchedToolCallIds.size ? { notDispatchedToolCallIds: [...notDispatchedToolCallIds] } : {}) }
       return result
@@ -2660,6 +2779,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         appendRuntimeMessage(createApprovalSystemMessage())
       }
     }
+    await publishCompletedStep(modelTurns, modelTurns < input.maxModelTurns)
+    executionGeneration += 1
     dispatchedToolRounds += 1
   }
 

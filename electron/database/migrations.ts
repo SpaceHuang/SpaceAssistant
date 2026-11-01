@@ -40,6 +40,9 @@ import {
   MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
   MIGRATION_V114_INVOCATION_PENDING_VIEWS_RETIREMENT_SQL,
   MIGRATION_V120_SESSION_LEDGER_CANONICAL_READ_VERSION_SQL,
+  MIGRATION_V121_RUNTIME_TRIGGERS_SQL,
+  MIGRATION_V121_IM_FACT_BACKFILL_SQL,
+  MIGRATION_V121_IM_FACT_IDENTITY_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SESSION_TRIGGERS_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_HISTORY_TRIGGERS_SQL,
@@ -2399,6 +2402,21 @@ export function runMigrations(conn: DatabaseSync): void {
       conn.exec(MIGRATION_V120_SESSION_LEDGER_CANONICAL_READ_VERSION_SQL)
     }
     version = 120
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v120 → v121: durable trigger registrations and independently accepted IM fact identity.
+  if (version === 120) runInTransaction(conn, () => {
+    if (hasTable(conn, 'im_inbox_message_context')) {
+      for (const column of ['account_id', 'conversation_id', 'sender_id', 'accepted_seq']) {
+        if (!hasColumn(conn, 'im_inbox_message_context', column)) conn.exec(`ALTER TABLE im_inbox_message_context ADD COLUMN ${column} ${column === 'accepted_seq' ? 'INTEGER' : 'TEXT'}`)
+      }
+    }
+    conn.exec(MIGRATION_V121_RUNTIME_TRIGGERS_SQL)
+    if (hasTable(conn, 'im_inbox_message_context')) {
+      conn.exec(MIGRATION_V121_IM_FACT_BACKFILL_SQL)
+      conn.exec(MIGRATION_V121_IM_FACT_IDENTITY_SQL)
+    }
+    version = 121
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

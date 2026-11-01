@@ -29,6 +29,309 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
   })
 }
 
+describe('runAgentTurn lifecycle hooks', () => {
+  it('invokes postStep after the final response and settles postTurn after terminal history', async () => {
+    const registry = new ModelProviderRegistry()
+    const history = new MemoryHistory()
+    registry.register(route, { providerId: 'lifecycle-final-step', stream: () => stream(
+      { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+    ) })
+    const capabilities = new CapabilityRegistry(); capabilities.define('lifecycle-final-step', [])
+    const permits = new InMemorySafetyPermitStore()
+    const calls: string[] = []
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'lifecycle-final-step', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+      lifecycleHooks: {
+        postStep: async (step) => { calls.push(`step:${step.stepKey}:${step.historyVersion}:${step.hasNextStep}`) },
+        postTurn: async (terminal) => {
+          calls.push(`turn:${terminal.status}:${terminal.historyVersion}`)
+          expect((await history.read('lifecycle-final-step')).events.at(-1)?.kind).toBe('invocation-completed')
+        }
+      }, lifecycleLimits: { callbackTimeoutMs: 1000, maxPauseMs: 2000 }
+    })
+    expect(result.text).toBe('done')
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toMatch(/^step:.*:false$/)
+    expect(calls[1]).toMatch(/^turn:completed:/)
+  })
+
+  it('invokes postStep only after an entire multi-tool result group is committed', async () => {
+    const registry = new ModelProviderRegistry()
+    const history = new MemoryHistory()
+    let modelCalls = 0
+    registry.register(route, { providerId: 'lifecycle-tool-group', stream: async function* (): AsyncGenerator<StreamChunk> {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        yield { type: 'tool-call', toolCallId: 'a', toolName: 'lookup', input: {} }
+        yield { type: 'tool-call', toolCallId: 'b', toolName: 'lookup', input: {} }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: 'done' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+    const capabilities = new CapabilityRegistry(); capabilities.define('lifecycle-tool-group', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const stepEvents: number[] = []
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'lifecycle-tool-group', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 2,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'auth-v1' }) } }),
+      prepareTool: async (call, stage) => ({ requestId: 'req', turnId: 'turn', invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, inputSnapshotHash: 'input-hash', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth-v1', phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async (_call) => ({ output: 'value' })),
+      lifecycleHooks: { postStep: async (step) => { stepEvents.push(step.modelTurn); const events = (await history.read('lifecycle-tool-group')).events; expect(events.filter((event) => event.kind === 'tool-call-finished')).toHaveLength(2); expect(step.historyVersion).toBe(events.length) } },
+      lifecycleLimits: { callbackTimeoutMs: 1000, maxPauseMs: 2000 }
+    })
+    expect(result.modelTurns).toBe(2)
+    expect(stepEvents).toEqual([1, 2])
+  })
+
+  it('waits for a PauseRequest before completing the turn', async () => {
+    const registry = new ModelProviderRegistry()
+    const history = new MemoryHistory()
+    registry.register(route, { providerId: 'lifecycle-pause', stream: () => stream(
+      { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+    ) })
+    const capabilities = new CapabilityRegistry(); capabilities.define('lifecycle-pause', [])
+    const permits = new InMemorySafetyPermitStore()
+    let settleWait!: () => void
+    let waitSignal: AbortSignal | undefined
+    const execution = runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'lifecycle-pause', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+      lifecycleHooks: { postStep: () => ({ timeoutMs: 1000, onTimeout: 'fail', wait: (signal) => { waitSignal = signal; return new Promise<void>((resolve) => { settleWait = resolve }) } }) },
+      lifecycleLimits: { callbackTimeoutMs: 1000, maxPauseMs: 2000 }
+    })
+    await vi.waitFor(() => expect(settleWait).toBeTypeOf('function'))
+    expect(waitSignal?.aborted).toBe(false)
+    settleWait()
+    await expect(execution).resolves.toMatchObject({ text: 'done' })
+    expect(waitSignal?.aborted).toBe(false)
+  })
+
+  it('ignores a late pause completion after timeout has already settled', async () => {
+    vi.useFakeTimers()
+    try {
+      const registry = new ModelProviderRegistry()
+      const history = new MemoryHistory()
+      registry.register(route, { providerId: 'lifecycle-pause-race', stream: () => stream(
+        { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+      ) })
+      const capabilities = new CapabilityRegistry(); capabilities.define('lifecycle-pause-race', [])
+      const permits = new InMemorySafetyPermitStore()
+      let settleWait!: () => void
+      let pauseSignal: AbortSignal | undefined
+      const execution = runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'lifecycle-pause-race', history,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+        prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+        lifecycleHooks: { postStep: () => ({ timeoutMs: 20, onTimeout: 'fail', wait: (signal) => { pauseSignal = signal; return new Promise<void>((resolve) => { settleWait = resolve }) } }) },
+        lifecycleLimits: { callbackTimeoutMs: 100, maxPauseMs: 50 }
+      })
+      const settled = execution.then((value) => ({ value }), (error: unknown) => ({ error }))
+      await vi.waitFor(() => expect(settleWait).toBeTypeOf('function'))
+      await vi.advanceTimersByTimeAsync(20)
+      await expect(settled).resolves.toMatchObject({ error: { code: 'LIFECYCLE_PAUSE_TIMEOUT' } })
+      expect(pauseSignal?.aborted).toBe(true)
+      settleWait()
+      await Promise.resolve()
+      expect((await history.read('lifecycle-pause-race')).events.at(-1)?.kind).toBe('invocation-failed')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('ignores a late postStep rejection after callback timeout without an unhandled rejection', async () => {
+    vi.useFakeTimers()
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const registry = new ModelProviderRegistry()
+      const history = new MemoryHistory()
+      registry.register(route, { providerId: 'lifecycle-callback-late', stream: () => stream(
+        { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+      ) })
+      const capabilities = new CapabilityRegistry(); capabilities.define('lifecycle-callback-late', [])
+      const permits = new InMemorySafetyPermitStore()
+      let rejectCallback!: (error: Error) => void
+      const execution = runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'lifecycle-callback-late', history,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+        prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+        lifecycleHooks: { postStep: () => new Promise<void>((_resolve, reject) => { rejectCallback = reject }) },
+        lifecycleLimits: { callbackTimeoutMs: 20, maxPauseMs: 50 }
+      })
+      const settled = execution.then((value) => ({ value }), (error: unknown) => ({ error }))
+      await vi.waitFor(() => expect(rejectCallback).toBeTypeOf('function'))
+      await vi.advanceTimersByTimeAsync(20)
+      await expect(settled).resolves.toMatchObject({ error: { code: 'LIFECYCLE_CALLBACK_TIMEOUT' } })
+      rejectCallback(new Error('late callback rejection'))
+      await vi.runAllTicks()
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+      vi.useRealTimers()
+    }
+  })
+
+  it('propagates lifecycle callback throws and pause rejection through the turn failure protocol', async () => {
+    const run = async (invocationId: string, lifecycleHooks: NonNullable<Parameters<typeof runAgentTurn>[0]['lifecycleHooks']>) => {
+      const registry = new ModelProviderRegistry()
+      const history = new MemoryHistory()
+      registry.register(route, { providerId: invocationId, stream: () => stream(
+        { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+      ) })
+      const capabilities = new CapabilityRegistry(); capabilities.define(invocationId, [])
+      const permits = new InMemorySafetyPermitStore()
+      const execution = runAgentTurn({
+        registry, routeId: route.routeId, invocationId, history,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+        prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+        lifecycleHooks, lifecycleLimits: { callbackTimeoutMs: 1000, maxPauseMs: 2000 }
+      })
+      const outcome = execution.then((value) => ({ value }), (error: unknown) => ({ error }))
+      await expect(outcome).resolves.toMatchObject({ error: { message: invocationId === 'lifecycle-callback-throw' ? 'callback threw' : 'pause rejected' } })
+      expect((await history.read(invocationId)).events.at(-1)?.kind).toBe('invocation-failed')
+    }
+    await run('lifecycle-callback-throw', { postStep: () => { throw new Error('callback threw') } })
+    await run('lifecycle-pause-reject', { postStep: () => ({ timeoutMs: 1000, onTimeout: 'continue', wait: async () => { throw new Error('pause rejected') } }) })
+  })
+
+  it('limits one pause and applies the declared continue outcome', async () => {
+    vi.useFakeTimers()
+    try {
+      const registry = new ModelProviderRegistry()
+      const history = new MemoryHistory()
+      registry.register(route, { providerId: 'lifecycle-pause-timeout', stream: () => stream(
+        { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+      ) })
+      const capabilities = new CapabilityRegistry(); capabilities.define('lifecycle-pause-timeout', [])
+      const permits = new InMemorySafetyPermitStore()
+      const execution = runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'lifecycle-pause-timeout', history,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+        prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+        lifecycleHooks: { postStep: () => ({ timeoutMs: 25, onTimeout: 'continue', wait: () => new Promise<void>(() => {}) }) },
+        lifecycleLimits: { callbackTimeoutMs: 100, maxPauseMs: 50 }
+      })
+      await vi.advanceTimersByTimeAsync(30)
+      await expect(execution).resolves.toMatchObject({ text: 'done' })
+    } finally { vi.useRealTimers() }
+  })
+
+  it('fails the turn when a postStep callback exceeds its bounded callback time', async () => {
+    vi.useFakeTimers()
+    try {
+      const registry = new ModelProviderRegistry()
+      const history = new MemoryHistory()
+      registry.register(route, { providerId: 'lifecycle-callback-timeout', stream: () => stream(
+        { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+      ) })
+      const capabilities = new CapabilityRegistry(); capabilities.define('lifecycle-callback-timeout', [])
+      const permits = new InMemorySafetyPermitStore()
+      const execution = runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'lifecycle-callback-timeout', history,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+        prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+        lifecycleHooks: { postStep: () => new Promise<void>(() => {}) }, lifecycleLimits: { callbackTimeoutMs: 25, maxPauseMs: 50 }
+      })
+      const settled = execution.then((value) => ({ value }), (error: unknown) => ({ error }))
+      await vi.advanceTimersByTimeAsync(30)
+      await expect(settled).resolves.toMatchObject({ error: { code: 'LIFECYCLE_CALLBACK_TIMEOUT' } })
+      expect((await history.read('lifecycle-callback-timeout')).events.at(-1)?.kind).toBe('invocation-failed')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('cancels a pause through the user signal and does not treat it as its timeout action', async () => {
+    const registry = new ModelProviderRegistry()
+    const history = new MemoryHistory()
+    registry.register(route, { providerId: 'lifecycle-pause-cancel', stream: () => stream(
+      { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+    ) })
+    const capabilities = new CapabilityRegistry(); capabilities.define('lifecycle-pause-cancel', [])
+    const permits = new InMemorySafetyPermitStore()
+    const controller = new AbortController()
+    let waitSignal: AbortSignal | undefined
+    const execution = runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'lifecycle-pause-cancel', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10, signal: controller.signal }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+      lifecycleHooks: { postStep: () => ({ timeoutMs: 1000, onTimeout: 'continue', wait: (signal) => { waitSignal = signal; return new Promise<void>(() => {}) } }) },
+      lifecycleLimits: { callbackTimeoutMs: 1000, maxPauseMs: 2000 }
+    })
+    await vi.waitFor(() => expect(waitSignal).toBeDefined())
+    controller.abort('user cancel')
+    const outcome = execution.then((value) => ({ value }), (error: unknown) => ({ error }))
+    await expect(outcome).resolves.toMatchObject({ error: { code: 'TURN_CANCELLED' } })
+    expect(waitSignal?.aborted).toBe(true)
+    expect((await history.read('lifecycle-pause-cancel')).events.at(-1)?.kind).toBe('invocation-interrupted')
+  })
+
+  it('fails a pause when its declared timeout action is fail', async () => {
+    vi.useFakeTimers()
+    try {
+      const registry = new ModelProviderRegistry()
+      const history = new MemoryHistory()
+      registry.register(route, { providerId: 'lifecycle-pause-fail', stream: () => stream(
+        { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+      ) })
+      const capabilities = new CapabilityRegistry(); capabilities.define('lifecycle-pause-fail', [])
+      const permits = new InMemorySafetyPermitStore()
+      const execution = runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'lifecycle-pause-fail', history,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+        prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+        lifecycleHooks: { postStep: () => ({ timeoutMs: 25, onTimeout: 'fail', wait: () => new Promise<void>(() => {}) }) },
+        lifecycleLimits: { callbackTimeoutMs: 100, maxPauseMs: 50 }
+      })
+      const settled = execution.then((value) => ({ value }), (error: unknown) => ({ error }))
+      await vi.advanceTimersByTimeAsync(30)
+      await expect(settled).resolves.toMatchObject({ error: { code: 'LIFECYCLE_PAUSE_TIMEOUT' } })
+      expect((await history.read('lifecycle-pause-fail')).events.at(-1)?.kind).toBe('invocation-failed')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('keeps an already committed success when postTurn notification times out', async () => {
+    vi.useFakeTimers()
+    try {
+      const registry = new ModelProviderRegistry()
+      const history = new MemoryHistory()
+      registry.register(route, { providerId: 'lifecycle-post-turn-timeout', stream: () => stream(
+        { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+      ) })
+      const capabilities = new CapabilityRegistry(); capabilities.define('lifecycle-post-turn-timeout', [])
+      const permits = new InMemorySafetyPermitStore()
+      const observed: unknown[] = []
+      const execution = runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'lifecycle-post-turn-timeout', history,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+        prepareTool: async () => { throw new Error('unused') }, toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+        observer: { onObservationError: (error, stage) => { observed.push({ error, stage }) } },
+        lifecycleHooks: { postTurn: () => new Promise<void>(() => {}) }, lifecycleLimits: { callbackTimeoutMs: 25, maxPauseMs: 50 }
+      })
+      const settled = execution.then((value) => ({ value }), (error: unknown) => ({ error }))
+      await vi.advanceTimersByTimeAsync(30)
+      await expect(settled).resolves.toMatchObject({ value: { text: 'done' } })
+      expect(observed).toEqual([expect.objectContaining({ stage: 'history-terminal', error: expect.objectContaining({ code: 'LIFECYCLE_CALLBACK_TIMEOUT' }) })])
+      expect((await history.read('lifecycle-post-turn-timeout')).events.at(-1)?.kind).toBe('invocation-completed')
+    } finally { vi.useRealTimers() }
+  })
+})
+
 describe('runAgentTurn', () => {
   it('rechecks a silent overflow after an intervening transient retry', async () => {
     const registry = new ModelProviderRegistry()

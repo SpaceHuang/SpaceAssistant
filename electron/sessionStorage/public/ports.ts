@@ -7,6 +7,8 @@ import type { EnqueueResult, MessageEntry, RemoteSessionIdentityUpdate, Continua
   ContinuationRecoveryFacts, MessageRef, ChatMessagePage, ApiContextBaseline, ContextHistorySummaryBaseline, CanonicalContextMeterEvent, LatestMessagePreviewCandidate,
   RoutingRead, RouteInput, SelectionFence, ExportPage, SearchCorpusPage, MessageSearchHit, MessageSkeleton, RetryContextTarget,
   PreparedChatBodyView,
+  ImAcceptedFactScope, ImAcceptedFactFrontier, ImAcceptedFactPage,
+  RuntimeTriggerRecord, RuntimeTriggerPatch, QueueInputReceiptSnapshot, ScopedQueueInput, QueueInputSource,
 } from './model'
 import type { HistoryPort, HistorySnapshot } from '../../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../../packages/agent-sdk/src/model'
@@ -66,6 +68,20 @@ export type SessionHistoryRecoveryOptions = Readonly<{
 
 /** Business commands for one session storage instance; implementation details stay behind the adapter. */
 export interface SessionCommands {
+  readonly scopedQueue: Readonly<{
+    enqueue(input: ScopedQueueInput): EnqueueResult
+    readReceipt(input: { sessionId: string; requestId: string; queueScope: import('../../../src/shared/queueScope').QueueScope }): QueueInputReceiptSnapshot | undefined
+    cancelUnstartedInput(input: { sessionId: string; requestId: string; queueScope: import('../../../src/shared/queueScope').QueueScope; expectedSource: QueueInputSource }): boolean
+  }>
+  readonly runtimeTriggers: Readonly<{
+    read(triggerId: string): RuntimeTriggerRecord | null
+    findByClientKey(ownerSessionId: string, clientKey: string): RuntimeTriggerRecord | null
+    listByOwner(input: { ownerSessionId: string; cursor?: { createdAt: number; id: string }; limit: number }): readonly RuntimeTriggerRecord[]
+    countActive(input?: { ownerSessionId?: string; now?: number }): number
+    findActiveSyncTarget(receiverSessionId: string): RuntimeTriggerRecord | null
+    insert(record: RuntimeTriggerRecord): RuntimeTriggerRecord
+    update(triggerId: string, expectedRevision: number, patch: RuntimeTriggerPatch): RuntimeTriggerRecord | null
+  }>
   appendNonTurnMessage(message: Message): MessageEntry
   updateStreamingMessage(messageId: string, patch: Partial<Message>): MessageEntry | null
   createSession(input: {
@@ -111,9 +127,16 @@ export interface ContinuationSourceQueries {
   readRecoveryFacts(sessionId: string): ContinuationRecoveryFacts
 }
 
+export interface ImAcceptedFactQueries {
+  captureFrontier(scope: ImAcceptedFactScope): ImAcceptedFactFrontier
+  readPage(input: ImAcceptedFactScope & ImAcceptedFactFrontier & { after: number; limit: number }): ImAcceptedFactPage
+  readBody(input: ImAcceptedFactScope & { messageId: string }): string | null
+}
+
 /** Bound, database-free read capabilities for one session storage instance. */
 export interface SessionQueries {
   readonly continuationSources: ContinuationSourceQueries
+  readonly imAcceptedFacts: ImAcceptedFactQueries
   readSession(sessionId: string): Session | undefined
   readSessionIdForPlatformMessage(input: { channel: 'feishu' | 'wechat'; platformMessageId: string }): string | undefined
   readSessionUsage(sessionId: string): SessionUsage | undefined

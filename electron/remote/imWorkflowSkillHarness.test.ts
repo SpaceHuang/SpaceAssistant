@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getWorkflowState } from '../database/workflowState'
-import { appendImInboxMessage, listImInboxMessages } from '../database/imInbox'
+import { appendImInboxMessage as appendImInboxMessageRaw, listImInboxMessages } from '../database/imInbox'
+
+const appendImInboxMessage: typeof appendImInboxMessageRaw = (db, input) => appendImInboxMessageRaw(db, { ...input, accountId: 'fixture-account', conversationId: input.sessionId, senderId: 'fixture-sender' })
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { processImWorkflowInbound, runImWorkflowSkillFlow, type ImWorkflowDecision, type ImWorkflowModel } from './imWorkflowSkillHarness'
 import { isRequestLeaseOwner, releaseRemoteSession, resetRunningRemoteAgentRegistryForTests, tryClaimRemoteSession } from './remoteAgentRegistry'

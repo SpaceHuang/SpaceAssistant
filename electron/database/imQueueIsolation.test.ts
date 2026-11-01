@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appendImInboxMessageWithWakeEvent, claimImInboxMessage } from './imInbox'
+import { appendImInboxMessageWithWakeEvent, claimImInboxMessage } from './imInboxTestFixtures'
 import { createSession, enqueueQueuedUserMessage, listQueuedUserMessages } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { buildImQueueScope } from '../../src/shared/queueScope'

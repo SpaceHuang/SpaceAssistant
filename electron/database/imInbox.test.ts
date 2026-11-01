@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { appendImInboxMessage, appendImInboxMessageWithWakeEvent, ackImInboxMessage, claimImInboxMessage, releaseImInboxMessage, renewImInboxClaim, listImInboxMessages, getImInboxMessageContext, parkImInboxMessageForClarification, resumeClarificationInboxMessage } from './imInbox'
+import { appendImInboxMessage as appendImInboxMessageRaw, appendImInboxMessageWithWakeEvent as appendImInboxMessageWithWakeEventRaw, parkImInboxMessageForClarification as parkImInboxMessageForClarificationRaw, ackImInboxMessage, claimImInboxMessage, releaseImInboxMessage, renewImInboxClaim, listImInboxMessages, getImInboxMessageContext, resumeClarificationInboxMessage } from './imInbox'
+
+const withFixtureImIdentity = <T extends { sessionId: string }>(input: T) => ({ ...input, accountId: 'fixture-account', conversationId: input.sessionId, senderId: 'fixture-sender' })
+const appendImInboxMessage: typeof appendImInboxMessageRaw = (db, input) => appendImInboxMessageRaw(db, withFixtureImIdentity(input))
+const appendImInboxMessageWithWakeEvent: typeof appendImInboxMessageWithWakeEventRaw = (db, input) => appendImInboxMessageWithWakeEventRaw(db, withFixtureImIdentity(input))
+const parkImInboxMessageForClarification: typeof parkImInboxMessageForClarificationRaw = (db, input) => parkImInboxMessageForClarificationRaw(db, withFixtureImIdentity(input))
 import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { createSession } from './operations'
 import { listQueuedUserMessages } from './operations'
@@ -14,6 +19,43 @@ import { expireDuePendingClarifications, listPendingClarificationNotices, listRe
   startClarificationSendAttempt, finishClarificationSendAttempt, resolveClarificationSelection } from './clarificationStore'
 
 describe('IM Inbox persistence', () => {
+  it('rolls back the queued message and receipt when accepted identity validation fails', () => {
+    const db = createMemoryAppDb()
+    try {
+      const sessionId = createSession(db, { name: 'accepted-im-rollback' }).id
+      const conn = getDbConnection(db)
+      expect(() => appendImInboxMessageRaw(db, { sessionId, channel: 'feishu', queueScope: buildImQueueScope('feishu', sessionId),
+        channelMessageId: 'identity-rollback', content: 'body', accountId: '   ', conversationId: sessionId, senderId: 'fixture-sender' })).toThrow('IM accountId must not be empty')
+      expect(conn.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+      expect(conn.prepare('SELECT COUNT(*) AS count FROM queue_input_requests WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+      expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get('im_fact_next_seq')).toEqual({ value: '0' })
+    } finally { db.close() }
+  })
+
+  it('records immutable accepted IM identity with a non-reused sequence and per-stream coverage revision', () => {
+    const db = createMemoryAppDb()
+    try {
+      const sessionId = createSession(db, { name: 'accepted-im-facts' }).id
+      const queueScope = buildImQueueScope('feishu', sessionId)
+      const first = appendImInboxMessage(db, { sessionId, channel: 'feishu', queueScope, channelMessageId: 'fact-1', content: 'one' })
+      const second = appendImInboxMessage(db, { sessionId, channel: 'feishu', queueScope, channelMessageId: 'fact-2', content: 'two' })
+      const conn = getDbConnection(db)
+      const firstContext = getImInboxMessageContext(db, first.messageId)
+      expect(conn.prepare('SELECT account_id,conversation_id,sender_id,accepted_seq FROM im_inbox_message_context WHERE message_id=?').get(first.messageId))
+        .toEqual({ account_id: 'fixture-account', conversation_id: sessionId, sender_id: 'fixture-sender', accepted_seq: 1 })
+      expect(conn.prepare('SELECT accepted_seq FROM im_inbox_message_context WHERE message_id=?').get(second.messageId)).toEqual({ accepted_seq: 2 })
+      const coverageKey = `im_fact_coverage_revision:${'feishu'.length}:feishu${'fixture-account'.length}:fixture-account${sessionId.length}:${sessionId}`
+      expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(coverageKey)).toEqual({ value: '2' })
+      expect(firstContext?.platformMessageId).toBe('fact-1')
+      expect(() => conn.prepare('UPDATE im_inbox_message_context SET sender_id=? WHERE message_id=?').run('other', first.messageId))
+        .toThrow('accepted IM fact identity is immutable')
+      conn.prepare('DELETE FROM messages WHERE id=?').run(first.messageId)
+      expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(coverageKey)).toEqual({ value: '3' })
+      const third = appendImInboxMessage(db, { sessionId, channel: 'feishu', queueScope, channelMessageId: 'fact-3', content: 'three' })
+      expect(conn.prepare('SELECT accepted_seq FROM im_inbox_message_context WHERE message_id=?').get(third.messageId)).toEqual({ accepted_seq: 3 })
+    } finally { db.close() }
+  })
+
   it('expires parked clarification input during recovery and writes one terminal lifecycle notice', () => {
     const db = createMemoryAppDb()
     try {
@@ -108,6 +150,8 @@ describe('IM Inbox persistence', () => {
         clarificationId: 'cross-session-clarification', identityKey: 'alice', ownerId: 'owner-a', authorizationEpoch: 1,
         handle: 'EFGHJKMNPQ345', candidates: [{ trackId: 'cross-session-track', option: 1, label: '原任务', stateAtIssue: 'open' }],
         expiresAt: 10_000, now: 100 })
+      const acceptedIdentity = getDbConnection(db).prepare('SELECT account_id,conversation_id,sender_id,accepted_seq FROM im_inbox_message_context WHERE message_id=?')
+        .get(parked.messageId)
       startClarificationSendAttempt(db, { sendAttemptId: 'cross-session-send', clarificationId: 'cross-session-clarification', version: 1, startedAt: 101 })
       finishClarificationSendAttempt(db, { sendAttemptId: 'cross-session-send', state: 'send-fulfilled', finishedAt: 102 })
       const selection = resolveClarificationSelection(db, { handle: 'EFGHJKMNPQ345', option: 1, channel: 'wechat', identityKey: 'alice',
@@ -125,6 +169,8 @@ describe('IM Inbox persistence', () => {
       expect(listImInboxMessages(db, { queueScope: buildImQueueScope('wechat', intakeSessionId) })).toEqual([])
       expect(getDbConnection(db).prepare('SELECT session_id,queue_scope,status FROM messages WHERE id=?').get(parked.messageId))
         .toEqual({ session_id: trackSessionId, queue_scope: `im:wechat:${trackSessionId}`, status: 'queued' })
+      expect(getDbConnection(db).prepare('SELECT account_id,conversation_id,sender_id,accepted_seq FROM im_inbox_message_context WHERE message_id=?')
+        .get(parked.messageId)).toEqual(acceptedIdentity)
       expect(getDbConnection(db).prepare("SELECT session_id,queue_scope,state FROM queue_input_requests WHERE request_id='cross-session-source-message'").get())
         .toEqual({ session_id: trackSessionId, queue_scope: `im:wechat:${trackSessionId}`, state: 'consumed' })
       expect(claimImInboxMessage(db, { queueScope: buildImQueueScope('wechat', trackSessionId), messageId: parked.messageId, ownerId: 'dispatcher' }))

@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 120
+export const DB_SCHEMA_VERSION = 121
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -331,6 +331,10 @@ CREATE TABLE IF NOT EXISTS im_inbox_message_context (
   track_event_id TEXT REFERENCES remote_track_events(event_id) ON DELETE SET NULL,
   clarification_work_id TEXT REFERENCES remote_track_work_queue(work_id) ON DELETE SET NULL
 );
+
+
+
+
 
 CREATE TABLE IF NOT EXISTS im_inbox_clarification_park (
   message_id TEXT PRIMARY KEY NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -1761,9 +1765,74 @@ export const SCHEMA_META_KEYS = {
   migratedFromJsonPath: 'migrated_from_json_path',
   legacyWorkspaceLayoutCleanedAt: 'legacy_workspace_layout_cleaned_at',
   /** 用量统计一次性历史回填完成时间（C7）；缺失时启动重试，成功即写。 */
-  usageStatsBackfillAt: 'usage_stats_backfill_at'
+  usageStatsBackfillAt: 'usage_stats_backfill_at',
+  imFactNextSeq: 'im_fact_next_seq',
+  imFactCoverageRevisionPrefix: 'im_fact_coverage_revision:'
 } as const
 
+
+/** v120 → v121: nullable legacy IM identity, fully populated for newly accepted source facts. */
+export const MIGRATION_V121_RUNTIME_TRIGGERS_SQL = `
+CREATE TABLE IF NOT EXISTS runtime_triggers (
+  id TEXT PRIMARY KEY NOT NULL,
+  owner_session_id TEXT NOT NULL,
+  receiver_session_id TEXT NOT NULL,
+  client_key TEXT NOT NULL,
+  definition_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('waiting','matched','completed','cancelled','expired','failed')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  matched_at INTEGER,
+  event_json TEXT,
+  message_id TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER,
+  result_json TEXT,
+  revision INTEGER NOT NULL DEFAULT 1,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(owner_session_id,client_key)
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_triggers_state_due ON runtime_triggers(state,next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_runtime_triggers_owner_created ON runtime_triggers(owner_session_id,created_at,id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_triggers_active_sync_target ON runtime_triggers(receiver_session_id)
+  WHERE state IN ('waiting','matched') AND json_extract(definition_json,'$.condition.type')='session_steps'
+    AND json_extract(definition_json,'$.condition.mode')='sync';
+`;
+
+export const MIGRATION_V121_IM_FACT_IDENTITY_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_im_inbox_accepted_seq ON im_inbox_message_context(accepted_seq)
+  WHERE accepted_seq IS NOT NULL;
+CREATE TRIGGER IF NOT EXISTS bump_im_fact_coverage_after_delete
+AFTER DELETE ON im_inbox_message_context WHEN OLD.accepted_seq IS NOT NULL AND OLD.account_id IS NOT NULL AND OLD.conversation_id IS NOT NULL
+BEGIN
+  UPDATE schema_meta SET value=CAST(value AS INTEGER)+1
+    WHERE key='im_fact_coverage_revision:' || length(OLD.channel) || ':' || OLD.channel || length(OLD.account_id) || ':' || OLD.account_id || length(OLD.conversation_id) || ':' || OLD.conversation_id;
+END;
+CREATE TRIGGER IF NOT EXISTS guard_im_fact_identity_immutable
+BEFORE UPDATE OF channel,platform_message_id,account_id,conversation_id,sender_id,accepted_seq ON im_inbox_message_context
+WHEN OLD.accepted_seq IS NOT NULL AND (
+  NEW.channel IS NOT OLD.channel OR NEW.platform_message_id IS NOT OLD.platform_message_id OR NEW.account_id IS NOT OLD.account_id OR
+  NEW.conversation_id IS NOT OLD.conversation_id OR NEW.sender_id IS NOT OLD.sender_id OR NEW.accepted_seq IS NOT OLD.accepted_seq
+)
+BEGIN SELECT RAISE(ABORT,'accepted IM fact identity is immutable'); END;
+`;
+
+/** Assign stable pre-registration watermarks to legacy facts before identity guards are installed. */
+export const MIGRATION_V121_IM_FACT_BACKFILL_SQL = `
+WITH ranked AS (
+  SELECT message_id, ROW_NUMBER() OVER(ORDER BY created_at,message_id) +
+    COALESCE((SELECT MAX(accepted_seq) FROM im_inbox_message_context),0) AS seq
+  FROM im_inbox_message_context WHERE accepted_seq IS NULL
+)
+UPDATE im_inbox_message_context SET accepted_seq=(SELECT seq FROM ranked WHERE ranked.message_id=im_inbox_message_context.message_id)
+WHERE accepted_seq IS NULL;
+INSERT INTO schema_meta(key,value)
+  SELECT 'im_fact_next_seq', CAST(COALESCE(MAX(accepted_seq),0) AS TEXT) FROM im_inbox_message_context WHERE true
+  ON CONFLICT(key) DO UPDATE SET value=CASE WHEN CAST(value AS INTEGER)<CAST(excluded.value AS INTEGER) THEN excluded.value ELSE value END;
+INSERT OR IGNORE INTO schema_meta(key,value)
+  SELECT 'im_fact_coverage_revision:' || length(channel) || ':' || channel || length(account_id) || ':' || account_id || length(conversation_id) || ':' || conversation_id, '0'
+  FROM im_inbox_message_context WHERE account_id IS NOT NULL AND conversation_id IS NOT NULL GROUP BY channel,account_id,conversation_id;
+`;
 
 /** v45 → v46: keep canonical-only rows immutable if their cutover fence is damaged or missing. */
 export const MIGRATION_V46_CANONICAL_ONLY_MESSAGE_CONTENT_IMMUTABLE_SQL = `
