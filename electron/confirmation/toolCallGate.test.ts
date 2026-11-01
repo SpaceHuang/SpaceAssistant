@@ -1051,7 +1051,7 @@ describe('evaluateToolCallGate', () => {
         runShellPrecheck: async () => ({ ok: true, analysis: { verdict: 'allow' } as never, legacyAutoAllowEligible: true, legacyPolicy: { permissionDecision: 'allow', trustedCacheKeys: [] }, hints: {} as never })
       }))
 
-      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
+      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: process.platform === 'win32' ? 'unknown' : 'read-only' })
       expect(audit.events.find((event) => event.event === 'policy.decision')?.pathZones).toContain('outside-workdir')
       expect(JSON.stringify(audit.events)).not.toContain(secretPath)
     } finally {
@@ -1285,7 +1285,7 @@ describe('evaluateToolCallGate', () => {
     const root = await fs.realpath(await makeTempDir('read-policy-system-root-'))
     const windowsRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
     const systemDir = process.platform === 'win32' ? path.join(windowsRoot, 'System32') : '/etc'
-    const systemFile = process.platform === 'win32' ? path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'cmd', 'git.exe') : '/etc/hosts'
+    const systemFile = process.platform === 'win32' ? path.join(windowsRoot, 'System32', 'drivers', 'etc', 'hosts') : '/etc/hosts'
     try {
       await fs.access(systemDir)
       await fs.access(systemFile)
