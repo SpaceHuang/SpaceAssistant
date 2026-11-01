@@ -2,7 +2,7 @@
 
 > 定位：shell（`run_shell`）、文件工具、grep/rg、browser、subagent、工具调用可靠性、MCP（集成/延迟加载/SSE/超时隔离）。
 > 主要代码域：`electron/shell/`、`electron/tools/`、`electron/browser/`、`electron/mcp/`、`electron/fileIpc.ts`、`src/shared/toolResultContract.ts`
-> 核对基线：`main` `17236274`（2026-10-14）
+> 核对基线：`4da4c382`（2026-11-02，Agent Runtime trigger execution 最终代码）
 
 ## 现状与设计文档（留主题目录）
 
@@ -14,7 +14,11 @@
 | [cli-subagent-integration-design.md](./cli-subagent-integration-design.md) | 设计（v1.0） | 子代理集成设计 |
 | [ripgrep-integration-technical-design.md](./ripgrep-integration-technical-design.md) | 设计（评审整改版） | rg 集成；本地必做项已完成 |
 | [tool-invocation-reliability-improvement-technical-design.md](./tool-invocation-reliability-improvement-technical-design.md) | 设计（v1.4） | R1–R8 工具可靠性 |
+| [agent-runtime-trigger-technical-design.md](./in-flight/agent-runtime-trigger-technical-design.md) | 技术方案 | Agent Runtime 通用触发器、授权/History 接纳合同与 AC-01～14 |
+| [agent-runtime-trigger-execution-plan.md](../../plan/agent-runtime-trigger-execution-plan.md) | 执行计划 | T00～T22、阶段提交与验收证据 |
 | [golden-data/](./golden-data/)（2 json） | 证据数据 | shell / python 切换后的漂移证据，随宿主设计 |
+
+Agent Runtime 触发器当前实现入口见[工具能力-现状 §6](./工具能力-现状.md#6-agent-runtime-通用触发器)；阶段验收从[执行计划](../../plan/agent-runtime-trigger-execution-plan.md)与其证据目录追溯。
 
 ## 在途（in-flight）
 
