@@ -36,6 +36,9 @@ describe('validateMcpEndpoint', () => {
     expect(validateMcpEndpoint('https://224.0.0.1/mcp').ok).toBe(false)
     expect(validateMcpEndpoint('https://[fc00::1]/mcp').ok).toBe(false)
     expect(validateMcpEndpoint('https://[fe80::1]/mcp').ok).toBe(false)
+    expect(validateMcpEndpoint('https://[::ffff:192.168.1.10]/mcp').ok).toBe(false)
+    expect(validateMcpEndpoint('https://[::ffff:169.254.169.254]/mcp').ok).toBe(false)
+    expect(validateMcpEndpoint('https://[::ffff:8.8.8.8]/mcp').ok).toBe(true)
   })
 
   it('rejects non-http(s) schemes and malformed urls', () => {
@@ -86,6 +89,10 @@ describe('IP policy helpers', () => {
     expect(isPrivateOrReservedIp('fe80::1')).toBe(true)
     expect(isPrivateOrReservedIp('ff02::1')).toBe(true)
     expect(isPrivateOrReservedIp('2606:4700::1111')).toBe(false)
+    expect(isPrivateOrReservedIp(new URL('https://[::ffff:192.168.1.10]/').hostname)).toBe(true)
+    expect(isPrivateOrReservedIp(new URL('https://[::ffff:169.254.169.254]/').hostname)).toBe(true)
+    expect(isPrivateOrReservedIp('::ffff:192.168.1.10')).toBe(true)
+    expect(isPrivateOrReservedIp('::ffff:8.8.8.8')).toBe(false)
   })
 
   it('assertEndpointIpAllowed accepts public and loopback, rejects private', () => {

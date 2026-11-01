@@ -1,4 +1,7 @@
-import { validateMcpEndpoint } from './endpointPolicy'
+import dns from 'node:dns/promises'
+import { isIP } from 'node:net'
+import { Agent, interceptors } from 'undici'
+import { assertEndpointIpAllowed, McpEndpointValidationError, normalizeHost, validateMcpEndpoint } from './endpointPolicy'
 import type { EndpointPolicyOptions } from './endpointPolicy'
 
 /**
@@ -13,6 +16,45 @@ import type { EndpointPolicyOptions } from './endpointPolicy'
 
 export const DISCOVERY_TIMEOUT_MS = 5_000
 export const DISCOVERY_MAX_REDIRECTS = 3
+
+type DiscoveryAddress = { address: string; family: 4 | 6; ttl: number }
+const dispatchers = new Map<boolean, ReturnType<Agent['compose']>>()
+
+async function resolveAllowedAddresses(hostname: string, allowPrivateNetwork: boolean): Promise<DiscoveryAddress[] | null> {
+  const normalizedHost = normalizeHost(hostname)
+  const family = isIP(normalizedHost)
+  if (family) {
+    if (!assertEndpointIpAllowed(normalizedHost, allowPrivateNetwork)) return null
+    return [{ address: normalizedHost, family: family as 4 | 6, ttl: 60 }]
+  }
+  try {
+    const addresses = await dns.lookup(normalizedHost, { all: true, verbatim: true })
+    if (!addresses.length || addresses.some(({ address }) => !assertEndpointIpAllowed(address, allowPrivateNetwork))) return null
+    return addresses.map(({ address, family: addressFamily }) => ({ address, family: addressFamily as 4 | 6, ttl: 60 }))
+  } catch {
+    return null
+  }
+}
+
+function dispatcherFor(allowPrivateNetwork: boolean): ReturnType<Agent['compose']> {
+  const existing = dispatchers.get(allowPrivateNetwork)
+  if (existing) return existing
+  const agent = new Agent({ connections: 4 })
+  const dispatcher = agent.compose(interceptors.dns({
+    maxTTL: 60,
+    lookup: (origin, _options, callback) => {
+      void resolveAllowedAddresses(origin.hostname, allowPrivateNetwork).then((addresses) => {
+        if (!addresses) {
+          callback(new McpEndpointValidationError('Endpoint 域名或 IP 解析到受限地址或无法解析', 'resolved-private-address'), [])
+          return
+        }
+        callback(null, addresses)
+      })
+    }
+  }))
+  dispatchers.set(allowPrivateNetwork, dispatcher)
+  return dispatcher
+}
 
 export function createSafeDiscoveryFetch(
   timeoutMs = DISCOVERY_TIMEOUT_MS,
@@ -29,11 +71,21 @@ export function createSafeDiscoveryFetch(
   }
   return async (url, init) => {
     let current = new URL(url.toString())
+    const dispatcher = dispatcherFor(policyOptions?.allowPrivateNetwork === true)
     if (!assertTargetAllowed(current)) {
       return new Response(null, { status: 403, statusText: 'endpoint policy blocked' })
     }
     for (let hop = 0; ; hop++) {
-      const response = await fetch(current, { ...init, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) })
+      if (!await resolveAllowedAddresses(current.hostname, policyOptions?.allowPrivateNetwork === true)) {
+        onBlocked?.(current)
+        return new Response(null, { status: 403, statusText: 'endpoint policy blocked' })
+      }
+      const response = await fetch(current, {
+        ...init,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(timeoutMs),
+        dispatcher
+      } as RequestInit)
       if (response.status < 300 || response.status >= 400) return response
       const location = response.headers.get('location')
       if (!location) return response

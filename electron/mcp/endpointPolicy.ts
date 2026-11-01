@@ -39,13 +39,13 @@ function parseIpv6(host: string): string | null {
   try {
     const hex = host.toLowerCase()
     // 简单结构校验：至少 2 段，允许 :: 压缩
-    return /^[0-9a-f:]+$/.test(hex) ? hex : null
+    return /^[0-9a-f:.]+$/.test(hex) ? hex : null
   } catch {
     return null
   }
 }
 
-function normalizeHost(host: string): string {
+export function normalizeHost(host: string): string {
   return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host
 }
 
@@ -82,7 +82,15 @@ export function isPrivateOrReservedIp(host: string): boolean {
     if (v6.startsWith('fe8') || v6.startsWith('fe9') || v6.startsWith('fea') || v6.startsWith('feb')) return true
     if (v6.startsWith('ff')) return true // multicast
     if (v6.startsWith('::ffff:')) {
-      const mapped = v6.slice('::ffff:'.length)
+      // WHATWG URL canonicalizes dotted IPv4-mapped literals to hex (for example
+      // ::ffff:192.168.1.10 -> ::ffff:c0a8:10a). Decode the final two hextets.
+      const suffix = v6.slice('::ffff:'.length)
+      if (suffix.includes('.')) return parseIpv4(suffix) ? isPrivateOrReservedIp(suffix) : true
+      const words = suffix.split(':')
+      if (words.length !== 2 || words.some((word) => !/^[0-9a-f]{1,4}$/.test(word))) return true
+      const high = Number.parseInt(words[0]!, 16)
+      const low = Number.parseInt(words[1]!, 16)
+      const mapped = `${high >>> 8}.${high & 255}.${low >>> 8}.${low & 255}`
       return isPrivateOrReservedIp(mapped)
     }
     return false
