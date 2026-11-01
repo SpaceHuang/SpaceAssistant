@@ -6,6 +6,28 @@ const user = (id: string, content: string): CanonicalModelMessage => ({ role: 'u
 const assistant = (id: string, content: string): CanonicalModelMessage => ({ role: 'assistant', id, content })
 
 describe('shared session context rules', () => {
+  it('restores long completed delta histories in order without retaining per-turn system state', () => {
+    const events = Array.from({ length: 300 }, (_, index) => {
+      const invocationId = `linear-invocation-${index}`
+      const turnId = `linear-turn-${index}`
+      const event = (sequence: number, kind: string, payload: unknown) => ({ invocationId, turnId, sequence,
+        schemaVersion: 1, eventId: `${invocationId}-${sequence}`, idempotencyKey: `${invocationId}-${sequence}`, kind, payload })
+      const input = { role: 'user' as const, id: `linear-user-${index}`, content: `question-${index}` }
+      return [
+        event(1, 'invocation-context-committed', { contextProtocol: 2, inputMode: index === 0 ? 'baseline' : 'delta',
+          messages: [input], inputMessages: [input], failureInputMessages: [input], scope: { kind: 'session', sessionId: 'linear-session' }, system: 'temporary system' }),
+        event(2, 'model-response-committed', { message: { role: 'assistant', id: `linear-answer-${index}`, content: `answer-${index}` } }),
+        event(3, 'invocation-completed', { status: 'completed', contextSelection: { contextProtocol: 2, target: 'working' } })
+      ]
+    }).flat() as import('../src/history').HistoryEvent[]
+    const restored = restoreSessionContext({ committedVersion: 300, events })
+    expect(restored.committed).toHaveLength(600)
+    expect(restored.committed[0]).toMatchObject({ role: 'user', id: 'linear-user-0' })
+    expect(restored.committed.at(-1)).toMatchObject({ role: 'assistant', id: 'linear-answer-299' })
+    expect(restored.requestSystem).toBe('')
+    expect(restored.committed.every((message) => message.role !== 'system')).toBe(true)
+  })
+
   it('owns incoming messages once and shares frozen historical message objects across turns', () => {
     const sourceMessage = { role: 'user' as const, id: 'shared-user', content: [{ type: 'text' as const, text: 'original' }] }
     const seed = restoreLegacySessionContextSnapshot({ invocationId: 'shared-seed', turnId: 'shared-seed', committedVersion: 1, messages: [sourceMessage] })

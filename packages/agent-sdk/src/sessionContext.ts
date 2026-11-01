@@ -27,6 +27,8 @@ export type SessionContextState = Readonly<{
   activeInvocationId?: string
   scope?: ContextScope
 }>
+type ContextReplayEvent = Readonly<Pick<HistoryEvent, 'kind' | 'payload'> & Partial<Pick<HistoryEvent,
+  'invocationId' | 'sequence' | 'eventId' | 'idempotencyKey' | 'turnId' | 'schemaVersion'>>>
 
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -93,7 +95,9 @@ const freezeState = (state: SessionContextState): SessionContextState => Object.
 })
 
 /** Convert the legacy full-context events into one canonical state for both recovery and live turns. */
-export function restoreSessionContext(input: Readonly<{ committedVersion: number; events: readonly HistoryEvent[] | HistorySnapshot['events'] }>): SessionContextState {
+export function restoreSessionContext(input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>): SessionContextState {
+  const simpleRestored = restoreSimpleCompletedSessionContext(input)
+  if (simpleRestored) return simpleRestored
   let state = freezeState({ committedVersion: input.committedVersion, committed: [], working: [], failure: [], parkBaseline: [], pendingTools: new Map(), completedToolResults: new Map(), approvedToolCallIds: new Set(), requestSystem: '' })
   for (const event of input.events) {
     if (event.kind === 'session-input-committed') {
@@ -193,6 +197,89 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
     }
   }
   return freezeState({ ...state, committedVersion: input.committedVersion })
+}
+
+/** Fast path for ordinary completed turns: append to one private buffer, freeze only the final result. */
+function restoreSimpleCompletedSessionContext(input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>): SessionContextState | undefined {
+  const events = input.events
+  if (events.length === 0 || events.at(-1)?.kind !== 'invocation-completed') return undefined
+  let scopeKey: string | undefined
+  for (const event of events) {
+    if (event.kind !== 'session-input-committed' && event.kind !== 'invocation-context-committed' &&
+      event.kind !== 'model-response-committed' && event.kind !== 'invocation-completed') return undefined
+    if (event.kind === 'invocation-completed') {
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload as { status?: unknown; contextSelection?: unknown } : undefined
+      const selection = payload?.contextSelection as { contextProtocol?: unknown; target?: unknown } | undefined
+      if (payload?.status !== 'completed' || (selection && (selection.contextProtocol !== 2 || selection.target !== 'working'))) return undefined
+    }
+    if (event.kind === 'model-response-committed') {
+      const message = (event.payload as { message?: CanonicalModelMessage } | undefined)?.message
+      if (!message || message.role !== 'assistant' || message.toolCalls?.length) return undefined
+    }
+    if (event.kind === 'invocation-context-committed') {
+      const payload = event.payload as { contextProtocol?: unknown; inputMode?: unknown; inputMessages?: unknown; failureInputMessages?: unknown; messages?: unknown; scope?: unknown }
+      if (payload?.contextProtocol !== 2 || !Array.isArray(payload.inputMessages) || !Array.isArray(payload.failureInputMessages) ||
+        !payload.scope || typeof payload.scope !== 'object' || JSON.stringify(payload.inputMessages) !== JSON.stringify(payload.failureInputMessages) ||
+        (payload.inputMode !== undefined && payload.inputMode !== 'delta' && payload.inputMode !== 'baseline') ||
+        (payload.inputMode === 'baseline' && !Array.isArray(payload.messages))) return undefined
+      const nextScopeKey = JSON.stringify(payload.scope)
+      if (scopeKey !== undefined && scopeKey !== nextScopeKey) return undefined
+      scopeKey = nextScopeKey
+    }
+    if (event.kind === 'session-input-committed') {
+      const payload = event.payload as { scope?: unknown } | undefined
+      if (payload?.scope && typeof payload.scope === 'object') scopeKey = JSON.stringify(payload.scope)
+    }
+  }
+
+  const buffer: CanonicalModelMessage[] = []
+  let hasSystemMessage = false
+  let scope: ContextScope | undefined
+  let requestSystem = ''
+  let activeInvocationId: string | undefined
+  let requiredUserMessage: SessionContextState['requiredUserMessage']
+  for (const event of events) {
+    if (event.kind === 'session-input-committed') {
+      const payload = event.payload as { messages?: unknown; scope?: unknown; system?: unknown }
+      if (Array.isArray(payload.messages)) {
+        buffer.length = 0
+        const owned = ownMessages(payload.messages as CanonicalModelMessage[])
+        buffer.push(...owned)
+        hasSystemMessage = owned.some((message) => message.role === 'system')
+        activeInvocationId = undefined
+        requiredUserMessage = undefined
+        requestSystem = ''
+      }
+      if (payload.scope && typeof payload.scope === 'object') scope = deepFreeze(structuredClone(payload.scope as ContextScope))
+      if (typeof payload.system === 'string') requestSystem = payload.system
+    } else if (event.kind === 'invocation-context-committed') {
+      const payload = event.payload as { inputMode?: 'delta' | 'baseline'; inputMessages: CanonicalModelMessage[]; messages?: CanonicalModelMessage[]; scope: ContextScope; invocationId?: string; requiredUserMessage?: { id: string; message: CanonicalModelMessage }; system?: string }
+      const mode = payload.inputMode ?? (Array.isArray(payload.messages) ? 'baseline' : 'delta')
+      const additions = ownMessages(mode === 'baseline' && Array.isArray(payload.messages) ? payload.messages : payload.inputMessages)
+      if (mode === 'baseline') { buffer.length = 0; hasSystemMessage = false }
+      buffer.push(...additions)
+      hasSystemMessage ||= additions.some((message) => message.role === 'system')
+      scope = scope ? scope : deepFreeze(structuredClone(payload.scope))
+      if (payload.invocationId) activeInvocationId = payload.invocationId
+      if (payload.requiredUserMessage) requiredUserMessage = deepFreeze(structuredClone(payload.requiredUserMessage))
+      if (typeof payload.system === 'string') requestSystem = payload.system
+    } else if (event.kind === 'model-response-committed') {
+      const message = (event.payload as { message: CanonicalModelMessage }).message
+      buffer.push(ownMessage(message))
+    } else if (event.kind === 'invocation-completed') {
+      if (hasSystemMessage) {
+        for (let index = buffer.length - 1; index >= 0; index -= 1) if (buffer[index]?.role === 'system') buffer.splice(index, 1)
+        hasSystemMessage = false
+      }
+      activeInvocationId = undefined
+      requiredUserMessage = undefined
+      requestSystem = ''
+    }
+  }
+  const messages = Object.freeze(buffer)
+  return Object.freeze({ committedVersion: input.committedVersion, committed: messages, working: messages, failure: messages,
+    parkBaseline: messages, pendingTools: readonlyMap(new Map<string, CanonicalToolCall>()), completedToolResults: readonlyMap(new Map<string, Extract<CanonicalModelMessage, { role: 'tool' }>>()), approvedToolCallIds: readonlySet(new Set<string>()),
+    ...(requiredUserMessage ? { requiredUserMessage } : {}), requestSystem, ...(activeInvocationId ? { activeInvocationId } : {}), ...(scope ? { scope } : {}) })
 }
 
 /** One-way adapter for legacy transcript snapshots; all later changes use the shared event reducer. */

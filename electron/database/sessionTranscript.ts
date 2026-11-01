@@ -102,13 +102,12 @@ export function readSessionTranscript(db: AppDatabase, sessionId: string, option
     const receiptFirstEvent = conn.prepare(`SELECT turn_id FROM agent_history_events WHERE session_id=? AND session_seq=?`)
       .get(sessionId, receipt.event_start) as { turn_id: string } | undefined
     if (!receiptFirstEvent || receiptFirstEvent.turn_id !== receipt.turn_id) throw new Error('SESSION_TRANSCRIPT_SELECTION_RECEIPT_RANGE_INVALID')
-    const eventRows = conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json
+    const eventRows = conn.prepare(`SELECT event_id,turn_id,kind,payload_json
       FROM agent_history_events WHERE session_id=? AND session_seq<=? ORDER BY session_seq ASC`)
-      .all(sessionId, receipt.event_end) as Array<{ invocation_id: string; sequence: number; event_id: string; idempotency_key: string; turn_id: string; schema_version: number; kind: HistoryEvent['kind']; payload_json: string }>
+      .all(sessionId, receipt.event_end) as Array<{ event_id: string; turn_id: string; kind: HistoryEvent['kind']; payload_json: string }>
     const main = conn.prepare('PRAGMA database_list').all().find((database) => (database as { name?: string }).name === 'main') as { file?: string } | undefined
     const spillRoot = main?.file ? path.join(path.dirname(main.file), 'spill') : undefined
-    const events: HistoryEvent[] = eventRows.map((event) => ({ invocationId: event.invocation_id, sequence: event.sequence,
-      eventId: event.event_id, idempotencyKey: event.idempotency_key, turnId: event.turn_id, schemaVersion: event.schema_version,
+    const events = eventRows.map((event) => ({ eventId: event.event_id, turnId: event.turn_id,
       kind: event.kind, payload: hydrateTranscriptSpills(JSON.parse(event.payload_json) as unknown, spillRoot) }))
     const restored = restoreSessionContext({ committedVersion: version, events })
     const terminal = events.find((event) => event.eventId === receiptTerminalRow!.event_id)
