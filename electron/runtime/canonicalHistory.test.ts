@@ -101,6 +101,23 @@ describe('toCanonicalModelMessages', () => {
 })
 
 describe('rebuildClaudeMessagesFromHistory', () => {
+  it('uses a replayed tool result to replace the inferred not-dispatched result', () => {
+    const event = (sequence: number, kind: HistoryEvent['kind'], payload: unknown): HistoryEvent => ({
+      invocationId: 'tool-replay-projection', turnId: 'tool-replay-turn', sequence, schemaVersion: 1,
+      eventId: `tool-replay-${sequence}`, idempotencyKey: `tool-replay-${sequence}`, kind, payload
+    })
+    const messages = rebuildClaudeMessagesFromHistory([
+      event(1, 'model-response-committed', { message: { role: 'assistant', toolCalls: [{ id: 'rejected-call', name: 'lookup', input: {} }] } }),
+      event(2, 'tool-call-not-dispatched', { toolCallId: 'rejected-call', reason: 'POLICY_DENY' }),
+      event(3, 'replay-message-committed', { message: { role: 'tool', toolCallId: 'rejected-call', content: 'precise rejection', isError: true } }),
+      event(4, 'model-response-committed', { message: { role: 'assistant', content: 'I could not run the lookup.' } })
+    ])
+    expect(messages).toHaveLength(3)
+    expect(messages[1]).toMatchObject({ role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'rejected-call', content: 'precise rejection', is_error: true }
+    ] })
+  })
+
   it('resumes serializable reducer state across event chunks with tool ordering and snapshot replacement', () => {
     const events: HistoryEvent[] = [
       { invocationId: 'chunked', turnId: 'turn-1', sequence: 1, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'old' }] } },

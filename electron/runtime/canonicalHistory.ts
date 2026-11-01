@@ -651,10 +651,21 @@ export function foldCanonicalHistoryChunk(
       continue
     }
     if (event.kind === 'replay-message-committed') {
-      flushResults()
       const payload = event.payload as { message?: unknown }
       const message = payload?.message as CanonicalModelMessage | undefined
-      if (!message || (message.role !== 'user' && message.role !== 'assistant')) throw new Error(`invalid canonical replay message: ${event.eventId}`)
+      if (!message) throw new Error(`invalid canonical replay message: ${event.eventId}`)
+      if (message.role === 'tool') {
+        if (!message.toolCallId?.trim() || !toolCallOrder.includes(message.toolCallId) ||
+          (!pendingToolCalls.has(message.toolCallId) && !replayResults.has(message.toolCallId))) {
+          throw new Error(`canonical replay tool result has no committed call: ${message.toolCallId ?? event.eventId}`)
+        }
+        pendingToolCalls.delete(message.toolCallId)
+        replayResults.set(message.toolCallId, { type: 'tool_result', tool_use_id: message.toolCallId,
+          content: message.content ?? '', ...(message.isError ? { is_error: true } : {}) })
+        continue
+      }
+      flushResults()
+      if (message.role !== 'user' && message.role !== 'assistant') throw new Error(`invalid canonical replay message: ${event.eventId}`)
       if (message.role === 'assistant') throw new Error('assistant replay messages must use model-response-committed')
       if (!message.id?.trim() && options.omitAnonymousReplayFromSessionTranscript) continue
       if (typeof message.content === 'string') emitMessage({ role: 'user', content: message.content, ...(message.id ? { id: message.id } : {}) })
