@@ -29,6 +29,39 @@ test('summarizes failed tests with safe names, statuses, durations and redacted 
   assert.match(summary.failedTests[0].error, /\[REDACTED\]/)
 })
 
+test('redacts compound OAuth and client-secret keys in all common casing and quote forms', async (t) => {
+  const cases = [
+    ['access_token', 'demo-access-unquoted'],
+    ['refresh_token', 'demo-refresh-unquoted'],
+    ['client_secret', 'demo-client-unquoted'],
+    ['ACCESS_TOKEN', 'demo-access-upper'],
+    ['Refresh_Token', 'demo-refresh-mixed'],
+    ['Client_Secret', 'demo-client-mixed'],
+    ['accessToken', 'demo-access-camel'],
+    ['refreshToken', 'demo-refresh-camel'],
+    ['clientSecret', 'demo-client-camel'],
+    ['oauth_refresh_token', 'demo-oauth-prefixed'],
+    ['client_secret_name', 'demo-client-suffixed'],
+    ['access_token', 'demo-access-double-quoted', '"'],
+    ['refresh_token', 'demo-refresh-single-quoted', "'"],
+    ['client_secret', 'demo-client-double-quoted', '"']
+  ]
+
+  for (const [key, secret, quote = ''] of cases) {
+    await t.test(`${key} (${quote ? 'quoted' : 'unquoted'})`, () => {
+      const input = `Error: ${key}=${quote}${secret}${quote}`
+      const summary = summarizeVitestReport({ testResults: [{
+        name: 'example.test.ts',
+        assertionResults: [{ status: 'failed', fullName: 'redaction boundary', failureMessages: [input] }]
+      }] }, {})
+
+      const serialized = JSON.stringify(summary)
+      assert.doesNotMatch(serialized, new RegExp(secret))
+      assert.match(summary.failedTests[0].error, /\[REDACTED\]/)
+    })
+  }
+})
+
 test('counts all test states and tolerates malformed optional report fields', () => {
   const summary = summarizeVitestReport({ testResults: [{
     name: 'src/example.test.ts',

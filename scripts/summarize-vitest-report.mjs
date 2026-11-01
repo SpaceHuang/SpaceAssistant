@@ -3,7 +3,7 @@ import path from 'node:path'
 
 const SECRET_PATTERNS = [
   /\bBearer\s+[^\s,;]+/gi,
-  /\b(?:api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+  /(?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|token|secret|password|authorization)(?:[_-][A-Za-z0-9]+)*\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gim,
   /\bsk-[A-Za-z0-9_-]{8,}\b/g,
   /\b(?:xox[baprs]-|gh[pousr]_|github_pat_)[A-Za-z0-9_-]+/gi,
   /https?:\/\/[^\s?#]+(?:\?[^\s#]*)?/gi,
