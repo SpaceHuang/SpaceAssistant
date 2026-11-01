@@ -6,6 +6,27 @@ const user = (id: string, content: string): CanonicalModelMessage => ({ role: 'u
 const assistant = (id: string, content: string): CanonicalModelMessage => ({ role: 'assistant', id, content })
 
 describe('shared session context rules', () => {
+  it('owns incoming messages once and shares frozen historical message objects across turns', () => {
+    const sourceMessage = { role: 'user' as const, id: 'shared-user', content: [{ type: 'text' as const, text: 'original' }] }
+    const seed = restoreLegacySessionContextSnapshot({ invocationId: 'shared-seed', turnId: 'shared-seed', committedVersion: 1, messages: [sourceMessage] })
+    sourceMessage.content[0]!.text = 'mutated outside'
+    const committedMessage = seed.committed[0]!
+    const next = beginContextTurn(seed, { invocationId: 'shared-next', baseVersion: 1,
+      inputMessages: [user('shared-next-user', 'next')], failureInputMessages: [], requestSystem: '' })
+    const incomingAssistant = { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'answer' }] }
+    const answered = applyContextEvent(next, { kind: 'model-response-committed', message: incomingAssistant })
+    incomingAssistant.content[0]!.text = 'mutated after append'
+
+    expect((seed.committed[0] as Extract<CanonicalModelMessage, { role: 'user' }>).content).toEqual([{ type: 'text', text: 'original' }])
+    expect(next.committed[0]).toBe(committedMessage)
+    expect(next.working[0]).toBe(committedMessage)
+    expect(answered.working[0]).toBe(committedMessage)
+    expect(answered.failure?.[0]).toBe(committedMessage)
+    expect(answered.working.at(-1)?.content).toEqual([{ type: 'text', text: 'answer' }])
+    expect(Object.isFrozen(committedMessage)).toBe(true)
+    expect(Object.isFrozen((committedMessage as Extract<CanonicalModelMessage, { role: 'user' }>).content)).toBe(true)
+  })
+
   it('promotes only the committed selection to the next immutable session context version', () => {
     const prior = [user('prior-user', 'prior question'), assistant('prior-assistant', 'prior answer')]
     const seed = restoreLegacySessionContextSnapshot({ invocationId: 'prior-invocation', turnId: 'prior-turn', committedVersion: 4, messages: prior })

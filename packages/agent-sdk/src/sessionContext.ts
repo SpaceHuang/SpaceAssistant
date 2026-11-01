@@ -36,11 +36,14 @@ function deepFreeze<T>(value: T): T {
   return value
 }
 
+const ownMessage = (message: CanonicalModelMessage): CanonicalModelMessage => deepFreeze(structuredClone(message))
+const ownMessages = (messages: readonly CanonicalModelMessage[]): readonly CanonicalModelMessage[] =>
+  Object.freeze(messages.map(ownMessage))
 const freezeMessages = (messages: readonly CanonicalModelMessage[]): readonly CanonicalModelMessage[] =>
-  Object.freeze(messages.map((message) => deepFreeze(structuredClone(message))))
+  Object.isFrozen(messages) ? messages : Object.freeze(messages)
 
 function readonlyMap<K, V>(source: ReadonlyMap<K, V>): ReadonlyMap<K, V> {
-  const map = new Map([...source].map(([key, value]) => [key, value && typeof value === 'object' ? deepFreeze(structuredClone(value)) : value]))
+  const map = new Map(source)
   const view = {
     get size() { return map.size },
     get: (key: K) => map.get(key),
@@ -77,7 +80,7 @@ const freezeState = (state: SessionContextState): SessionContextState => Object.
   pendingTools: readonlyMap(state.pendingTools),
   completedToolResults: readonlyMap(state.completedToolResults),
   approvedToolCallIds: readonlySet(state.approvedToolCallIds),
-  ...(state.requiredUserMessage ? { requiredUserMessage: deepFreeze(structuredClone(state.requiredUserMessage)) } : {})
+  ...(state.requiredUserMessage ? { requiredUserMessage: state.requiredUserMessage } : {})
 })
 
 /** Convert the legacy full-context events into one canonical state for both recovery and live turns. */
@@ -86,7 +89,7 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
   for (const event of input.events) {
     if (event.kind === 'session-input-committed') {
       const payload = event.payload as { messages?: unknown; system?: unknown; scope?: unknown }
-      if (Array.isArray(payload?.messages)) state = replaceCommitted(state, payload.messages as CanonicalModelMessage[])
+      if (Array.isArray(payload?.messages)) state = replaceCommitted(state, ownMessages(payload.messages as CanonicalModelMessage[]))
       if (payload?.scope && typeof payload.scope === 'object') state = freezeState({ ...state, scope: deepFreeze(structuredClone(payload.scope as ContextScope)) })
       if (typeof payload?.system === 'string') state = freezeState({ ...state, requestSystem: payload.system })
     } else if (event.kind === 'invocation-context-committed') {
@@ -101,9 +104,9 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
         // Protocol 2 entries written before inputMode stored the complete request in both
         // fields (and also carried `messages`). Preserve that historical snapshot meaning.
         const inputMode = explicitMode ?? (Array.isArray(payload.messages) ? 'baseline' : 'delta')
-        const additions = (inputMode === 'baseline' && Array.isArray(payload.messages)
-          ? payload.messages : payload.inputMessages) as CanonicalModelMessage[]
-        const failureAdditions = payload.failureInputMessages as CanonicalModelMessage[]
+        const additions = ownMessages((inputMode === 'baseline' && Array.isArray(payload.messages)
+          ? payload.messages : payload.inputMessages) as CanonicalModelMessage[])
+        const failureAdditions = ownMessages(payload.failureInputMessages as CanonicalModelMessage[])
         const failureMessages = failureAdditions.length
           ? inputMode === 'baseline' ? failureAdditions : [...state.committed, ...failureAdditions]
           : state.failure
@@ -116,7 +119,7 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
           parkBaseline,
           scope: deepFreeze(structuredClone(scope)),
           ...(typeof payload.invocationId === 'string' ? { activeInvocationId: payload.invocationId } : {}),
-          ...(payload.requiredUserMessage && typeof payload.requiredUserMessage === 'object' ? { requiredUserMessage: payload.requiredUserMessage as { id: string; message: CanonicalModelMessage } } : {}),
+          ...(payload.requiredUserMessage && typeof payload.requiredUserMessage === 'object' ? { requiredUserMessage: deepFreeze(structuredClone(payload.requiredUserMessage as { id: string; message: CanonicalModelMessage })) } : {}),
           ...(typeof payload.system === 'string' ? { requestSystem: payload.system } : {}) })
         continue
       }
@@ -125,21 +128,21 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
       if (replacement && !Array.isArray(replacement.messages)) throw new Error('CONTEXT_REPLACEMENT_MESSAGES_INVALID')
       const replacementMessages = replacement?.messages
       if (Array.isArray(payload?.messages) || replacementMessages) {
-        const messages = (replacementMessages ?? payload.messages) as CanonicalModelMessage[]
+        const messages = ownMessages((replacementMessages ?? payload.messages) as CanonicalModelMessage[])
         if (replacementMessages) {
           state = replaceCommitted(state, messages)
           continue
         }
         state = freezeState({ ...state, working: messages, failure: messages, parkBaseline: messages,
           ...(typeof payload.invocationId === 'string' ? { activeInvocationId: payload.invocationId } : {}),
-          ...(payload.requiredUserMessage && typeof payload.requiredUserMessage === 'object' ? { requiredUserMessage: payload.requiredUserMessage as { id: string; message: CanonicalModelMessage } } : {}),
+          ...(payload.requiredUserMessage && typeof payload.requiredUserMessage === 'object' ? { requiredUserMessage: deepFreeze(structuredClone(payload.requiredUserMessage as { id: string; message: CanonicalModelMessage })) } : {}),
           ...(typeof payload.system === 'string' ? { requestSystem: payload.system } : {}) })
       }
     } else if (event.kind === 'transcript-compacted') {
       const payload = event.payload as { contextProtocol?: unknown; messages?: unknown; failureCut?: unknown }
       if (payload?.contextProtocol !== undefined && payload.contextProtocol !== 2) throw new Error('CONTEXT_PROTOCOL_UNKNOWN')
       if (Array.isArray(payload?.messages)) {
-        const messages = payload.messages as CanonicalModelMessage[]
+        const messages = ownMessages(payload.messages as CanonicalModelMessage[])
         state = applyContextEvent(state, { kind: 'transcript-compacted', messages, ...(Number.isInteger(payload.failureCut) ? { failureCut: Number(payload.failureCut) } : {}) })
       }
     } else if (event.kind === 'model-response-committed' || event.kind === 'replay-message-committed') {
@@ -220,11 +223,13 @@ export function beginContextTurn(state: SessionContextState, input: Readonly<{
   requestSystem: string
 }>): SessionContextState {
   if (state.committedVersion !== input.baseVersion) throw new Error('CONTEXT_BASE_VERSION_MISMATCH')
-  const working = [...state.committed, ...input.inputMessages]
-  const failureBase = input.failureInputMessages.length > 0 ? [...state.committed, ...input.failureInputMessages] : state.failure ?? state.committed
+  const inputMessages = ownMessages(input.inputMessages)
+  const failureInputMessages = ownMessages(input.failureInputMessages)
+  const working = [...state.committed, ...inputMessages]
+  const failureBase = failureInputMessages.length > 0 ? [...state.committed, ...failureInputMessages] : state.failure ?? state.committed
   return freezeState({ ...state, working, failure: failureBase, parkBaseline: failureBase,
     pendingTools: new Map(), completedToolResults: new Map(), activeInvocationId: input.invocationId,
-    ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}), requestSystem: input.requestSystem })
+    ...(input.requiredUserMessage ? { requiredUserMessage: deepFreeze(structuredClone(input.requiredUserMessage)) } : {}), requestSystem: input.requestSystem })
 }
 
 /** Apply one business fact; tool results are exposed in model-declared call order. */
@@ -236,15 +241,17 @@ export function applyContextEvent(state: SessionContextState, event: SessionCont
       if (JSON.stringify(event.messages[index]) === JSON.stringify(required.message)) { matchIndex = index; break }
     }
     if (Number.isInteger(event.failureCut) && (matchIndex < 0 || matchIndex >= event.messages.length || !required || JSON.stringify(event.messages[matchIndex]) !== JSON.stringify(required.message))) throw new Error('CONTEXT_FAILURE_CUT_INVALID')
-    const failure = required && matchIndex >= 0 ? event.messages.slice(0, matchIndex + 1) : null
+    const messages = ownMessages(event.messages)
+    const failure = required && matchIndex >= 0 ? messages.slice(0, matchIndex + 1) : null
     const pendingTools = new Map<string, CanonicalToolCall>()
-    for (const message of event.messages) if (message.role === 'assistant') for (const call of message.toolCalls ?? []) pendingTools.set(call.id, call)
-    return freezeState({ ...state, working: event.messages, failure, pendingTools, completedToolResults: new Map() })
+    for (const message of messages) if (message.role === 'assistant') for (const call of message.toolCalls ?? []) pendingTools.set(call.id, call)
+    return freezeState({ ...state, working: messages, failure, pendingTools, completedToolResults: new Map() })
   }
   if (event.kind === 'model-response-committed' || event.kind === 'replay-message-committed') {
     const pendingTools = new Map(state.pendingTools)
-    if (event.message.role === 'assistant') for (const call of event.message.toolCalls ?? []) pendingTools.set(call.id, call)
-    return freezeState({ ...state, working: [...state.working, event.message], pendingTools })
+    const message = ownMessage(event.message)
+    if (message.role === 'assistant') for (const call of message.toolCalls ?? []) pendingTools.set(call.id, call)
+    return freezeState({ ...state, working: [...state.working, message], pendingTools })
   }
   if (event.kind === 'approval-resolved') {
     const approvedToolCallIds = new Set(state.approvedToolCallIds)
@@ -253,10 +260,11 @@ export function applyContextEvent(state: SessionContextState, event: SessionCont
     return freezeState({ ...state, approvedToolCallIds })
   }
   if (event.kind === 'tool-call-started') {
-    return freezeState({ ...state, pendingTools: new Map(state.pendingTools).set(event.toolCall.id, event.toolCall) })
+    return freezeState({ ...state, pendingTools: new Map(state.pendingTools).set(event.toolCall.id, deepFreeze(structuredClone(event.toolCall))) })
   }
   const pendingTools = new Map(state.pendingTools)
-  const completedToolResults = new Map(state.completedToolResults).set(event.toolCallId, event.message)
+  const message = ownMessage(event.message) as Extract<CanonicalModelMessage, { role: 'tool' }>
+  const completedToolResults = new Map(state.completedToolResults).set(event.toolCallId, message)
   let index = -1
   for (let cursor = state.working.length - 1; cursor >= 0; cursor -= 1) {
     const message = state.working[cursor]

@@ -240,6 +240,12 @@ export type CanonicalSessionSnapshot = Readonly<{
 export function canonicalSessionTranscriptEvents(events: readonly HistoryEvent[]): HistoryEvent[] {
   const transcriptEvents: HistoryEvent[] = []
   for (const event of events) {
+    if (event.kind === 'replay-message-committed') {
+      const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+        ? event.payload as { message?: { role?: unknown } } : undefined
+      // Model-context tool results pair with a tool call in History but are not standalone chat bodies.
+      if (payload?.message?.role === 'tool') continue
+    }
     if (event.kind === 'tool-call-started' || event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' || event.kind === 'approval-deferred') continue
     if (event.kind === 'model-response-committed') {
       const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)

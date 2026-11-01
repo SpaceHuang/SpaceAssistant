@@ -940,8 +940,8 @@ export class SqliteAgentHistory implements HistoryPort {
         this.validateCanonicalSessionToolTransitions(events)
         const hydratedEvents = this.spillStore ? events.map((event) => this.hydrateLargeToolResultSync(event)) : events
         validateHistoryTransition([], hydratedEvents)
-        const messages = rebuildClaudeMessagesFromHistory(canonicalSessionTranscriptEvents(hydratedEvents), { omitAnonymousReplayFromSessionTranscript: true,
-          allowPendingToolCalls: streamRows.at(-1)?.kind === 'invocation-interrupted' })
+        const messages = this.canonicalSessionBodyMessages(rebuildClaudeMessagesFromHistory(canonicalSessionTranscriptEvents(hydratedEvents), { omitAnonymousReplayFromSessionTranscript: true,
+          allowPendingToolCalls: streamRows.at(-1)?.kind === 'invocation-interrupted' }), invocationId)
         const last = streamRows.at(-1)!
         snapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq, commitOrder: last.commit_order, messages })
       }
@@ -1003,8 +1003,8 @@ export class SqliteAgentHistory implements HistoryPort {
         this.validateCanonicalSessionToolTransitions(events)
         const hydrated = this.spillStore ? events.map((event) => this.hydrateLargeToolResultSync(event)) : events
         validateHistoryTransition([], hydrated)
-        const messages = rebuildClaudeMessagesFromHistory(canonicalSessionTranscriptEvents(hydrated), { omitAnonymousReplayFromSessionTranscript: true,
-          allowPendingToolCalls: streamRows.at(-1)?.kind === 'invocation-interrupted' })
+        const messages = this.canonicalSessionBodyMessages(rebuildClaudeMessagesFromHistory(canonicalSessionTranscriptEvents(hydrated), { omitAnonymousReplayFromSessionTranscript: true,
+          allowPendingToolCalls: streamRows.at(-1)?.kind === 'invocation-interrupted' }), invocationId)
         const last = streamRows.at(-1)!
         snapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq, commitOrder: last.commit_order, messages })
       }
@@ -1018,6 +1018,17 @@ export class SqliteAgentHistory implements HistoryPort {
       return { kind: 'matched', messages: folded, sessionId, sessionGeneration: session.generation, sessionSeq: watermark.session_seq,
         commitOrder: watermark.commit_order, watermarkEventId: watermark.event_id, watermarkInvocationId: watermark.invocation_id, eventCount: rows.length }
     } catch { return { kind: 'unavailable', reason: 'snapshot-invalid' } }
+  }
+
+  private canonicalSessionBodyMessages(
+    messages: readonly import('../../src/shared/api').ClaudeChatMessageWithBlocks[], invocationId: string
+  ): import('../../src/shared/api').ClaudeChatMessageWithBlocks[] {
+    return messages.flatMap((message, index) => {
+      if (message.role === 'assistant' && Array.isArray(message.content) && message.content.length === 0) return []
+      if (message.role === 'user' && Array.isArray(message.content) && message.content.length > 0 &&
+        message.content.every((block) => block && typeof block === 'object' && 'type' in block && block.type === 'tool_result')) return []
+      return [message.id?.trim() ? message : { ...message, id: `canonical:${invocationId}:${index}` }]
+    })
   }
 
   private isCanonicalSessionInvocationRowsValid(sessionId: string, invocationId: string, rows: readonly OrderedSessionEventRow[]): boolean {

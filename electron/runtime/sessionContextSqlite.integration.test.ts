@@ -11,11 +11,12 @@ import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src
 import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection, openDatabase } from '../database'
-import { createSession } from '../database/operations'
+import { appendMessage, createSession } from '../database/operations'
 import { commitSessionTranscript, readSessionTranscript } from '../database/sessionTranscript'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { createSpillStore } from '../storage/spillStore'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { getProjectedMessages } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { restoreLegacySessionContextSnapshot, restoreSessionContext, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
 
@@ -157,6 +158,7 @@ describe('SDK session context SQLite replay contract', () => {
     const temp = createTempDatabase('session-context-rejected-tool-replay-')
     let db = temp.db
     const session = createSession(db, { name: 'rejected-tool-replay', model: 'test' })
+    appendMessage(db, { id: 'rejected-user', sessionId: session.id, role: 'user', content: 'try lookup', timestamp: 1, status: 'sent' })
     const registry = new ModelProviderRegistry()
     let modelTurn = 0
     registry.register(route, { providerId: 'rejected-tool-provider', stream: async function* () {
@@ -177,7 +179,7 @@ describe('SDK session context SQLite replay contract', () => {
     try {
       const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
       await runAgentTurn({ registry, routeId: route.routeId, invocationId: 'rejected-invocation', turnId: 'rejected-turn', sessionId: session.id,
-        history, request: { messages: [{ role: 'user', id: 'rejected-user', content: 'try lookup' }], maxTokens: 32 },
+        history, request: { messages: [{ role: 'user', id: 'rejected-user', content: 'try lookup', timestamp: 1 }], maxTokens: 32 },
         sessionTranscriptBaseVersion: 0, sessionTranscriptCommitProtocol: 2, maxModelTurns: 2,
         safetyGate: new SafetyGate({ capabilities, permitStore: new InMemorySafetyPermitStore(), policy: createAgentSdkSafetyPolicy() }),
         prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
@@ -191,6 +193,12 @@ describe('SDK session context SQLite replay contract', () => {
       const committedVersion = readSessionTranscript(db, session.id).version
       const historyEvents = (await history.read('rejected-invocation')).events
       expect(restoreSessionContext({ committedVersion, events: historyEvents }).committed).toEqual(warm?.committed)
+      const shadow = history.readCanonicalSessionTranscriptForShadow(session.id)
+      if (shadow.kind !== 'matched') throw new Error(`canonical transcript shadow unavailable: ${shadow.reason}`)
+      expect(shadow.messages.some((message) => message.role === 'tool')).toBe(false)
+      getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id='rejected-user'").run()
+      expect(getProjectedMessages(db, session.id).find(({ id }) => id === 'rejected-user')?.content).toBe('try lookup')
       db.close()
       db = openDatabase(temp.dbPath)
       expect(readSessionTranscript(db, session.id).messages).toEqual(warm?.committed)
@@ -232,7 +240,11 @@ describe('SDK session context SQLite replay contract', () => {
         onSessionContextCommitted: (state) => { warm = state } })
       expect(warm?.committed.map((message) => message.role)).toEqual(['user', 'assistant', 'tool', 'user', 'assistant'])
       const version = readSessionTranscript(db, session.id).version
-      expect(restoreSessionContext({ committedVersion: version, events: (await history.read('output-limit-invocation')).events }).committed).toEqual(warm?.committed)
+      const outputLimitEvents = (await history.read('output-limit-invocation')).events
+      expect(restoreSessionContext({ committedVersion: version, events: outputLimitEvents }).committed).toEqual(warm?.committed)
+      const shadow = history.readCanonicalSessionTranscriptForShadow(session.id)
+      if (shadow.kind !== 'matched') throw new Error(`output-limit canonical shadow unavailable: ${shadow.reason}`)
+      if (shadow.kind === 'matched') expect(shadow.messages.some((message) => message.role === 'tool')).toBe(false)
       db.close()
       db = openDatabase(temp.dbPath)
       const reopened = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
