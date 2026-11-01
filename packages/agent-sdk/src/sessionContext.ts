@@ -43,6 +43,8 @@ const ownMessages = (messages: readonly CanonicalModelMessage[]): readonly Canon
   Object.freeze(messages.map(ownMessage))
 const freezeOwnedMessages = (messages: readonly CanonicalModelMessage[]): readonly CanonicalModelMessage[] =>
   Object.freeze(messages.map(deepFreeze))
+const mutableOwnedMessages = (messages: readonly CanonicalModelMessage[]): CanonicalModelMessage[] =>
+  messages.map(deepFreeze)
 const freezeMessages = (messages: readonly CanonicalModelMessage[]): readonly CanonicalModelMessage[] =>
   Object.isFrozen(messages) ? messages : Object.freeze(messages)
 export const SESSION_CONTEXT_NEUTRAL_HISTORY_KINDS = [
@@ -118,6 +120,7 @@ function restoreSessionContextWithOwnership(
   input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>,
   eventsAreOwned: boolean
 ): SessionContextState {
+  if (eventsAreOwned) return restoreOwnedSessionContextLinear(input)
   // On large histories, cheaply identify mixed event kinds before validating the
   // simple path's payloads. Mixed histories are reduced in segments below, so
   // validating every old simple-turn payload here would only repeat that work.
@@ -162,6 +165,271 @@ function restoreSessionContextWithOwnership(
   }
   flushSimpleRun()
   return freezeState({ ...state, committedVersion: input.committedVersion })
+}
+
+type MutableReplaySelection = Readonly<{
+  base: CanonicalModelMessage[]
+  baseLength: number
+  additions: readonly CanonicalModelMessage[]
+  filterStart: number
+}> | null
+
+type MutableToolGroup = {
+  callIds: readonly string[]
+  cursor: number
+  emitted: Set<string>
+}
+
+/** Cold History owns its decoded payloads, so replay can advance private buffers in place. */
+function restoreOwnedSessionContextLinear(
+  input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>
+): SessionContextState {
+  let committed: CanonicalModelMessage[] = []
+  let committedLength = 0
+  let working = committed
+  let workingFilterStart = 0
+  let failure: MutableReplaySelection = { base: committed, baseLength: 0, additions: [], filterStart: 0 }
+  let parkBaseline: MutableReplaySelection = failure
+  let scope: ContextScope | undefined
+  let requestSystem = ''
+  let activeInvocationId: string | undefined
+  let requiredUserMessage: SessionContextState['requiredUserMessage']
+  const pendingTools = new Map<string, CanonicalToolCall>()
+  const completedToolResults = new Map<string, Extract<CanonicalModelMessage, { role: 'tool' }>>()
+  const approvedToolCallIds = new Set<string>()
+  const toolGroups = new Map<string, MutableToolGroup>()
+
+  const selection = (base: CanonicalModelMessage[], baseLength = base.length,
+    additions: readonly CanonicalModelMessage[] = [], filterStart = 0): MutableReplaySelection =>
+    ({ base, baseLength, additions, filterStart })
+  const materialize = (source: MutableReplaySelection): CanonicalModelMessage[] => {
+    if (!source) throw new Error('CONTEXT_FAILURE_SELECTION_UNAVAILABLE')
+    if (source.additions.length === 0 && source.baseLength === source.base.length && !Object.isFrozen(source.base)) return source.base
+    return [...source.base.slice(0, source.baseLength), ...source.additions]
+  }
+  const removeSystemMessagesFrom = (messages: CanonicalModelMessage[], start: number): void => {
+    let write = Math.min(start, messages.length)
+    for (let read = write; read < messages.length; read += 1) {
+      const message = messages[read]!
+      if (message.role !== 'system') messages[write++] = message
+    }
+    messages.length = write
+  }
+  const clearTools = (): void => {
+    pendingTools.clear()
+    completedToolResults.clear()
+    approvedToolCallIds.clear()
+    toolGroups.clear()
+  }
+  const commitMessages = (messages: CanonicalModelMessage[]): void => {
+    committed = messages
+    committedLength = messages.length
+    working = messages
+    workingFilterStart = messages.length
+    failure = selection(messages)
+    parkBaseline = failure
+    clearTools()
+    requestSystem = ''
+    activeInvocationId = undefined
+    requiredUserMessage = undefined
+  }
+  const createToolGroup = (callIds: readonly string[], emitted = new Set<string>()): MutableToolGroup => {
+    const group: MutableToolGroup = { callIds, cursor: 0, emitted }
+    while (group.cursor < callIds.length && emitted.has(callIds[group.cursor]!)) group.cursor += 1
+    for (const callId of callIds) toolGroups.set(callId, group)
+    return group
+  }
+  const addAssistantCalls = (message: CanonicalModelMessage): void => {
+    if (message.role !== 'assistant' || !message.toolCalls?.length) return
+    const calls = message.toolCalls
+    createToolGroup(calls.map((call) => call.id))
+    for (const call of calls) pendingTools.set(call.id, call)
+  }
+  const rebuildCompactedToolGroups = (messages: readonly CanonicalModelMessage[]): void => {
+    pendingTools.clear()
+    toolGroups.clear()
+    for (let index = 0; index < messages.length; index += 1) {
+      const assistant = messages[index]
+      if (assistant?.role !== 'assistant' || !assistant.toolCalls?.length) continue
+      const callIds = assistant.toolCalls.map((call) => call.id)
+      const callIdSet = new Set(callIds)
+      const emitted = new Set<string>()
+      for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
+        const nested = messages[cursor]
+        if (nested?.role === 'assistant') break
+        if (nested?.role === 'tool' && callIdSet.has(nested.toolCallId)) emitted.add(nested.toolCallId)
+      }
+      createToolGroup(callIds, emitted)
+      for (const call of assistant.toolCalls) pendingTools.set(call.id, call)
+    }
+  }
+  const completeTool = (toolCallId: string, incoming: Extract<CanonicalModelMessage, { role: 'tool' }>): void => {
+    if (!pendingTools.has(toolCallId)) throw new Error('CONTEXT_TOOL_RESULT_WITHOUT_CALL')
+    const group = toolGroups.get(toolCallId)
+    if (!group) throw new Error('CONTEXT_TOOL_RESULT_WITHOUT_CALL')
+    const message = deepFreeze(incoming)
+    completedToolResults.set(toolCallId, message)
+    while (group.cursor < group.callIds.length) {
+      const nextId = group.callIds[group.cursor]!
+      if (group.emitted.has(nextId)) { group.cursor += 1; continue }
+      const result = completedToolResults.get(nextId)
+      if (!result) break
+      working.push(result)
+      group.emitted.add(nextId)
+      pendingTools.delete(nextId)
+      completedToolResults.delete(nextId)
+      group.cursor += 1
+    }
+  }
+
+  for (const event of input.events) {
+    if (event.kind === 'session-input-committed') {
+      const payload = event.payload as { messages?: unknown; system?: unknown; scope?: unknown }
+      if (Array.isArray(payload?.messages)) {
+        committed = mutableOwnedMessages(payload.messages as CanonicalModelMessage[])
+        committedLength = committed.length
+        working = committed
+        workingFilterStart = 0
+        failure = selection(working, working.length, [], 0)
+        parkBaseline = failure
+        clearTools()
+        activeInvocationId = undefined
+        requiredUserMessage = undefined
+        requestSystem = ''
+      }
+      if (payload?.scope && typeof payload.scope === 'object') scope = deepFreeze(structuredClone(payload.scope as ContextScope))
+      if (typeof payload?.system === 'string') requestSystem = payload.system
+    } else if (event.kind === 'invocation-context-committed') {
+      const payload = event.payload as { contextProtocol?: unknown; inputMode?: unknown; inputMessages?: unknown; failureInputMessages?: unknown; scope?: unknown; messages?: unknown; replacement?: unknown; invocationId?: unknown; requiredUserMessage?: unknown; system?: unknown }
+      if (payload?.contextProtocol !== undefined && payload.contextProtocol !== 2) throw new Error('CONTEXT_PROTOCOL_UNKNOWN')
+      if (payload?.contextProtocol === 2 && payload.inputMessages !== undefined) {
+        if (!Array.isArray(payload.inputMessages) || !Array.isArray(payload.failureInputMessages) || !payload.scope || typeof payload.scope !== 'object') throw new Error('CONTEXT_INPUT_INVALID')
+        const nextScope = payload.scope as ContextScope
+        if (scope && JSON.stringify(scope) !== JSON.stringify(nextScope)) throw new Error('CONTEXT_SCOPE_MISMATCH')
+        const mode = payload.inputMode
+        if (mode !== undefined && mode !== 'baseline' && mode !== 'delta') throw new Error('CONTEXT_INPUT_MODE_INVALID')
+        const inputMode = mode ?? (Array.isArray(payload.messages) ? 'baseline' : 'delta')
+        const additions = mutableOwnedMessages((inputMode === 'baseline' && Array.isArray(payload.messages)
+          ? payload.messages : payload.inputMessages) as CanonicalModelMessage[])
+        const failureAdditions = freezeOwnedMessages(payload.failureInputMessages as CanonicalModelMessage[]) as CanonicalModelMessage[]
+        if (inputMode === 'baseline') {
+          working = additions
+          workingFilterStart = 0
+        } else {
+          working = committed
+          working.length = committedLength
+          working.push(...additions)
+          workingFilterStart = committedLength
+        }
+        if (failureAdditions.length) {
+          failure = inputMode === 'baseline' ? selection(failureAdditions) : selection(committed, committedLength, failureAdditions, committedLength)
+          parkBaseline = inputMode === 'baseline' ? selection(failureAdditions) : selection(committed, committedLength, failureAdditions, committedLength)
+        }
+        scope = deepFreeze(structuredClone(nextScope))
+        if (typeof payload.invocationId === 'string') activeInvocationId = payload.invocationId
+        if (payload.requiredUserMessage && typeof payload.requiredUserMessage === 'object') {
+          requiredUserMessage = deepFreeze(structuredClone(payload.requiredUserMessage as { id: string; message: CanonicalModelMessage }))
+        }
+        if (typeof payload.system === 'string') requestSystem = payload.system
+        continue
+      }
+      const replacement = payload?.replacement && typeof payload.replacement === 'object' ? payload.replacement as { reason?: unknown; messages?: unknown } : undefined
+      if (replacement && replacement.reason !== 'initial-scope' && replacement.reason !== 'manual-review') throw new Error('CONTEXT_REPLACEMENT_REASON_UNKNOWN')
+      if (replacement && !Array.isArray(replacement.messages)) throw new Error('CONTEXT_REPLACEMENT_MESSAGES_INVALID')
+      const replacementMessages = replacement?.messages
+      if (Array.isArray(payload?.messages) || replacementMessages) {
+        const messages = mutableOwnedMessages((replacementMessages ?? payload.messages) as CanonicalModelMessage[])
+        if (replacementMessages) {
+          commitMessages(messages)
+          continue
+        }
+        working = messages
+        workingFilterStart = 0
+        failure = selection(working)
+        parkBaseline = failure
+        if (typeof payload.invocationId === 'string') activeInvocationId = payload.invocationId
+        if (payload.requiredUserMessage && typeof payload.requiredUserMessage === 'object') {
+          requiredUserMessage = deepFreeze(structuredClone(payload.requiredUserMessage as { id: string; message: CanonicalModelMessage }))
+        }
+        if (typeof payload.system === 'string') requestSystem = payload.system
+      }
+    } else if (event.kind === 'transcript-compacted') {
+      const payload = event.payload as { contextProtocol?: unknown; messages?: unknown; failureCut?: unknown }
+      if (payload?.contextProtocol !== undefined && payload.contextProtocol !== 2) throw new Error('CONTEXT_PROTOCOL_UNKNOWN')
+      if (Array.isArray(payload?.messages)) {
+        const messages = mutableOwnedMessages(payload.messages as CanonicalModelMessage[])
+        let matchIndex = Number.isInteger(payload.failureCut) ? Number(payload.failureCut) : -1
+        if (!Number.isInteger(payload.failureCut) && requiredUserMessage) for (let index = messages.length - 1; index >= 0; index -= 1) {
+          if (JSON.stringify(messages[index]) === JSON.stringify(requiredUserMessage.message)) { matchIndex = index; break }
+        }
+        if (Number.isInteger(payload.failureCut) && (matchIndex < 0 || matchIndex >= messages.length || !requiredUserMessage ||
+          JSON.stringify(messages[matchIndex]) !== JSON.stringify(requiredUserMessage.message))) throw new Error('CONTEXT_FAILURE_CUT_INVALID')
+        working = messages
+        workingFilterStart = 0
+        failure = requiredUserMessage && matchIndex >= 0
+          ? selection(working.slice(0, matchIndex + 1))
+          : null
+        rebuildCompactedToolGroups(working)
+        completedToolResults.clear()
+      }
+    } else if (event.kind === 'model-response-committed' || event.kind === 'replay-message-committed') {
+      const payload = event.payload as { message?: unknown }
+      if (payload?.message && typeof payload.message === 'object') {
+        const message = deepFreeze(payload.message as CanonicalModelMessage)
+        if (event.kind === 'replay-message-committed' && message.role === 'tool') {
+          completeTool(message.toolCallId, message)
+        } else {
+          working.push(message)
+          addAssistantCalls(message)
+        }
+      }
+    } else if (event.kind === 'tool-call-started') {
+      const payload = event.payload as { toolCall?: unknown }
+      if (payload?.toolCall && typeof payload.toolCall === 'object') {
+        const call = deepFreeze(payload.toolCall as CanonicalToolCall)
+        pendingTools.set(call.id, call)
+      }
+    } else if (event.kind === 'tool-call-finished') {
+      const payload = event.payload as { toolCallId?: unknown; message?: unknown; replayContent?: unknown; result?: unknown; isError?: unknown }
+      const result = payload.message && typeof payload.message === 'object'
+        ? payload.message as Extract<CanonicalModelMessage, { role: 'tool' }>
+        : typeof payload.toolCallId === 'string' && (payload.replayContent !== undefined || payload.result !== undefined)
+          ? { role: 'tool' as const, toolCallId: payload.toolCallId, content: payload.replayContent ?? payload.result, isError: payload.isError === true }
+          : undefined
+      if (typeof payload.toolCallId === 'string' && result) {
+        completeTool(payload.toolCallId, result)
+        if (approvedToolCallIds.has(payload.toolCallId)) {
+          const resultIndex = working.findIndex((message) => message.role === 'tool' && message.toolCallId === payload.toolCallId)
+          if (resultIndex >= 0) working.splice(resultIndex + 1, 0, createApprovalSystemMessage())
+        }
+      }
+    } else if (event.kind === 'approval-resolved') {
+      const payload = event.payload as { toolCallId?: unknown; approved?: unknown; answerer?: unknown }
+      if (typeof payload.toolCallId === 'string' && payload.approved === true && payload.answerer === 'user') approvedToolCallIds.add(payload.toolCallId)
+    } else if (event.kind === 'invocation-completed' || event.kind === 'invocation-parked' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted') {
+      const target = event.kind === 'invocation-completed' ? 'working' : event.kind === 'invocation-parked' ? 'park-baseline' : 'failure'
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload as { contextSelection?: unknown; status?: unknown } : undefined
+      if (payload?.contextSelection && typeof payload.contextSelection === 'object') {
+        const terminalSelection = payload.contextSelection as { contextProtocol?: unknown; target?: unknown }
+        if (terminalSelection.contextProtocol !== 2 || terminalSelection.target !== target) throw new Error('CONTEXT_TERMINAL_SELECTION_MISMATCH')
+      }
+      const selectedSource = target === 'working' ? selection(working, working.length, [], workingFilterStart)
+        : target === 'park-baseline' ? parkBaseline : failure
+      const selected = materialize(selectedSource)
+      const selectedFilterStart = target === 'working' ? workingFilterStart
+        : (target === 'park-baseline' ? parkBaseline : failure)?.filterStart ?? 0
+      removeSystemMessagesFrom(selected, selectedFilterStart)
+      commitMessages(selected)
+    }
+  }
+
+  const finalCommitted = committed.length === committedLength ? committed : committed.slice(0, committedLength)
+  const finalFailure = failure === null ? null : materialize(failure)
+  const finalParkBaseline = materialize(parkBaseline)
+  return freezeState({ committedVersion: input.committedVersion, committed: finalCommitted, working,
+    failure: finalFailure, parkBaseline: finalParkBaseline, pendingTools, completedToolResults,
+    approvedToolCallIds, requestSystem, ...(scope ? { scope } : {}), ...(requiredUserMessage ? { requiredUserMessage } : {}),
+    ...(activeInvocationId ? { activeInvocationId } : {}) })
 }
 
 function restoreSessionContextGeneric(

@@ -83,6 +83,33 @@ describe('shared session context rules', () => {
     expect(inputModeReads).toBe(1)
   })
 
+  it('replays owned tool-heavy history in declaration order across approval notes and terminal selection', () => {
+    const calls = ['a', 'b', 'c'].map((id) => ({ id, name: `tool-${id}`, input: {} }))
+    const event = (sequence: number, kind: string, payload: unknown) => ({ eventId: `owned-${sequence}`, idempotencyKey: `owned-${sequence}`,
+      invocationId: 'owned-tools', turnId: 'owned-turn', sequence, schemaVersion: 1, kind, payload })
+    const events = [
+      event(1, 'invocation-context-committed', { contextProtocol: 2, inputMode: 'baseline', messages: [user('owned-u', 'run')],
+        inputMessages: [user('owned-u', 'run')], failureInputMessages: [user('owned-u', 'run')], scope: { kind: 'session', sessionId: 'owned-tools' } }),
+      event(2, 'model-response-committed', { message: { role: 'assistant', content: '', toolCalls: calls } }),
+      ...calls.map((toolCall, index) => event(3 + index, 'tool-call-started', { toolCall })),
+      event(6, 'approval-resolved', { toolCallId: 'a', approved: true, answerer: 'user' }),
+      event(7, 'tool-call-finished', { toolCallId: 'b', replayContent: 'result-b', isError: false }),
+      event(8, 'tool-call-finished', { toolCallId: 'a', replayContent: 'result-a', isError: false }),
+      event(9, 'tool-call-finished', { toolCallId: 'c', replayContent: 'result-c', isError: false }),
+      event(10, 'invocation-completed', { status: 'completed', contextSelection: { contextProtocol: 2, target: 'working' } })
+    ] as import('../src/history').HistoryEvent[]
+
+    const restored = restoreSessionContextFromOwnedEvents({ committedVersion: 1, events })
+
+    expect(restored.committed.filter((message) => message.role === 'tool').map((message) => message.role === 'tool' ? message.toolCallId : null))
+      .toEqual(['a', 'b', 'c'])
+    expect(restored.committed.filter((message) => message.role === 'system')).toEqual([])
+    const pending = restoreSessionContextFromOwnedEvents({ committedVersion: 0, events: events.slice(0, -1) })
+    expect(pending.working.filter((message) => message.role === 'system')).toEqual([createApprovalSystemMessage()])
+    expect(restored.pendingTools.size).toBe(0)
+    expect(restored.completedToolResults.size).toBe(0)
+  })
+
   it('owns incoming messages once and shares frozen historical message objects across turns', () => {
     const sourceMessage = { role: 'user' as const, id: 'shared-user', content: [{ type: 'text' as const, text: 'original' }] }
     const seed = restoreLegacySessionContextSnapshot({ invocationId: 'shared-seed', turnId: 'shared-seed', committedVersion: 1, messages: [sourceMessage] })
