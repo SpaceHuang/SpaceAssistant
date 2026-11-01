@@ -69,6 +69,9 @@ describe('SDK session context SQLite replay contract', () => {
       }
       if (turn === 2) await expect(runAgentTurn(input)).rejects.toThrow('deterministic provider failure')
       else await runAgentTurn(input)
+      const writtenHistory = await history.read(`invocation-${turn}`)
+      expect(writtenHistory.events.some((event) => event.kind === 'model-request-started')).toBe(true)
+      expect(writtenHistory.events.some((event) => event.kind === 'provider-attempt-result')).toBe(true)
       const replayed = readSessionTranscript(currentDb, session.id)
       expect(replayed.version).toBe(turn)
       expect(committed).toBeDefined()

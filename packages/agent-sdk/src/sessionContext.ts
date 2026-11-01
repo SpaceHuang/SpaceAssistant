@@ -43,6 +43,14 @@ const ownMessages = (messages: readonly CanonicalModelMessage[]): readonly Canon
   Object.freeze(messages.map(ownMessage))
 const freezeMessages = (messages: readonly CanonicalModelMessage[]): readonly CanonicalModelMessage[] =>
   Object.isFrozen(messages) ? messages : Object.freeze(messages)
+export const SESSION_CONTEXT_NEUTRAL_HISTORY_KINDS = [
+  'model-request-started', 'provider-retry-scheduled', 'provider-attempt-result', 'model-attempt-discarded'
+] as const satisfies readonly HistoryEvent['kind'][]
+const contextNeutralObservationKinds: ReadonlySet<string> = new Set(SESSION_CONTEXT_NEUTRAL_HISTORY_KINDS)
+const simpleCompletedHistoryKinds: ReadonlySet<string> = new Set([
+  'session-input-committed', 'invocation-context-committed', 'model-response-committed', 'invocation-completed', ...SESSION_CONTEXT_NEUTRAL_HISTORY_KINDS
+])
+const contextTerminalKinds: ReadonlySet<string> = new Set(['invocation-completed', 'invocation-parked', 'invocation-failed', 'invocation-interrupted'])
 
 const ownedReadonlyMaps = new WeakSet<object>()
 const ownedReadonlySets = new WeakSet<object>()
@@ -99,6 +107,49 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
   const simpleRestored = restoreSimpleCompletedSessionContext(input)
   if (simpleRestored) return simpleRestored
   let state = freezeState({ committedVersion: input.committedVersion, committed: [], working: [], failure: [], parkBaseline: [], pendingTools: new Map(), completedToolResults: new Map(), approvedToolCallIds: new Set(), requestSystem: '' })
+  let simpleRun: ContextReplayEvent[] = []
+  let currentTurn: ContextReplayEvent[] = []
+  let currentTurnIsSimple = true
+  const flushSimpleRun = () => {
+    if (!simpleRun.length) return
+    state = restoreSimpleCompletedSessionContext({ committedVersion: input.committedVersion, events: simpleRun }, state)
+      ?? restoreSessionContextGeneric({ committedVersion: input.committedVersion, events: simpleRun }, state)
+    simpleRun = []
+  }
+  for (const event of input.events) {
+    currentTurn.push(event)
+    if (!simpleCompletedHistoryKinds.has(event.kind)) currentTurnIsSimple = false
+    if (event.kind === 'model-response-committed') {
+      const message = (event.payload as { message?: CanonicalModelMessage } | undefined)?.message
+      if (!message || message.role !== 'assistant' || message.toolCalls?.length) currentTurnIsSimple = false
+    }
+    if (event.kind === 'invocation-completed') {
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload as { status?: unknown; contextSelection?: unknown } : undefined
+      const selection = payload?.contextSelection as { contextProtocol?: unknown; target?: unknown } | undefined
+      if (payload?.status !== 'completed' || (selection && (selection.contextProtocol !== 2 || selection.target !== 'working'))) currentTurnIsSimple = false
+    }
+    if (!contextTerminalKinds.has(event.kind)) continue
+    if (currentTurnIsSimple) simpleRun.push(...currentTurn)
+    else {
+      flushSimpleRun()
+      state = restoreSessionContextGeneric({ committedVersion: input.committedVersion, events: currentTurn }, state)
+    }
+    currentTurn = []
+    currentTurnIsSimple = true
+  }
+  if (currentTurn.length) {
+    flushSimpleRun()
+    state = restoreSessionContextGeneric({ committedVersion: input.committedVersion, events: currentTurn }, state)
+  }
+  flushSimpleRun()
+  return freezeState({ ...state, committedVersion: input.committedVersion })
+}
+
+function restoreSessionContextGeneric(
+  input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>,
+  initialState?: SessionContextState
+): SessionContextState {
+  let state = initialState ?? freezeState({ committedVersion: input.committedVersion, committed: [], working: [], failure: [], parkBaseline: [], pendingTools: new Map(), completedToolResults: new Map(), approvedToolCallIds: new Set(), requestSystem: '' })
   for (const event of input.events) {
     if (event.kind === 'session-input-committed') {
       const payload = event.payload as { messages?: unknown; system?: unknown; scope?: unknown }
@@ -200,13 +251,16 @@ export function restoreSessionContext(input: Readonly<{ committedVersion: number
 }
 
 /** Fast path for ordinary completed turns: append to one private buffer, freeze only the final result. */
-function restoreSimpleCompletedSessionContext(input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>): SessionContextState | undefined {
+function restoreSimpleCompletedSessionContext(
+  input: Readonly<{ committedVersion: number; events: readonly ContextReplayEvent[] | HistorySnapshot['events'] }>,
+  initialState?: SessionContextState
+): SessionContextState | undefined {
   const events = input.events
   if (events.length === 0 || events.at(-1)?.kind !== 'invocation-completed') return undefined
-  let scopeKey: string | undefined
+  let scopeKey: string | undefined = initialState?.scope ? JSON.stringify(initialState.scope) : undefined
   for (const event of events) {
     if (event.kind !== 'session-input-committed' && event.kind !== 'invocation-context-committed' &&
-      event.kind !== 'model-response-committed' && event.kind !== 'invocation-completed') return undefined
+      event.kind !== 'model-response-committed' && event.kind !== 'invocation-completed' && !contextNeutralObservationKinds.has(event.kind)) return undefined
     if (event.kind === 'invocation-completed') {
       const payload = event.payload && typeof event.payload === 'object' ? event.payload as { status?: unknown; contextSelection?: unknown } : undefined
       const selection = payload?.contextSelection as { contextProtocol?: unknown; target?: unknown } | undefined
@@ -232,12 +286,12 @@ function restoreSimpleCompletedSessionContext(input: Readonly<{ committedVersion
     }
   }
 
-  const buffer: CanonicalModelMessage[] = []
-  let hasSystemMessage = false
-  let scope: ContextScope | undefined
-  let requestSystem = ''
-  let activeInvocationId: string | undefined
-  let requiredUserMessage: SessionContextState['requiredUserMessage']
+  const buffer: CanonicalModelMessage[] = [...(initialState?.committed ?? [])]
+  let hasSystemMessage = buffer.some((message) => message.role === 'system')
+  let scope: ContextScope | undefined = initialState?.scope
+  let requestSystem = initialState?.requestSystem ?? ''
+  let activeInvocationId: string | undefined = initialState?.activeInvocationId
+  let requiredUserMessage: SessionContextState['requiredUserMessage'] = initialState?.requiredUserMessage
   for (const event of events) {
     if (event.kind === 'session-input-committed') {
       const payload = event.payload as { messages?: unknown; scope?: unknown; system?: unknown }

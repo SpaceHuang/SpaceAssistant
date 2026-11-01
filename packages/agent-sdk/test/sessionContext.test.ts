@@ -16,8 +16,16 @@ describe('shared session context rules', () => {
       return [
         event(1, 'invocation-context-committed', { contextProtocol: 2, inputMode: index === 0 ? 'baseline' : 'delta',
           messages: [input], inputMessages: [input], failureInputMessages: [input], scope: { kind: 'session', sessionId: 'linear-session' }, system: 'temporary system' }),
-        event(2, 'model-response-committed', { message: { role: 'assistant', id: `linear-answer-${index}`, content: `answer-${index}` } }),
-        event(3, 'invocation-completed', { status: 'completed', contextSelection: { contextProtocol: 2, target: 'working' } })
+        event(2, 'model-request-started', { requestId: `${invocationId}:round:1`, modelTurn: 1, attempt: 1 }),
+        event(3, 'provider-attempt-result', { requestId: `${invocationId}:round:1`, modelTurn: 1, attempt: 1,
+          physical: true, attemptSource: { kind: 'initial' }, outcome: 'failed', usage: { status: 'unreported' } }),
+        event(4, 'provider-retry-scheduled', { requestId: `${invocationId}:round:1`, nextAttempt: 2 }),
+        event(5, 'model-attempt-discarded', { requestId: `${invocationId}:round:1`, attempt: 1, reason: 'retry' }),
+        event(6, 'model-request-started', { requestId: `${invocationId}:round:1`, modelTurn: 1, attempt: 2 }),
+        event(7, 'provider-attempt-result', { requestId: `${invocationId}:round:1`, modelTurn: 1, attempt: 2,
+          physical: true, attemptSource: { kind: 'recovery', recoveryKind: 'transient' }, outcome: 'succeeded', usage: { status: 'unreported' } }),
+        event(8, 'model-response-committed', { message: { role: 'assistant', id: `linear-answer-${index}`, content: `answer-${index}` } }),
+        event(9, 'invocation-completed', { status: 'completed', contextSelection: { contextProtocol: 2, target: 'working' } })
       ]
     }).flat() as import('../src/history').HistoryEvent[]
     const restored = restoreSessionContext({ committedVersion: 300, events })

@@ -6,7 +6,7 @@ import { runInTransaction } from './transaction'
 import path from 'node:path'
 import { readSourceTruthSpillSync, type SpillDescriptor } from '../storage/spillProtocol'
 import { assertSpillReferencePayloadStrict, replaceSpillReferenceOwnerInTransaction, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
-import { restoreLegacySessionContextSnapshot, restoreSessionContext } from '../../packages/agent-sdk/src/sessionContext'
+import { restoreLegacySessionContextSnapshot, restoreSessionContext, SESSION_CONTEXT_NEUTRAL_HISTORY_KINDS } from '../../packages/agent-sdk/src/sessionContext'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
@@ -14,13 +14,25 @@ import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorag
 export type TranscriptMessage = Readonly<Record<string, unknown>>
 export type SessionTranscript = Readonly<{ sessionId: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked'; messages: readonly TranscriptMessage[] }>
 export type SessionTranscriptControl = Readonly<{ sessionId: string; generation?: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked' }>
+const contextNeutralHistoryKindsSql = SESSION_CONTEXT_NEUTRAL_HISTORY_KINDS.map((kind) => `'${kind}'`).join(',')
 
 function transcriptPayloadHash(outcome: string, messagesJson: string): string {
   return createHash('sha256').update(JSON.stringify({ outcome, messagesJson })).digest('hex')
 }
 
 function hydrateTranscriptSpills(value: unknown, spillRoot: string | undefined): unknown {
-  if (Array.isArray(value)) return value.map((item) => hydrateTranscriptSpills(item, spillRoot))
+  if (Array.isArray(value)) {
+    let hydrated: unknown[] | undefined
+    for (let index = 0; index < value.length; index += 1) {
+      const item = value[index]
+      const next = hydrateTranscriptSpills(item, spillRoot)
+      if (next !== item) {
+        hydrated ??= value.slice(0, index)
+        hydrated.push(next)
+      } else hydrated?.push(item)
+    }
+    return hydrated ?? value
+  }
   if (!value || typeof value !== 'object') return value
   const record = value as Record<string, unknown>
   if ('__spaceassistant_spill_v1' in record) {
@@ -29,7 +41,15 @@ function hydrateTranscriptSpills(value: unknown, spillRoot: string | undefined):
     if (!descriptor || descriptor.kind !== 'source-of-truth') throw new Error('SESSION_TRANSCRIPT_SOURCE_SPILL_INVALID')
     return readSourceTruthSpillSync(spillRoot, descriptor)
   }
-  return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, hydrateTranscriptSpills(item, spillRoot)]))
+  let hydrated: Record<string, unknown> | undefined
+  for (const [key, item] of Object.entries(record)) {
+    const next = hydrateTranscriptSpills(item, spillRoot)
+    if (next !== item) {
+      hydrated ??= { ...record }
+      hydrated[key] = next
+    }
+  }
+  return hydrated ?? record
 }
 
 function stableReviewEncode(value: unknown): string {
@@ -103,7 +123,9 @@ export function readSessionTranscript(db: AppDatabase, sessionId: string, option
       .get(sessionId, receipt.event_start) as { turn_id: string } | undefined
     if (!receiptFirstEvent || receiptFirstEvent.turn_id !== receipt.turn_id) throw new Error('SESSION_TRANSCRIPT_SELECTION_RECEIPT_RANGE_INVALID')
     const eventRows = conn.prepare(`SELECT event_id,turn_id,kind,payload_json
-      FROM agent_history_events WHERE session_id=? AND session_seq<=? ORDER BY session_seq ASC`)
+      FROM agent_history_events WHERE session_id=? AND session_seq<=?
+        AND kind NOT IN (${contextNeutralHistoryKindsSql})
+      ORDER BY session_seq ASC`)
       .all(sessionId, receipt.event_end) as Array<{ event_id: string; turn_id: string; kind: HistoryEvent['kind']; payload_json: string }>
     const main = conn.prepare('PRAGMA database_list').all().find((database) => (database as { name?: string }).name === 'main') as { file?: string } | undefined
     const spillRoot = main?.file ? path.join(path.dirname(main.file), 'spill') : undefined
