@@ -78,3 +78,23 @@ test('rejects an untracked extra job outside the fixed required set', () => {
   changed.jobs.untracked_platform_check = { name: 'Extra check', 'runs-on': 'ubuntu-latest', steps: [] }
   assert.ok(checkWorkflow(changed).some((issue) => issue.includes('untracked_platform_check')))
 })
+
+test('requires a failure-safe sanitized Vitest report upload on the full test job', () => {
+  const changed = validWorkflow()
+  const steps = changed.jobs.test.steps
+  assert.deepEqual(checkWorkflow(changed), [])
+
+  const vitest = steps.find((step) => step.run?.startsWith('npm test'))
+  vitest.run = 'npm test'
+  assert.ok(checkWorkflow(changed).some((issue) => issue.includes('Vitest JSON report')))
+
+  const complete = validWorkflow()
+  complete.jobs.test.steps = complete.jobs.test.steps.filter((step) => step.name !== 'Upload sanitized Vitest report')
+  assert.ok(checkWorkflow(complete).some((issue) => issue.includes('sanitized Vitest report artifact')))
+})
+
+test('requires the result aggregator to check out the script it executes', () => {
+  const changed = validWorkflow()
+  changed.jobs['ci-required'].steps = changed.jobs['ci-required'].steps.filter((step) => step.uses !== 'actions/checkout@v5')
+  assert.ok(checkWorkflow(changed).some((issue) => issue.includes('aggregator must check out the repository')))
+})

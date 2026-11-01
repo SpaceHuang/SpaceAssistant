@@ -29,7 +29,7 @@ jobs:
       - name: Check required CI coverage
         run: npm run check:ci-required-coverage
       - name: Test required CI coverage checker
-        run: node --test scripts/check-ci-required-coverage.test.mjs scripts/check-ci-required-results.test.mjs
+        run: node --test scripts/check-ci-required-coverage.test.mjs scripts/check-ci-required-results.test.mjs scripts/summarize-vitest-report.test.mjs
       - run: npm run i18n:generate-types
       - run: npm run i18n:check
       - run: npm run typecheck:shared
@@ -43,7 +43,22 @@ jobs:
       - run: npm run build:electron
       # SDK turn 与 Hosted Host 生命周期回归，不启动 Electron UI。
       - run: npm exec vitest run packages/agent-sdk/test/agentCore.test.ts packages/agent-sdk/test/turn.test.ts electron/runtime/hostedAgentTurnHost.test.ts
-      - run: npm test
+      - name: Run full Vitest suite
+        run: npm test -- --reporter=dot --reporter=json --outputFile=.ci/vitest-report.json
+      - name: Summarize Vitest failures
+        if: always()
+        env:
+          CI_PLATFORM: macOS ${{ runner.arch }}
+          ACTIONS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/summarize-vitest-report.mjs
+      - name: Upload sanitized Vitest report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: vitest-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci/vitest-summary.json
+          retention-days: 14
+          if-no-files-found: error
   golden_windows:
     name: CI / Shell golden (Windows)
     runs-on: windows-latest
@@ -171,6 +186,7 @@ jobs:
       - shell_macos_x64
       - shell_macos_arm64
     steps:
+      - uses: actions/checkout@v5
       - name: Summarize required CI results
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}

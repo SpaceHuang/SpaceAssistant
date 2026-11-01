@@ -52,6 +52,20 @@ export function checkWorkflow(workflow) {
     if (job.strategy?.matrix) issues.push(`${jobId} must not use a matrix`)
   }
 
+  const testSteps = jobs.test?.steps ?? []
+  const fullVitest = testSteps.find((step) => typeof step.run === 'string' && step.run.startsWith('npm test'))
+  if (!fullVitest?.run.includes('--reporter=dot') || !fullVitest?.run.includes('--reporter=json') || !fullVitest?.run.includes('--outputFile=.ci/vitest-report.json')) {
+    issues.push('test job must emit a Vitest JSON report alongside dot output')
+  }
+  const summarizeStep = testSteps.find((step) => step.name === 'Summarize Vitest failures')
+  if (summarizeStep?.run !== 'node scripts/summarize-vitest-report.mjs' || summarizeStep.if !== 'always()' || summarizeStep.env?.CI_PLATFORM !== 'macOS ${{ runner.arch }}' || !summarizeStep.env?.ACTIONS_URL) {
+    issues.push('test job must always create the sanitized Vitest report summary')
+  }
+  const reportArtifact = testSteps.find((step) => step.name === 'Upload sanitized Vitest report')
+  if (reportArtifact?.uses !== 'actions/upload-artifact@v5' || reportArtifact.if !== 'always()' || reportArtifact.with?.path !== '.ci/vitest-summary.json' || reportArtifact.with?.['retention-days'] !== 14 || reportArtifact.with?.['if-no-files-found'] !== 'error') {
+    issues.push('test job must upload the sanitized Vitest report artifact with 14-day retention')
+  }
+
   const aggregator = jobs[AGGREGATOR_ID]
   if (!aggregator) {
     issues.push(`missing aggregator job ${AGGREGATOR_ID}`)
@@ -59,6 +73,7 @@ export function checkWorkflow(workflow) {
   }
   if (aggregator.name !== 'required') issues.push(`${AGGREGATOR_ID} name must be required`)
   if (aggregator['if'] !== 'always()') issues.push(`${AGGREGATOR_ID} must use if: always()`)
+  if (!aggregator.steps?.some((step) => step.uses === 'actions/checkout@v5')) issues.push('aggregator must check out the repository before running its summary script')
   const dependencies = values(aggregator.needs)
   const dependencySet = new Set(dependencies)
   for (const duplicate of dependencies.filter((id, index) => dependencies.indexOf(id) !== index)) {
