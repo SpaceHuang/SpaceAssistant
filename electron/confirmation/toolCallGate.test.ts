@@ -1047,7 +1047,7 @@ describe('evaluateToolCallGate', () => {
         runShellPrecheck: async () => ({ ok: true, analysis: { verdict: 'allow' } as never, legacyAutoAllowEligible: true, legacyPolicy: { permissionDecision: 'allow', trustedCacheKeys: [] }, hints: {} as never })
       }))
 
-      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
+      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: process.platform === 'win32' ? 'unknown' : 'read-only' })
       expect(audit.events.find((event) => event.event === 'policy.decision')?.pathZones).toContain('outside-workdir')
       expect(JSON.stringify(audit.events)).not.toContain(secretPath)
     } finally {
@@ -1305,7 +1305,7 @@ describe('evaluateToolCallGate', () => {
         appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'), toolName, toolInput, requestId, toolUseId, readConfirmationRegistry: registry
       }))
       // Windows 系统目录会命中内置敏感前缀；POSIX /etc 归为 system-dir。两种分类都由锁定的逐次确认规则保护。
-      const isWindowsSensitiveRoot = process.platform === 'win32' && toolName !== 'list_directory'
+      const isWindowsSensitiveRoot = process.platform === 'win32'
       const expectedZone = isWindowsSensitiveRoot ? 'sensitive-file' : 'system-dir'
       const expectedRuleId = isWindowsSensitiveRoot ? 'path-sensitive-read-confirm' : 'path-system-dir-ask'
       expect(gate.readPathFact?.zone).toBe(expectedZone)
@@ -1828,8 +1828,13 @@ describe('evaluateToolCallGate', () => {
     await fs.writeFile(file, 'hello')
     try {
       const read = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: readFileCommand(file) } }))
-      expect(read.decision).toMatchObject({ type: 'auto-allow', ruleId: 'shell-precheck-auto-allow' })
-      expect(read.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
+      if (process.platform === 'win32') {
+        expect(read.decision.type).toBe('require-confirm')
+        expect(read.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'unknown' })
+      } else {
+        expect(read.decision).toMatchObject({ type: 'auto-allow', ruleId: 'shell-precheck-auto-allow' })
+        expect(read.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
+      }
 
       const write = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: `touch ${file}` } }))
       expect(write.decision.type).toBe('require-confirm')
