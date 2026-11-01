@@ -78,8 +78,12 @@ function systemFileCommand(): string {
 }
 
 function readFileCommand(filePath: string): string {
-  if (process.platform === 'win32') return `type '${filePath}'`
+  if (process.platform === 'win32') return `Get-Content -LiteralPath ${filePath}`
   return `cat ${filePath}`
+}
+
+function outsideReadCommand(filePath: string): string {
+  return process.platform === 'win32' ? `type ${filePath}` : `cat ${filePath}`
 }
 
 describe('buildToolCallGateArgs', () => {
@@ -1042,7 +1046,7 @@ describe('evaluateToolCallGate', () => {
         workDir: root,
         userDataDir: path.join(root, '.userdata'),
         toolName: 'run_shell',
-        toolInput: { command: readFileCommand(secretPath) },
+        toolInput: { command: outsideReadCommand(secretPath) },
         audit,
         runShellPrecheck: async () => ({ ok: true, analysis: { verdict: 'allow' } as never, legacyAutoAllowEligible: true, legacyPolicy: { permissionDecision: 'allow', trustedCacheKeys: [] }, hints: {} as never })
       }))
@@ -1306,8 +1310,8 @@ describe('evaluateToolCallGate', () => {
       }))
       // Windows 系统目录会命中内置敏感前缀；POSIX /etc 归为 system-dir。两种分类都由锁定的逐次确认规则保护。
       const isWindowsSensitiveRoot = process.platform === 'win32'
-      const expectedZone = isWindowsSensitiveRoot && toolName !== 'list_directory' ? 'sensitive-file' : 'system-dir'
-      const expectedRuleId = isWindowsSensitiveRoot && toolName !== 'list_directory' ? 'path-sensitive-read-confirm' : 'path-system-dir-ask'
+      const expectedZone = isWindowsSensitiveRoot ? 'sensitive-file' : 'system-dir'
+      const expectedRuleId = isWindowsSensitiveRoot ? 'path-sensitive-read-confirm' : 'path-system-dir-ask'
       expect(gate.readPathFact?.zone).toBe(expectedZone)
       expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: expectedRuleId, answerer: 'user' })
       expect(gate.readExecutionPermit).toBeUndefined()
@@ -1865,7 +1869,7 @@ describe('evaluateToolCallGate', () => {
         workDir: root,
         userDataDir: path.join(root, '.userdata'),
         toolName: 'run_shell',
-        toolInput: { command: process.platform === 'win32' ? `type '${file}'` : `cat ${file}` },
+        toolInput: { command: process.platform === 'win32' ? `type ${file}` : `cat ${file}` },
         internalConfirmExemption: recursionGuard ? 'approval-agent' : undefined,
         runShellPrecheck: async () => ({
           ok: true,
