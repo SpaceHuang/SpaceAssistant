@@ -1,5 +1,6 @@
 import type { AppDatabase } from './sqliteStore'
 import { createHash } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
 import type { DatabaseSync } from 'node:sqlite'
 import { getDbConnection } from './sqliteStore'
 import { runInTransaction } from './transaction'
@@ -72,7 +73,8 @@ function sessionReviewPayloadHash(input: {
   })).digest('hex')
 }
 
-export function readSessionTranscript(db: AppDatabase, sessionId: string, options: Readonly<{ version?: number }> = {}): SessionTranscript {
+export function readSessionTranscript(db: AppDatabase, sessionId: string, options: Readonly<{ version?: number }> = {},
+  profileContextReducer?: (durationMs: number) => void): SessionTranscript {
   const conn = getDbConnection(db)
   return runInTransaction(conn, () => {
   const row = conn.prepare('SELECT version,last_turn_id,status FROM session_transcript_checkpoints WHERE session_id=?').get(sessionId) as { version: number; last_turn_id: string | null; status: SessionTranscript['status'] } | undefined
@@ -131,7 +133,9 @@ export function readSessionTranscript(db: AppDatabase, sessionId: string, option
     const spillRoot = main?.file ? path.join(path.dirname(main.file), 'spill') : undefined
     const events = eventRows.map((event) => ({ eventId: event.event_id, turnId: event.turn_id,
       kind: event.kind, payload: hydrateTranscriptSpills(JSON.parse(event.payload_json) as unknown, spillRoot) }))
+    const reducerStart = profileContextReducer ? performance.now() : 0
     const restored = restoreSessionContextFromOwnedEvents({ committedVersion: version, events })
+    if (profileContextReducer) profileContextReducer(performance.now() - reducerStart)
     const terminal = events.find((event) => event.eventId === receiptTerminalRow!.event_id)
     const terminalSelection = terminal?.payload && typeof terminal.payload === 'object'
       ? (terminal.payload as { contextSelection?: { contextProtocol?: unknown; target?: unknown; baseVersion?: unknown } }).contextSelection

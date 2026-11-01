@@ -102,13 +102,14 @@ try {
     const eventLoopSamples: number[] = []
     let maxEventLoopDelayMs = 0
     let transcript: ReturnType<typeof readSessionTranscript> | undefined
-    const readStageSamples: Array<{ sample: number; readMs: number; sqlMs: number; jsonParseMs: number; remainingMs: number }> = []
+    const readStageSamples: Array<{ sample: number; readMs: number; sqlMs: number; jsonParseMs: number; reducerMs: number; remainingMs: number }> = []
     for (let sample = 0; sample < 30; sample += 1) {
       let timerDelayMs = 0
       const timerStart = performance.now()
       const tick = new Promise<void>((resolve) => setImmediate(() => { timerDelayMs = performance.now() - timerStart; resolve() }))
       let readSqlMs = 0
       let readJsonParseMs = 0
+      let readReducerMs = 0
       const originalPrepare = conn.prepare
       const originalJsonParse = JSON.parse
       if (profileReadPhases) {
@@ -131,7 +132,9 @@ try {
         }) as typeof JSON.parse
       }
       const totalStart = performance.now()
-      try { transcript = readSessionTranscript(db, session.id) }
+      try { transcript = readSessionTranscript(db, session.id, {}, profileReadPhases
+        ? (durationMs) => { readReducerMs = durationMs }
+        : undefined) }
       finally {
         if (profileReadPhases) {
           conn.prepare = originalPrepare
@@ -141,7 +144,7 @@ try {
       const readMs = performance.now() - totalStart
       totalSamples.push(readMs)
       if (profileReadPhases) readStageSamples.push({ sample, readMs, sqlMs: readSqlMs, jsonParseMs: readJsonParseMs,
-        remainingMs: Math.max(0, readMs - readSqlMs - readJsonParseMs) })
+        reducerMs: readReducerMs, remainingMs: Math.max(0, readMs - readSqlMs - readJsonParseMs - readReducerMs) })
       await tick
       eventLoopSamples.push(timerDelayMs)
       maxEventLoopDelayMs = Math.max(maxEventLoopDelayMs, timerDelayMs)
@@ -163,9 +166,9 @@ try {
       sqlMs, parseMs, reduceMs, totalReadSampleCount: totalSamples.length, eventLoopDelayMs: maxEventLoopDelayMs,
       totalReadP95Ms, maxReadSampleMs, maxContinuousBlockMs,
       ...(slowestRead ? { readStageSummary: { sql: summarizeStage((sample) => sample.sqlMs), jsonParse: summarizeStage((sample) => sample.jsonParseMs),
-        remaining: summarizeStage((sample) => sample.remainingMs) },
+        reducer: summarizeStage((sample) => sample.reducerMs), remaining: summarizeStage((sample) => sample.remainingMs) },
         slowestRead: { sample: slowestRead.sample, readMs: Number(slowestRead.readMs.toFixed(2)),
-          sqlMs: Number(slowestRead.sqlMs.toFixed(2)), jsonParseMs: Number(slowestRead.jsonParseMs.toFixed(2)),
+          sqlMs: Number(slowestRead.sqlMs.toFixed(2)), jsonParseMs: Number(slowestRead.jsonParseMs.toFixed(2)), reducerMs: Number(slowestRead.reducerMs.toFixed(2)),
           remainingMs: Number(slowestRead.remainingMs.toFixed(2)) } } : {}),
       readSamplesMs: totalSamples.map((sample) => Number(sample.toFixed(2))),
       eventLoopSamplesMs: eventLoopSamples.map((sample) => Number(sample.toFixed(2))),
