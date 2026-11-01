@@ -3,6 +3,8 @@
  * 审批会话内 require-confirm 决策被改写为 deny（cause=recursion-blocked），不进规则集、不可配置。
  */
 import { afterEach, describe, expect, it } from 'vitest'
+import os from 'node:os'
+import path from 'node:path'
 import { loadEffectivePolicyRules } from './policyRulesRuntime'
 import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getDbConnection, openSqliteDatabase, type AppDatabase } from '../database'
@@ -59,8 +61,8 @@ function base(overrides: Partial<ToolCallGateArgs> = {}): ToolCallGateArgs {
     toolName: 'write_file',
     toolInput: { path: 'a.txt', content: 'x' },
     sessionId: 's-recursion',
-    workDir: '/tmp/wd',
-    userDataDir: '/tmp/ud',
+    workDir: path.join(os.tmpdir(), 'wd'),
+    userDataDir: path.join(os.tmpdir(), 'ud'),
     lane: 'automation',
     toolsConfig: { ...DEFAULT_TOOLS_CONFIG, deniedTools: [] } as ToolsConfig,
     ...gateMaterialsFor(legacyDb, lane),
