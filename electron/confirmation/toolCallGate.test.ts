@@ -78,7 +78,7 @@ function systemFileCommand(): string {
 }
 
 function readFileCommand(filePath: string): string {
-  if (process.platform === 'win32') return `Get-Content -LiteralPath '${filePath}'`
+  if (process.platform === 'win32') return `type '${filePath}'`
   return `cat ${filePath}`
 }
 
@@ -1305,13 +1305,14 @@ describe('evaluateToolCallGate', () => {
         appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'), toolName, toolInput, requestId, toolUseId, readConfirmationRegistry: registry
       }))
       // Windows 系统目录会命中内置敏感前缀；POSIX /etc 归为 system-dir。两种分类都由锁定的逐次确认规则保护。
-      const expectedZone = 'system-dir'
-      const expectedRuleId = 'path-system-dir-ask'
+      const isWindowsSensitiveRoot = process.platform === 'win32' && toolName !== 'list_directory'
+      const expectedZone = isWindowsSensitiveRoot ? 'sensitive-file' : 'system-dir'
+      const expectedRuleId = isWindowsSensitiveRoot ? 'path-sensitive-read-confirm' : 'path-system-dir-ask'
       expect(gate.readPathFact?.zone).toBe(expectedZone)
       expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: expectedRuleId, answerer: 'user' })
       expect(gate.readExecutionPermit).toBeUndefined()
       if (toolName === 'list_directory') {
-        expect(finalizeReadConfirmation({ toolName, toolInput, requestId, toolUseId, outcome: 'approved', answerer: 'user', readPathFact: gate.readPathFact, approvedTargets: gate.readTargetMapping }, registry)?.targets[0]).toMatchObject({ scope: 'direct-entries', targetKind: 'directory' })
+        expect(finalizeReadConfirmation({ toolName, toolInput, requestId, toolUseId, outcome: 'approved', answerer: 'user', readPathFact: gate.readPathFact, approvedTargets: gate.readTargetMapping }, registry)?.targets[0]).toMatchObject({ scope: 'direct-entries', targetKind: 'directory', zone: expectedZone })
       }
     } finally {
       await fs.rm(root, { recursive: true, force: true })
@@ -1604,7 +1605,7 @@ describe('evaluateToolCallGate', () => {
     try {
       const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: systemFileCommand() } }))
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'path-target', zone: 'system-dir' }))
-      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
+      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: process.platform === 'win32' ? 'unknown' : 'read-only' })
       expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'shell-system-dir-confirm', answerer: 'user' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
