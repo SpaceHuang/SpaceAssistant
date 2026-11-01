@@ -112,6 +112,7 @@ jobs:
       - name: Initialize Electron binary before test workers
         run: node scripts/initialize-electron-ci.mjs
       - run: npm run i18n:generate-types
+      - run: npm run build:agent-provider-pi-ai
       - run: npm exec -- vitest run --project electron electron/confirmation/recursionGuard.test.ts electron/confirmation/toolCallGate.test.ts
       - run: npm run test:shell-lifecycle
       - run: npm run typecheck:shared
@@ -130,6 +131,7 @@ jobs:
       - name: Initialize Electron binary before test workers
         run: node scripts/initialize-electron-ci.mjs
       - run: npm run i18n:generate-types
+      - run: npm run build:agent-provider-pi-ai
       - run: npm exec -- vitest run --project electron electron/confirmation/recursionGuard.test.ts electron/confirmation/toolCallGate.test.ts
       - run: npm run test:shell-lifecycle
       - run: npm run typecheck:shared
@@ -149,6 +151,7 @@ jobs:
       - name: Initialize Electron binary before test workers
         run: node scripts/initialize-electron-ci.mjs
       - run: npm run i18n:generate-types
+      - run: npm run build:agent-provider-pi-ai
       - run: npm exec -- vitest run --project electron electron/confirmation/recursionGuard.test.ts electron/confirmation/toolCallGate.test.ts
       - run: npm run test:shell-lifecycle
       - run: npm run typecheck:shared
