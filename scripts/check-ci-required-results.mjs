@@ -18,22 +18,33 @@ export function summarizeResults(needs) {
   return { success: failed.length === 0, failed }
 }
 
-function main() {
-  const needs = JSON.parse(process.env.NEEDS_JSON ?? '{}')
+export function formatResultSummary(needs, { commitSha = 'unknown', runId = 'unknown', runAttempt = 'unknown', actionsUrl = '' } = {}) {
   const summary = summarizeResults(needs)
-  const commitSha = process.env.COMMIT_SHA ?? 'unknown'
-  const runId = process.env.RUN_ID ?? 'unknown'
-  const runAttempt = process.env.RUN_ATTEMPT ?? 'unknown'
-  const actionsUrl = process.env.ACTIONS_URL ?? ''
-
-  console.log(`CI required summary for commit ${commitSha}, run ${runId}, summary attempt ${runAttempt}`)
-  if (actionsUrl) console.log(`Run details: ${actionsUrl}`)
+  const lines = [`CI required summary for commit ${commitSha}, run ${runId}, attempt ${runAttempt}`]
+  if (actionsUrl) {
+    lines.push(`Run details: ${actionsUrl}`)
+    lines.push(`Attempt details: ${actionsUrl}/attempts/${runAttempt}`)
+  }
   for (const [jobId, platform] of Object.entries(REQUIRED_RESULTS)) {
     const result = needs?.[jobId]?.result
-    console.log(`${jobId} (${platform}): ${typeof result === 'string' ? result : 'missing'}`)
+    lines.push(`${jobId} (${platform}): ${typeof result === 'string' ? result : 'missing'}`)
   }
   if (!summary.success) {
-    console.error(`CI required failed: ${summary.failed.map(({ jobId, platform, result }) => `${jobId} (${platform})=${result}`).join(', ')}`)
+    lines.push(`CI required failed: ${summary.failed.map(({ jobId, platform, result }) => `${jobId} (${platform})=${result}`).join(', ')}`)
+  }
+  return { summary, output: lines.join('\n') }
+}
+
+function main() {
+  const needs = JSON.parse(process.env.NEEDS_JSON ?? '{}')
+  const result = formatResultSummary(needs, {
+    commitSha: process.env.COMMIT_SHA ?? 'unknown',
+    runId: process.env.RUN_ID ?? 'unknown',
+    runAttempt: process.env.RUN_ATTEMPT ?? 'unknown',
+    actionsUrl: process.env.ACTIONS_URL ?? ''
+  })
+  console.log(result.output)
+  if (!result.summary.success) {
     process.exitCode = 1
   }
 }

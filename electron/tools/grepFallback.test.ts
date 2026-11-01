@@ -153,6 +153,16 @@ describe('JavaScript grep fallback', () => {
     expect(out).toMatch(/超时/)
     expect(Date.now() - started).toBeLessThan(1_000)
   })
+
+  it('reports an incomplete timeout when the regex worker validation exhausts the total budget', async () => {
+    const root = fixture({ 'hostile.txt': `${'a'.repeat(30_000)}!` })
+    let calls = 0
+    const now = (): number => (++calls > 4 ? 100_000 : 0)
+    const out = await grepFallbackJs(root, root, '(a+)+$', args(), new AbortController().signal, () => {}, 40, undefined, { now })
+    expect(out).toContain('No matches found')
+    expect(out).toMatch(/搜索超时/)
+    expect(out).toContain('[边界摘要]')
+  })
 })
 
 describe('输出路径形态（D7/I6 最终口径：workDir 内相对、workDir 外绝对）', () => {

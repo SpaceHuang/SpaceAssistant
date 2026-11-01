@@ -26,10 +26,14 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
+      - name: Initialize Electron binary before test workers
+        run: node scripts/initialize-electron-ci.mjs
       - name: Check required CI coverage
         run: npm run check:ci-required-coverage
       - name: Test required CI coverage checker
-        run: node --test scripts/check-ci-required-coverage.test.mjs scripts/check-ci-required-results.test.mjs scripts/summarize-vitest-report.test.mjs
+        run: node --test scripts/check-ci-required-coverage.test.mjs scripts/check-ci-required-results.test.mjs scripts/summarize-vitest-report.test.mjs scripts/ci-failure-review.test.mjs
+      - name: Summarize recorded CI failure reviews
+        run: npm run check:ci-failure-review
       - run: npm run i18n:generate-types
       - run: npm run i18n:check
       - run: npm run typecheck:shared
@@ -43,6 +47,8 @@ jobs:
       - run: npm run build:electron
       # SDK turn 与 Hosted Host 生命周期回归，不启动 Electron UI。
       - run: npm exec vitest run packages/agent-sdk/test/agentCore.test.ts packages/agent-sdk/test/turn.test.ts electron/runtime/hostedAgentTurnHost.test.ts
+      - name: Prepare Vitest report directory
+        run: mkdir -p .ci
       - name: Run full Vitest suite
         run: npm test -- --reporter=dot --reporter=json --outputFile=.ci/vitest-report.json
       - name: Summarize Vitest failures

@@ -54,6 +54,12 @@ export function checkWorkflow(workflow) {
 
   const testSteps = jobs.test?.steps ?? []
   const fullVitest = testSteps.find((step) => typeof step.run === 'string' && step.run.startsWith('npm test'))
+  const prepareReports = testSteps.find((step) => step.name === 'Prepare Vitest report directory')
+  const prepareIndex = testSteps.indexOf(prepareReports)
+  const vitestIndex = testSteps.indexOf(fullVitest)
+  if (prepareReports?.run !== 'mkdir -p .ci' || prepareIndex < 0 || vitestIndex < 0 || prepareIndex > vitestIndex) {
+    issues.push('test report directory must be prepared before the full Vitest run')
+  }
   if (!fullVitest?.run.includes('--reporter=dot') || !fullVitest?.run.includes('--reporter=json') || !fullVitest?.run.includes('--outputFile=.ci/vitest-report.json')) {
     issues.push('test job must emit a Vitest JSON report alongside dot output')
   }
@@ -64,6 +70,26 @@ export function checkWorkflow(workflow) {
   const reportArtifact = testSteps.find((step) => step.name === 'Upload sanitized Vitest report')
   if (reportArtifact?.uses !== 'actions/upload-artifact@v5' || reportArtifact.if !== 'always()' || reportArtifact.with?.path !== '.ci/vitest-summary.json' || reportArtifact.with?.['retention-days'] !== 14 || reportArtifact.with?.['if-no-files-found'] !== 'error') {
     issues.push('test job must upload the sanitized Vitest report artifact with 14-day retention')
+  }
+  const testElectronInit = testSteps.find((step) => step.name === 'Initialize Electron binary before test workers' && step.run === 'node scripts/initialize-electron-ci.mjs')
+  const testElectronInitIndex = testSteps.indexOf(testElectronInit)
+  const vitestWorkerIndices = testSteps.map((step, index) => ({ step, index }))
+    .filter(({ step }) => typeof step.run === 'string' && (step.run.includes('vitest run') || step.run.startsWith('npm test')))
+    .map(({ index }) => index)
+  if (testElectronInitIndex < 0 || vitestWorkerIndices.length === 0 || vitestWorkerIndices.some((index) => testElectronInitIndex > index)) {
+    issues.push('test: Electron initialization must precede Vitest workers')
+  }
+  if (testSteps[testElectronInitIndex]?.['continue-on-error'] === true) issues.push('test: Electron initialization failure must stop the full test job')
+  for (const jobId of ['shell_windows_x64', 'shell_macos_x64', 'shell_macos_arm64']) {
+    const steps = jobs[jobId]?.steps ?? []
+    const initIndex = steps.findIndex((step) => step.name === 'Initialize Electron binary before test workers' && step.run === 'node scripts/initialize-electron-ci.mjs')
+    const workerIndices = steps.map((step, index) => ({ step, index }))
+      .filter(({ step }) => typeof step.run === 'string' && (step.run.includes('vitest run') || step.run.includes('test:shell-lifecycle')))
+      .map(({ index }) => index)
+    if (initIndex < 0 || workerIndices.length === 0 || workerIndices.some((index) => initIndex > index)) {
+      issues.push(`${jobId}: Electron initialization must precede shell test workers`)
+    }
+    if (steps[initIndex]?.['continue-on-error'] === true) issues.push(`${jobId}: Electron initialization failure must stop the shell job`)
   }
 
   const aggregator = jobs[AGGREGATOR_ID]

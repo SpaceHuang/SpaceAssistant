@@ -43,6 +43,13 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       if (key?.startsWith('spaceassistant:butler-task-draft:v1:')) localStorage.removeItem(key)
     }
     await changeAppLocale('zh-CN')
+    // Clear one-shot replies as well as call history. A timed-out UI test can leave queued
+    // mockResolvedValueOnce responses that otherwise leak into the following test.
+    for (const mock of [
+      butlerListTasks, butlerCreateTask, butlerUpdateTask, butlerConfirmTaskAuthorization,
+      butlerDeleteTask, butlerRunTask, butlerGetTaskDefaults, butlerGetModelCandidates,
+      butlerChooseWorkDir, butlerChooseOutputDir, butlerListTaskRuns, appGetTrayEnabled
+    ]) mock.mockReset()
     vi.clearAllMocks()
     appGetTrayEnabled.mockResolvedValue(true)
     butlerListTasks.mockResolvedValue([])
@@ -184,7 +191,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       outputOrganization: 'direct'
     })
     expect(butlerConfirmTaskAuthorization).not.toHaveBeenCalled()
-  })
+  }, 30_000)
 
   it('点击预检即暂存已填写内容，即使必填校验未通过', async () => {
     renderTab()

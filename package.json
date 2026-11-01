@@ -43,6 +43,7 @@
     "check:message-fact-ownership": "node scripts/check-message-fact-ownership.mjs",
     "check:no-nul": "node scripts/check-no-nul.mjs",
     "check:ci-required-coverage": "node scripts/check-ci-required-coverage.mjs",
+    "check:ci-failure-review": "node scripts/ci-failure-review.mjs",
     "check:treesitter-wasm": "node scripts/check-treesitter-wasm.mjs",
     "check:agent-sdk-dependencies": "node --test scripts/check-agent-sdk-dependencies.test.mjs && node scripts/check-agent-sdk-dependencies.mjs",
     "check:agent-sdk": "node scripts/check-agent-sdk-boundary.mjs && npm run check:agent-sdk-dependencies && node scripts/check-agent-sdk-package-closure.mjs",

@@ -6,7 +6,8 @@ const SECRET_PATTERNS = [
   /\b(?:api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
   /\bsk-[A-Za-z0-9_-]{8,}\b/g,
   /\b(?:xox[baprs]-|gh[pousr]_|github_pat_)[A-Za-z0-9_-]+/gi,
-  /https?:\/\/[^\s?#]+(?:\?[^\s#]*)?/gi
+  /https?:\/\/[^\s?#]+(?:\?[^\s#]*)?/gi,
+  /"[^"\n]*"|'[^'\n]*'/g
 ]
 
 function redact(value) {

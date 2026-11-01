@@ -89,12 +89,39 @@ test('requires a failure-safe sanitized Vitest report upload on the full test jo
   assert.ok(checkWorkflow(changed).some((issue) => issue.includes('Vitest JSON report')))
 
   const complete = validWorkflow()
-  complete.jobs.test.steps = complete.jobs.test.steps.filter((step) => step.name !== 'Upload sanitized Vitest report')
-  assert.ok(checkWorkflow(complete).some((issue) => issue.includes('sanitized Vitest report artifact')))
+  complete.jobs.test.steps = complete.jobs.test.steps.filter((step) => step.name !== 'Prepare Vitest report directory')
+  assert.ok(checkWorkflow(complete).some((issue) => issue.includes('report directory must be prepared')))
+
+  const missingArtifact = validWorkflow()
+  missingArtifact.jobs.test.steps = missingArtifact.jobs.test.steps.filter((step) => step.name !== 'Upload sanitized Vitest report')
+  assert.ok(checkWorkflow(missingArtifact).some((issue) => issue.includes('sanitized Vitest report artifact')))
 })
 
 test('requires the result aggregator to check out the script it executes', () => {
   const changed = validWorkflow()
   changed.jobs['ci-required'].steps = changed.jobs['ci-required'].steps.filter((step) => step.uses !== 'actions/checkout@v5')
   assert.ok(checkWorkflow(changed).some((issue) => issue.includes('aggregator must check out the repository')))
+})
+
+test('requires Electron initialization before all shell test workers without continue-on-error', () => {
+  const changed = validWorkflow()
+  const shellJob = changed.jobs.shell_windows_x64
+  const initIndex = shellJob.steps.findIndex((step) => step.name === 'Initialize Electron binary before test workers')
+  const initStep = shellJob.steps.splice(initIndex, 1)[0]
+  shellJob.steps.push(initStep)
+  assert.ok(checkWorkflow(changed).some((issue) => issue.includes('Electron initialization must precede shell test workers')))
+
+  const ignoredFailure = validWorkflow()
+  const init = ignoredFailure.jobs.shell_macos_x64.steps.find((step) => step.name === 'Initialize Electron binary before test workers')
+  init['continue-on-error'] = true
+  assert.ok(checkWorkflow(ignoredFailure).some((issue) => issue.includes('Electron initialization failure must stop the shell job')))
+})
+
+test('requires Electron initialization before the full job starts any Vitest worker', () => {
+  const changed = validWorkflow()
+  const steps = changed.jobs.test.steps
+  const initIndex = steps.findIndex((step) => step.name === 'Initialize Electron binary before test workers')
+  const initStep = steps.splice(initIndex, 1)[0]
+  steps.push(initStep)
+  assert.ok(checkWorkflow(changed).some((issue) => issue.includes('test: Electron initialization must precede Vitest workers')))
 })

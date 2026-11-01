@@ -10,7 +10,7 @@ test('summarizes failed tests with safe names, statuses, durations and redacted 
         fullName: 'rejects invalid permit',
         status: 'failed',
         duration: 17,
-        failureMessages: ['Authorization: Bearer ci-test-token-123 api_key=sk-test-key-123456 https://example.test/path?token=x\n    at run (src/test.ts:1:2)']
+        failureMessages: ['AssertionError: expected "私密消息正文" after Authorization: Bearer ci-test-token-123 api_key=sk-test-key-123456 https://example.test/path?token=x\n    at run (src/test.ts:1:2)']
       }]
     }]
   }
@@ -25,7 +25,7 @@ test('summarizes failed tests with safe names, statuses, durations and redacted 
   assert.equal(summary.failedTests[0].file, 'electron/example.test.ts')
   assert.equal(summary.failedTests[0].name, 'rejects invalid permit')
   assert.equal(summary.failedTests[0].durationMs, 17)
-  assert.doesNotMatch(JSON.stringify(summary), /ci-test-token|sk-test-key|token=x|Authorization:|src\/test.ts/)
+  assert.doesNotMatch(JSON.stringify(summary), /私密消息正文|ci-test-token|sk-test-key|token=x|Authorization:|src\/test.ts/)
   assert.match(summary.failedTests[0].error, /\[REDACTED\]/)
 })
 
