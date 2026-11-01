@@ -1047,7 +1047,7 @@ describe('evaluateToolCallGate', () => {
         runShellPrecheck: async () => ({ ok: true, analysis: { verdict: 'allow' } as never, legacyAutoAllowEligible: true, legacyPolicy: { permissionDecision: 'allow', trustedCacheKeys: [] }, hints: {} as never })
       }))
 
-      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: process.platform === 'win32' ? 'unknown' : 'read-only' })
+      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
       expect(audit.events.find((event) => event.event === 'policy.decision')?.pathZones).toContain('outside-workdir')
       expect(JSON.stringify(audit.events)).not.toContain(secretPath)
     } finally {
@@ -1306,8 +1306,8 @@ describe('evaluateToolCallGate', () => {
       }))
       // Windows 系统目录会命中内置敏感前缀；POSIX /etc 归为 system-dir。两种分类都由锁定的逐次确认规则保护。
       const isWindowsSensitiveRoot = process.platform === 'win32'
-      const expectedZone = isWindowsSensitiveRoot ? 'sensitive-file' : 'system-dir'
-      const expectedRuleId = isWindowsSensitiveRoot ? 'path-sensitive-read-confirm' : 'path-system-dir-ask'
+      const expectedZone = isWindowsSensitiveRoot && toolName !== 'list_directory' ? 'sensitive-file' : 'system-dir'
+      const expectedRuleId = isWindowsSensitiveRoot && toolName !== 'list_directory' ? 'path-sensitive-read-confirm' : 'path-system-dir-ask'
       expect(gate.readPathFact?.zone).toBe(expectedZone)
       expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: expectedRuleId, answerer: 'user' })
       expect(gate.readExecutionPermit).toBeUndefined()
@@ -1865,7 +1865,7 @@ describe('evaluateToolCallGate', () => {
         workDir: root,
         userDataDir: path.join(root, '.userdata'),
         toolName: 'run_shell',
-        toolInput: { command: readFileCommand(file) },
+        toolInput: { command: process.platform === 'win32' ? `type '${file}'` : `cat ${file}` },
         internalConfirmExemption: recursionGuard ? 'approval-agent' : undefined,
         runShellPrecheck: async () => ({
           ok: true,
