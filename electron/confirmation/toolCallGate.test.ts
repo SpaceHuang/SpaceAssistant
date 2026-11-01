@@ -60,21 +60,21 @@ async function makeTempDir(prefix: string): Promise<string> {
   return directory
 }
 
-function systemHostsPath(): string {
+function systemFilePath(): string {
   if (process.platform !== 'win32') return '/etc/hosts'
   const windowsRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
-  return path.join(windowsRoot, 'System32', 'drivers', 'etc', 'hosts')
+  return path.join(windowsRoot, 'System32', 'kernel32.dll')
 }
 
 function systemMissingPath(name: string): string {
   if (process.platform !== 'win32') return path.join('/etc', name)
   const windowsRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
-  return path.join(windowsRoot, 'System32', 'drivers', 'etc', name)
+  return path.join(windowsRoot, 'System32', name)
 }
 
-function systemHostsCommand(): string {
-  if (process.platform === 'win32') return `Get-Content -LiteralPath '${systemHostsPath()}'`
-  return `cat ${systemHostsPath()}`
+function systemFileCommand(): string {
+  if (process.platform === 'win32') return `Get-Content -LiteralPath '${systemFilePath()}'`
+  return `cat ${systemFilePath()}`
 }
 
 describe('buildToolCallGateArgs', () => {
@@ -490,7 +490,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
       const single = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: file }, effectiveRules, imPolicySnapshot: snapshot }))
       const listing = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'list_directory', toolInput: { path: outside }, effectiveRules, imPolicySnapshot: snapshot }))
       const recursive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'grep', toolInput: { path: outside, pattern: 'needle' }, effectiveRules, imPolicySnapshot: snapshot }))
-      const sensitive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: systemHostsPath() }, effectiveRules, imPolicySnapshot: snapshot }))
+      const sensitive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: systemFilePath() }, effectiveRules, imPolicySnapshot: snapshot }))
       const special = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: outside }, effectiveRules, imPolicySnapshot: snapshot }))
       const unknown = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: path.join(outside, '**', '*.txt') }, effectiveRules, imPolicySnapshot: snapshot }))
 
@@ -1276,7 +1276,7 @@ describe('evaluateToolCallGate', () => {
     const root = await fs.realpath(await makeTempDir('read-policy-system-root-'))
     const windowsRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
     const systemDir = process.platform === 'win32' ? path.join(windowsRoot, 'System32') : '/etc'
-    const systemFile = process.platform === 'win32' ? path.join(windowsRoot, 'System32', 'drivers', 'etc', 'hosts') : '/etc/hosts'
+    const systemFile = process.platform === 'win32' ? path.join(windowsRoot, 'System32', 'kernel32.dll') : '/etc/hosts'
     try {
       await fs.access(systemDir)
       await fs.access(systemFile)
@@ -1599,7 +1599,7 @@ describe('evaluateToolCallGate', () => {
   it('V3 run_shell 将单次分析中的路径事实交给 locked 策略确认', async () => {
     const root = await fs.realpath(await makeTempDir('shell-facts-root-'))
     try {
-      const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: systemHostsCommand() } }))
+      const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: systemFileCommand() } }))
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'path-target', zone: 'system-dir' }))
       expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
       expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'shell-system-dir-confirm', answerer: 'user' })
@@ -1618,7 +1618,7 @@ describe('evaluateToolCallGate', () => {
       hints: { requiresRiskAck: false, outsideWorkDirRisk: false, warnings: [] }
     }))
     const gate = await evaluateToolCallGate(base({
-      toolName: 'run_shell', toolInput: { command: systemHostsCommand() }, runShellPrecheck: precheck as never
+      toolName: 'run_shell', toolInput: { command: systemFileCommand() }, runShellPrecheck: precheck as never
     }))
     expect(analyzeSpy).toHaveBeenCalledTimes(1)
     expect(precheck).toHaveBeenCalledTimes(1)
@@ -1954,7 +1954,7 @@ describe('evaluateToolCallGate', () => {
     const declaredWithSensitivePath = await evaluateToolCallGate(base({
       appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
       toolName: 'run_script',
-      toolInput: { code: `# @path-scope workdir-readonly\ncustom_accessor(target)\nopen(${JSON.stringify(systemHostsPath())}, "r")` }
+      toolInput: { code: `# @path-scope workdir-readonly\ncustom_accessor(target)\nopen(${JSON.stringify(systemFilePath())}, "r")` }
     }))
     expect(declaredWithSensitivePath.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-declaration', consistent: false }))
     expect(declaredWithSensitivePath.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-system-dir-confirm' })
@@ -1962,7 +1962,7 @@ describe('evaluateToolCallGate', () => {
 
   it('V3 run_script 静态敏感路径与内容分析共享一次解析，并进入敏感路径真人确认规则', async () => {
     const root = await fs.realpath(await makeTempDir('script-static-path-root-'))
-    const toolInput = { code: `open(${JSON.stringify(systemHostsPath())}, "r")` }
+    const toolInput = { code: `open(${JSON.stringify(systemFilePath())}, "r")` }
     try {
       const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false }))
@@ -1974,9 +1974,9 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each([
-    { language: 'javascript', code: `import fs from 'node:fs'; fs.readFileSync(${JSON.stringify(systemHostsPath())})` },
-    { language: 'typescript', code: `import { readFile } from 'node:fs/promises'; await readFile(${JSON.stringify(systemHostsPath())})` },
-    { language: 'powershell', code: `Get-Content -LiteralPath '${systemHostsPath()}'` }
+    { language: 'javascript', code: `import fs from 'node:fs'; fs.readFileSync(${JSON.stringify(systemFilePath())})` },
+    { language: 'typescript', code: `import { readFile } from 'node:fs/promises'; await readFile(${JSON.stringify(systemFilePath())})` },
+    { language: 'powershell', code: `Get-Content -LiteralPath '${systemFilePath()}'` }
   ])('V3 run_script $language 的路径事实进入系统目录真人确认', async ({ language, code }) => {
     const root = await fs.realpath(await makeTempDir('script-language-gate-'))
     try {
@@ -2213,7 +2213,7 @@ describe('evaluateToolCallGate', () => {
     const root = await fs.realpath(await makeTempDir('lane-matrix-root-'))
     const outside = await fs.realpath(await makeTempDir('lane-matrix-outside-'))
     try {
-      const remoteRead = await evaluateToolCallGate(base({ lane: 'feishu', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'read_file', toolInput: { path: systemHostsPath() } }))
+      const remoteRead = await evaluateToolCallGate(base({ lane: 'feishu', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'read_file', toolInput: { path: systemFilePath() } }))
       expect(remoteRead.decision).toMatchObject({ type: 'require-confirm', answerer: 'user' })
 
       const automationWrite = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'write_file', toolInput: { path: path.join(outside, 'new.txt'), content: 'x' } }))
@@ -2330,7 +2330,7 @@ describe('evaluateToolCallGate', () => {
       expect(sensitive.decision).toMatchObject({ type: 'deny', ruleId: 'automation-sensitive-path-deny' })
       expect(staleAllowLookup).not.toHaveBeenCalled()
 
-      const system = await evaluateToolCallGate(base({ lane: 'automation', workDir, userDataDir, toolName: 'read_file', toolInput: { path: systemHostsPath() } }))
+      const system = await evaluateToolCallGate(base({ lane: 'automation', workDir, userDataDir, toolName: 'read_file', toolInput: { path: systemFilePath() } }))
       expect(system.decision).toMatchObject({ type: 'deny', ruleId: 'automation-system-dir-deny' })
 
       const unregisteredMedia = await evaluateToolCallGate(base({ lane: 'automation', workDir, userDataDir, toolName: 'read_feishu_attachment', toolInput: { attachmentId: 'attachment-1' } }))
