@@ -1,6 +1,6 @@
 # 测试体系优化技术方案（近期 + 中期）
 
-> 状态：实施中（2026-11-02；W1–W7 已本地落地并分阶段提交；W5/W6 本地验收通过，远端矩阵与 W5 连续 5 次 CI 绿待完成；W0 六链路未实施；D-04 required 批准与 R-01…R-04 仍待负责人决定。评审复核：[复评报告](../../../review/2026-11-02-test-system-optimization-technical-plan-review.md)）
+> 状态：实施中（2026-11-02；W1–W7 已本地落地并分阶段提交；W0 六条真实 Electron UI 链路全部本地通过，required `test` job 已接入；进程重启恢复采用“恢复已记录上下文、明确说明工具结果未知、由 Agent 决定检查/询问/重试”的方向；逐链路反向验证和远端 CI 结果仍待完成。D-04 已获用户批准；W5/W6 远端证据及 R-01…R-04 决策待完成。评审复核：[复评报告](../../../review/2026-11-02-test-system-optimization-technical-plan-review.md)）
 > 核对基线：`main` `a6a5cdb7`（2026-11-01）；修订时 HEAD `bf980e1e`（领先 4 提交，评审确认不影响核对项实质）
 > 范围：覆盖率测量与门禁策略、测试基建复用、fixture 确定性、流式链路故障注入、渲染快照通道、存储性能门禁进 CI、probe CI 矩阵扩展、测试政策文档修订。
 > 来源：2026-11-01 对 DeepSeek Harness（外部仓库，下称 DSH）测试体系的对比调研；外部事实标注为「外部参照」，不在本仓复核范围内。
@@ -42,9 +42,9 @@
 - **覆盖率第一批只测量不门禁**（见 R-01）。
 - **不引入 Playwright/WebDriver 级 Electron UI e2e**；W0 使用 Electron 自带的 `webContents.executeJavaScript` 驱动真实 renderer 的可访问控件，不增加产品 IPC 或浏览器自动化依赖。
 
-### 待批准决策
+### 决策状态
 
-- **D-04［待批准：执行门禁］关键用户操作链路的目标已确认，强制门禁仍待负责人批准**：用户已明确要求补齐关键链路自动化回归；本方案建议每次 PR 必须验证新会话发送、已有会话续聊、工具调用后完成、用户取消、进程重启恢复后继续操作、跨设置页签修改并保存六条链路。对话使用本地固定模型响应，不依赖真实模型凭据；获批后不得降为观察性 job 或仅靠发布前手工验收。批准前，本文将其作为 W0 的拟交付契约，不声称门禁已获批准。
+- **D-04［已批准：执行门禁］六条关键用户操作进入每 PR 必过检查**：用户于 2026-11-02 批准接入必过检查。新会话发送、已有会话续聊、工具调用后完成、用户取消、进程重启恢复后继续操作、跨设置页签修改并保存六条链路已由 `.github/workflows/ci.yml` 的既有 `test` job 调用 `npm run verify:critical-user-flows`；该 job 仍由 `CI / required` 汇总门禁依赖。假服务固定响应，不依赖真实模型凭据。
 
 ## 1. 概要层【人机共读】
 
@@ -89,18 +89,18 @@
 
 | 操作链路 | 必须按顺序验证的结果 | 现有测试能证明什么 / 尚缺什么 |
 |---|---|---|
-| 新会话发送指令 | 创建会话 → renderer 提交 → `window.api` / IPC → turn 运行 → 回复显示 → turn 与助手消息成功保存 → active turn 清空 | `electron/appIpc.file.test.ts` 覆盖接受 turn 并启动异步执行；Hosted 与恢复分别有集成测试，但此前未把刚创建 turn 与立即恢复放在同一真实业务时序中。此链路新增完整回归，撤销本次修复时必须失败。 |
-| 已有会话继续对话 | 打开已有会话 → 发送第二条指令 → 模型输入包含正确历史且当前指令只出现一次 → 新回复显示并提交 → 历史顺序正确 | `electron/claudeStreamHandlers.hostedIntegration.test.ts` 已验证 Hosted provider 与 canonical history；仍需从 renderer 提交入口验证，避免只验证 Hosted 内部输入构造。 |
-| 工具调用后完成 | 发送会触发工具的指令 → 模型发出 tool-use → 正确工具实际执行一次 → 结果回到模型 → 助手最终回复显示并完成保存 | Hosted 与 `electron/confirmation/securityTaskSetGate.integration.test.ts` 等覆盖授权、执行与结果等局部；需增加一条串联工具派发、结果回传和最终 turn 完成的成功主路径，核心执行器与 turn runtime 不得 mock。 |
-| 用户取消运行中会话 | 启动请求并保持模型响应待处理 → 用户取消 → provider 收到取消 / 执行停止 → UI 与存储均为 cancelled → 迟到响应不能复活或覆盖终态 | `electron/appIpc.file.test.ts` 与 Hosted 测试已有 cancel IPC / 执行取消用例；仍需一个从用户取消动作到最终状态一致的贯通回归，并验证迟到响应。 |
-| 进程重启后恢复并继续 | 真实 SQLite 留下执行中 turn → 关闭并重开应用 / runtime → 遗留 turn 按恢复规则收敛 → 会话仍可打开 → 下一条用户指令正常完成 | `electron/runtime/sessionTranscriptStartup.test.ts` 已有真实 SQLite 启动恢复测试；还需验证恢复完成后用户能够继续执行，而不只断言数据库 claim / checkpoint 状态。 |
-| 跨页签修改并保存设置 | 修改设置值 → 切到会卸载该控件的其他页签 → 保存 → 主进程校验并写入实际设置存储 → 重新读取 / 重开设置页 → 值与用户输入一致 | `src/renderer/components/Config/ConfigSettingsPage.test.tsx` 已有跨页签保存回归，能捕获控件卸载后提交 `NaN` 的问题；仍需贯通真实 `window.api` / IPC、主进程保存与重新读取，确认不是只验证提交 payload。 |
+| 新会话发送指令 | 创建会话 → renderer 提交 → `window.api` / IPC → turn 运行 → 回复显示 → turn 与助手消息成功保存 → active turn 清空 | `new-session` 真实 Electron 链路覆盖界面创建与发送、用户/助手消息保存、SQLite turn 完成和 active turn 清空。 |
+| 已有会话继续对话 | 打开已有会话 → 发送第二条指令 → 模型输入包含正确历史且当前指令只出现一次 → 新回复显示并提交 → 历史顺序正确 | `continue-session` 真实 Electron 链路从界面提交两条指令；本地模型检查历史里两条用户消息各出现一次，并验证第二条回复与顺序。 |
+| 工具调用后完成 | 发送会触发工具的指令 → 模型发出 tool-use → 正确工具实际执行一次 → 结果回到模型 → 助手最终回复显示并完成保存 | `tool-roundtrip` 真实 Electron 链路经由用户批准、正式 `read_file` 工具执行、本地模型接收工具结果、助手最终回复与 SQLite 终态。 |
+| 用户取消运行中会话 | 启动请求并保持模型响应待处理 → 用户取消 → provider 收到取消 / 执行停止 → UI 与存储均为 cancelled → 迟到响应不能复活或覆盖终态 | `cancel-stale-response` 真实 Electron 链路在 provider 请求挂起时从界面取消，核对取消终态、active turn 清空，并在迟到响应窗口后再次检查终态。 |
+| 进程重启后恢复并继续 | 真实 SQLite 留下执行中 turn → 关闭并重开应用 / runtime → 遗留 turn 按恢复规则收敛 → 会话仍可打开 → 下一条用户指令正常完成 | `restart-recovery` 真实 Electron 链路复用 SQLite profile，重启后恢复已记上下文并显式告知 Agent 工具结果未知；不自动重跑旧 turn，下一条消息在同一会话发给 provider。 |
+| 跨页签修改并保存设置 | 修改设置值 → 切到会卸载该控件的其他页签 → 保存 → 主进程校验并写入实际设置存储 → 重新读取 / 重开设置页 → 值与用户输入一致 | `settings-cross-tab-save` 真实 Electron 链路切换页签后保存并通过正式 config IPC 重新读取设置值。 |
 
 - **测试形态**：新增确定性的 Electron 集成套件，驱动真实 renderer 操作、`window.api` / preload / IPC、主进程 turn 启动、Hosted handoff 与恢复、turn runtime 和 SQLite session storage；只把模型服务响应替换为固定、可控的流。设置保存用真实设置表单和 IPC / 持久化路径，不能 mock 保存 handler 或存储。工具调用使用真实应用工具注册与执行路径，副作用限定在临时目录或内存夹具。不得 mock 恢复逻辑、Hosted handoff、turn runtime、IPC handler 或会话 / 设置存储，也不得只断言函数被调用。
 - **共同断言**：对话链路检查用户可见结果与数据库事实一致、状态终结正确（completed / cancelled）、无意外 active turn、用户指令与工具调用次数正确；设置链路检查跨页签后提交值有限且符合 schema、保存成功、重新读取值相同。各阶段均有界等待，失败时输出链路名、阶段名及 turnId 或设置字段名。取消链路额外验证迟到模型响应不会改变 cancelled 终态。
-- **回归有效性**：新会话用例固定覆盖本次“当前新 turn 被遗留恢复误处理”；重启用例覆盖旧 turn 恢复与下一 turn 可运行；设置用例固定复现“切换页签导致字段卸载、保存值变 `NaN`”并在真实持久化后复读。首次落地每个用例都须做反向验证或故障注入，证明破坏对应保证会令测试失败。
+- **回归有效性**：六条真实 Electron 链路均检查各自关键用户结果、存储事实或对话上下文；新会话检查新 turn 正常完成，重启检查旧 turn 上下文和下一 turn 可运行，设置检查卸载页签后保存并复读。逐链路反向验证 / 故障注入仍未完成，因此 AC-8 的此项验收保持未完成。
 - **CI 与验收**：六条链路全部加入现有每次 PR 必跑的 `test` job，并纳入 required 聚合结果，不另设可选 / 观察性 lane。**AC-8**：CI 每次 PR 执行六条链路；新会话可完成、续聊历史正确、工具可执行并完成、取消后无迟到复活、重启恢复后可继续、设置跨页签保存后复读一致；各链路的反向验证 / 故障注入证明测试可检出对应回归。真实模型试跑可作发布前补充证据，但不替代自动化门禁。
-- **可执行接入契约（方案选定，待实现）**：新增 `scripts/run-critical-user-flows.cjs`（Node 父启动器）与 `scripts/critical-user-flows.electron.cjs`（Electron 子进程套件）；新增 `npm run test:critical-user-flows` 作为已构建产物的运行命令，以及 `npm run verify:critical-user-flows` 作为本地/CI 单命令入口。后者顺序执行 `npm run build:renderer`、`npm run build:electron`、`node -e "require('electron')"` 串行预热，再运行套件。父启动器启动一个仅监听 `127.0.0.1` 随机端口的静态文件服务，根目录固定为 Vite 实际构建输出 `dist/renderer/`，并将服务就绪后的首页 URL 通过 `ELECTRON_START_URL` 传给 Electron 子进程；服务只映射该构建目录内的文件，路径须规范化并拒绝目录外访问。子进程以 `SPACEASSISTANT_DEV=1`、独立的 `SPACEASSISTANT_DEV_USER_DATA_DIR` 与 `ELECTRON_START_URL` 启动 `electron dist-electron/electron/main.js`，因此使用正式主进程和正式 preload，但走未打包应用现有的 URL 加载分支，通过 `loadURL` 加载刚构建的 renderer；不启动 Vite、不依赖 9240，也不伪造 `app.isPackaged`。启动器须等静态服务器首页可访问后才启动 Electron；子进程再等待正式窗口 `did-finish-load`、页面根节点已挂载且必需的 `window.api` 方法存在后开始操作，任何服务未就绪、资源加载失败、renderer 启动错误或窗口加载降级均令本例失败。测试由 `webContents.executeJavaScript` 按可访问名称/角色查找并操作真实控件，读取页面可见结果，必要时用既有只读存储接口复核持久化事实。若控件缺少稳定可访问名称，在 RP-3 登记对应 renderer 组件仅增加无行为影响的测试定位标记，不新增产品 IPC。
+- **可执行接入契约（已实现）**：`scripts/run-critical-user-flows.cjs`（Node 父启动器）与 `scripts/critical-user-flows.electron.cjs`（Electron 子进程套件）提供六条 UI 流程；`npm run test:critical-user-flows` 运行已构建产物，`npm run verify:critical-user-flows` 依次构建 renderer / Electron、串行预热并运行套件。父启动器仅监听 `127.0.0.1` 随机端口，静态服务限制在 `dist/renderer/` 内；Electron 通过正式主进程、preload、`window.api`、IPC 与真实 UI 运行，六例使用隔离的 `userData`，重启例复用同一 profile。UI 由 `webContents.executeJavaScript` 按真实控件操作并检查可见结果；本地六条均通过，启动与静态服务异常、流程断言失败或超时会使父命令非零退出。
 - **固定模型边界**：父启动器在 loopback 随机端口启动 Anthropic 兼容 SSE 假服务，按场景返回预先编排的普通回复、工具调用、延迟/取消响应；每个隔离 profile 通过应用已有模型服务配置持久化接口，将 API base URL 指向该服务并使用仅测试用假 key。请求仍经正式 Anthropic client、Hosted handoff、工具循环与 turn runtime；不替换 client factory，不 mock IPC、恢复、核心执行器或存储。工具副作用仅允许写入该用例自己的临时工作目录。
 - **隔离、重启与清理**：每条链路使用独立 `mkdtemp` 根目录及独立 `userData`/SQLite 数据库；重启恢复用例的两次 Electron 启动显式复用同一 profile，其他用例不得复用。父启动器串行运行六例，为每例设置总超时；无论成功、断言失败或超时，均在 `finally` 关闭 Electron 子进程树、停止 renderer 静态文件服务和模型 loopback 服务并删除临时根目录。父启动器仅在 Electron 正常退出且收到成功结果、renderer 服务无 404/5xx 请求时记该例通过；静态文件服务错误、启动失败、断言失败或超时都使父命令非零退出。子进程每例输出带链路名和阶段名的机器可读结果。
 - **精确 CI 接入**：在 `.github/workflows/ci.yml` 现有 macOS `test` job 中，以 `npm run verify:critical-user-flows` 替换单独的 `npm run build:electron` 步骤（该命令内已构建 renderer 与 Electron、串行预热并用本地静态服务加载 `dist/renderer/`），位置在现有类型/边界检查之后、Vitest 主套件之前；原有 `npm test` 与其余测试步骤保留。此 `test` job 必须继续进入仓库既有 `CI / required` 聚合门禁。六条场景必须各输出一条通过记录并在 job 日志中列出汇总；缺少任一场景记录、断言失败、进程异常或超时均令命令和 required job 失败。首次落地还须逐条做反向验证并保留结果，证明对应回归会使该命令失败。
@@ -181,7 +181,7 @@
 
 | 工作项 | 已完成证据 | 尚未完成的验收 |
 |---|---|---|
-| W0 / AC-8 六条关键用户链路 | 无；本轮尚未实现真 renderer→preload/IPC→主进程→SQLite 的 Electron UI E2E | 六链路、逐条反向验证、required `test` job 接入全部未完成；D-04 required 批准仍待负责人确认 |
+| W0 / AC-8 六条关键用户链路 | Electron UI harness 与 runner 5 项测试通过；六条真实 Electron 流程本地 `6/6` 通过。目标会话恢复在 session-storage 边界为无终止事件的遗留 turn 写入 `process-restart` 终止记录并选择 working context；工具结果不明时明确说明事实，不自动重跑旧 turn；同一会话的下一条消息可到达 provider。`npm test` 全量通过（1256 个文件通过、1 个跳过；12160 项通过、140 项跳过）；CI `test` job 配置为调用该验证命令并仍属于 `CI / required` 汇总 | 逐链路反向验证 / 故障注入仍待完成；六链路远端 macOS CI 运行结果与 Windows 兼容性证据待 CI 运行 |
 | W1 / AC-1 覆盖率 | `npm run test:coverage` 与基线文档已提交，测量结果可本地复核 | 无已知剩余项 |
 | W2 / AC-2 测试基建 | 工厂与临时路径 helper 已提交；renderer/Electron suites、20 次重复、typecheck 与增量构建已通过 | 无已知剩余项 |
 | W3 / AC-3 流式 harness | 场景 harness 与目标测试迁移已提交，定向测试通过 | 无已知剩余项 |
@@ -190,7 +190,7 @@
 | W6 / AC-6 chat IPC probe | 本地正常路径、丢投影、异常终态三种路径均已验证；CI 矩阵与初始化顺序静态门禁通过 | macOS + Windows 远端正常结果、初始化屏障失败时 probe 未启动的实际 CI 证据；R-02 required 决策 |
 | W7 / AC-7 测试政策 | guide 已按当前四个 Vitest project、CI lane、mock、snapshot、coverage 与 temp path 纪律修订并提交 | 无已知剩余项 |
 
-本轮本地验证命令：`npm run test:storage-perf`、`node --test scripts/check-ci-required-coverage.test.mjs scripts/summarize-storage-perf-report.test.mjs`、`npm run check:ci-required-coverage`、`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run probe:chat-business-ipc`。远端验收尚未发生；禁止把已实现 job 或本地探针结果表述成 CI 平台通过。
+本轮本地验证命令：`npm test`（1256 个测试文件通过、1 个跳过；12160 项通过、140 项跳过）、`npm run verify:critical-user-flows`（构建 renderer / Electron 并运行六条真实 Electron 流程，`6/6` 通过）、`node --test scripts/run-critical-user-flows.test.cjs`（5/5）、重启恢复 / 投影 / 存储定向 Vitest（3 个文件、100 项通过）、`npm run typecheck:renderer`、`npm run i18n:check`、`npm run build:electron:incremental`，以及 W1/W5/W6 已记录的覆盖率、storage-perf 与 chat IPC probe 命令。远端验收尚未发生；禁止把已接入的 job 或本地结果表述成 CI 平台通过。
 
 ## 4. 风险与已排除方案【机｜人工可跳过】
 
@@ -293,7 +293,7 @@ flowchart LR
 
 ### RP-6 待批准清单与自曝三处
 
-- **待批准**：本方案范围、P1/P2 工作项、D-04 所述“六条链路进入每 PR required job”、storage-perf 与 probe job 初期观察性、W6 作为有业务断言的回归门禁、R-01…R-04 决策边界。D-04 的“用户目标已确认”不等于“CI required 门禁已批准”。外部验收项：六条链路 CI 执行、macOS/Windows 真实 Electron CI 运行与 probe 负例、storage-perf 连续五次远端运行。上述不要求在方案评审前完成。
+- **待批准 / 待验证**：D-04 已批准并已接入；R-01…R-04 的决策边界仍待确认。外部验收项包括六条链路的远端 macOS/Windows 运行、逐链路反向验证或故障注入记录、probe 负例，以及 storage-perf 连续五次远端运行。
 - **弱点 1**：W6 probe 业务断言可能与实际终态语义不符；若真实 `turnRuntime`/SQLite 流程中 outcome 或助手状态定义不同，须以既有领域契约与测试证据修订，不能放宽为仅打印。
 - **弱点 2**：storage-perf 在 CI 的 p95 可能受 runner 波动影响；连续五次运行若不稳定，应基于摘要与本地复测重估预算或 runner，不得靠重试或放宽预算掩盖。
 - **弱点 3**：coverage 合并报告与新增测试工厂的 project include 可能遗漏文件；若复核命令与报告覆盖面不一致，修正配置/基线后再讨论阈值。
@@ -307,7 +307,7 @@ flowchart LR
 | INV-03（CI 可靠性方案） | W6 job 步骤、AC-6 |
 | INV-04（CI 可靠性方案） | W2 tempPaths 约定、AC-2 |
 | R-04 | 本轮不实施 pre-push；未来另立方案，不构成 P1 授权 |
-| D-04 / INV-05…06 | W0 六条关键用户操作与 AC-8；D-04 的 required 状态待负责人批准；INV-05/06 为本方案定义的不变量 |
+| D-04 / INV-05…06 | W0 六条关键用户操作与 AC-8；D-04 于 2026-11-02 获用户批准并接入 required `test` job；INV-05/06 为本方案定义的不变量 |
 | F-08 | §0 测试文件计数、W3/AC-3 度量基线（21 处 / 其中 claudeStreamHandlers 系 4 文件） |
 | 附录 F-01…F-07 | §1.2 各问题点 |
 

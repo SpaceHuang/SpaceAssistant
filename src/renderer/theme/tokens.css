@@ -44,9 +44,9 @@
   --sa-chat-assistant-accent: color-mix(in srgb, var(--sa-primary) 22%, var(--sa-border) 78%);
   --sa-chat-user-shadow: none;
   --sa-chat-assistant-shadow: var(--sa-shadow-sm);
-  --sa-chat-failed-fg: #cf1322;
-  --sa-chat-failed-bg: #fff1f0;
-  --sa-chat-failed-border: #ffa39e;
+  --sa-chat-failed-fg: #a6534a;
+  --sa-chat-failed-bg: color-mix(in srgb, var(--sa-chat-failed-fg) 4%, var(--sa-bg-elevated));
+  --sa-chat-failed-border: color-mix(in srgb, var(--sa-chat-failed-fg) 18%, var(--sa-border));
   --sa-chat-streaming-fg: var(--sa-primary);
 
   /* 消息列表：统一字号与展开区表面 */

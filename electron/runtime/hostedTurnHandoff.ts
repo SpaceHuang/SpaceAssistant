@@ -211,7 +211,9 @@ export function createHostedTurnHandoff(input: {
               const result = await cleanupOrphanProcess({ pid: orphan.pid, processGroupId: orphan.processGroupId, ownerToken: orphan.ownerToken })
               logAgentEvent('info', 'shell.orphan_cleanup', { turnId: orphan.turnId, toolUseId: orphan.toolUseId, result })
             }
-            const recovery = input.sessionExecution!.recoverExecutionTarget(sessionId)
+            const protectedTurnId = input.acceptedTurn?.turnId === input.turnId && input.acceptedTurn.sessionId === sessionId
+              ? input.turnId : undefined
+            const recovery = input.sessionExecution!.recoverExecutionTarget(sessionId, protectedTurnId)
             if (recovery?.status === 'blocked') return { acquired: false as const, reason: 'blocked' as const }
           }
           const result = input.sessionExecution!.claimExecution({ sessionId, turnId: input.turnId, ownerId })

@@ -2625,6 +2625,10 @@ export class SqliteAgentHistory implements HistoryPort {
           }
           const processRestartEventId = `${invocationId}:history:${sequence}`
           const toolUseIds = pendingInterruptedToolUseIds(snapshot.events)
+          const recoverySessionId = streamSessionId ?? this.sessionId
+          const checkpoint = recoverySessionId
+            ? this.conn.prepare('SELECT version FROM session_transcript_checkpoints WHERE session_id=?').get(recoverySessionId) as { version: number } | undefined
+            : undefined
           const terminal = { status: 'interrupted', turnId: lastEvent.turnId, reason: 'interrupted',
             canonicalTerminalEventId: processRestartEventId, toolUseIds }
           await this.appendBatch([{
@@ -2637,6 +2641,7 @@ export class SqliteAgentHistory implements HistoryPort {
             kind: 'invocation-interrupted',
             payload: {
               status: 'interrupted', reason: 'process-restart',
+              ...(recoverySessionId && checkpoint ? { contextSelection: { contextProtocol: 2, target: 'working', baseVersion: checkpoint.version } } : {}),
               ...(recoveryLocation ? { sessionLedger: { location: recoveryLocation, turnId: lastEvent.turnId, reason: terminal.reason } } : {})
             }
           }], snapshot.version)

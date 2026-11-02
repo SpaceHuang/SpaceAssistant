@@ -873,9 +873,10 @@
 }
 
 .chat-bubble-status--failed {
-  color: var(--sa-chat-failed-fg);
-  background: var(--sa-chat-failed-bg);
-  border: 1px solid var(--sa-chat-failed-border);
+  color: var(--sa-text-secondary);
+  background: transparent;
+  border: 0;
+  font-weight: 400;
 }
 
 .chat-bubble-status--queued {
@@ -893,21 +894,22 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px 12px;
+  gap: 6px 12px;
   width: 100%;
-  margin-top: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--sa-chat-failed-border);
-  border-radius: var(--sa-radius-md);
-  background: var(--sa-chat-failed-bg);
-  color: var(--sa-text);
-  font-size: 12px;
+  margin-top: 6px;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  font-size: 13px;
   line-height: 1.5;
 }
 
 .chat-message-error__text {
   flex: 1 1 12rem;
   min-width: 0;
+  color: var(--sa-text-secondary);
 }
 
 .chat-message-error__reason {
@@ -920,8 +922,8 @@
 
 .chat-message-error__reason-label {
   margin-right: 6px;
-  color: var(--sa-chat-failed-fg);
-  font-weight: 500;
+  color: var(--sa-text-secondary);
+  font-weight: 400;
 }
 
 .chat-message-source {
@@ -960,14 +962,14 @@
 
 .chat-message-error__retry {
   flex-shrink: 0;
-  border: 1px solid var(--sa-chat-failed-border);
+  border: 1px solid transparent;
   border-radius: var(--sa-radius-sm);
-  background: var(--sa-bg);
-  color: var(--sa-chat-failed-fg);
-  padding: 4px 10px;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  padding: 4px 6px;
   font: inherit;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 400;
   cursor: pointer;
   transition:
     background var(--sa-duration-fast),
@@ -976,7 +978,8 @@
 
 .chat-message-error__retry:hover {
   background: var(--sa-bg-hover);
-  border-color: var(--sa-chat-failed-fg);
+  border-color: transparent;
+  color: var(--sa-text);
 }
 
 .chat-message-error__retry:focus-visible {
@@ -1937,7 +1940,9 @@
 }
 
 .tool-row__status--completed { color: var(--sa-success); background: color-mix(in srgb, var(--sa-success) 12%, transparent); }
-.tool-row__status--failed { color: var(--sa-danger); background: color-mix(in srgb, var(--sa-danger) 12%, transparent); }
+.tool-row__status--failed { color: var(--sa-text-secondary); background: var(--sa-bg-muted); }
+.tool-row--interrupted .tool-row__status--failed { color: var(--sa-text-secondary); background: transparent; }
+.tool-row__status--interrupted { color: var(--sa-text-tertiary); background: transparent; font-weight: 400; }
 .tool-row__status--rejected { color: var(--sa-text-tertiary); }
 .tool-row__status--confirming { color: var(--sa-warning); background: color-mix(in srgb, var(--sa-warning) 12%, transparent); }
 .tool-row__duration { color: var(--sa-text-tertiary); }
@@ -2142,6 +2147,11 @@
   color: var(--sa-text);
   font-weight: 500;
   line-height: 1.55;
+}
+
+.tool-row--interrupted.tool-row--expanded .tool-row-detail__inner > .tool-row-detail__message {
+  color: var(--sa-text-secondary);
+  font-weight: 400;
 }
 
 .tool-row--expanded .tool-row-detail__inner > .sa-command-inset,

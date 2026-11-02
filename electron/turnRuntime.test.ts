@@ -26,6 +26,25 @@ function storage(): TurnStorage {
 }
 
 describe('TurnRuntime', () => {
+  it('consumes sequence numbers for ignored finishing facts so late tool results remain attachable', async () => {
+    vi.useFakeTimers()
+    const runtime = new TurnRuntime({ storage: storage(), deps: { now: () => 1, id: () => 'turn' } })
+    const turn = runtime.prepare({ mode: 'create-user', requestId: 'req', sessionId: 's1', input: { text: 'hi' }, config: {} })
+    runtime.bindRequest('req', turn.turnId)
+    let done!: (value: { outcome: 'cancelled' }) => void
+    const execution = runtime.executeWithSource(turn.turnId, turn.startToken, () => new Promise((resolve) => { done = resolve }))
+    runtime.cancel(turn.turnId)
+    runtime.consumeForRequest('req', { type: 'tool-use', id: 'tool', toolName: 'read_file', input: {} })
+    runtime.consumeForRequest('req', { type: 'preview-commit' })
+    expect(() => runtime.consumeForRequest('req', { type: 'tool-result', id: 'tool', result: { success: true, data: 'OK' } })).not.toThrow()
+    expect(runtime.getTurn(turn.turnId)?.assistantMessage.toolCalls?.[0]).toMatchObject({
+      id: 'tool', status: 'completed', result: { success: true, data: 'OK' }
+    })
+    done({ outcome: 'cancelled' })
+    await execution
+    vi.useRealTimers()
+  })
+
   it.each([
     ['no-tools', [{ type: 'content-delta', text: 'answer' }, { type: 'source-completed' }]],
     ['tools', [

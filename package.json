@@ -53,6 +53,8 @@
     "check:model-baseline": "node --import tsx scripts/generate-model-baseline.mjs --check",
     "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",
     "probe:chat-ipc-transport": "electron scripts/probe-chat-ipc-transport.cjs",
+    "test:critical-user-flows": "node scripts/run-critical-user-flows.cjs",
+    "verify:critical-user-flows": "npm run build:renderer && npm run build:electron && node -e \"require('electron')\" && npm run test:critical-user-flows",
     "probe:chat-business-ipc": "electron scripts/probe-chat-business-ipc.cjs",
     "probe:agent-continuation-ipc": "npm run build:electron && node scripts/run-agent-continuation-ipc-probe.cjs",
     "probe:chat-renderer-dom": "node scripts/probe-chat-renderer-dom.cjs",

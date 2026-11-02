@@ -238,7 +238,7 @@ export function toTurnDisplay(input: { turnId: string; requestId: string; versio
 
 export function lifecycleForMessage(message: Message): TurnDisplay['lifecycle'] {
   if (message.status === 'completed') return 'completed'
-  if (message.status === 'failed') return 'failed'
+  if (message.status === 'failed' || message.status === 'cancelled') return 'failed'
   if (message.toolCalls?.some((tool) => tool.status === 'confirming')) return 'awaiting-confirmation'
   return 'running'
 }

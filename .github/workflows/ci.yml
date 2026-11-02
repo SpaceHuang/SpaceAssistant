@@ -44,7 +44,8 @@ jobs:
       - run: npm run typecheck:agent-sdk
       # SDK 包边界和生产依赖闭包护栏。
       - run: npm run check:agent-sdk
-      - run: npm run build:electron
+      - name: Build app and verify six critical user flows
+        run: npm run verify:critical-user-flows
       # SDK turn 与 Hosted Host 生命周期回归，不启动 Electron UI。
       - run: npm exec vitest run packages/agent-sdk/test/agentCore.test.ts packages/agent-sdk/test/turn.test.ts electron/runtime/hostedAgentTurnHost.test.ts
       - name: Prepare Vitest report directory

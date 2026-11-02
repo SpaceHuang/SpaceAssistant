@@ -720,6 +720,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:get-messages',
     async (_e, payload: { sessionId: string; limit?: number; offset?: number }): Promise<Message[]> => {
+      if (turnRuntime.listActive(payload.sessionId).length === 0) {
+        ctx.sessionStorage?.execution.recoverExecutionTarget(payload.sessionId)
+      }
       return readChatMessagesAfterPreparation(sessionStorage, payload)
     }
   )
@@ -1179,7 +1182,12 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     return [...errors].map(([assistantMessageId, message]) => ({ assistantMessageId, message }))
   })
 
-  ipcMain.handle('chat:list-active-turns', (_e, payload?: { sessionId?: string }) => turnRuntime.listActive(payload?.sessionId).map(({ executionConfig: _executionConfig, ...turn }) => turn))
+  ipcMain.handle('chat:list-active-turns', (_e, payload?: { sessionId?: string }) => {
+    if (payload?.sessionId && turnRuntime.listActive(payload.sessionId).length === 0) {
+      ctx.sessionStorage?.execution.recoverExecutionTarget(payload.sessionId)
+    }
+    return turnRuntime.listActive(payload?.sessionId).map(({ executionConfig: _executionConfig, ...turn }) => turn)
+  })
 
   ipcMain.handle('chat:get-turn-displays', (_e, payload: { known: Array<{ turnId: string; version: number }>; sessionId?: string }) => {
     const known = new Map((payload?.known ?? []).map((item) => [item.turnId, item.version]))

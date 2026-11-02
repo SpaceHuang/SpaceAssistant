@@ -1029,6 +1029,50 @@ describe('file IPC handlers', () => {
     await expect(pending).resolves.toBe('rejected')
   })
 
+  it('recovers a reopened session before returning its active turns', async () => {
+    const recoverExecutionTarget = vi.fn(() => ({
+      status: 'ready', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0
+    }))
+    ctx.sessionStorage = { ...ctx.sessionStorage, execution: { ...ctx.sessionStorage.execution, recoverExecutionTarget } }
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const handler = ipc.getHandler('chat:list-active-turns')!
+
+    await handler({}, { sessionId: 'reopened-session' })
+
+    expect(recoverExecutionTarget).toHaveBeenCalledWith('reopened-session')
+  })
+
+  it('recovers a reopened session before reading messages for continuation', async () => {
+    const recoverExecutionTarget = vi.fn(() => ({
+      status: 'ready', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0
+    }))
+    ctx.sessionStorage = { ...ctx.sessionStorage, execution: { ...ctx.sessionStorage.execution, recoverExecutionTarget } }
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const handler = ipc.getHandler('chat:get-messages')!
+
+    await handler({}, { sessionId: 'reopened-session' })
+
+    expect(recoverExecutionTarget).toHaveBeenCalledWith('reopened-session')
+  })
+
+  it('does not recover a session while a turn is active in this process', async () => {
+    const recoverExecutionTarget = vi.fn(() => ({
+      status: 'ready', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0
+    }))
+    ctx.sessionStorage = { ...ctx.sessionStorage, execution: { ...ctx.sessionStorage.execution, recoverExecutionTarget } }
+    ctx.turnRuntime = Object.assign(Object.create(ctx.turnRuntime), {
+      listActive: vi.fn(() => [{ turnId: 'current-turn' }])
+    }) as AppIpcContext['turnRuntime']
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+    await ipc.getHandler('chat:get-messages')!({}, { sessionId: 'active-session' })
+
+    expect(recoverExecutionTarget).not.toHaveBeenCalled()
+  })
+
   it('records a local IPC handler dispatch baseline for the final pipeline report', async () => {
     const handler = ipc.getHandler('chat:list-active-turns')!
     const sampleCount = 1_000

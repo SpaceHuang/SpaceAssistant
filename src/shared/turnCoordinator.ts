@@ -291,11 +291,18 @@ export class TurnCoordinator {
     const turn = this.turns.get(turnId)
     if (!turn) throw new Error('unknown turn')
     if (isTerminalMessageStatus(turn.assistantMessage.status)) return turn
-    if (this.finishing.has(turnId) && !this.isFinishingEventAllowed(event.type)) return turn
     if (event.eventSeq != null) {
       const last = turn.lastEventSeq ?? 0
       if (event.eventSeq <= last) return turn
       if (event.eventSeq !== last + 1) throw new Error(`TURN_EVENT_SEQUENCE_GAP:${last + 1}:${event.eventSeq}`)
+    }
+    if (this.finishing.has(turnId) && !this.isFinishingEventAllowed(event.type)) {
+      if (event.eventSeq != null) {
+        const advanced = { ...turn, lastEventSeq: event.eventSeq }
+        this.turns.set(turnId, advanced)
+        return advanced
+      }
+      return turn
     }
     const message = reduceAssistantFact(turn.assistantMessage, event, { now: this.deps.now(), createId: this.deps.id })
     const version = turn.version + 1
@@ -412,7 +419,9 @@ export class TurnCoordinator {
   }
 
   private isFinishingEventAllowed(type: AssistantFactEvent['type']): boolean {
-    return type === 'content-delta' || type === 'thinking-delta' || type === 'content-reconciled' || type === 'thinking-reconciled' || type === 'preview-rollback' || type === 'tool-progress' || type === 'tool-result'
+    // A committed model response can deliver its tool-use fact just after cancel starts.
+    // Keep that identity so the already in-flight tool-result can be paired and shown.
+    return type === 'content-delta' || type === 'thinking-delta' || type === 'content-reconciled' || type === 'thinking-reconciled' || type === 'preview-rollback' || type === 'tool-use' || type === 'tool-progress' || type === 'tool-result'
   }
 
   private beginFinishing(turnId: string, outcome: 'cancelled' | 'timed-out'): void {
@@ -431,10 +440,11 @@ export class TurnCoordinator {
     this.terminals.set(turnId, { ...this.makeTerminal(finalized, outcome), ...(error ? { error } : {}) })
   }
 
-  recover(sessionId?: string): number {
+  recover(sessionId?: string, excludeTurnId?: string): number {
     const unfinished = this.storage.listUnfinishedTurns(sessionId)
     let recovered = 0
     for (const turn of unfinished) {
+      if (excludeTurnId !== undefined && turn.turnId === excludeTurnId) continue
       if (this.recovered.has(turn.assistantMessageId)) continue
       const recovery = this.storage.recoverTurn(turn.turnId, turn.assistantMessageId)
       if (recovery) {
@@ -461,8 +471,10 @@ export class TurnCoordinator {
       const residue = message
       const m = residue.message
       if (m.role !== 'assistant' || m.status !== 'streaming') continue
+      if (excludeTurnId !== undefined && residue.turnId === excludeTurnId) continue
       if (this.recovered.has(m.id)) continue
       const owned = [...this.turns.values()].find((turn) => turn.assistantMessage.id === m.id)
+      if (excludeTurnId !== undefined && owned?.turnId === excludeTurnId) continue
       const terminalOutcome = residue.turnOutcome ?? owned?.persistedOutcome
       const terminalStatus = terminalOutcome === 'completed' ? 'completed'
         : terminalOutcome === 'parked' ? 'sent'

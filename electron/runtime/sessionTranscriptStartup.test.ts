@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { appendMessage, createSession, getMessage } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
-import { claimSessionExecution, commitSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, readSessionTranscript, reconcileUncertainSessionTranscript } from '../database/sessionTranscript'
+import { claimSessionExecution, commitSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, readSessionTranscript, reconcileUncertainSessionTranscript, recoverSessionExecutionForTarget } from '../database/sessionTranscript'
 import { getPersistedTurn, listPersistedTurns } from '../database/operations'
 import { openDatabase } from '../database'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
@@ -50,6 +50,48 @@ async function createUncertainProtocol2Session() {
 }
 
 describe('startup transcript reconciliation ordering', () => {
+  it('allows the next turn after a process-restart terminal is recorded, preserving history as the transcript source', async () => {
+    const temp = createTempDatabase('restart-resume-')
+    const db = temp.db
+    const session = createSession(db, { name: 'restart-resume', model: 'test' })
+    const seedOwner = claimSessionExecution(db, { sessionId: session.id, turnId: 'seed-turn', ownerId: 'seed-owner' })
+    if (!seedOwner.acquired) throw new Error('test setup failed to claim seed turn')
+    commitSessionTranscript(db, { sessionId: session.id, turnId: 'seed-turn', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', id: 'seed-user', content: 'seed' }] })
+    markSessionExecutionStarted(db, { sessionId: session.id, turnId: 'seed-turn', ownerId: 'seed-owner', generation: seedOwner.generation })
+    markSessionExecutionUncertain(db, { sessionId: session.id, turnId: 'seed-turn', ownerId: 'seed-owner', generation: seedOwner.generation })
+    expect(reconcileStartupSessionTranscripts(db, { historyRecoverySucceeded: true, turnCoordinatorRecoverySucceeded: true }, 2_500)).toMatchObject({ reconciled: 1 })
+    const owner = claimSessionExecution(db, { sessionId: session.id, turnId: 'restart-turn', ownerId: 'old-owner' })
+    if (!owner.acquired) throw new Error('test setup failed to claim restart turn')
+    markSessionExecutionStarted(db, { sessionId: session.id, turnId: 'restart-turn', ownerId: 'old-owner', generation: owner.generation })
+    const restartProjection = createTurnCoordinatorStorage(db).prepareAtomic?.({
+      user: { id: 'restart-user', sessionId: session.id, role: 'user', content: 'continue task', timestamp: 2, status: 'sent' },
+      assistant: { id: 'restart-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 3, status: 'streaming' },
+      turn: { turnId: 'restart-turn', requestId: 'restart-request', sessionId: session.id, userMessageId: 'restart-user', assistantMessageId: 'restart-assistant', state: 'executing' }
+    })
+    if (!restartProjection) throw new Error('test setup failed to create restart projection')
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    const userMessage = { role: 'user' as const, id: 'restart-user', content: 'continue task' }
+    const toolCall = { id: 'restart-tool', name: 'write_file', input: { path: 'x' } }
+    await history.appendBatch([
+      { invocationId: 'restart-turn', turnId: 'restart-turn', sequence: 2, schemaVersion: 1, eventId: 'restart-context', idempotencyKey: 'restart-context', kind: 'invocation-context-committed', payload: {
+        contextProtocol: 2, inputMode: 'delta', baseVersion: 1, inputMessages: [userMessage], failureInputMessages: [userMessage], messages: [userMessage],
+        scope: { kind: 'session', sessionId: session.id }
+      } },
+      { invocationId: 'restart-turn', turnId: 'restart-turn', sequence: 3, schemaVersion: 1, eventId: 'restart-answer', idempotencyKey: 'restart-answer', kind: 'model-response-committed', payload: {
+        message: { role: 'assistant', id: 'restart-assistant', content: '', toolCalls: [toolCall] }
+      } },
+      { invocationId: 'restart-turn', turnId: 'restart-turn', sequence: 4, schemaVersion: 1, eventId: 'restart-tool-start', idempotencyKey: 'restart-tool-start', kind: 'tool-call-started', payload: { toolCall } }
+    ], 1)
+    expect(recoverSessionExecutionForTarget(db, session.id, 3_000).status).toBe('ready')
+    expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 2, status: 'ready', lastTurnId: 'restart-turn', messages: [
+      { id: 'restart-user' }, { id: 'restart-assistant' },
+      { role: 'tool', toolCallId: 'restart-tool', content: expect.stringContaining('may have started') }
+    ] })
+    expect(recoverSessionExecutionForTarget(db, session.id, 3_500).status).toBe('ready')
+    expect(claimSessionExecution(db, { sessionId: session.id, turnId: 'next-turn', ownerId: 'new-owner' })).toMatchObject({ acquired: true })
+    temp.cleanup()
+  })
+
   it('keeps an uncertain claim when canonical History repair did not complete', () => {
     const db = createUncertainCommittedSession()
 
