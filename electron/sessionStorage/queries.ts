@@ -28,7 +28,7 @@ import {
   selectTurnContextForPreparedRead,
   resolveProjectedRetryContext,
   searchProjectedMessages,
-  attachInterruptedToolCallsToChatPage
+  attachRecoveredToolCallsToChatPage
 } from './infrastructure/sqlite/sessionTranscriptProjection'
 import type { SessionQueries } from './public/ports'
 import type { ContextHistorySummaryEntry, LatestMessagePreviewCandidate, MessageRef, MessageSearchHit, MessageSkeleton, RetryContextTarget } from './public/model'
@@ -262,7 +262,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         return { page, canonicalIds: canonicalBodyMessageIds(db, sessionId, page.entries.map(({ message }) => message)) }
       }))
       if (!selected) return undefined
-      if (selected.canonicalIds.length === 0) return attachInterruptedToolCallsToChatPage(db, { ...selected.page,
+      if (selected.canonicalIds.length === 0) return attachRecoveredToolCallsToChatPage(db, { ...selected.page,
         entries: projectMessageEntriesV1('chatMessageV1', selected.page.entries) })
       let bodies: PreparedChatBodySelection
       try { bodies = await measureStage('body-read', () => preparedChatBody.readBodies(view, selected.canonicalIds,
@@ -285,7 +285,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
           () => preparedChatBody.invalidate(view))
         if (!messages) return undefined
         const entries = latest.entries.map((entry, index) => ({ ...entry, message: messages[index]! }))
-        return attachInterruptedToolCallsToChatPage(db, { ...latest, entries: projectMessageEntriesV1('chatMessageV1', entries) })
+        return attachRecoveredToolCallsToChatPage(db, { ...latest, entries: projectMessageEntriesV1('chatMessageV1', entries) })
       }))
     } } : {}),
     ...(preparedChatBody?.readSourceBodies ? { readSourceChatPage: async ({ sessionId, beforeSequence, limit, measure, recordStage }) => {
@@ -300,7 +300,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         return { sessionGeneration: session.generation, sourceIdentityJson, page, canonicalIds }
       }))
       if (!selected) return undefined
-      if (selected.canonicalIds.length === 0) return attachInterruptedToolCallsToChatPage(db, { ...selected.page,
+      if (selected.canonicalIds.length === 0) return attachRecoveredToolCallsToChatPage(db, { ...selected.page,
         entries: projectMessageEntriesV1('chatMessageV1', selected.page.entries) })
       const expectedSequences = selected.page.entries.filter(({ message }) => selected.canonicalIds.includes(message.id))
         .map(({ sequence, message }) => ({ id: message.id, sequence }))
@@ -342,7 +342,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
               entry.message.role !== prior.message.role || entry.message.timestamp !== prior.message.timestamp
           })) throw new Error('PROJECTION_SOURCE_PAGE_CHANGED')
         const messages = overlayPreparedBodies(latest.entries.map(({ message }) => message), selected.canonicalIds, bodies!)
-        return attachInterruptedToolCallsToChatPage(db, { ...latest, entries: projectMessageEntriesV1('chatMessageV1', latest.entries.map((entry, index) =>
+        return attachRecoveredToolCallsToChatPage(db, { ...latest, entries: projectMessageEntriesV1('chatMessageV1', latest.entries.map((entry, index) =>
           ({ ...entry, message: messages[index]! }))) })
       }))
     } } : {}),

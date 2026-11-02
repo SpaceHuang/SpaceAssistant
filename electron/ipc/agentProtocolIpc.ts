@@ -846,6 +846,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       if (isSessionContextCompactionLocked(intent.sessionId) || isActiveTurnAdmissionBlocked(intent.sessionId)) throw new Error('SESSION_CONTEXT_COMPACTION_BUSY')
       return turnCoordinator.prepare({ ...intent, config: {} }, 'configuring')
     })
+    // 用户消息与 configuring turn 已持久化受理；Skill 路由和上下文准备也属于本轮执行。
+    turnRuntime.publishStarted?.(started)
     const controller = new AbortController()
     const configuring = (async () => {
       try {
