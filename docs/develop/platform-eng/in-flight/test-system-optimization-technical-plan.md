@@ -1,10 +1,10 @@
 # 测试体系优化技术方案（近期 + 中期）
 
-> 状态：草稿（2026-11-02 复评后修订：B-01…B-03 已逐项核销，待评审人确认放行；[复评报告](../../../review/2026-11-02-test-system-optimization-technical-plan-review.md)）
+> 状态：实施中（2026-11-02；W1–W7 已本地落地并分阶段提交；W5/W6 本地验收通过，远端矩阵与 W5 连续 5 次 CI 绿待完成；W0 六链路未实施；D-04 required 批准与 R-01…R-04 仍待负责人决定。评审复核：[复评报告](../../../review/2026-11-02-test-system-optimization-technical-plan-review.md)）
 > 核对基线：`main` `a6a5cdb7`（2026-11-01）；修订时 HEAD `bf980e1e`（领先 4 提交，评审确认不影响核对项实质）
 > 范围：覆盖率测量与门禁策略、测试基建复用、fixture 确定性、流式链路故障注入、渲染快照通道、存储性能门禁进 CI、probe CI 矩阵扩展、测试政策文档修订。
 > 来源：2026-11-01 对 DeepSeek Harness（外部仓库，下称 DSH）测试体系的对比调研；外部事实标注为「外部参照」，不在本仓复核范围内。
-> 本文是方案，不代表任何配置、脚本或文档已修改。
+> 本文保留方案设计基线；实际实施状态、证据与剩余验收见第 3 节“当前实施状态与未完成验收”。
 
 ## 第 0 层：决策层【人必读】
 
@@ -29,8 +29,8 @@
 ### 待负责人决策
 
 - **R-01 覆盖率首个门禁的范围与阈值**。依赖 W1 产出基线数据后决策；本方案默认第一批**只测量不门禁**，防止在无数据时盲设阈值催生大面积豁免、使门禁失去意义。
-- **R-02 probe 扩展的选取与平台**。本方案建议首选 `probe:chat-business-ipc`，macOS + Windows 两平台；是否纳入本方案及是否要求（而非观察）由负责人定。纳入后按 W6 的业务回归门禁契约实施。
-- **R-03 storage-perf CI job 是否设为 required**。默认建议先非必需观察一段时间的稳定性与时长，再决定是否挂入 `CI / required` 聚合。
+- **R-02 probe 扩展的选取与平台**。本方案建议首选 `probe:chat-business-ipc`，macOS + Windows 两平台；实现已按该矩阵加入观察性 job。是否纳入本方案及是否要求（而非观察）仍由负责人定；跨平台远端结果待 CI。
+- **R-03 storage-perf CI job 是否设为 required**。已实现非必需观察性 job，未挂入 `CI / required`；需收集连续 5 次远端结果和时长后再决定。
 - **R-04 后续是否另立 pre-push 方案**。本轮明确不实施，也不新增 `check:pre-push` 或 hook。若未来立项，另行评审原生 hook 的安装、跳过、升级维护、失败阻断行为及验证方式；不引入依赖与否届时再定。
 
 ### 不需要负责人决定（默认取舍）
@@ -145,16 +145,16 @@
 - **现状**：`test:storage-perf`（env 开关 + 白名单 `-t`、单 worker）有硬性 p95 断言，仅本地手动跑；阈值散在测试用例名与断言中。
 - **改动**：
   1. 阈值集中到一个常量模块（建议 `electron/runtime/storagePerfBudget.ts`），测试断言引用它；
-  2. ci.yml 新增 `storage-perf` job：macOS runner，步骤为依赖安装 → `npm run build:agent-provider-pi-ai` → `npm run test:storage-perf`；纯 Vitest node 环境，不启动 Electron，不涉及 INV-03 预热；超时预算参考本地实测 p95 加余量。显式构建不可省略：根 `pretest` 只由 `npm test` 触发，不由 `test:storage-perf` 触发；
+  2. ci.yml 的 `storage-perf` 观察性 job 使用 macOS runner，步骤为依赖安装 → `npm run build:agent-provider-pi-ai` → `npm run test:storage-perf`；纯 Vitest node 环境，不启动 Electron，不涉及 INV-03 预热；超时预算参考实测 p95 加余量。显式构建不可省略：根 `pretest` 只由 `npm test` 触发，不由 `test:storage-perf` 触发；
   3. 每次运行上传耗时摘要 artifact（字段仅含用例名 / 耗时 / 结论，遵循 CI 可靠性方案 §4.4 的字段纪律）。
-- **验收**：job 连续 5 次稳定绿；红绿验证时临时将选定用例预算收紧到低于已测耗时（或注入可控延迟令耗时超过原预算），指定用例断言失败且命令退出码非零；恢复原预算后同一命令通过，并在 PR 记录用例、前后预算、失败信息与恢复结果。禁止以调高上限作为失败验证。job 时长记录在案供 R-03 决策。
+- **本地验收记录（2026-11-02）**：预算常量化并由选定断言读取；storage-perf lane 10 个被选中测试实例全绿（77.38s），并发读写 30 个样本的候选 p95 为 2.38ms、主线程 History replay 为 0。红绿验证将 `apiShadowP95Ms` 暂设为 0，选定用例以 `candidate=12.32ms` 非零失败；恢复 50ms 后通过。CI job、JSON 汇总及只含用例名 / 耗时 / 结论的 14 天摘要 artifact 已实现；远端连续 5 次运行与 runner 时长证据仍待 CI。
 
 #### W6 probe CI 矩阵扩展
 
 - **现状**：9 个 `probe:*` npm scripts，CI 只跑 `probe:sqlite`（3 平台矩阵）；chat 系列仅本地手工。
-- **改动**：改造 `scripts/probe-chat-business-ipc-preload.cjs` 与 `scripts/probe-chat-business-ipc.cjs`，使 `chat-ipc-probe` 成为**业务回归门禁**而非仅启动/查询烟测；ci.yml 新增该 job（macOS + Windows）：`npm ci` → `build:electron` → **Electron 串行预热屏障（按 CI 可靠性方案 INV-03）** → `npm run probe:chat-business-ipc`。复用既有 `SPACEASSISTANT_IPC_SAMPLES` env（默认 1000），CI 侧设小值，本地默认不变。preload 有界等待初始与终态投影，超时抛错；主进程校验投影版本递增、终态投影送达、active 清空、持久化 turn 为 `state=terminal/outcome=completed`、助手消息为预期成功态。任一断言失败均到顶层失败处理并以非零退出；不得将业务结果仅写入摘要日志。
+- **实施**：`scripts/probe-chat-business-ipc-preload.cjs` 与 `scripts/probe-chat-business-ipc.cjs` 已改造为业务断言 probe；ci.yml 已加入 macOS + Windows 观察性矩阵：`npm ci` → `build:electron` → **Electron 串行预热屏障（按 CI 可靠性方案 INV-03）** → `npm run probe:chat-business-ipc`。复用 `SPACEASSISTANT_IPC_SAMPLES`（默认 1000），CI 设 40。preload 有界等待初始与终态投影，超时抛错；主进程校验投影版本递增、终态投影送达、active 清空、持久化 turn 为 `state=terminal/outcome=completed`、助手消息成功态。任一断言失败均非零退出；业务结果通过断言判定，不只写摘要日志。
 - **故障注入**：为探针提供仅测试使用的故障模式或等价隔离入口，覆盖「丢失投影」与「异常终态」两例；各自须在有界超时/业务断言处失败、命令退出码非零，且 CI job 红。故障入口不得默认启用，不新增产品 IPC。
-- **验收**：两平台正常路径 job 稳定绿；两种负例均证明命令非零退出；预热屏障失败时 probe 未启动（复用 CI 可靠性方案 AC-03 的验证方式）。R-02 在负例和屏障证据齐备后再决定是否设为 required。
+- **本地验收记录（2026-11-02）**：正式 Electron 下默认 1000 samples 正常路径通过，验证投影版本 1→2、completed 终态、active 清空、SQLite turn 与 assistant completed；`drop-projection` 在 terminal 有界等待处非零退出；`abnormal-terminal` 因业务终态断言非零退出。CI 已有 macOS + Windows 矩阵、build→串行初始化→probe 顺序，且 contract checker 拒绝缺失屏障或 `continue-on-error`。两平台远端正常 job 与屏障失败实机注入尚待 CI 证据；R-02 是否 required 仍待负责人决定。
 
 #### W7 测试政策一页纸（testing-guide.md 修订）
 
@@ -174,6 +174,23 @@
 |---|---|---|
 | P1 | W0 六条关键操作端到端回归；W1 覆盖率脚本 + 基线文档；W2 共享工厂 + tempPaths + 4 处改造 | **AC-8**：每次 PR 的必需测试 job 执行六条链路；新会话可完成、续聊历史正确、工具可执行并完成、取消后无迟到复活、重启恢复后可继续、设置跨页签保存后复读一致；故障注入 / 反向验证证明各用例可检出回归。**AC-1**：`npm run test:coverage` 一条命令产出合并报告，基线文档数字可复核。**AC-2**：8 处内联工厂迁移后 `test:renderer` 全绿；`tmpdir.*Date.now` 模式清零；重复跑 20 次无碰撞。 |
 | P2 | W3 SSE harness；W4 双组件快照；W5 storage-perf CI；W6 probe CI；W7 政策修订 | **AC-3**：harness ≥6 场景；claudeStreamHandlers 系 4 文件迁移后 `vi.mock('./anthropicClientFactory')` 清零（其余 17 处不动），清单在 PR 中。**AC-4**：快照红绿验证记录在案。**AC-5**：storage-perf job 连续 5 次绿；阈值常量化；预算收紧至低于已测值或注入可控延迟时命令非零退出，恢复预算后通过。**AC-6**：probe 两平台正常路径通过；丢投影与异常终态负例均令命令非零退出；active/投影/持久化/助手状态断言齐备；INV-03 屏障生效。**AC-7**：testing-guide 与三份配置文件逐项一致。 |
+
+### 当前实施状态与未完成验收
+
+截至 2026-11-02，本方案状态以代码、定向命令和实际 CI 运行结果为准：
+
+| 工作项 | 已完成证据 | 尚未完成的验收 |
+|---|---|---|
+| W0 / AC-8 六条关键用户链路 | 无；本轮尚未实现真 renderer→preload/IPC→主进程→SQLite 的 Electron UI E2E | 六链路、逐条反向验证、required `test` job 接入全部未完成；D-04 required 批准仍待负责人确认 |
+| W1 / AC-1 覆盖率 | `npm run test:coverage` 与基线文档已提交，测量结果可本地复核 | 无已知剩余项 |
+| W2 / AC-2 测试基建 | 工厂与临时路径 helper 已提交；renderer/Electron suites、20 次重复、typecheck 与增量构建已通过 | 无已知剩余项 |
+| W3 / AC-3 流式 harness | 场景 harness 与目标测试迁移已提交，定向测试通过 | 无已知剩余项 |
+| W4 / AC-4 渲染快照 | 两组件快照及 red/green 验证已提交 | 无已知剩余项 |
+| W5 / AC-5 storage-perf | 本地红绿验证通过；CI 观察 job、阈值模块和脱敏摘要 artifact 已实现 | 需连续 5 次远端 CI 绿，并记录 job 时长；R-03 收到证据后再决策是否 required |
+| W6 / AC-6 chat IPC probe | 本地正常路径、丢投影、异常终态三种路径均已验证；CI 矩阵与初始化顺序静态门禁通过 | macOS + Windows 远端正常结果、初始化屏障失败时 probe 未启动的实际 CI 证据；R-02 required 决策 |
+| W7 / AC-7 测试政策 | guide 已按当前四个 Vitest project、CI lane、mock、snapshot、coverage 与 temp path 纪律修订并提交 | 无已知剩余项 |
+
+本轮本地验证命令：`npm run test:storage-perf`、`node --test scripts/check-ci-required-coverage.test.mjs scripts/summarize-storage-perf-report.test.mjs`、`npm run check:ci-required-coverage`、`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run probe:chat-business-ipc`。远端验收尚未发生；禁止把已实现 job 或本地探针结果表述成 CI 平台通过。
 
 ## 4. 风险与已排除方案【机｜人工可跳过】
 
