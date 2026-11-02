@@ -1,6 +1,6 @@
 # 测试体系优化技术方案（近期 + 中期）
 
-> 状态：已完成（2026-11-03；W0–W8 本地实现、TDD 与远端 required 验收完成。SHA `0739ca29` 的 GitHub Actions run `41498061062` 首次 attempt 中，三项 macOS required job 因未分配 runner 被取消；重跑 attempt 2 后，全量 Vitest、六条真实 Electron UI 链路、三个 macOS required job 和 `CI / required` 均通过。storage-perf 观察 job 仍按决定保持非阻断；本地 pre-push hook 已安装并实际运行通过。进程重启恢复已记录上下文并说明工具结果未知，由 Agent 决定检查/询问/重试；不自动重跑旧 turn。D-04、R-01、R-02、R-04 已按用户决定实施；R-03 五次远端观察完成并决定保持非阻断。W6 macOS / Windows probe 正常路径均有远端通过记录。评审复核：[复评报告](../../../review/2026-11-02-test-system-optimization-technical-plan-review.md)）
+> 状态：实施中（2026-11-03；W0–W8 本地实现和 TDD 已完成。远端发现关键流程 harness 在回复可见、消息仍为 `streaming` 时提前断言的竞态；已改为等界面回复、等 active turn 结束，再核对 SQLite 中的 completed 消息。本地旧逻辑 5 次中 1 次失败；修复后该流程连续 5 次通过、六条真实 Electron UI 流程全部通过。修复 SHA `7b72759c` 的 CI 尚待触发并取得 required 结果。前一 SHA `0739ca29` 的 attempt 2 全量 Vitest 与 `CI / required` 已通过。storage-perf 观察 job 仍按决定保持非阻断；本地 pre-push hook 已安装并实际运行通过。进程重启恢复已记录上下文并说明工具结果未知，由 Agent 决定检查/询问/重试；不自动重跑旧 turn。D-04、R-01、R-02、R-04 已按用户决定实施；R-03 五次远端观察完成并决定保持非阻断。W6 macOS / Windows probe 正常路径均有远端通过记录。评审复核：[复评报告](../../../review/2026-11-02-test-system-optimization-technical-plan-review.md)）
 > 核对基线：`main` `a6a5cdb7`（2026-11-01）；修订时 HEAD `bf980e1e`（领先 4 提交，评审确认不影响核对项实质）
 > 范围：覆盖率测量与门禁策略、测试基建复用、fixture 确定性、流式链路故障注入、渲染快照通道、存储性能门禁进 CI、probe CI 矩阵扩展、本地 pre-push 快速门禁、测试政策文档修订。
 > 来源：2026-11-01 对 DeepSeek Harness（外部仓库，下称 DSH）测试体系的对比调研；外部事实标注为「外部参照」，不在本仓复核范围内。
@@ -207,7 +207,7 @@
 
 | 工作项 | 已完成证据 | 尚未完成的验收 |
 |---|---|---|
-| W0 / AC-8 六条关键用户链路 | 当前分支本地正向 `6/6`、六项故障注入负向 `6/6` 通过；恢复语义为恢复已记录上下文、将未知工具结果交由 Agent 判断，不自动重跑旧 turn。合并 `codex/session-runtime-ended-tool-timer` 后曾全量 `npm test` 通过（1256 个文件通过、1 个跳过；12160 项通过、140 项跳过，用时 1040.92 秒）。远端首轮发现并修复 runner 默认英文 locale 和 SQLite 终态提交竞态；run [41498061062 attempt 2](https://github.com/SpaceHuang/SpaceAssistant/actions/runs/41498061062/attempts/2) 的六条真实 UI 流程与全量 Vitest 通过。 | 无待完成验收。attempt 2 的 `CI / required` 汇总通过；Windows runner 不执行 W0 UI 链路，Windows shell / SQLite / IPC jobs 提供平台兼容性证据，不表示 Windows UI 已通过。 |
+| W0 / AC-8 六条关键用户链路 | 当前分支六条真实 UI 流程正向 `6/6`、六项故障注入负向 `6/6` 通过；恢复语义为恢复已记录上下文、将未知工具结果交由 Agent 判断，不自动重跑旧 turn。合并 `codex/session-runtime-ended-tool-timer` 后曾全量 `npm test` 通过（1256 个文件通过、1 个跳过；12160 项通过、140 项跳过，用时 1040.92 秒）。远端首轮发现 runner 默认英文 locale 和 SQLite 终态提交竞态，随后又发现验收助手回复时在 UI 显示后立即读取消息可能读到 `streaming`。新增 wait helper 单测并修复为先等 UI 回复和 active turn 清空、再读取 completed 消息；旧逻辑本地重复 5 次中有 1 次以 `status=streaming` 失败，修复后同一真实 Electron 流程连续 5 次通过。 | SHA `7b72759c` 已推送；新代码的远端 CI 尚未启动。前一 SHA `0739ca29` 的 [run 41498061062 attempt 2](https://github.com/SpaceHuang/SpaceAssistant/actions/runs/41498061062/attempts/2) 中六条 UI 流程、全量 Vitest 与 required 均通过，但不替代本次修复的远端验收。Windows runner 不执行 W0 UI 链路；Windows shell / SQLite / IPC jobs 提供平台兼容性证据，不表示 Windows UI 已通过。 |
 | W1 / AC-1 覆盖率 | `npm run test:coverage` 与基线文档已提交，测量结果可本地复核 | 无已知剩余项 |
 | W2 / AC-2 测试基建 | 工厂与临时路径 helper 已提交；renderer/Electron suites、20 次重复、typecheck 与增量构建已通过。Windows CI 发现三个 shell 测试 fixture 在删除 SQLite 文件前未关闭数据库句柄；修复后 Windows shell contract job 通过 | 无已知剩余项 |
 | W3 / AC-3 流式 harness | 场景 harness 与目标测试迁移已提交，定向测试通过 | 无已知剩余项 |
@@ -217,7 +217,7 @@
 | W7 / AC-7 测试政策 | guide 已按当前四个 Vitest project、CI lane、mock、snapshot、coverage 与 temp path 纪律修订并提交 | 无已知剩余项 |
 | W8 / AC-9 pre-push hook | `core.hooksPath=.githooks` 已在本仓安装；bare remote 集成测试证明 Git 会调用 hook、显式 skip 可过、检查失败会阻止 push；优化后的 `npm run check:pre-push` 对 6 个改动路径通过全部快速检查，并直接运行 3 个测试文件（50/50），约 20 秒完成；CI Node harness 测试在远端通过 | 无已知剩余项；本地 hook 仅作开发反馈，不替代远端 required CI |
 
-本轮本地验证命令：此前当前分支全量 `npm test`（1256 个测试文件通过、1 个跳过；12160 项通过、140 项跳过，用时 1040.92 秒；运行中有非致命 `MaxListenersExceededWarning`）；`npm run verify:critical-user-flows`（六条真实流程，`6/6`）；`npm run test:critical-user-flows:negative`（六条注入故障均令对应链路失败并被验证器识别，`6/6`）；本轮 `CRITICAL_USER_FLOWS_ONLY=new-session npm run test:critical-user-flows` 与 `CRITICAL_USER_FLOWS_ONLY=tool-roundtrip npm run test:critical-user-flows` 均通过；`SPACEASSISTANT_IPC_SAMPLES=40 npm run probe:chat-business-ipc` 正常路径通过，`drop-projection` 与 `abnormal-terminal` 均按预期非零退出；`npm run check:ci-required-coverage` 及 required coverage / aggregator 测试（21/21）通过；pre-push、浅克隆 hook 与 locale harness Node 测试（8/8）；`npm run check:pre-push`（优化后 3 个直接相关测试文件、50/50，通过；此前 86 路径基线为 481 个文件通过、1 个跳过）；`npm run typecheck:renderer`、`npm run i18n:check`、`npm run build:electron:incremental`、覆盖率测量与 storage-perf 定向测试。SHA `0739ca29` 的 GitHub Actions run `41498061062` attempt 2 中，六条 W0 真实 UI 流程、全量 Vitest 和 `CI / required` 汇总均通过；首次 attempt 的 macOS job 未分配 runner 而被取消，重跑后通过。storage-perf 观察 job 按非阻断决定报告预算失败。
+本轮本地验证命令：此前当前分支全量 `npm test`（1256 个测试文件通过、1 个跳过；12160 项通过、140 项跳过，用时 1040.92 秒；运行中有非致命 `MaxListenersExceededWarning`）；本轮新关键流程等待 helper 与 pre-push / harness Node 测试（19/19）；旧逻辑 `CRITICAL_USER_FLOWS_ONLY=new-session npm run test:critical-user-flows` 重复 5 次时第 3 次复现 `assistant.status=streaming`；修复后同一真实流程连续 5 次通过，`npm run test:critical-user-flows` 六条真实流程 `6/6` 通过；此前 `npm run test:critical-user-flows:negative` 六项故障注入均令对应链路失败并被验证器识别（`6/6`）；`SPACEASSISTANT_IPC_SAMPLES=40 npm run probe:chat-business-ipc` 正常路径通过，`drop-projection` 与 `abnormal-terminal` 均按预期非零退出；`npm run check:ci-required-coverage` 及 required coverage / aggregator 测试（21/21）通过；`npm run check:pre-push`（优化后 3 个直接相关测试文件、50/50，通过；此前 86 路径基线为 481 个文件通过、1 个跳过）；`npm run typecheck:renderer`、`npm run i18n:check`、`npm run build:electron:incremental`、覆盖率测量与 storage-perf 定向测试。SHA `0739ca29` 的 GitHub Actions run `41498061062` attempt 2 中，六条 W0 真实 UI 流程、全量 Vitest 和 `CI / required` 汇总通过；SHA `7b72759c` 包含新等待时序修复，远端结果待 CI。
 
 ## 4. 风险与已排除方案【机｜人工可跳过】
 
@@ -322,7 +322,7 @@ flowchart LR
 
 ### RP-6 待批准清单与自曝三处
 
-- **已决 / 验收完成**：D-04、R-01、R-02、R-04 已确认；R-03 五次远端结果已收齐，storage-perf 按结果保持非阻断观察。W0 六条负向故障注入本地 `6/6` 检出，SHA `0739ca29` 的 run `41498061062` attempt 2 中远端六条 UI 流程、全量 Vitest 与 `CI / required` 均通过。首次 attempt 的三个 macOS required job 未分配 runner而被取消，重跑后均通过。W6 macOS / Windows 正常 probe 均有远端通过证据；contract checker 验证预热屏障顺序、失败停止与缺失屏障拒绝。当前 CI 不在 Windows runner 执行 W0 UI 链路，Windows shell / SQLite / IPC jobs 提供平台兼容性证据。合成测试不用于推断生产负载。
+- **已决 / 待最终验收**：D-04、R-01、R-02、R-04 已确认；R-03 五次远端结果已收齐，storage-perf 按结果保持非阻断观察。W0 六条负向故障注入本地 `6/6` 检出；助手回复等待竞态已通过旧逻辑失败复现、helper 单测与修复后六流程验证，但 SHA `7b72759c` 的远端 required CI 尚未运行。此前 SHA `0739ca29` 的 attempt 2 全量 Vitest 与 required 汇总通过。W6 macOS / Windows 正常 probe 均有远端通过证据；contract checker 验证预热屏障顺序、失败停止与缺失屏障拒绝。当前 CI 不在 Windows runner 执行 W0 UI 链路，Windows shell / SQLite / IPC jobs 提供平台兼容性证据。合成测试不用于推断生产负载。
 - **弱点 1**：W6 probe 业务断言可能与实际终态语义不符；若真实 `turnRuntime`/SQLite 流程中 outcome 或助手状态定义不同，须以既有领域契约与测试证据修订，不能放宽为仅打印。
 - **弱点 2**：storage-perf 的 CI 结果受 runner 波动影响；五轮中每轮都有预算断言失败，因此继续观察而不升级为 required；不得靠自动重试或放宽预算掩盖不稳定。
 - **弱点 3**：coverage 合并报告与新增测试工厂的 project include 可能遗漏文件；若复核命令与报告覆盖面不一致，修正配置/基线后再讨论阈值。
@@ -418,4 +418,4 @@ grep -rn "vi\.mock('@anthropic-ai/sdk'" electron/ --include="*.test.ts"   # 仅�
 
 ### 编写边界
 
-本文记录方案、实施与验收状态。W0–W8 已在本分支完成本地实现和 TDD 验证；SHA `0739ca29` 的 run `41498061062` attempt 2 中，六条关键 UI 流程、全量 Vitest 与 `CI / required` 已通过。R-01（覆盖率先测量）、R-02（macOS / Windows IPC probe 非阻断观察）、R-04（本轮加入并优化 pre-push hook）已按用户决定实施；R-03 五次远端 storage-perf 观察已完成，因五轮均有预算失败，决定继续保持非阻断。W6 两平台正常 probe 均有远端通过证据。
+本文记录方案、实施与验收状态。W0–W8 已完成本地实现和 TDD；最新助手回复等待时序修复已通过本地复现、单测与六流程验证，远端 required 验收等待 SHA `7b72759c` 的 CI。此前 SHA `0739ca29` 的 run `41498061062` attempt 2 中，六条关键 UI 流程、全量 Vitest 与 `CI / required` 已通过。R-01（覆盖率先测量）、R-02（macOS / Windows IPC probe 非阻断观察）、R-04（本轮加入并优化 pre-push hook）已按用户决定实施；R-03 五次远端 storage-perf 观察已完成，因五轮均有预算失败，决定继续保持非阻断。W6 两平台正常 probe 均有远端通过证据。
