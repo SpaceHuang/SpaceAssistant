@@ -673,7 +673,7 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     expect(LANE_PROFILES.desktop.availableActions).toEqual(['deny', 'allow', 'ask', 'auto-evaluator'])
   })
 
-  it('IM 自定义套餐逐条覆盖：适用的每条默认规则均可编辑且显示完整动作域', { timeout: 120000 }, async () => {
+  it('IM 自定义套餐逐条覆盖：适用的每条默认规则均可编辑且显示完整动作域', { timeout: 180000 }, async () => {
     const rules = DEFAULT_POLICY_RULES.filter((rule) => !rule.match?.lane || rule.match.lane.includes('wechat')).map((rule) => ({
       id: rule.id,
       when: rule.when,

@@ -1,9 +1,28 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { grepFallbackJs, type GrepExecArgs } from './builtinExecutors'
 import { canCreateSymlinks } from '../../src/test/symlinkCapability'
+
+const { onRegexWorkerOnline } = vi.hoisted(() => ({ onRegexWorkerOnline: vi.fn<() => void>() }))
+vi.mock('node:worker_threads', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:worker_threads')>()
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      override once(event: string | symbol, listener: (...args: any[]) => void): this {
+        if (event === 'online') {
+          return super.once(event, (...args: any[]) => {
+            onRegexWorkerOnline()
+            listener(...args)
+          })
+        }
+        return super.once(event, listener)
+      }
+    }
+  }
+})
 
 const roots: string[] = []
 const args = (overrides: Partial<GrepExecArgs> = {}): GrepExecArgs => ({
@@ -140,9 +159,14 @@ describe('JavaScript grep fallback', () => {
     const root = fixture({ 'hostile.txt': `${'a'.repeat(30_000)}!` })
     const controller = new AbortController()
     const started = Date.now()
+    onRegexWorkerOnline.mockReset()
+    const workerReady = new Promise<void>((resolve) => onRegexWorkerOnline.mockImplementationOnce(resolve))
     const pending = grepFallbackJs(root, root, '(a+)+$', args(), controller.signal, () => {}, 5_000)
-    setTimeout(() => controller.abort(), 40)
-    await expect(pending).resolves.toBe('No matches found')
+    await workerReady
+    controller.abort()
+    const result = await pending
+    expect(result).toContain('No matches found')
+    expect(result).toMatch(/搜索已被中止/)
     expect(Date.now() - started).toBeLessThan(1_000)
   })
 
@@ -152,6 +176,16 @@ describe('JavaScript grep fallback', () => {
     const out = await grepFallbackJs(root, root, '(a+)+$', args(), new AbortController().signal, () => {}, 40)
     expect(out).toMatch(/超时/)
     expect(Date.now() - started).toBeLessThan(1_000)
+  })
+
+  it('reports an incomplete timeout when the regex worker validation exhausts the total budget', async () => {
+    const root = fixture({ 'hostile.txt': `${'a'.repeat(30_000)}!` })
+    let calls = 0
+    const now = (): number => (++calls > 4 ? 100_000 : 0)
+    const out = await grepFallbackJs(root, root, '(a+)+$', args(), new AbortController().signal, () => {}, 40, undefined, { now })
+    expect(out).toContain('No matches found')
+    expect(out).toMatch(/搜索超时/)
+    expect(out).toContain('[边界摘要]')
   })
 })
 

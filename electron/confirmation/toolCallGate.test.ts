@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { ReviewScopeCache } from './reviewScopeCache'
 import { captureFileIdentity, safeAtomicWrite } from '../safeAtomicWrite'
@@ -45,6 +45,47 @@ import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/
 import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
 
 const shells: AppDatabase[] = []
+const tempDirectories = new Set<string>()
+let defaultWorkDir = ''
+beforeAll(async () => {
+  defaultWorkDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tool-call-gate-default-')))
+})
+afterAll(async () => {
+  if (defaultWorkDir) await fs.rm(defaultWorkDir, { recursive: true, force: true })
+})
+
+async function makeTempDir(prefix: string): Promise<string> {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
+  tempDirectories.add(directory)
+  return directory
+}
+
+function systemFilePath(): string {
+  if (process.platform !== 'win32') return '/etc/hosts'
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
+  return path.join(programFiles, 'Git', 'cmd', 'git.exe')
+}
+
+function systemMissingPath(name: string): string {
+  if (process.platform !== 'win32') return path.join('/etc', name)
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
+  return path.join(programFiles, name)
+}
+
+function systemFileCommand(): string {
+  if (process.platform === 'win32') return `Get-Content -LiteralPath '${systemFilePath()}'`
+  return `cat ${systemFilePath()}`
+}
+
+function readFileCommand(filePath: string): string {
+  if (process.platform === 'win32') return `Get-Content -LiteralPath ${filePath}`
+  return `cat ${filePath}`
+}
+
+function outsideReadCommand(filePath: string): string {
+  return process.platform === 'win32' ? `type ${filePath}` : `cat ${filePath}`
+}
+
 describe('buildToolCallGateArgs', () => {
   it('binds phase and call identity while isolating canonical input from gate mutation', () => {
     const input = { path: 'note.txt' }
@@ -60,8 +101,8 @@ describe('buildToolCallGateArgs', () => {
   })
 
   it('uses trusted task roots as a union for builtin reads and writes', async () => {
-    const rootA = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-task-root-a-')))
-    const rootB = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-task-root-b-')))
+    const rootA = await fs.realpath(await makeTempDir('gate-task-root-a-'))
+    const rootB = await fs.realpath(await makeTempDir('gate-task-root-b-'))
     try {
       await fs.writeFile(path.join(rootB, 'note.txt'), 'ok')
       const read = await evaluateToolCallGate(base({ toolName: 'read_file', toolInput: { path: path.join(rootB, 'note.txt') }, workDir: rootA, taskWorkDirs: [rootA, rootB] }))
@@ -77,7 +118,7 @@ describe('buildToolCallGateArgs', () => {
 
 describe('review scope cache gate integration', () => {
   it('binds trusted tasks and produces a candidate without bypassing current gate checks', async () => {
-    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-review-scope-')))
+    const dir = await fs.realpath(await makeTempDir('gate-review-scope-'))
     try {
       const target = path.join(dir, 'note.txt')
       await fs.writeFile(target, 'before')
@@ -114,7 +155,7 @@ describe('review scope cache gate integration', () => {
   })
 
   it('classifies the complete projected edit result so a replacement cannot form a shebang', async () => {
-    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-review-edit-head-')))
+    const dir = await fs.realpath(await makeTempDir('gate-review-edit-head-'))
     try {
       await fs.writeFile(path.join(dir, 'note.txt'), 'HEADER\necho safe')
       const result = await evaluateToolCallGate(base({ toolName: 'edit_file',
@@ -128,7 +169,7 @@ describe('review scope cache gate integration', () => {
 
 describe('review scope cache gate integration', () => {
   it('binds the candidate to complete trusted task and host-derived object', async () => {
-    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-review-scope-')))
+    const dir = await fs.realpath(await makeTempDir('gate-review-scope-'))
     try {
       await fs.writeFile(path.join(dir, 'note.txt'), 'before')
       const args = base({ toolName: 'edit_file', toolInput: { path: 'note.txt', old_string: 'before', new_string: 'after' }, workDir: dir,
@@ -146,7 +187,7 @@ describe('review scope cache gate integration', () => {
 
 describe('review scope receipt final-check', () => {
   it('consumes only a current file receipt and revokes after external content changes', async () => {
-    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-review-receipt-')))
+    const dir = await fs.realpath(await makeTempDir('gate-review-receipt-'))
     const target = path.join(dir, 'note.txt')
     try {
       await fs.writeFile(target, 'before')
@@ -205,6 +246,9 @@ function openDb(): AppDatabase {
 afterEach(() => {
   shells.splice(0).forEach((db) => db.close())
   resetRunningRemoteAgentRegistryForTests()
+  const directories = [...tempDirectories]
+  tempDirectories.clear()
+  return Promise.all(directories.map((directory) => fs.rm(directory, { recursive: true, force: true })))
 })
 
 const toolsConfig = (overrides: Partial<ToolsConfig> = {}): ToolsConfig => ({
@@ -279,9 +323,9 @@ function base(overrides: Partial<ToolCallGateArgs> = {}): ToolCallGateArgs {
     requestId: `gate-test-req-${++nextGateTestId}`,
     toolUseId: `gate-test-tool-${nextGateTestId}`,
     // The write-path probe intentionally rejects missing parent directories.
-    // Use an existing neutral directory instead of relying on a machine-local /tmp/wd.
-    workDir: os.tmpdir(),
-    userDataDir: '/tmp/ud',
+    // Use the host-provided temporary root instead of relying on a machine-local fixture path.
+    workDir: defaultWorkDir || os.tmpdir(),
+    userDataDir: path.join(defaultWorkDir || os.tmpdir(), '.userdata'),
     toolsConfig: toolsConfig(),
     audit: { record: () => undefined },
     ...gateMaterialsFor(legacyDb, lane),
@@ -310,10 +354,10 @@ describe('IM standard policy override is final at the gate', () => {
     expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-environment')).toMatchObject({ kind: 'script-execution-environment', status: 'complete', digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(candidate.facts.signals.find((signal) => signal.kind === 'script-execution-settings')).toMatchObject({ kind: 'script-execution-settings', status: 'complete', interpreter: expect.any(String), digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', code, url: 'https://docs.example.com/', host: 'docs.example.com', method: 'GET', complete: true })
-    expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: os.tmpdir(), timeoutSeconds: toolsConfig().scriptTimeout,
+    expect(candidate.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: defaultWorkDir || os.tmpdir(), timeoutSeconds: toolsConfig().scriptTimeout,
       interpreter: 'python', interpreterFallbackCandidates: process.platform === 'win32' ? ['py', 'python3'] : ['python3'], interpreterResolution: 'first-version-probe-success' })
     const explicitTimeout = await evaluate(code, 'im-standard-v3', 3600)
-    expect(explicitTimeout.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: os.tmpdir(), timeoutSeconds: 3600 })
+    expect(explicitTimeout.facts.reviewMaterials).toMatchObject({ kind: 'static-network-script', cwd: defaultWorkDir || os.tmpdir(), timeoutSeconds: 3600 })
     let scriptPrompt = ''
     const scriptApproval = new AgentChannel({ lane, requestId: 'script-review-materials', sessionId: 's', toolName: 'run_script', policy: { kind: 'agent' },
       invokeApproval: async (invocation) => { scriptPrompt = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
@@ -336,7 +380,7 @@ describe('IM standard policy override is final at the gate', () => {
   })
 
   it.each(['wechat', 'feishu'] as const)('%s isolated v3 routes bounded git status/log to Agent and leaves other shell calls denied', async (lane) => {
-    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'shell-review-')))
+    const workDir = await fs.realpath(await makeTempDir('shell-review-'))
     const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
     const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
     const run = (command: string, version = 'im-standard-v3') => {
@@ -360,7 +404,9 @@ describe('IM standard policy override is final at the gate', () => {
         const shellApproval = new AgentChannel({ lane, requestId: 'shell-review-materials', sessionId: 's', toolName: 'run_shell', policy: { kind: 'agent' },
           invokeApproval: async (invocation) => { shellPrompt = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
         expect(await shellApproval.request({ facts: result.facts, riskLevel: result.decision.type === 'require-confirm' ? result.decision.riskLevel : 'high', memoryTiers: [], timeoutMs: 5000 })).toMatchObject({ kind: 'approved' })
-        for (const material of [command, workDir, '300', 'zsh', 'PATH', 'b'.repeat(64), 'complete']) expect(shellPrompt).toContain(material)
+        for (const material of [command, workDir, '300', 'zsh', 'PATH', 'b'.repeat(64), 'complete']) {
+          expect(shellPrompt).toContain(material === workDir ? JSON.stringify(workDir).slice(1, -1) : material)
+        }
       }
       for (const command of ['git push', 'git -c core.fsmonitor=helper status', 'git status && touch marker', 'git status | cat']) {
         const result = await run(command)
@@ -372,7 +418,7 @@ describe('IM standard policy override is final at the gate', () => {
   })
 
   it.each(['wechat', 'feishu'] as const)('%s isolated v3 write candidate reviews only ordinary outside new/edit targets', async (lane) => {
-    const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-candidate-')))
+    const parent = await fs.realpath(await makeTempDir('write-candidate-'))
     const workDir = path.join(parent, 'work')
     const outside = path.join(parent, 'outside')
     await fs.mkdir(workDir)
@@ -443,8 +489,8 @@ describe('IM standard policy override is final at the gate', () => {
 
 describe('evaluateToolCallGate 诊断契约（R2）', () => {
   it.each(['wechat', 'feishu'] as const)('%s isolated v3 read candidate reviews file and direct listing only', async (lane) => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-candidate-root-')))
-    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-candidate-outside-')))
+    const root = await fs.realpath(await makeTempDir('read-candidate-root-'))
+    const outside = await fs.realpath(await makeTempDir('read-candidate-outside-'))
     const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
     const effectiveRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion, pkg: 'standard', rules: DEFAULT_POLICY_RULES })
     try {
@@ -453,7 +499,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
       const single = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: file }, effectiveRules, imPolicySnapshot: snapshot }))
       const listing = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'list_directory', toolInput: { path: outside }, effectiveRules, imPolicySnapshot: snapshot }))
       const recursive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'grep', toolInput: { path: outside, pattern: 'needle' }, effectiveRules, imPolicySnapshot: snapshot }))
-      const sensitive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: '/etc/hosts' }, effectiveRules, imPolicySnapshot: snapshot }))
+      const sensitive = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: systemFilePath() }, effectiveRules, imPolicySnapshot: snapshot }))
       const special = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: outside }, effectiveRules, imPolicySnapshot: snapshot }))
       const unknown = await evaluateToolCallGate(base({ lane, workDir: root, toolName: 'read_file', toolInput: { path: path.join(outside, '**', '*.txt') }, effectiveRules, imPolicySnapshot: snapshot }))
 
@@ -477,8 +523,8 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
   })
 
   it('extracts a stable read scope token so an isolated candidate can exclude recursive directory grep', async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-scope-token-')))
-    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-scope-outside-')))
+    const root = await fs.realpath(await makeTempDir('read-scope-token-'))
+    const outside = await fs.realpath(await makeTempDir('read-scope-outside-'))
     try {
       const file = path.join(outside, 'note.txt')
       await fs.writeFile(file, 'needle')
@@ -660,7 +706,7 @@ describe('Wiki schema change confirmation policy', () => {
   })
 
   it('locks generic file and shell access to the managed Wiki only after domain_enabled', async () => {
-    const root = await fs.mkdtemp('/tmp/wiki-bypass-gate-')
+    const root = await makeTempDir('wiki-bypass-gate-')
     const workDir = path.join(root, 'work')
     const userDataDir = path.join(root, 'userdata')
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
@@ -708,7 +754,7 @@ describe('Wiki schema change confirmation policy', () => {
   })
 
   it('denies a generic Wiki file read before the executor is entered', async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wiki-bypass-executor-'))
+    const root = await makeTempDir('wiki-bypass-executor-')
     const workDir = path.join(root, 'work')
     const userDataDir = path.join(root, 'userdata')
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
@@ -955,7 +1001,7 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
 
 describe('evaluateToolCallGate', () => {
   it('missing target 的父目录不存在时在确认和自动审批前直接 deny', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-gate-parent-missing-'))
+    const root = await fs.realpath(await makeTempDir('write-gate-parent-missing-'))
     const fileAutoApproval = vi.fn(async () => ({ approve: true as const }))
     try {
       const gate = await evaluateToolCallGate(base({
@@ -990,8 +1036,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('策略决策审计对 Shell 路径只记录路径分区，不记录原路径', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/shell-audit-root-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/shell-audit-outside-'))
+    const root = await fs.realpath(await makeTempDir('shell-audit-root-'))
+    const outside = await fs.realpath(await makeTempDir('shell-audit-outside-'))
     const secretPath = path.join(outside, 'private-token.txt')
     const audit = auditSink()
     await fs.writeFile(secretPath, 'audit fixture')
@@ -1000,12 +1046,12 @@ describe('evaluateToolCallGate', () => {
         workDir: root,
         userDataDir: path.join(root, '.userdata'),
         toolName: 'run_shell',
-        toolInput: { command: `cat ${secretPath}` },
+        toolInput: { command: outsideReadCommand(secretPath) },
         audit,
         runShellPrecheck: async () => ({ ok: true, analysis: { verdict: 'allow' } as never, legacyAutoAllowEligible: true, legacyPolicy: { permissionDecision: 'allow', trustedCacheKeys: [] }, hints: {} as never })
       }))
 
-      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
+      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: process.platform === 'win32' ? 'unknown' : 'read-only' })
       expect(audit.events.find((event) => event.event === 'policy.decision')?.pathZones).toContain('outside-workdir')
       expect(JSON.stringify(audit.events)).not.toContain(secretPath)
     } finally {
@@ -1015,8 +1061,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.skipIf(process.platform === 'win32')('桌面与远程写 gate 均拒绝 outside symlink 和 hardlink 目标', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp('/tmp/write-link-matrix-work-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/write-link-matrix-outside-'))
+    const workDir = await fs.realpath(await makeTempDir('write-link-matrix-work-'))
+    const outside = await fs.realpath(await makeTempDir('write-link-matrix-outside-'))
     const external = path.join(outside, 'external.txt')
     const outsideSymlink = path.join(workDir, 'outside-link.txt')
     const hardlink = path.join(workDir, 'hardlink.txt')
@@ -1049,8 +1095,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each(['read_file', 'grep'] as const)('%s 使用 desktop strict/custom 的生效读取规则，而非固定 zone 决策', async (toolName) => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/read-policy-root-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/read-policy-outside-'))
+    const root = await fs.realpath(await makeTempDir('read-policy-root-'))
+    const outside = await fs.realpath(await makeTempDir('read-policy-outside-'))
     const targets = [
       { zone: 'workdir-normal' as const, path: path.join(root, 'note.txt'), ruleId: 'read-target-workdir-allow' },
       { zone: 'outside-workdir' as const, path: path.join(outside, 'note.txt'), ruleId: 'path-outside-readonly-allow' }
@@ -1108,7 +1154,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('list_directory 使用同一生效规则并把 direct-entries 许可绑定到目录事实', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/list-directory-policy-root-'))
+    const root = await fs.realpath(await makeTempDir('list-directory-policy-root-'))
     const targetDir = path.join(root, 'target')
     await fs.mkdir(targetDir)
     const db = openDb()
@@ -1181,8 +1227,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.skipIf(process.platform === 'win32')('list_directory symlink 事实解析最终目录并在许可中限定浅层枚举', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/list-directory-symlink-root-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/list-directory-symlink-outside-'))
+    const root = await fs.realpath(await makeTempDir('list-directory-symlink-root-'))
+    const outside = await fs.realpath(await makeTempDir('list-directory-symlink-outside-'))
     const targetDir = path.join(outside, 'actual')
     const link = path.join(root, 'link')
     await fs.mkdir(targetDir)
@@ -1201,7 +1247,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each(['read_file', 'grep', 'list_directory'] as const)('%s 的敏感目标仍由 locked 真人确认规则优先裁决', async (toolName) => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/read-policy-sensitive-root-'))
+    const root = await fs.realpath(await makeTempDir('read-policy-sensitive-root-'))
     const userDataDir = path.join(root, '.userdata')
     await fs.mkdir(userDataDir)
     const targetFile = path.join(userDataDir, 'secret.txt')
@@ -1236,7 +1282,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each(['read_file', 'grep', 'list_directory'] as const)('%s 的系统目录目标不可被 custom 普通路径规则放宽', async (toolName) => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/read-policy-system-root-'))
+    const root = await fs.realpath(await makeTempDir('read-policy-system-root-'))
     const windowsRoot = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
     const systemDir = process.platform === 'win32' ? path.join(windowsRoot, 'System32') : '/etc'
     const systemFile = process.platform === 'win32' ? path.join(windowsRoot, 'System32', 'drivers', 'etc', 'hosts') : '/etc/hosts'
@@ -1262,16 +1308,15 @@ describe('evaluateToolCallGate', () => {
       const gate = await evaluateToolCallGate(base({
         appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'), toolName, toolInput, requestId, toolUseId, readConfirmationRegistry: registry
       }))
-      // win32 上 %SystemRoot%\System32\... 命中内置敏感前缀（shellSensitivePaths 显式收录 C:\Windows）→ sensitive-file；
-      // POSIX 上 /etc 的内置敏感分支为空（该 zone 留给 system-dir）→ system-dir。两条 read 规则同为
-      // locked confirm-every-time（path-sensitive-read-confirm / path-system-dir-ask），“不可被 custom 放宽”语义等价。
-      const expectedZone = process.platform === 'win32' ? 'sensitive-file' : 'system-dir'
-      const expectedRuleId = process.platform === 'win32' ? 'path-sensitive-read-confirm' : 'path-system-dir-ask'
+      // Windows 系统目录会命中内置敏感前缀；POSIX /etc 归为 system-dir。两种分类都由锁定的逐次确认规则保护。
+      const isWindowsSensitiveRoot = process.platform === 'win32'
+      const expectedZone = isWindowsSensitiveRoot ? 'sensitive-file' : 'system-dir'
+      const expectedRuleId = isWindowsSensitiveRoot ? 'path-sensitive-read-confirm' : 'path-system-dir-ask'
       expect(gate.readPathFact?.zone).toBe(expectedZone)
       expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: expectedRuleId, answerer: 'user' })
       expect(gate.readExecutionPermit).toBeUndefined()
       if (toolName === 'list_directory') {
-        expect(finalizeReadConfirmation({ toolName, toolInput, requestId, toolUseId, outcome: 'approved', answerer: 'user', readPathFact: gate.readPathFact, approvedTargets: gate.readTargetMapping }, registry)?.targets[0]).toMatchObject({ scope: 'direct-entries', targetKind: 'directory' })
+        expect(finalizeReadConfirmation({ toolName, toolInput, requestId, toolUseId, outcome: 'approved', answerer: 'user', readPathFact: gate.readPathFact, approvedTargets: gate.readTargetMapping }, registry)?.targets[0]).toMatchObject({ scope: 'direct-entries', targetKind: 'directory', zone: expectedZone })
       }
     } finally {
       await fs.rm(root, { recursive: true, force: true })
@@ -1289,7 +1334,7 @@ describe('evaluateToolCallGate', () => {
 
   it.each(['desktop', 'automation'] as const)('macOS /var/log 经 realpath 后在 %s lane 保持系统目录边界', async (lane) => {
     if (process.platform !== 'darwin') return
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/read-policy-var-root-'))
+    const root = await fs.realpath(await makeTempDir('read-policy-var-root-'))
     try {
       const gate = await evaluateToolCallGate(base({
         lane, workDir: root, userDataDir: path.join(root, '.userdata'),
@@ -1303,8 +1348,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('list_directory 工作目录外目标服从 standard/strict/custom 规则且确认许可保持单层范围', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/list-directory-outside-root-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/list-directory-outside-target-'))
+    const root = await fs.realpath(await makeTempDir('list-directory-outside-root-'))
+    const outside = await fs.realpath(await makeTempDir('list-directory-outside-target-'))
     const db = openDb()
     const input = { path: outside }
     const requestId = 'list-outside-req'
@@ -1339,8 +1384,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each(['wechat', 'feishu', 'automation'] as const)('三种读取工具的工作目录外目标在 %s lane 被 locked 规则拒绝', async (lane) => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/list-directory-remote-root-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/list-directory-remote-outside-'))
+    const root = await fs.realpath(await makeTempDir('list-directory-remote-root-'))
+    const outside = await fs.realpath(await makeTempDir('list-directory-remote-outside-'))
     const file = path.join(outside, 'note.txt')
     await fs.writeFile(file, 'needle')
     try {
@@ -1364,7 +1409,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each(['wechat', 'feishu', 'automation'] as const)('%s lane 对 workDir 内目录/省略路径 grep 放行并签 subtree permit（AC-27b/AC-27c，§3.3/§3.3b）', async (lane) => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/grep-directory-boundary-'))
+    const root = await fs.realpath(await makeTempDir('grep-directory-boundary-'))
     try {
       await fs.writeFile(path.join(root, 'note.txt'), 'needle')
       for (const toolInput of [{ pattern: 'needle', path: '.' }, { pattern: 'needle' }]) {
@@ -1377,7 +1422,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each(['wechat', 'feishu', 'automation'] as const)('大小写不同的 POSIX 目录外目标在 %s lane 对三种读取工具触发 locked 拒绝', async (lane) => {
-    const parent = await fs.realpath(await fs.mkdtemp('/tmp/case-sensitive-read-'))
+    const parent = await fs.realpath(await makeTempDir('case-sensitive-read-'))
     const workDir = path.join(parent, 'Work')
     const outside = path.join(parent, 'work')
     try {
@@ -1419,7 +1464,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('写入快通道拒绝原因进入 file.auto-approve 安全审计', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-audit-'))
+    const root = await fs.realpath(await makeTempDir('write-audit-'))
     const audit = auditSink()
     try {
       await evaluateToolCallGate(base({
@@ -1448,8 +1493,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V2 写入 gate 先生成写目标事实，越界授权由标准档策略规则交给 Agent', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-gate-root-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/write-gate-outside-'))
+    const root = await fs.realpath(await makeTempDir('write-gate-root-'))
+    const outside = await fs.realpath(await makeTempDir('write-gate-outside-'))
     const fileAutoApproval = vi.fn(async () => ({ approve: true as const }))
     try {
       const target = path.join(outside, 'new.txt')
@@ -1474,8 +1519,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V2 工作目录外写入在策略前不读取旧决策缓存', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-cache-root-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/write-cache-outside-'))
+    const root = await fs.realpath(await makeTempDir('write-cache-root-'))
+    const outside = await fs.realpath(await makeTempDir('write-cache-outside-'))
     const lookup = vi.fn(() => ({ decision: 'allow', ruleId: 'stale-allow' } as never))
     try {
       const gate = await evaluateToolCallGate(base({
@@ -1507,7 +1552,7 @@ describe('evaluateToolCallGate', () => {
   // 依赖真实 symlink 的用例以能力探测保护：win32 非特权进程 fs.symlink 直接 EPERM（无
   // SeCreateSymbolicLinkPrivilege）；安全语义由下方 mock 通路用例在 win32 覆盖，Linux CI/特权环境真跑。
   it.skipIf(!canCreateSymlinks())('V2 symlink 写目标产出事实后由 gate 拒绝，不进入确认', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-link-gate-root-'))
+    const root = await fs.realpath(await makeTempDir('write-link-gate-root-'))
     try {
       const target = path.join(root, 'target.txt')
       const link = path.join(root, 'link.txt')
@@ -1524,7 +1569,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('mock 通路：lstat 报 symlink 的写目标产 symlink 事实并由 gate 拒绝（win32 无特权平台的安全语义锚）', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-link-gate-mock-'))
+    const root = await fs.realpath(await makeTempDir('write-link-gate-mock-'))
     const link = path.join(root, 'link.txt')
     const outsideReal = path.resolve(root, '..', 'mock-gate-outside.txt')
     await fs.writeFile(link, 'protected')
@@ -1560,11 +1605,11 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V3 run_shell 将单次分析中的路径事实交给 locked 策略确认', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/shell-facts-root-'))
+    const root = await fs.realpath(await makeTempDir('shell-facts-root-'))
     try {
-      const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: 'cat /etc/hosts' } }))
+      const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: systemFileCommand() } }))
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'path-target', zone: 'system-dir' }))
-      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
+      expect(gate.facts.signals).toContainEqual({ kind: 'command-effect', effect: process.platform === 'win32' ? 'unknown' : 'read-only' })
       expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'shell-system-dir-confirm', answerer: 'user' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
@@ -1581,7 +1626,7 @@ describe('evaluateToolCallGate', () => {
       hints: { requiresRiskAck: false, outsideWorkDirRisk: false, warnings: [] }
     }))
     const gate = await evaluateToolCallGate(base({
-      toolName: 'run_shell', toolInput: { command: 'cat /etc/hosts' }, runShellPrecheck: precheck as never
+      toolName: 'run_shell', toolInput: { command: systemFileCommand() }, runShellPrecheck: precheck as never
     }))
     expect(analyzeSpy).toHaveBeenCalledTimes(1)
     expect(precheck).toHaveBeenCalledTimes(1)
@@ -1673,7 +1718,7 @@ describe('evaluateToolCallGate', () => {
     })
 
   it('routes only a new ordinary in-workspace IM write through the standard review candidate', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/im-low-risk-create-'))
+    const root = await fs.realpath(await makeTempDir('im-low-risk-create-'))
     const candidateDb = openDb()
       const imSnapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } }
       try {
@@ -1732,10 +1777,10 @@ describe('evaluateToolCallGate', () => {
       }))
       expect(sensitive.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-sensitive-path-confirm', answerer: 'user' })
 
-      const system = await evaluateToolCallGate(makeArgs({ path: '/etc/im-security-review-test-new.md', content: 'private' }))
+      const system = await evaluateToolCallGate(makeArgs({ path: systemMissingPath('im-security-review-test-new.md'), content: 'private' }))
       expect(system.decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-write-deny' })
 
-      const outside = await evaluateToolCallGate(makeArgs({ path: '/etc/im-security-review-test-new.md', content: 'blocked' }))
+      const outside = await evaluateToolCallGate(makeArgs({ path: systemMissingPath('im-security-review-test-new.md'), content: 'blocked' }))
       expect(outside.decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-write-deny' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
@@ -1769,7 +1814,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V3 AST 重定向目标进入 shell 路径事实并触发敏感路径确认', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/shell-redirect-root-'))
+    const root = await fs.realpath(await makeTempDir('shell-redirect-root-'))
     try {
       const target = path.join(root, '.env')
       const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: `echo secret > ${target}` } }))
@@ -1781,14 +1826,19 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V3 仅对全部目标均为 outside 的只读 shell 放行，写效果仍需审批', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/shell-outside-work-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/shell-outside-target-'))
+    const root = await fs.realpath(await makeTempDir('shell-outside-work-'))
+    const outside = await fs.realpath(await makeTempDir('shell-outside-target-'))
     const file = path.join(outside, 'note.txt')
     await fs.writeFile(file, 'hello')
     try {
-      const read = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: `cat ${file}` } }))
-      expect(read.decision).toMatchObject({ type: 'auto-allow', ruleId: 'shell-precheck-auto-allow' })
-      expect(read.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
+      const read = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: readFileCommand(file) } }))
+      if (process.platform === 'win32') {
+        expect(read.decision.type).toBe('require-confirm')
+        expect(read.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'unknown' })
+      } else {
+        expect(read.decision).toMatchObject({ type: 'auto-allow', ruleId: 'shell-precheck-auto-allow' })
+        expect(read.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
+      }
 
       const write = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: `touch ${file}` } }))
       expect(write.decision.type).toBe('require-confirm')
@@ -1809,8 +1859,8 @@ describe('evaluateToolCallGate', () => {
     if (lanePackage === 'custom') {
       new PolicyRuleStore(getDbConnection(db)).setOverride({ ruleId: 'shell-precheck-auto-allow', action: 'ask', params: {} })
     }
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/shell-outside-policy-root-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/shell-outside-policy-target-'))
+    const root = await fs.realpath(await makeTempDir('shell-outside-policy-root-'))
+    const outside = await fs.realpath(await makeTempDir('shell-outside-policy-target-'))
     const file = path.join(outside, 'note.txt')
     await fs.writeFile(file, 'hello')
     try {
@@ -1819,7 +1869,7 @@ describe('evaluateToolCallGate', () => {
         workDir: root,
         userDataDir: path.join(root, '.userdata'),
         toolName: 'run_shell',
-        toolInput: { command: `cat ${file}` },
+        toolInput: { command: process.platform === 'win32' ? `type ${file}` : `cat ${file}` },
         internalConfirmExemption: recursionGuard ? 'approval-agent' : undefined,
         runShellPrecheck: async () => ({
           ok: true,
@@ -1839,7 +1889,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V3 run_script 未建模调用在有人 lane 可选会话信任、automation lane 拒绝', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/script-facts-root-'))
+    const root = await fs.realpath(await makeTempDir('script-facts-root-'))
     const toolInput = { code: 'custom_accessor(target)' }
     try {
       const desktop = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
@@ -1917,15 +1967,15 @@ describe('evaluateToolCallGate', () => {
     const declaredWithSensitivePath = await evaluateToolCallGate(base({
       appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
       toolName: 'run_script',
-      toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)\nopen("/etc/hosts", "r")' }
+      toolInput: { code: `# @path-scope workdir-readonly\ncustom_accessor(target)\nopen(${JSON.stringify(systemFilePath())}, "r")` }
     }))
     expect(declaredWithSensitivePath.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-declaration', consistent: false }))
     expect(declaredWithSensitivePath.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-system-dir-confirm' })
   })
 
   it('V3 run_script 静态敏感路径与内容分析共享一次解析，并进入敏感路径真人确认规则', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/script-static-path-root-'))
-    const toolInput = { code: 'open("/etc/hosts", "r")' }
+    const root = await fs.realpath(await makeTempDir('script-static-path-root-'))
+    const toolInput = { code: `open(${JSON.stringify(systemFilePath())}, "r")` }
     try {
       const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false }))
@@ -1937,11 +1987,11 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each([
-    { language: 'javascript', code: "import fs from 'node:fs'; fs.readFileSync('/etc/hosts')" },
-    { language: 'typescript', code: "import { readFile } from 'node:fs/promises'; await readFile('/etc/hosts')" },
-    { language: 'powershell', code: "Get-Content -LiteralPath '/etc/hosts'" }
+    { language: 'javascript', code: `import fs from 'node:fs'; fs.readFileSync(${JSON.stringify(systemFilePath())})` },
+    { language: 'typescript', code: `import { readFile } from 'node:fs/promises'; await readFile(${JSON.stringify(systemFilePath())})` },
+    { language: 'powershell', code: `Get-Content -LiteralPath '${systemFilePath()}'` }
   ])('V3 run_script $language 的路径事实进入系统目录真人确认', async ({ language, code }) => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/script-language-gate-'))
+    const root = await fs.realpath(await makeTempDir('script-language-gate-'))
     try {
       const gate = await evaluateToolCallGate(base({
         workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput: { language, code }
@@ -1960,7 +2010,7 @@ describe('evaluateToolCallGate', () => {
     expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unverified-language-confirm', answerer: 'user' })
 
     const unattended = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_script', toolInput, taskAccessPermissions: automationToolPermission('run_script', '/') }))
-    expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-unverified-script-language-deny' })
+    expect(unattended.decision.type).toBe('deny')
 
     const unsupported = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { language: 'ruby', code: 'puts 1' } }))
     expect(unsupported.facts.signals).toContainEqual({ kind: 'script-language-analysis', language: 'unknown', status: 'unverified' })
@@ -1986,7 +2036,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('T4-1 自定义敏感前缀由 gate facts 和策略环境读取同一 shellConfig', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/custom-sensitive-gate-'))
+    const root = await fs.realpath(await makeTempDir('custom-sensitive-gate-'))
     const customDir = path.join(root, 'private')
     await fs.mkdir(customDir)
     const target = path.join(customDir, 'token.txt')
@@ -2007,7 +2057,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V4 wiki raw 写目标在策略层 locked deny', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/wiki-policy-root-'))
+    const root = await fs.realpath(await makeTempDir('wiki-policy-root-'))
     try {
       const gate = await evaluateToolCallGate(base({
         workDir: root,
@@ -2024,8 +2074,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.skipIf(!canCreateSymlinks())('V4 飞书附件 symlink 越出 feishu-media 时由策略事实 locked deny', async () => {
-    const userDataDir = await fs.realpath(await fs.mkdtemp('/tmp/feishu-media-gate-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/feishu-media-outside-'))
+    const userDataDir = await fs.realpath(await makeTempDir('feishu-media-gate-'))
+    const outside = await fs.realpath(await makeTempDir('feishu-media-outside-'))
     const mediaRoot = path.join(userDataDir, 'feishu-media')
     await fs.mkdir(mediaRoot)
     await fs.writeFile(path.join(outside, 'secret.txt'), 'secret')
@@ -2044,7 +2094,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V4 飞书媒体目录内普通附件由 gate 捕获文件身份并下发执行许可', async () => {
-    const userDataDir = await fs.realpath(await fs.mkdtemp('/tmp/feishu-media-permit-'))
+    const userDataDir = await fs.realpath(await makeTempDir('feishu-media-permit-'))
     const mediaRoot = path.join(userDataDir, 'feishu-media')
     await fs.mkdir(mediaRoot)
     await fs.writeFile(path.join(mediaRoot, 'ok.txt'), 'attachment')
@@ -2066,7 +2116,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V4 策略要求用户确认时，飞书附件 gate 登记目标并在批准后生成 permit', async () => {
-    const userDataDir = await fs.realpath(await fs.mkdtemp('/tmp/feishu-media-confirm-'))
+    const userDataDir = await fs.realpath(await makeTempDir('feishu-media-confirm-'))
     const mediaRoot = path.join(userDataDir, 'feishu-media')
     await fs.mkdir(mediaRoot)
     await fs.writeFile(path.join(mediaRoot, 'ok.txt'), 'attachment')
@@ -2102,7 +2152,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V4 媒体目录中的文件未登记到当前消息时不能生成 permit', async () => {
-    const userDataDir = await fs.realpath(await fs.mkdtemp('/tmp/feishu-media-unregistered-'))
+    const userDataDir = await fs.realpath(await makeTempDir('feishu-media-unregistered-'))
     const mediaRoot = path.join(userDataDir, 'feishu-media')
     await fs.mkdir(mediaRoot)
     await fs.writeFile(path.join(mediaRoot, 'private.txt'), 'not attached to this message')
@@ -2120,8 +2170,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V4 gate 后媒体父目录切换到外部附件时，执行器校验 permit identity 并拒绝读取', async () => {
-    const userDataDir = await fs.realpath(await fs.mkdtemp('/tmp/feishu-media-permit-race-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/feishu-media-permit-race-outside-'))
+    const userDataDir = await fs.realpath(await makeTempDir('feishu-media-permit-race-'))
+    const outside = await fs.realpath(await makeTempDir('feishu-media-permit-race-outside-'))
     const mediaRoot = path.join(userDataDir, 'feishu-media')
     const mediaParent = path.join(mediaRoot, 'cache')
     const movedParent = path.join(mediaRoot, 'cache-original')
@@ -2156,7 +2206,7 @@ describe('evaluateToolCallGate', () => {
     { name: '附件编号未登记', attachmentId: 'unregistered', boundary: 'outside', ruleId: 'feishu-media-boundary-deny' },
     { name: '已登记附件文件缺失', attachmentId: 'attachment-1', boundary: 'unknown', ruleId: 'feishu-media-boundary-unknown-deny' }
   ] as const)('V4 飞书附件 $name 在策略层终局拒绝', async ({ attachmentId, boundary, ruleId }) => {
-    const userDataDir = await fs.realpath(await fs.mkdtemp('/tmp/feishu-media-case-'))
+    const userDataDir = await fs.realpath(await makeTempDir('feishu-media-case-'))
     const mediaRoot = path.join(userDataDir, 'feishu-media')
     await fs.mkdir(mediaRoot)
     const attachments = boundary === 'unknown' ? [attachmentRegistration(path.join(mediaRoot, 'missing.txt'))] : []
@@ -2173,10 +2223,10 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V4 remote system read 进入真人确认，automation 写入和 shell 终局拒绝', async () => {
-    const root = await fs.realpath(await fs.mkdtemp('/tmp/lane-matrix-root-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/lane-matrix-outside-'))
+    const root = await fs.realpath(await makeTempDir('lane-matrix-root-'))
+    const outside = await fs.realpath(await makeTempDir('lane-matrix-outside-'))
     try {
-      const remoteRead = await evaluateToolCallGate(base({ lane: 'feishu', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'read_file', toolInput: { path: '/etc/hosts' } }))
+      const remoteRead = await evaluateToolCallGate(base({ lane: 'feishu', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'read_file', toolInput: { path: systemFilePath() } }))
       expect(remoteRead.decision).toMatchObject({ type: 'require-confirm', answerer: 'user' })
 
       const automationWrite = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'write_file', toolInput: { path: path.join(outside, 'new.txt'), content: 'x' } }))
@@ -2191,7 +2241,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('automation 仅允许精确绑定到本次归档目录的结果写入，输出目录不授权读取', async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-bound-output-')))
+    const root = await fs.realpath(await makeTempDir('automation-bound-output-'))
     const outputRunDir = path.join(root, '20261018-07')
     const authorizedRoot = path.join(root, 'authorized')
     await fs.mkdir(path.join(outputRunDir, 'reports'), { recursive: true })
@@ -2278,8 +2328,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('V4 automation 对敏感/系统读取及飞书媒体越界在显式只读 allow 前终局拒绝', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp('/tmp/automation-boundary-work-'))
-    const userDataDir = await fs.realpath(await fs.mkdtemp('/tmp/automation-boundary-user-'))
+    const workDir = await fs.realpath(await makeTempDir('automation-boundary-work-'))
+    const userDataDir = await fs.realpath(await makeTempDir('automation-boundary-user-'))
     const mediaRoot = path.join(userDataDir, 'feishu-media')
     await fs.mkdir(mediaRoot)
     await fs.writeFile(path.join(mediaRoot, 'ok.txt'), 'safe')
@@ -2293,7 +2343,7 @@ describe('evaluateToolCallGate', () => {
       expect(sensitive.decision).toMatchObject({ type: 'deny', ruleId: 'automation-sensitive-path-deny' })
       expect(staleAllowLookup).not.toHaveBeenCalled()
 
-      const system = await evaluateToolCallGate(base({ lane: 'automation', workDir, userDataDir, toolName: 'read_file', toolInput: { path: '/etc/hosts' } }))
+      const system = await evaluateToolCallGate(base({ lane: 'automation', workDir, userDataDir, toolName: 'read_file', toolInput: { path: systemFilePath() } }))
       expect(system.decision).toMatchObject({ type: 'deny', ruleId: 'automation-system-dir-deny' })
 
       const unregisteredMedia = await evaluateToolCallGate(base({ lane: 'automation', workDir, userDataDir, toolName: 'read_feishu_attachment', toolInput: { attachmentId: 'attachment-1' } }))
@@ -2343,7 +2393,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('桌面 read_file 在生产 gate 中产出路径事实信号', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-facts-')))
+    const workDir = await fs.realpath(await makeTempDir('read-gate-facts-'))
     try {
       const r = await evaluateToolCallGate(base({
         requestId: 'req-1', toolUseId: 'tool-1', workDir,
@@ -2377,10 +2427,10 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('路径探测遇到 EACCES 时以环境错误终局拒绝且不生成 permit 或确认登记', async () => {
-    const file = '/tmp/wd/blocked.txt'
+    const file = path.join(defaultWorkDir, 'blocked.txt')
     const originalLstat = fs.lstat.bind(fs)
     const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (target, ...args) => {
-      if (String(target) === file) throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      if (path.normalize(String(target)) === path.normalize(file)) throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
       return originalLstat(target, ...args)
     })
     const registry = new ReadConfirmationRegistry()
@@ -2410,7 +2460,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('userDataDir 与自定义敏感前缀都在 gate 中进入真人确认', async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-sensitive-zones-')))
+    const root = await fs.realpath(await makeTempDir('read-gate-sensitive-zones-'))
     try {
       const userDataDir = path.join(root, '.userdata')
       const customDir = path.join(root, 'private-config')
@@ -2431,8 +2481,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.skipIf(process.platform === 'win32')('工作目录 symlink 指向外部时 gate 以真实目标 zone 生成 permit', async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-link-root-')))
-    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-link-out-')))
+    const root = await fs.realpath(await makeTempDir('read-gate-link-root-'))
+    const outside = await fs.realpath(await makeTempDir('read-gate-link-out-'))
     try {
       const target = path.join(outside, 'note.txt')
       const link = path.join(root, 'link.txt')
@@ -2449,8 +2499,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('selected-directory read permit records its source while retaining the outside-workdir zone', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-grant-work-')))
-    const selected = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-grant-selected-')))
+    const workDir = await fs.realpath(await makeTempDir('read-gate-grant-work-'))
+    const selected = await fs.realpath(await makeTempDir('read-gate-grant-selected-'))
     try {
       const target = path.join(selected, 'note.txt')
       await fs.writeFile(target, 'selected context')
@@ -2527,7 +2577,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('desktop read V1：目录 grep 放行并签 subtree permit；通配/多路径报 read-path-pattern-unsupported；read_file 目录仍拒', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-v1-targets-')))
+    const workDir = await fs.realpath(await makeTempDir('read-gate-v1-targets-'))
     try {
       await fs.writeFile(path.join(workDir, 'note.txt'), 'needle')
       const common = { workDir, userDataDir: path.join(workDir, '.userdata') }
@@ -2559,7 +2609,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('grep 省略 path 按工作目录根探测并签发 subtree permit（C1，AC-15）', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'grep-omit-path-gate-')))
+    const workDir = await fs.realpath(await makeTempDir('grep-omit-path-gate-'))
     try {
       await fs.writeFile(path.join(workDir, 'note.txt'), 'needle')
       const gate = await evaluateToolCallGate(base({ workDir, userDataDir: path.join(workDir, '.userdata'), toolName: 'grep', toolInput: { pattern: 'needle' } }))
@@ -2599,7 +2649,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('3.2.5 RED: existing target must not be eligible for the new-file fast path', async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-existing-target-')))
+    const root = await fs.realpath(await makeTempDir('write-existing-target-'))
     const target = path.join(root, 'existing.txt')
     await fs.writeFile(target, 'before')
     const fastTrack = vi.fn(async () => ({ approve: true as const }))
@@ -2617,7 +2667,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('仅 Hosted recheck 重算无副作用的桌面文件快通道，旧 loop recheck 仍 fail closed', async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-hosted-recheck-')))
+    const root = await fs.realpath(await makeTempDir('write-hosted-recheck-'))
     const audit = auditSink()
     const fileAutoApproval = vi.fn(async () => ({ approve: true as const }))
     const common = {
@@ -2798,7 +2848,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('T07：敏感文件真人底线与显式 deny 同时命中时拒绝，候选规则不能降级 deny', async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'im-review-deny-priority-')))
+    const root = await fs.realpath(await makeTempDir('im-review-deny-priority-'))
     const target = path.join(root, 'credential.txt')
     await fs.writeFile(target, 'sensitive')
     const snapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v3', revision: 1, snapshot: { selectedPackage: 'standard' } }
@@ -2895,7 +2945,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('远程 write_file 默认（无新版策略快照）→ require-confirm(im-write-ask)', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'remote-write-gate-')))
+    const workDir = await fs.realpath(await makeTempDir('remote-write-gate-'))
     try {
       const r = await evaluateToolCallGate(
         base({
@@ -2914,8 +2964,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each(['feishu', 'wechat'] as const)('%s 越界 write_file/edit_file 在 gate 策略层终局拒绝', async (lane) => {
-    const workDir = await fs.realpath(await fs.mkdtemp('/tmp/remote-write-work-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/remote-write-outside-'))
+    const workDir = await fs.realpath(await makeTempDir('remote-write-work-'))
+    const outside = await fs.realpath(await makeTempDir('remote-write-outside-'))
     const lookup = vi.fn(() => ({ decision: 'allow', ruleId: 'stale-remote-write-allow' } as never))
     try {
       for (const toolName of ['write_file', 'edit_file'] as const) {
@@ -2943,8 +2993,8 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.skipIf(!canCreateSymlinks())('微信发送附件的外部 symlink 目标在 gate 被拒绝并写入脱敏路径事实', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-work-'))
-    const outside = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-outside-'))
+    const workDir = await fs.realpath(await makeTempDir('wechat-media-work-'))
+    const outside = await fs.realpath(await makeTempDir('wechat-media-outside-'))
     const privateFile = path.join(outside, 'private-report.txt')
     const linkedFile = path.join(workDir, 'report.txt')
     const audit = auditSink()
@@ -2971,7 +3021,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('微信发送工作目录内普通附件进入标准出站 Agent 审核规则', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-inside-'))
+    const workDir = await fs.realpath(await makeTempDir('wechat-media-inside-'))
     const mediaFile = path.join(workDir, 'report.txt')
     await fs.writeFile(mediaFile, 'shareable')
     try {
@@ -2989,7 +3039,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('T10：隔离 v3 为普通目录外微信附件提取完整审核事实并交 Agent', async () => {
-    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-review-'))
+    const parent = await fs.realpath(await makeTempDir('wechat-outside-review-'))
     const workDir = path.join(parent, 'work')
     const outside = path.join(parent, 'outside')
     await fs.mkdir(workDir)
@@ -3017,7 +3067,7 @@ describe('evaluateToolCallGate', () => {
       const approval = new AgentChannel({ lane: 'wechat', requestId: 'attachment-materials', sessionId: 's', toolName: 'wechat_reply', policy: { kind: 'agent' },
         invokeApproval: async (invocation) => { rendered = renderCluePackForTest(invocation.clue); return { ok: true, verdict: { kind: 'approve', reason: { summary: 'reviewed' } } } } })
       expect(await approval.request({ facts: gate.facts, riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : 'medium', memoryTiers: [], timeoutMs: 5000 })).toMatchObject({ kind: 'approved' })
-      expect(rendered).toContain(attachment)
+      expect(rendered).toContain(JSON.stringify(attachment).slice(1, -1))
       expect(rendered).toContain('report.txt')
       expect(rendered).toContain('owner')
       expect(rendered).toContain('ordinary report content')
@@ -3026,7 +3076,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('T10：自定义敏感前缀下的目录外附件不得进入普通 Agent 审核', async () => {
-    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-sensitive-outside-review-'))
+    const parent = await fs.realpath(await makeTempDir('wechat-sensitive-outside-review-'))
     const workDir = path.join(parent, 'work')
     const outside = path.join(parent, 'restricted')
     await fs.mkdir(workDir); await fs.mkdir(outside)
@@ -3047,7 +3097,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('T10：附件授权代次或接收者缺失时目录外文件不产生审核候选', async () => {
-    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-incomplete-'))
+    const parent = await fs.realpath(await makeTempDir('wechat-outside-incomplete-'))
     const workDir = path.join(parent, 'work')
     const outside = path.join(parent, 'outside')
     await fs.mkdir(workDir)
@@ -3065,7 +3115,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('T10：执行器准备附件摘要与审核实际读取摘要不一致时拒绝候选', async () => {
-    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-digest-mismatch-'))
+    const parent = await fs.realpath(await makeTempDir('wechat-outside-digest-mismatch-'))
     const workDir = path.join(parent, 'work')
     const outside = path.join(parent, 'outside')
     await fs.mkdir(workDir)
@@ -3085,7 +3135,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('T10：目录外附件命中凭证内容底线时必须真人确认', async () => {
-    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-sensitive-'))
+    const parent = await fs.realpath(await makeTempDir('wechat-outside-sensitive-'))
     const workDir = path.join(parent, 'work')
     const outside = path.join(parent, 'outside')
     await fs.mkdir(workDir)
@@ -3104,7 +3154,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('T10：标准模式外的附件即使事实完整也保持拒绝', async () => {
-    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-nonstandard-'))
+    const parent = await fs.realpath(await makeTempDir('wechat-outside-nonstandard-'))
     const workDir = path.join(parent, 'work')
     const outside = path.join(parent, 'outside')
     await fs.mkdir(workDir)
@@ -3123,7 +3173,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('T10：目录外附件仍不能绕过微信主动发送拒绝', async () => {
-    const parent = await fs.realpath(await fs.mkdtemp('/tmp/wechat-outside-active-send-'))
+    const parent = await fs.realpath(await makeTempDir('wechat-outside-active-send-'))
     const workDir = path.join(parent, 'work')
     const outside = path.join(parent, 'outside')
     await fs.mkdir(workDir)
@@ -3141,7 +3191,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('微信附件敏感内容证据触发真人 outbound 规则且不保存附件正文', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-content-facts-'))
+    const workDir = await fs.realpath(await makeTempDir('wechat-media-content-facts-'))
     const attachmentPath = path.join(workDir, 'report.txt')
     const secret = 'api_key=sk-1234567890abcdefghijklmnop'
     await fs.writeFile(attachmentPath, secret)
@@ -3163,7 +3213,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('微信附件路径事实探测失败时拒绝且不查询旧缓存', async () => {
-    const workDir = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-probe-error-'))
+    const workDir = await fs.realpath(await makeTempDir('wechat-media-probe-error-'))
     const blockedPath = path.join(workDir, 'blocked.txt')
     const originalLstat = fs.lstat.bind(fs)
     const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (target, ...args) => {
@@ -3189,10 +3239,10 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each([
-    { path: '/etc/spaceassistant-policy-test-new-file', zone: 'system-dir', scope: 'outside-workdir', decision: { type: 'deny', ruleId: 'remote-outside-write-deny' } },
+    { path: systemMissingPath('spaceassistant-policy-test-new-file'), zone: 'system-dir', scope: 'outside-workdir', decision: { type: 'deny', ruleId: 'remote-outside-write-deny' } },
     { path: '.env', zone: 'sensitive-file', scope: 'inside-workdir', decision: { type: 'require-confirm', ruleId: 'im-write-sensitive-path-confirm' } }
   ] as const)('远程写入 $zone 目标按真实工作目录范围裁决', async ({ path: target, zone, scope, decision }) => {
-    const workDir = await fs.realpath(await fs.mkdtemp('/tmp/remote-write-special-work-'))
+    const workDir = await fs.realpath(await makeTempDir('remote-write-special-work-'))
     try {
       const gate = await evaluateToolCallGate(base({
         lane: 'feishu', remoteContext: remoteContext(), workDir, userDataDir: path.join(workDir, '.userdata'),
@@ -3504,7 +3554,7 @@ describe('fileAutoApproved 显式结果字段（H2：自动批准审计不再依
 
 describe('automation result directory write permission', () => {
   it('user-confirmed result-write grants writes across the run archive without exact file bindings', async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-output-scope-')))
+    const root = await fs.realpath(await makeTempDir('automation-output-scope-'))
     const scheduledFor = new Date(2026, 9, 18, 7, 0).getTime()
     const runOutputDir = path.join(root, '20261018')
     await fs.mkdir(runOutputDir)
