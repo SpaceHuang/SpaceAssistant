@@ -179,9 +179,13 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       const turnRuntime = turnRuntimeByExecution.get(execution)
       // Hosted execution asks for stale-target recovery while it is acquiring the
       // first session owner. A turn accepted in this process is already live even
-      // though that owner has not yet been registered; recovering it here would
-      // finalize the request before its provider can run.
-      if (turnRuntime?.listActive(sessionId).length) {
+      // though that owner has not yet been registered; its prepared state must not
+      // be finalized before the provider can run. Persisted executing turns restored
+      // after a process restart are different: recover them before they strand the
+      // session queue behind a phantom active snapshot.
+      const activeTurns = turnRuntime?.listActive(sessionId) ?? []
+      const hasUnclaimedPreparedTurn = activeTurns.some((turn) => getPersistedTurn(db, turn.turnId)?.state === 'prepared')
+      if (hasUnclaimedPreparedTurn) {
         return { status: 'active-owner', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }
       }
       if (turnRuntime) turnRuntime.recoverSession(sessionId)

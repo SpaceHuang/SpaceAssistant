@@ -75,6 +75,29 @@ describe('压缩换入后复用 store 跨 reopen（闭包连接现取化回归�
     }
   })
 
+  it('recovers a persisted executing turn after restart even when its snapshot is restored in memory', () => {
+    const { db, cleanup } = createTempDatabase('target-recovery-stale-restored-turn-')
+    try {
+      const session = createSession(db, { name: 'stale restored turn', model: 'test' })
+      const execution = createSessionExecutionStore(db)
+      const runtime = createTurnRuntimeForSessionExecution(execution, { deps: { now: () => 2, id: (() => { let id = 0; return () => `stale-restored-${++id}` })() } })
+      const started = runtime.prepare({ mode: 'create-user', requestId: 'stale-restored-request', sessionId: session.id,
+        input: { text: 'accepted before process exit' }, config: {} })
+      getDbConnection(db).prepare("UPDATE turns SET state='executing' WHERE turn_id=?").run(started.turnId)
+
+      const recovery = execution.recoverExecutionTarget(session.id)
+
+      expect(recovery.status).toBe('ready')
+      expect(runtime.terminal(started.turnId)).toMatchObject({ outcome: 'recovered' })
+      expect(getDbConnection(db).prepare('SELECT state,outcome FROM turns WHERE turn_id=?').get(started.turnId))
+        .toEqual({ state: 'terminal', outcome: 'recovered' })
+      expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(started.assistantMessage.id))
+        .toEqual({ status: 'failed' })
+    } finally {
+      cleanup()
+    }
+  })
+
   it('target recovery rebuilds committed tool results from History after a result checkpoint was omitted', async () => {
     const { db, cleanup } = createTempDatabase('target-tool-recovery-history-')
     try {
