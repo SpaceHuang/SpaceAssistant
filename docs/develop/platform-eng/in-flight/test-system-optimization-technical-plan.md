@@ -181,7 +181,7 @@
 
 | 工作项 | 已完成证据 | 尚未完成的验收 |
 |---|---|---|
-| W0 / AC-8 六条关键用户链路 | Electron UI harness 与 runner 5 项测试通过；六条真实 Electron 流程本地 `6/6` 通过。目标会话恢复在 session-storage 边界为无终止事件的遗留 turn 写入 `process-restart` 终止记录并选择 working context；工具结果不明时明确说明事实，不自动重跑旧 turn；同一会话的下一条消息可到达 provider。`npm test` 全量通过（1256 个文件通过、1 个跳过；12160 项通过、140 项跳过）；CI `test` job 配置为调用该验证命令并仍属于 `CI / required` 汇总 | 逐链路反向验证 / 故障注入仍待完成；六链路远端 macOS CI 运行结果与 Windows 兼容性证据待 CI 运行 |
+| W0 / AC-8 六条关键用户链路 | Electron UI harness 与 runner 5 项测试通过；六条真实 Electron 流程本地 `6/6` 通过。目标会话恢复在 session-storage 边界为无终止事件的遗留 turn 写入 `process-restart` 终止记录并选择 working context；工具结果不明时明确说明事实，不自动重跑旧 turn；同一会话的下一条消息可到达 provider。按用户要求合并 `codex/session-runtime-ended-tool-timer` 后，`npm test` 全量通过（1256 个文件通过、1 个跳过；12160 项通过、140 项跳过，用时 1106.70 秒）；CI `test` job 配置为调用六链路验证命令并仍属于 `CI / required` 汇总 | 逐链路反向验证 / 故障注入仍待完成；六链路远端 macOS CI 运行结果与 Windows 兼容性证据待 CI 运行 |
 | W1 / AC-1 覆盖率 | `npm run test:coverage` 与基线文档已提交，测量结果可本地复核 | 无已知剩余项 |
 | W2 / AC-2 测试基建 | 工厂与临时路径 helper 已提交；renderer/Electron suites、20 次重复、typecheck 与增量构建已通过 | 无已知剩余项 |
 | W3 / AC-3 流式 harness | 场景 harness 与目标测试迁移已提交，定向测试通过 | 无已知剩余项 |
@@ -190,7 +190,7 @@
 | W6 / AC-6 chat IPC probe | 本地正常路径、丢投影、异常终态三种路径均已验证；CI 矩阵与初始化顺序静态门禁通过 | macOS + Windows 远端正常结果、初始化屏障失败时 probe 未启动的实际 CI 证据；R-02 required 决策 |
 | W7 / AC-7 测试政策 | guide 已按当前四个 Vitest project、CI lane、mock、snapshot、coverage 与 temp path 纪律修订并提交 | 无已知剩余项 |
 
-本轮本地验证命令：`npm test`（1256 个测试文件通过、1 个跳过；12160 项通过、140 项跳过）、`npm run verify:critical-user-flows`（构建 renderer / Electron 并运行六条真实 Electron 流程，`6/6` 通过）、`node --test scripts/run-critical-user-flows.test.cjs`（5/5）、重启恢复 / 投影 / 存储定向 Vitest（3 个文件、100 项通过）、`npm run typecheck:renderer`、`npm run i18n:check`、`npm run build:electron:incremental`，以及 W1/W5/W6 已记录的覆盖率、storage-perf 与 chat IPC probe 命令。远端验收尚未发生；禁止把已接入的 job 或本地结果表述成 CI 平台通过。
+本轮本地验证命令：合并 `codex/session-runtime-ended-tool-timer` 后运行 `npm test`（1256 个测试文件通过、1 个跳过；12160 项通过、140 项跳过，用时 1106.70 秒）；`npm run verify:critical-user-flows`（构建 renderer / Electron 并运行六条真实 Electron 流程，`6/6` 通过）；合并后重启恢复 / 投影 / 存储定向 Vitest（4 个文件、226 项通过、6 项跳过）；`node --test scripts/run-critical-user-flows.test.cjs`（5/5）、`npm run typecheck:renderer`、`npm run i18n:check`、`npm run build:electron:incremental`，以及 W1/W5/W6 已记录的覆盖率、storage-perf 与 chat IPC probe 命令。远端验收尚未发生；禁止把已接入的 job 或本地结果表述成 CI 平台通过。
 
 ## 4. 风险与已排除方案【机｜人工可跳过】
 
