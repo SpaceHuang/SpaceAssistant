@@ -6,6 +6,9 @@ const { createSession, getPersistedTurn, getMessages } = require('../dist-electr
 const { createSessionTurnRuntime, createSqliteSessionStorage } = require('../dist-electron/electron/sessionStorage/sqliteSessionStorage.js')
 
 const sampleCount = Number(process.env.SPACEASSISTANT_IPC_SAMPLES || 1000)
+const failureMode = process.env.SPACEASSISTANT_IPC_PROBE_FAILURE_MODE || ''
+if (!Number.isSafeInteger(sampleCount) || sampleCount < 1 || sampleCount > 10000) throw new Error('SPACEASSISTANT_IPC_SAMPLES_INVALID')
+if (failureMode && !['drop-projection', 'abnormal-terminal'].includes(failureMode)) throw new Error('SPACEASSISTANT_IPC_PROBE_FAILURE_MODE_INVALID')
 const preload = path.join(__dirname, 'probe-chat-business-ipc-preload.cjs')
 let probeWindow
 
@@ -22,7 +25,7 @@ const turnRuntime = createSessionTurnRuntime(sessionStorage, {
 })
 let prepared
 
-// 只替身隔离模型/存储副作用；IPC 注册本身走生产 registerAppIpcHandlers。
+// 只替身模型与外部副作用；被测聊天通道使用生产 registerAgentIpc handler 和 SQLite session storage。
 const ctx = {
   db,
   sessionStorage,
@@ -46,6 +49,10 @@ prepared = turnRuntime.prepare({ mode: 'create-user', requestId: 'probe-request'
 ipcMain.handle('probe:complete-turn', async () => {
   turnRuntime.bindRequest(prepared.requestId, prepared.turnId)
   return turnRuntime.executeWithSource(prepared.turnId, prepared.startToken, async () => {
+    if (failureMode === 'abnormal-terminal') {
+      turnRuntime.consume(prepared.turnId, { type: 'source-failed', eventSeq: 2 })
+      return { outcome: 'failed' }
+    }
     turnRuntime.consume(prepared.turnId, { type: 'source-completed', eventSeq: 2 })
     return { outcome: 'completed' }
   })
@@ -60,7 +67,18 @@ app.whenReady().then(async () => {
     const result = await window.webContents.executeJavaScript(`window.ipcBusinessProbe.run(${sampleCount}, ${JSON.stringify(session.id)})`, true)
     const persisted = getPersistedTurn(db, prepared.turnId)
     const persistedAssistant = persisted && getMessages(db, session.id).find((message) => message.id === persisted.assistantMessageId)
-    console.log(`[chat-business-ipc] ${JSON.stringify({ ...result, activeTurnCount: turnRuntime.listActive(session.id).length, metricCount: metrics.length, metricKinds: metrics.map((metric) => metric.kind), metrics, persistedState: persisted?.state ?? null, persistedVersion: persisted?.version ?? null, persistedAssistantStatus: persistedAssistant?.status ?? null })}`)
+    const checks = [
+      ['active-turn-projection', result.sampleCount === sampleCount],
+      ['projection-version-increases', result.terminalProjectionVersion > result.initialProjectionVersion],
+      ['terminal-completed-projection', result.terminalProjectionEvent === 'source-completed'],
+      ['terminal-assistant-success', result.terminalAssistantStatus === 'completed'],
+      ['active-turn-cleared', result.activeAfterTerminal === 0 && turnRuntime.listActive(session.id).length === 0],
+      ['persisted-terminal-completed', persisted?.state === 'terminal' && persisted.outcome === 'completed'],
+      ['persisted-assistant-success', persistedAssistant?.status === 'completed']
+    ]
+    console.log(`[chat-business-ipc] ${JSON.stringify({ ...result, checks: checks.map(([name, passed]) => ({ name, passed })), metricCount: metrics.length, metricKinds: metrics.map((metric) => metric.kind), persistedState: persisted?.state ?? null, persistedOutcome: persisted?.outcome ?? null, persistedVersion: persisted?.version ?? null, persistedAssistantStatus: persistedAssistant?.status ?? null })}`)
+    const failed = checks.filter(([, passed]) => !passed)
+    if (failed.length) throw new Error(`CHAT_IPC_BUSINESS_ASSERTION_FAILED:${failed.map(([name]) => name).join(',')}`)
     window.destroy()
     ctx.db.close()
     app.quit()

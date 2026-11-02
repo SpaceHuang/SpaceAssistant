@@ -65,6 +65,61 @@ jobs:
           path: .ci/vitest-summary.json
           retention-days: 14
           if-no-files-found: error
+  storage-perf:
+    name: CI / Storage performance (observation)
+    runs-on: macos-latest
+    # Storage performance is observational until R-03 is decided; do not add it to ci-required.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Test sanitized storage performance summarizer
+        run: node --test scripts/summarize-storage-perf-report.test.mjs
+      - run: npm run build:agent-provider-pi-ai
+      - name: Prepare storage performance report directory
+        run: mkdir -p .ci
+      - name: Run storage performance regression lane
+        run: npm run test:storage-perf -- --reporter=json --outputFile=.ci/storage-perf-report.json
+      - name: Summarize selected storage performance results
+        if: always()
+        run: node scripts/summarize-storage-perf-report.mjs
+      - name: Upload sanitized storage performance summary
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: storage-perf-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci/storage-perf-summary.json
+          retention-days: 14
+          if-no-files-found: error
+  chat_business_probe:
+    name: CI / Chat business IPC probe (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS
+            runner: macos-latest
+          - label: Windows
+            runner: windows-latest
+    env:
+      SPACEASSISTANT_IPC_SAMPLES: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build:electron
+      - name: Initialize Electron binary before probe
+        run: node scripts/initialize-electron-ci.mjs
+      - name: Probe chat IPC business lifecycle
+        run: npm run probe:chat-business-ipc
   golden_windows:
     name: CI / Shell golden (Windows)
     runs-on: windows-latest

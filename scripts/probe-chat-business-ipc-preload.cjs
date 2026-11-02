@@ -2,7 +2,11 @@ const { contextBridge, ipcRenderer } = require('electron')
 const projections = []
 const projectionDispatchMs = []
 const projectionDomCommitMs = []
+const projectionWaitTimeoutMs = 3000
+const failureMode = process.env.SPACEASSISTANT_IPC_PROBE_FAILURE_MODE || ''
 ipcRenderer.on('chat:turn-projection', (_event, payload) => {
+  const eventType = payload?.event?.type
+  if (failureMode === 'drop-projection' && ['source-completed', 'source-failed'].includes(eventType)) return
   const receivedAt = performance.now()
   projections.push(payload)
   if (typeof payload?.probeSentAtMs === 'number') projectionDispatchMs.push(Math.max(0, Date.now() - payload.probeSentAtMs))
@@ -15,6 +19,16 @@ ipcRenderer.on('chat:turn-projection', (_event, payload) => {
 
 contextBridge.exposeInMainWorld('ipcBusinessProbe', {
   async run(sampleCount, sessionId) {
+    const waitForProjection = async (predicate, label) => {
+      const deadline = Date.now() + projectionWaitTimeoutMs
+      while (Date.now() < deadline) {
+        const match = projections.find(predicate)
+        if (match) return match
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      throw new Error(`CHAT_IPC_PROJECTION_TIMEOUT:${label}`)
+    }
+    const initialProjection = await waitForProjection((payload) => payload?.event?.type === 'content-delta', 'initial')
     const samples = []
     for (let i = 0; i < sampleCount; i += 1) {
       const start = performance.now()
@@ -24,10 +38,13 @@ contextBridge.exposeInMainWorld('ipcBusinessProbe', {
     }
     samples.sort((a, b) => a - b)
     const percentile = (p) => samples[Math.min(samples.length - 1, Math.floor(samples.length * p))]
-    const beforeTerminalProjectionCount = projections.length
     await ipcRenderer.invoke('probe:complete-turn')
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    const terminalProjection = await waitForProjection((payload) => payload?.turn?.turnId === initialProjection.turn.turnId &&
+      ['source-completed', 'source-failed'].includes(payload?.event?.type), 'terminal')
     const terminal = await ipcRenderer.invoke('chat:list-active-turns', { sessionId })
-    return { sampleCount: samples.length, p50Ms: percentile(.5), p95Ms: percentile(.95), p99Ms: percentile(.99), minMs: samples[0], maxMs: samples[samples.length - 1], projectionCount: projections.length, projectionVersion: projections[0]?.turn?.version ?? null, terminalProjectionCount: projections.length - beforeTerminalProjectionCount, projectionDispatchMs: projectionDispatchMs.slice(), projectionDomCommitMs: projectionDomCommitMs.slice(), activeAfterTerminal: terminal.length }
+    return { sampleCount: samples.length, p50Ms: percentile(.5), p95Ms: percentile(.95), p99Ms: percentile(.99), minMs: samples[0], maxMs: samples[samples.length - 1],
+      projectionCount: projections.length, initialProjectionVersion: initialProjection.turn.version, terminalProjectionVersion: terminalProjection.turn.version,
+      terminalProjectionEvent: terminalProjection.event.type, terminalAssistantStatus: terminalProjection.turn.assistantMessage?.status ?? null,
+      projectionDispatchMs: projectionDispatchMs.slice(), projectionDomCommitMs: projectionDomCommitMs.slice(), activeAfterTerminal: terminal.length }
   }
 })
