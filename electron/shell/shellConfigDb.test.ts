@@ -20,6 +20,7 @@ describe('shellConfigDb', () => {
   })
 
   afterEach(() => {
+    db.close()
     try {
       fs.unlinkSync(dbPath)
     } catch {
