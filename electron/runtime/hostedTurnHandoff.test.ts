@@ -172,7 +172,7 @@ describe('createHostedTurnHandoff', () => {
 
     await handoff({ request: { messages: [user] }, requiredUserMessage: { id: 'recover-before-claim-user', message: user } })
 
-    expect(recoverExecutionTarget).toHaveBeenCalledWith(session.id)
+    expect(recoverExecutionTarget).toHaveBeenCalledWith(session.id, 'recover-before-claim-turn')
     expect(order).toEqual(['recover', 'claim'])
     expect(claimExecution).toHaveBeenCalledOnce()
     db.close()

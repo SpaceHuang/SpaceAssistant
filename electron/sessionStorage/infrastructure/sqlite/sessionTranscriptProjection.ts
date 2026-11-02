@@ -1,4 +1,4 @@
-import type { Message } from '../../../../src/shared/domainTypes'
+import type { Message, ToolCallRecord } from '../../../../src/shared/domainTypes'
 import type { AppDatabase } from '../../../database'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { runInTransaction } from '../../../database/transaction'
@@ -22,6 +22,45 @@ export type SessionTranscriptProjectionRead =
   | Readonly<{ source: 'legacy'; messages: readonly Message[]; reason: string }>
 
 type RetryHistoryRow = { assistantMessageId: string; kind: string; payloadJson: string; createdAt: number }
+/** Reattach terminal tool steps from History on every chat-page read path, including prepared caches. */
+export function attachInterruptedToolCallsToChatPage(db: AppDatabase, page: ChatMessagePage): ChatMessagePage {
+  const terminalEntries = page.entries.filter(({ message }) => message.status === 'cancelled' || message.status === 'failed')
+  if (terminalEntries.length === 0) return page
+  const conn = getDbConnection(db)
+  const ids = terminalEntries.map(({ message }) => message.id)
+  const turns = conn.prepare(`SELECT assistant_message_id AS assistantMessageId,turn_id AS turnId,request_id AS requestId
+    FROM turns WHERE session_id=? AND assistant_message_id IN (${ids.map(() => '?').join(',')})`).all(
+      terminalEntries[0]!.message.sessionId, ...ids) as Array<{ assistantMessageId: string; turnId: string; requestId: string }>
+  const history = new SqliteAgentHistory(conn, 1, Date.now, terminalEntries[0]!.message.sessionId)
+  const recovered = new Map<string, ToolCallRecord[]>()
+  for (const turn of turns) {
+    const calls = history.readRecoverableToolCallsForSession(turn.turnId, terminalEntries[0]!.message.sessionId, turn.turnId) ??
+      (turn.requestId !== turn.turnId
+        ? history.readRecoverableToolCallsForSession(turn.requestId, terminalEntries[0]!.message.sessionId, turn.turnId)
+        : undefined)
+    if (!calls?.length) continue
+    recovered.set(turn.assistantMessageId, calls.map((call) => ({
+      ...call,
+      status: call.status === 'calling' || call.status === 'rejected' ? 'failed' : call.status,
+      ...(call.status === 'rejected' ? { result: { ...(call.result ?? { success: false }), notExecuted: true } } : {}),
+      ...(call.status === 'calling' || call.result?.executionOutcome === 'unknown-after-dispatch' ? { interrupted: true } : {})
+    })))
+  }
+  if (recovered.size === 0) return page
+  return { ...page, entries: page.entries.map((entry) => {
+    const calls = recovered.get(entry.message.id)
+    if (!calls?.length) return entry
+    const recoveredById = new Map(calls.map((call) => [call.id, call]))
+    const merged = (entry.message.toolCalls ?? []).map((call) => {
+      const recoveredCall = recoveredById.get(call.id)
+      if (!recoveredCall) return call
+      recoveredById.delete(call.id)
+      return { ...call, ...recoveredCall }
+    })
+    merged.push(...recoveredById.values())
+    return { ...entry, message: { ...entry.message, toolCalls: merged } }
+  }) }
+}
 
 export function reconstructProviderRetryOperations(rows: readonly RetryHistoryRow[]): Map<string, import('../../../../src/shared/domainTypes').SystemOperationRecord[]> {
   const result = new Map<string, import('../../../../src/shared/domainTypes').SystemOperationRecord[]>()
@@ -562,30 +601,35 @@ export function getProjectedChatMessagePage(
       AND e.kind IN ('provider-retry-scheduled','provider-attempt-result','invocation-interrupted','invocation-failed')
     ORDER BY e.created_at,e.sequence`).all(sessionId, ...pageIds) as RetryHistoryRow[]
   const retryOperations = reconstructProviderRetryOperations(retryRows)
-  const attachRetryOperations = (message: Message): Message => {
+  const attachRecoveredDisplay = (message: Message): Message => {
+    let result = message
     const recovered = retryOperations.get(message.id)
-    if (!recovered?.length) return message
-    const merged = new Map((message.systemOperations ?? []).map((operation) => [operation.id, operation]))
-    for (const operation of recovered) merged.set(operation.id, operation)
-    return { ...message, systemOperations: [...merged.values()] }
+    if (recovered?.length) {
+      const merged = new Map((result.systemOperations ?? []).map((operation) => [operation.id, operation]))
+      for (const operation of recovered) merged.set(operation.id, operation)
+      result = { ...result, systemOperations: [...merged.values()] }
+    }
+    return result
   }
-  const retryPage: ChatMessagePage = { ...page, entries: page.entries.map((entry) => ({ ...entry, message: attachRetryOperations(entry.message) })) }
+  const retryPage: ChatMessagePage = { ...page, entries: page.entries.map((entry) => ({ ...entry, message: attachRecoveredDisplay(entry.message) })) }
   const writeMode = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
     .get(sessionId) as { write_mode: string } | undefined
   if (writeMode?.write_mode !== 'canonical' && hasCurrentProjectionEligibility(db, sessionId)) {
     const states = conn.prepare(`SELECT id,content_storage_state FROM messages WHERE session_id=? AND id IN (${pageIds.map(() => '?').join(',')})`)
       .all(sessionId, ...pageIds) as Array<{ id: string; content_storage_state: string }>
-    if (states.length === pageIds.length && states.every(({ content_storage_state }) => content_storage_state === 'legacy')) return retryPage
+    if (states.length === pageIds.length && states.every(({ content_storage_state }) => content_storage_state === 'legacy')) {
+      return attachInterruptedToolCallsToChatPage(db, retryPage)
+    }
   }
   // Page-local cache hits cannot prove the body source for every requested ID. The transcript
   // reader validates the legacy cache against the complete legacy view, or replays History for
   // canonical-backed bodies, before we apply this page's cursor selection.
   const transcript = readSessionTranscriptProjection(db, sessionId)
-  if (transcript.source === 'legacy') return retryPage
+  if (transcript.source === 'legacy') return attachInterruptedToolCallsToChatPage(db, retryPage)
   const canonicalById = new Map(transcript.messages.map((message) => [message.id, message]))
   const entries = retryPage.entries.map((entry) => {
     const canonical = canonicalById.get(entry.message.id)
-    return canonical ? { ...entry, message: attachRetryOperations(canonical) } : entry
+    return canonical ? { ...entry, message: attachRecoveredDisplay(canonical) } : entry
   })
-  return { ...page, entries }
+  return attachInterruptedToolCallsToChatPage(db, { ...page, entries })
 }
