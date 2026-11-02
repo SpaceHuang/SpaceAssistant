@@ -64,6 +64,44 @@ describe('interrupted turn step display reconstruction', () => {
     db.close()
   })
 
+  it('replaces a stale executing card with the completed tool result from History', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'completed tool history recovery', model: 'test' })
+    appendMessage(db, { id: 'completed-recovery-user', sessionId: session.id, role: 'user', content: 'pull changes', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'completed-recovery-assistant', sessionId: session.id, role: 'assistant', content: 'Pull complete', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'completed-recovery-turn', requestId: 'completed-recovery-request', sessionId: session.id,
+      userMessageId: 'completed-recovery-user', assistantMessageId: 'completed-recovery-assistant', state: 'terminal', outcome: 'completed' })
+    getDbConnection(db).prepare('UPDATE messages SET tool_calls=? WHERE id=?').run(JSON.stringify([
+      { id: 'fetch-call', toolName: 'run_shell', input: {}, status: 'executing', riskLevel: 'high' }
+    ]), 'completed-recovery-assistant')
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 50, session.id)
+    const stdout = 'Updating abc..def\nFast-forward\n 20 files changed\n'
+    await history.appendBatch([
+      { invocationId: 'completed-recovery-turn', turnId: 'completed-recovery-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'completed-recovery-context', idempotencyKey: 'completed-recovery-context', kind: 'invocation-context-committed',
+        payload: { messages: [{ id: 'completed-recovery-user', role: 'user', content: 'pull changes', timestamp: 1 }] } },
+      { invocationId: 'completed-recovery-turn', turnId: 'completed-recovery-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'completed-recovery-response', idempotencyKey: 'completed-recovery-response', kind: 'model-response-committed',
+        payload: { message: { id: 'completed-recovery-assistant', role: 'assistant', content: 'Pull complete', timestamp: 2,
+          toolCalls: [{ id: 'fetch-call', name: 'run_shell', input: { command: 'git fetch origin --prune' } }] } } },
+      { invocationId: 'completed-recovery-turn', turnId: 'completed-recovery-turn', sequence: 3, schemaVersion: 1,
+        eventId: 'completed-recovery-started', idempotencyKey: 'completed-recovery-started', kind: 'tool-call-started', payload: { toolCallId: 'fetch-call' } },
+      { invocationId: 'completed-recovery-turn', turnId: 'completed-recovery-turn', sequence: 4, schemaVersion: 1,
+        eventId: 'completed-recovery-finished', idempotencyKey: 'completed-recovery-finished', kind: 'tool-call-finished',
+        payload: { toolCallId: 'fetch-call', success: true, result: { success: true, data: { stdout, stderr: '', exitCode: 0, status: 'completed' } } } },
+      { invocationId: 'completed-recovery-turn', turnId: 'completed-recovery-turn', sequence: 5, schemaVersion: 1,
+        eventId: 'completed-recovery-terminal', idempotencyKey: 'completed-recovery-terminal', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    updateMessageContent(db, 'completed-recovery-assistant', { status: 'completed' })
+
+    const assistant = getProjectedChatMessagePage(db, session.id, null, 20).entries.find(({ message }) => message.id === 'completed-recovery-assistant')!.message
+    expect(assistant.toolCalls).toEqual([expect.objectContaining({
+      id: 'fetch-call', toolName: 'run_shell', input: { command: 'git fetch origin --prune' }, status: 'completed',
+      result: { success: true, data: { stdout, stderr: '', exitCode: 0, status: 'completed' } }
+    })])
+    db.close()
+  })
+
   it('hydrates spilled tool output before rebuilding an interrupted chat card', async () => {
     const temp = createTempDatabase('interrupted-tool-spill-')
     const db = temp.db

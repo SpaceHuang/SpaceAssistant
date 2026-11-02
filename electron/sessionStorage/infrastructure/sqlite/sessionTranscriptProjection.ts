@@ -22,9 +22,10 @@ export type SessionTranscriptProjectionRead =
   | Readonly<{ source: 'legacy'; messages: readonly Message[]; reason: string }>
 
 type RetryHistoryRow = { assistantMessageId: string; kind: string; payloadJson: string; createdAt: number }
-/** Reattach terminal tool steps from History on every chat-page read path, including prepared caches. */
-export function attachInterruptedToolCallsToChatPage(db: AppDatabase, page: ChatMessagePage): ChatMessagePage {
-  const terminalEntries = page.entries.filter(({ message }) => message.status === 'cancelled' || message.status === 'failed')
+/** Reattach authoritative terminal tool records from History on every chat-page read path, including prepared caches. */
+export function attachRecoveredToolCallsToChatPage(db: AppDatabase, page: ChatMessagePage): ChatMessagePage {
+  const terminalEntries = page.entries.filter(({ message }) => message.role === 'assistant' &&
+    (message.status === 'completed' || message.status === 'cancelled' || message.status === 'failed'))
   if (terminalEntries.length === 0) return page
   const conn = getDbConnection(db)
   const ids = terminalEntries.map(({ message }) => message.id)
@@ -618,18 +619,18 @@ export function getProjectedChatMessagePage(
     const states = conn.prepare(`SELECT id,content_storage_state FROM messages WHERE session_id=? AND id IN (${pageIds.map(() => '?').join(',')})`)
       .all(sessionId, ...pageIds) as Array<{ id: string; content_storage_state: string }>
     if (states.length === pageIds.length && states.every(({ content_storage_state }) => content_storage_state === 'legacy')) {
-      return attachInterruptedToolCallsToChatPage(db, retryPage)
+      return attachRecoveredToolCallsToChatPage(db, retryPage)
     }
   }
   // Page-local cache hits cannot prove the body source for every requested ID. The transcript
   // reader validates the legacy cache against the complete legacy view, or replays History for
   // canonical-backed bodies, before we apply this page's cursor selection.
   const transcript = readSessionTranscriptProjection(db, sessionId)
-  if (transcript.source === 'legacy') return attachInterruptedToolCallsToChatPage(db, retryPage)
+  if (transcript.source === 'legacy') return attachRecoveredToolCallsToChatPage(db, retryPage)
   const canonicalById = new Map(transcript.messages.map((message) => [message.id, message]))
   const entries = retryPage.entries.map((entry) => {
     const canonical = canonicalById.get(entry.message.id)
     return canonical ? { ...entry, message: attachRecoveredDisplay(canonical) } : entry
   })
-  return attachInterruptedToolCallsToChatPage(db, { ...page, entries })
+  return attachRecoveredToolCallsToChatPage(db, { ...page, entries })
 }
