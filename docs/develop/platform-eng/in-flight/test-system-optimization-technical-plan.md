@@ -1,6 +1,6 @@
 # 测试体系优化技术方案（近期 + 中期）
 
-> 状态：实施中（2026-11-02；W0–W8 已本地实现；W0 六条真实 Electron UI 链路正向 `6/6`、负向 `6/6` 通过，required `test` job 已接入；pre-push hook 已安装并实际运行通过。进程重启恢复会恢复已记录上下文并说明工具结果未知，由 Agent 决定检查/询问/重试；不自动重跑旧 turn。D-04、R-01、R-02、R-04 已获用户批准；R-03 待决；远端 CI 结果仍待取得。评审复核：[复评报告](../../../review/2026-11-02-test-system-optimization-technical-plan-review.md)）
+> 状态：实施中（2026-11-02；W0–W8 已本地实现；W0 六条真实 Electron UI 链路正向 `6/6`、负向 `6/6` 通过，required `test` job 已接入；pre-push hook 已安装并实际运行通过。进程重启恢复会恢复已记录上下文并说明工具结果未知，由 Agent 决定检查/询问/重试；不自动重跑旧 turn。D-04、R-01、R-02、R-04 已获用户批准；R-03 维持 storage-perf 非阻断观察，不要求五次远端数据作为验收；W0 / W6 平台 CI 结果仍待取得。评审复核：[复评报告](../../../review/2026-11-02-test-system-optimization-technical-plan-review.md)）
 > 核对基线：`main` `a6a5cdb7`（2026-11-01）；修订时 HEAD `bf980e1e`（领先 4 提交，评审确认不影响核对项实质）
 > 范围：覆盖率测量与门禁策略、测试基建复用、fixture 确定性、流式链路故障注入、渲染快照通道、存储性能门禁进 CI、probe CI 矩阵扩展、本地 pre-push 快速门禁、测试政策文档修订。
 > 来源：2026-11-01 对 DeepSeek Harness（外部仓库，下称 DSH）测试体系的对比调研；外部事实标注为「外部参照」，不在本仓复核范围内。
@@ -30,7 +30,7 @@
 
 - **R-01 覆盖率第一批只测量，不阻断 PR**。用户于 2026-11-02 确认：先收集基线数据，再决定是否以及如何设门槛；不因无基线而设阈值。
 - **R-02 chat IPC probe 在 macOS + Windows 先做非阻断观察**。用户于 2026-11-02 确认两平台先观察；不会将 probe job 加入 `CI / required`。远端结果用于确认矩阵运行正常和检查屏障，不改变其观察性。
-- **R-03 storage-perf CI job 是否阻断 PR，待决**。当前使用测试自行生成的 SQLite / 文件访问场景测量 p95；重复 CI 运行检查托管 runner 上计时断言的稳定性与 job 时长，不代表生产流量或真实高频负载。是否保留“连续 5 次远端结果后再决定”，等待负责人回答。
+- **R-03 storage-perf 保持非阻断观察**。测试生成 SQLite / 文件样本，CI runner 运行同一合成场景；远端计时只反映 runner 上的测试耗时与波动，不代表生产流量或高频负载。当前 job 不阻断 PR，因此连续 5 次远端结果不是本轮完成条件；只有将来提议改为阻断门禁时，才先收集重复运行证据评估计时稳定性。
 - **R-04 本轮实施原生 pre-push hook**。用户于 2026-11-02 确认纳入本轮；不引入 hook 管理依赖。具体安装、跳过、命令编排、失败阻断和维护方式见 W8 与 CI 可靠性方案 §2.3。
 
 ### 不需要负责人决定（默认取舍）
@@ -147,7 +147,7 @@
   1. 阈值集中到一个常量模块（建议 `electron/runtime/storagePerfBudget.ts`），测试断言引用它；
   2. ci.yml 的 `storage-perf` 观察性 job 使用 macOS runner，步骤为依赖安装 → `npm run build:agent-provider-pi-ai` → `npm run test:storage-perf`；纯 Vitest node 环境，不启动 Electron，不涉及 INV-03 预热；超时预算参考实测 p95 加余量。显式构建不可省略：根 `pretest` 只由 `npm test` 触发，不由 `test:storage-perf` 触发；
   3. 每次运行上传耗时摘要 artifact（字段仅含用例名 / 耗时 / 结论，遵循 CI 可靠性方案 §4.4 的字段纪律）。
-- **本地验收记录（2026-11-02）**：预算常量化并由选定断言读取；storage-perf lane 10 个被选中测试实例全绿（77.38s），并发读写 30 个样本的候选 p95 为 2.38ms、主线程 History replay 为 0。红绿验证将 `apiShadowP95Ms` 暂设为 0，选定用例以 `candidate=12.32ms` 非零失败；恢复 50ms 后通过。CI job、JSON 汇总及只含用例名 / 耗时 / 结论的 14 天摘要 artifact 已实现；远端连续 5 次运行与 runner 时长证据仍待 CI。
+- **本地验收记录（2026-11-02）**：预算常量化并由选定断言读取；storage-perf lane 10 个被选中测试实例全绿。此前运行 77.38s，并发读写 30 个样本的候选 p95 为 2.38ms、主线程 History replay 为 0；本次复跑 84.77s，10 项通过、130 项按白名单跳过。红绿验证将 `apiShadowP95Ms` 暂设为 0，选定用例以 `candidate=12.32ms` 非零失败；恢复 50ms 后通过。CI job、JSON 汇总及只含用例名 / 耗时 / 结论的 14 天摘要 artifact 已实现。该 job 是非阻断观察；本地完整验证和 CI 配置检查足以完成实现验收，不要求连续远端运行。
 
 #### W6 probe CI 矩阵扩展
 
@@ -181,7 +181,7 @@
 | 阶段 | 交付 | 验收 |
 |---|---|---|
 | P1 | W0 六条关键操作端到端回归；W1 覆盖率脚本 + 基线文档；W2 共享工厂 + tempPaths + 4 处改造；W8 本地 pre-push 快速门禁 | **AC-8**：每次 PR 的必需测试 job 执行六条链路；六条反向故障注入均令相应断言失败并使命令非零。**AC-9**：pre-push hook 安装、手动执行、显式跳过与失败阻断行为可复核；不改变远端 required CI。**AC-1**：`npm run test:coverage` 一条命令产出合并报告，基线文档数字可复核。**AC-2**：8 处内联工厂迁移后 `test:renderer` 全绿；`tmpdir.*Date.now` 模式清零；重复跑 20 次无碰撞。 |
-| P2 | W3 SSE harness；W4 双组件快照；W5 storage-perf CI；W6 probe CI；W7 政策修订 | **AC-3**：harness ≥6 场景；claudeStreamHandlers 系 4 文件迁移后 `vi.mock('./anthropicClientFactory')` 清零（其余 17 处不动），清单在 PR 中。**AC-4**：快照红绿验证记录在案。**AC-5**：storage-perf job 连续 5 次绿；阈值常量化；预算收紧至低于已测值或注入可控延迟时命令非零退出，恢复预算后通过。**AC-6**：probe 两平台正常路径通过；丢投影与异常终态负例均令命令非零退出；active/投影/持久化/助手状态断言齐备；INV-03 屏障生效。**AC-7**：testing-guide 与三份配置文件逐项一致。 |
+| P2 | W3 SSE harness；W4 双组件快照；W5 storage-perf CI；W6 probe CI；W7 政策修订 | **AC-3**：harness ≥6 场景；claudeStreamHandlers 系 4 文件迁移后 `vi.mock('./anthropicClientFactory')` 清零（其余 17 处不动），清单在 PR 中。**AC-4**：快照红绿验证记录在案。**AC-5**：阈值常量化；性能用例通过，阈值压低或注入可控延迟时命令非零退出、恢复预算后通过；CI 观察 job 与脱敏摘要可运行且不进入 required 门禁。若未来改为 required，另行收集重复 runner 结果后评估。**AC-6**：probe 两平台正常路径通过；丢投影与异常终态负例均令命令非零退出；active/投影/持久化/助手状态断言齐备；INV-03 屏障生效。**AC-7**：testing-guide 与三份配置文件逐项一致。 |
 
 ### 当前实施状态与未完成验收
 
@@ -194,12 +194,12 @@
 | W2 / AC-2 测试基建 | 工厂与临时路径 helper 已提交；renderer/Electron suites、20 次重复、typecheck 与增量构建已通过 | 无已知剩余项 |
 | W3 / AC-3 流式 harness | 场景 harness 与目标测试迁移已提交，定向测试通过 | 无已知剩余项 |
 | W4 / AC-4 渲染快照 | 两组件快照及 red/green 验证已提交 | 无已知剩余项 |
-| W5 / AC-5 storage-perf | 本地红绿验证通过；CI 观察 job、阈值模块和脱敏摘要 artifact 已实现；R-03 对“是否阻断 PR”待决 | 收集连续 5 次远端 CI 结果与 job 时长，为 R-03 提供 runner 稳定性证据；没有以远端测试模拟生产流量 |
+| W5 / AC-5 storage-perf | 本地红绿验证通过；CI 观察 job、阈值模块和脱敏摘要 artifact 已实现；按当前范围保持非阻断，不作为 `CI / required` | 无实现项剩余；若将来提议改成 required，再以重复 runner 结果检查计时稳定性；远端 job 的日常观察不代表生产负载 |
 | W6 / AC-6 chat IPC probe | 本地正常路径、丢投影、异常终态三种路径均已验证；用户确认 macOS + Windows 先作为非阻断观察；CI 矩阵与初始化顺序静态门禁通过 | macOS + Windows 远端正常结果、初始化屏障失败时 probe 未启动的实际 CI 证据；观察 job 不进入 `CI / required` |
 | W7 / AC-7 测试政策 | guide 已按当前四个 Vitest project、CI lane、mock、snapshot、coverage 与 temp path 纪律修订并提交 | 无已知剩余项 |
 | W8 / AC-9 pre-push hook | `core.hooksPath=.githooks` 已在本仓安装；bare remote 集成测试证明 Git 会调用 hook、显式 skip 可过、检查失败会阻止 push；`npm run check:pre-push` 对 86 个变更路径通过，关联 Vitest 481 个文件通过、1 个跳过；checker 单测 5/5、集成测试 1/1 | 无已知本地剩余项；GitHub 远端 `test` job 尚未运行本次变更 |
 
-本轮本地验证命令：合并 `codex/session-runtime-ended-tool-timer` 后运行 `npm test`（1256 个测试文件通过、1 个跳过；12160 项通过、140 项跳过，用时 1106.70 秒）；`npm run verify:critical-user-flows`（构建 renderer / Electron 并运行六条真实 Electron 流程，`6/6` 通过）；`npm run test:critical-user-flows:negative`（六条注入故障均令对应链路失败并被验证器识别，`6/6`）；Node harness / verifier / pre-push 单测（14/14）；合并后恢复 / 投影 / 存储定向 Vitest（4 个文件、226 项通过、6 项跳过）；`npm run check:pre-push`（本地安装后的实际链路通过；481 个关联测试文件通过、1 个跳过；6146 项通过、137 项跳过）；`npm run typecheck:renderer`、`npm run i18n:check`、`npm run check:ci-required-coverage`、`npm run build:electron:incremental`，以及 W1/W5/W6 已记录的覆盖率、storage-perf 与 chat IPC probe 命令。远端验收尚未发生；禁止把已接入的 job 或本地结果表述成 CI 平台通过。
+本轮本地验证命令：合并 `codex/session-runtime-ended-tool-timer` 后运行 `npm test`（1256 个测试文件通过、1 个跳过；12160 项通过、140 项跳过，用时 1106.70 秒）；`npm run verify:critical-user-flows`（构建 renderer / Electron 并运行六条真实 Electron 流程，`6/6` 通过）；`npm run test:critical-user-flows:negative`（六条注入故障均令对应链路失败并被验证器识别，`6/6`）；Node harness / verifier / pre-push 单测（15/15）；合并后恢复 / 投影 / 存储定向 Vitest（4 个文件、226 项通过、6 项跳过）；`npm run check:pre-push`（本地安装后的实际链路通过；481 个关联测试文件通过、1 个跳过；6146 项通过、137 项跳过）；`npm run typecheck:renderer`、`npm run i18n:check`、`npm run check:ci-required-coverage`、`npm run build:electron:incremental`，以及 W1/W5/W6 已记录的覆盖率、storage-perf 与 chat IPC probe 命令。storage-perf job 保持非阻断观察，不以连续远端运行作为实现验收。W0 与 W6 的平台 CI 运行证据仍待远端执行；禁止把已接入的 job 或本地结果表述成 CI 平台通过。
 
 ## 4. 风险与已排除方案【机｜人工可跳过】
 
@@ -304,9 +304,9 @@ flowchart LR
 
 ### RP-6 待批准清单与自曝三处
 
-- **待决 / 待验收**：D-04、R-01、R-02、R-04 已由用户确认；R-03 是否让 storage-perf 阻断 PR 待决。W0 六条负向故障注入已本地 `6/6` 检出。外部验收仍包括 W0 远端 macOS 运行与 Windows 兼容性证据、W5 连续五次远端 runner 结果，以及 W6 两平台正常结果和初始化屏障负例；已接入的 job 尚不等于这些远端结果已通过。
+- **待决 / 待验收**：D-04、R-01、R-02、R-04 已由用户确认；R-03 按本方案继续保持非阻断观察，若要调整为 required 须另行决策。W0 六条负向故障注入已本地 `6/6` 检出。外部验收仍包括 W0 远端 macOS 运行与 Windows 兼容性证据，以及 W6 两平台正常结果和初始化屏障负例；storage-perf 的重复 runner 数据只在讨论升级为 required 时需要，合成测试不用于推断生产负载。
 - **弱点 1**：W6 probe 业务断言可能与实际终态语义不符；若真实 `turnRuntime`/SQLite 流程中 outcome 或助手状态定义不同，须以既有领域契约与测试证据修订，不能放宽为仅打印。
-- **弱点 2**：storage-perf 在 CI 的 p95 可能受 runner 波动影响；连续五次运行若不稳定，应基于摘要与本地复测重估预算或 runner，不得靠重试或放宽预算掩盖。
+- **弱点 2**：storage-perf 在 CI 的 p95 可能受 runner 波动影响；当前 job 不阻断 PR，摘要用于观察 runner 测试稳定性；若未来提议升级为 required，应先用重复结果评估预算，不得靠重试或放宽预算掩盖。
 - **弱点 3**：coverage 合并报告与新增测试工厂的 project include 可能遗漏文件；若复核命令与报告覆盖面不一致，修正配置/基线后再讨论阈值。
 
 ## 6. 追溯关系【机｜人工可跳过】
@@ -314,7 +314,7 @@ flowchart LR
 | 项 | 关联项 |
 |---|---|
 | R-01 | W1、AC-1；§4 首行排除项；用户确认先只测量、建立基线后再决定门槛 |
-| R-02 / R-03 | W6 / W5；AC-6 / AC-5；R-02 确认为两平台非阻断观察，R-03 待决 |
+| R-02 / R-03 | W6 / W5；AC-6 / AC-5；R-02 确认为两平台非阻断观察；R-03 维持非阻断观察，升级门禁需重新决策 |
 | INV-03（CI 可靠性方案） | W6 job 步骤、AC-6 |
 | INV-04（CI 可靠性方案） | W2 tempPaths 约定、AC-2 |
 | R-04 | W8 / AC-9；用户批准本轮实施本地 hook；职责与远端门禁边界见 CI 可靠性方案 §2.3 |
@@ -400,4 +400,4 @@ grep -rn "vi\.mock('@anthropic-ai/sdk'" electron/ --include="*.test.ts"   # 仅�
 
 ### 编写边界
 
-本文记录方案、实施与验收状态。W0–W8 已在本分支完成本地实现和 TDD 验证；合并 `codex/session-runtime-ended-tool-timer` 后全量 `npm test` 通过。R-01（覆盖率先测量）、R-02（macOS / Windows IPC probe 非阻断观察）、R-04（本轮加入 pre-push hook）已按用户决定实施。R-03（storage-perf 是否阻断 PR）仍待决定；远端 CI 证据需推送后取得，因此本计划保持实施中，不能标记全部完成。
+本文记录方案、实施与验收状态。W0–W8 已在本分支完成本地实现和 TDD 验证；合并 `codex/session-runtime-ended-tool-timer` 后全量 `npm test` 通过。R-01（覆盖率先测量）、R-02（macOS / Windows IPC probe 非阻断观察）、R-04（本轮加入 pre-push hook）已按用户决定实施；R-03 依当前范围维持 storage-perf 非阻断观察，不要求远端重复运行作为完成条件。W0 与 W6 的远端平台 CI 证据仍须在远端工作流实际运行后补记，因此计划仍处实施中。
