@@ -24,8 +24,16 @@ export type SessionTranscriptProjectionRead =
 type RetryHistoryRow = { assistantMessageId: string; kind: string; payloadJson: string; createdAt: number }
 /** Reattach authoritative terminal tool records from History on every chat-page read path, including prepared caches. */
 export function attachRecoveredToolCallsToChatPage(db: AppDatabase, page: ChatMessagePage): ChatMessagePage {
-  const terminalEntries = page.entries.filter(({ message }) => message.role === 'assistant' &&
-    (message.status === 'completed' || message.status === 'cancelled' || message.status === 'failed'))
+  const terminalEntries = page.entries.filter(({ message }) => {
+    if (message.role !== 'assistant') return false
+    if (message.status === 'cancelled' || message.status === 'failed') return true
+    // Completed turns only need a History read when the persisted card is visibly stale.
+    // readRecoverableToolCallsForSession synchronously scans and hydrates the full event stream,
+    // so rereading it for every already-complete card can block the Electron main thread on page load.
+    return message.status === 'completed' && message.toolCalls?.some((call) =>
+      call.status === 'calling' || call.status === 'confirming' || call.status === 'executing' ||
+      (call.status === 'completed' && call.result === undefined)) === true
+  })
   if (terminalEntries.length === 0) return page
   const conn = getDbConnection(db)
   const ids = terminalEntries.map(({ message }) => message.id)

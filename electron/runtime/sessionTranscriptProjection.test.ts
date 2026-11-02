@@ -102,6 +102,26 @@ describe('interrupted turn step display reconstruction', () => {
     db.close()
   })
 
+  it('does not synchronously reread History for an already complete tool card', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'complete tool card avoids history scan', model: 'test' })
+    appendMessage(db, { id: 'complete-card-user', sessionId: session.id, role: 'user', content: 'run tool', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'complete-card-assistant', sessionId: session.id, role: 'assistant', content: 'done', timestamp: 2, status: 'completed', toolCalls: [
+      { id: 'complete-card-tool', toolName: 'read_file', input: { path: 'README.md' }, status: 'completed', result: { success: true, data: 'done' } }
+    ] })
+    createPersistedTurn(db, { turnId: 'complete-card-turn', requestId: 'complete-card-request', sessionId: session.id,
+      userMessageId: 'complete-card-user', assistantMessageId: 'complete-card-assistant', state: 'terminal', outcome: 'completed' })
+    const readHistory = vi.spyOn(SqliteAgentHistory.prototype, 'readRecoverableToolCallsForSession')
+
+    try {
+      getProjectedChatMessagePage(db, session.id, null, 20)
+      expect(readHistory).not.toHaveBeenCalled()
+    } finally {
+      readHistory.mockRestore()
+      db.close()
+    }
+  })
+
   it('hydrates spilled tool output before rebuilding an interrupted chat card', async () => {
     const temp = createTempDatabase('interrupted-tool-spill-')
     const db = temp.db
