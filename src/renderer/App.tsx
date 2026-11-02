@@ -13,7 +13,7 @@ import { startInvalidationService } from './services/invalidationService'
 import { DetailPanelProvider, useDetailPanel } from './components/DetailPanel/DetailPanelContext'
 import { createLazyDetailPanel } from './components/DetailPanel/lazyDetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
-import { initTurnProjectionBridge } from './services/turnProjectionService'
+import { initTurnProjectionBridge, reconcileRendererRunningSessions } from './services/turnProjectionService'
 import { initTurnDisplayBridge } from './services/turnDisplayStore'
 import { turnDisplayReconciliation } from './services/turnDisplayReconciliation'
 import { initRemoteSessionSwitchBridge } from './services/remoteSessionSwitchService'
@@ -234,10 +234,14 @@ function AppShellInner() {
     })
     const offTurnProjection = initTurnProjectionBridge()
     const offTurnDisplay = initTurnDisplayBridge()
-    void turnDisplayReconciliation.reconcile().catch(() => {})
-    const onFocus = () => { void turnDisplayReconciliation.reconcile().catch(() => {}) }
+    const reconcileTurnState = () => {
+      void turnDisplayReconciliation.reconcile().catch(() => {})
+      void reconcileRendererRunningSessions().catch(() => {})
+    }
+    reconcileTurnState()
+    const onFocus = () => reconcileTurnState()
     window.addEventListener('focus', onFocus)
-    const recoveryTimer = window.setInterval(() => { void turnDisplayReconciliation.reconcile().catch(() => {}) }, 5000)
+    const recoveryTimer = window.setInterval(reconcileTurnState, 5000)
     const offRemoteSessionSwitch = initRemoteSessionSwitchBridge()
     const offNotificationNavigate = window.api.onNotificationNavigateSession((payload) => {
       void navigateToPendingConfirmation(payload).catch(() => {})

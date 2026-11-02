@@ -6,7 +6,7 @@ import { ChatMessageList } from './ChatMessageList'
 import type { PendingConfirmItem } from '../../services/pendingConfirmStore'
 import { completedAssistantMessage, streamingAssistantMessage } from './testUtils/chatMessageFixtures'
 import { toTurnDisplay } from '../../../shared/turnDisplayProtocol'
-import { useTurnDisplay } from '../../hooks/useTurnDisplay'
+import { useTurnDisplay, useTurnDisplays } from '../../hooks/useTurnDisplay'
 import type { AssistantActivityItem } from '../../../shared/assistantActivityTimeline'
 import { resolveMessageToolsInteractive } from '../../services/resolveMessageToolsInteractive'
 
@@ -34,10 +34,12 @@ vi.mock('./ChatBubble', () => ({
 }))
 
 vi.mock('../../hooks/useTurnDisplay', () => ({
-  useTurnDisplay: vi.fn()
+  useTurnDisplay: vi.fn(),
+  useTurnDisplays: vi.fn(() => [])
 }))
 
 const mockedUseTurnDisplay = vi.mocked(useTurnDisplay)
+const mockedUseTurnDisplays = vi.mocked(useTurnDisplays)
 
 function makeItem(overrides: Partial<PendingConfirmItem>): PendingConfirmItem {
   return {
@@ -82,6 +84,8 @@ describe('ChatMessageList confirmationReadyByToolId stability', () => {
     bubblePropsLog.length = 0
     mockedUseTurnDisplay.mockReset()
     mockedUseTurnDisplay.mockReturnValue(undefined)
+    mockedUseTurnDisplays.mockReset()
+    mockedUseTurnDisplays.mockReturnValue([])
   })
 
   it('同一 pendingConfirmItems 引用下重渲染，行内收到的 confirmationReadyByToolId 引用不变', () => {
@@ -204,6 +208,114 @@ describe('ChatMessageList confirmationReadyByToolId stability', () => {
 
     expect(lastBubbleProps().message.toolCalls?.[0]?.status).toBe('failed')
     expect(lastBubbleProps().toolsInteractive).toBeUndefined()
+  })
+
+  it('中断终态期间在已取消的消息上继续展示已执行步骤', () => {
+    const message = { ...streamingAssistantMessage({ id: 'm-cancelled-step', toolCalls: [] }), status: 'cancelled' as const }
+    const display = toTurnDisplay({
+      // Reproduce the handoff gap: persisted message is cancelled before turn display becomes terminal.
+      turnId: 'turn-cancelled-step', requestId: 'request-cancelled-step', version: 4, lifecycle: 'streaming', outcome: 'cancelled',
+      message: {
+        ...streamingAssistantMessage({ id: 'm-cancelled-step', content: '[no content]' }),
+        toolCalls: [
+          { id: 'done-step', toolName: 'read_file', input: { path: 'README.md' }, status: 'completed', riskLevel: 'low', result: { success: true, data: 'read ok' } },
+          { id: 'active-step', toolName: 'grep', input: { pattern: 'TODO' }, status: 'executing', riskLevel: 'low' }
+        ]
+      }
+    })
+    mockedUseTurnDisplay.mockReturnValue(display)
+
+    render(
+      <ChatMessageList
+        messages={[message]}
+        turnId="turn-cancelled-step"
+        confirmationReadyBySession={{}}
+        pendingConfirmItems={[]}
+        actions={undefined}
+        resolveToolsInteractive={() => undefined}
+        showArchiveToWiki={() => false}
+        canRetry={() => false}
+        canCancelQueued={() => false}
+      />
+    )
+
+    expect(lastBubbleProps().message.toolCalls?.map(({ id, status, interrupted }) => ({ id, status, interrupted }))).toEqual([
+      { id: 'done-step', status: 'completed', interrupted: undefined },
+      { id: 'active-step', status: 'failed', interrupted: true }
+    ])
+    expect(lastBubbleProps().message.content).toBe('')
+  })
+
+  it('canonical 已有工具调用时不让空的 turn-display activity 覆盖消息时间线', () => {
+    const message = {
+      ...streamingAssistantMessage({
+        id: 'm-cancelled-canonical-tool',
+        toolCalls: [{ id: 'persisted-tool', toolName: 'run_shell', input: { command: 'sleep 30' }, status: 'failed', riskLevel: 'high' }]
+      }),
+      status: 'cancelled' as const
+    }
+    mockedUseTurnDisplay.mockReturnValue(toTurnDisplay({
+      turnId: 'turn-cancelled-canonical-tool', requestId: 'request-cancelled-canonical-tool', version: 4,
+      lifecycle: 'failed', message: streamingAssistantMessage({ id: message.id, toolCalls: [
+        { id: 'completed-display-tool', toolName: 'read_file', input: { path: 'README.md' }, status: 'completed', riskLevel: 'low', result: { success: true, data: 'read ok' } },
+        { id: 'persisted-tool', toolName: 'run_shell', input: { command: 'sleep 30' }, status: 'executing', riskLevel: 'high' }
+      ] })
+    }))
+
+    render(
+      <ChatMessageList
+        messages={[message]}
+        turnId="turn-cancelled-canonical-tool"
+        confirmationReadyBySession={{}}
+        pendingConfirmItems={[]}
+        actions={undefined}
+        resolveToolsInteractive={() => undefined}
+        showArchiveToWiki={() => false}
+        canRetry={() => false}
+        canCancelQueued={() => false}
+      />
+    )
+
+    expect(lastBubbleProps().message.toolCalls?.map(({ id }) => id)).toEqual(['persisted-tool', 'completed-display-tool'])
+    expect(lastBubbleProps().message.toolCalls?.find(({ id }) => id === 'completed-display-tool')).toMatchObject({
+      input: { path: 'README.md' }, status: 'completed'
+    })
+    expect(lastBubbleProps().displayActivity).toContainEqual({ kind: 'tool', toolId: 'persisted-tool' })
+  })
+
+  it('中止先清除 runningSessions 时仍按 assistant message id 显示已执行步骤', () => {
+    const assistantId = 'm-aborted-before-checkpoint'
+    const message = {
+      ...streamingAssistantMessage({ id: assistantId, toolCalls: [] }),
+      status: 'cancelled' as const
+    }
+    const display = toTurnDisplay({
+      turnId: 'turn-aborted-before-checkpoint', requestId: 'request-aborted-before-checkpoint', version: 9,
+      lifecycle: 'failed', outcome: 'cancelled',
+      message: streamingAssistantMessage({
+        id: assistantId,
+        toolCalls: [{ id: 'running-shell', toolName: 'run_shell', input: { command: 'sleep 30' }, status: 'executing', riskLevel: 'high' }]
+      })
+    })
+    mockedUseTurnDisplays.mockReturnValue([display])
+
+    render(
+      <ChatMessageList
+        messages={[message]}
+        confirmationReadyBySession={{}}
+        pendingConfirmItems={[]}
+        actions={undefined}
+        resolveToolsInteractive={() => undefined}
+        showArchiveToWiki={() => false}
+        canRetry={() => false}
+        canCancelQueued={() => false}
+      />
+    )
+
+    expect(lastBubbleProps().message.toolCalls?.map(({ id, status, interrupted }) => ({ id, status, interrupted }))).toEqual([
+      { id: 'running-shell', status: 'failed', interrupted: true }
+    ])
+    expect(lastBubbleProps().displayActivity).toContainEqual({ kind: 'tool', toolId: 'running-shell' })
   })
 
   it('bounded display 更新已有工具记录时保留审批 Agent 标记', () => {

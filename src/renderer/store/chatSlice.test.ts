@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import chatReducer, { addMessage, removeMessage, setChatStatus, setSession, setDisplayPage, removeRunningSession, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId, setContextProjection } from './chatSlice'
+import chatReducer, { addMessage, removeMessage, setChatStatus, setSession, setDisplayPage, removeRunningSession, reconcileRunningSessions, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId, setContextProjection } from './chatSlice'
 import { setTurnFailure, mergeTurnFailures } from './chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
@@ -37,6 +37,42 @@ describe('chatSlice', () => {
       setChatStatus({ status: 'streaming', requestId: 'req-1', sessionId: 's1', turnId: 'turn-1' })
     )
     expect(state.runningSessions['s1']?.turnId).toBe('turn-1')
+  })
+
+  it('终态按 requestId 清除旧格式或 turnId 不一致的同一请求，不清除更新请求', () => {
+    let state = chatReducer(undefined, setChatStatus({ status: 'streaming', requestId: 'req-old', sessionId: 's1', turnId: 'stale-turn' }))
+
+    state = chatReducer(state, setChatStatus({ status: 'completed', requestId: 'req-old', sessionId: 's1', turnId: 'terminal-turn' }))
+    expect(state.runningSessions['s1']).toBeUndefined()
+
+    state = chatReducer(state, setChatStatus({ status: 'streaming', requestId: 'req-new', sessionId: 's1', turnId: 'new-turn' }))
+    state = chatReducer(state, setChatStatus({ status: 'completed', requestId: 'req-old', sessionId: 's1', turnId: 'terminal-turn' }))
+    expect(state.runningSessions['s1']).toMatchObject({ requestId: 'req-new', turnId: 'new-turn' })
+  })
+
+  it('按主进程活动 turn 快照清理孤儿运行态，并保留活动会话状态', () => {
+    let state = chatReducer(undefined, setChatStatus({ status: 'streaming', requestId: 'stale-request', sessionId: 's1', turnId: 'stale-turn' }))
+    state = chatReducer(state, setChatStatus({ status: 'streaming', requestId: 'active-request', sessionId: 's2', turnId: 'active-turn' }))
+
+    state = chatReducer(state, reconcileRunningSessions({
+      activeTurns: [{ sessionId: 's2', requestId: 'active-request', turnId: 'active-turn' }],
+      observedRunning: [
+        { sessionId: 's1', requestId: 'stale-request', turnId: 'stale-turn' },
+        { sessionId: 's2', requestId: 'active-request', turnId: 'active-turn' }
+      ]
+    }))
+
+    expect(state.runningSessions).toEqual({ s2: expect.objectContaining({ requestId: 'active-request', turnId: 'active-turn' }) })
+    expect(state.chatStatus).toBe('streaming')
+  })
+
+  it('对账请求期间开始的新请求不会被旧活动快照清掉', () => {
+    let state = chatReducer(undefined, setChatStatus({ status: 'streaming', requestId: 'new-request', sessionId: 's1', turnId: 'new-turn' }))
+    state = chatReducer(state, reconcileRunningSessions({
+      activeTurns: [],
+      observedRunning: [{ sessionId: 's1', requestId: 'old-request', turnId: 'old-turn' }]
+    }))
+    expect(state.runningSessions['s1']).toMatchObject({ requestId: 'new-request', turnId: 'new-turn' })
   })
 
   it('supports multiple concurrent running sessions', () => {

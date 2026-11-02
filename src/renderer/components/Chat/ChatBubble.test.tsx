@@ -221,6 +221,21 @@ describe('ChatBubble streaming render', () => {
     expect(screen.getByText(/会话模型「claude-sonnet-4-20250514」当前不可用/)).toBeDefined()
   })
 
+  it('transcript reconciliation required 时不展示无法执行的重试操作', () => {
+    render(
+      <ChatBubble
+        message={assistantMessage({ status: 'failed' })}
+        failureReason="SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED"
+        actions={{ archiveToWiki: vi.fn(), retryAssistant: vi.fn(), continueAssistant: vi.fn(), cancelQueued: vi.fn(), confirmTool: vi.fn(), cancelTool: vi.fn() }}
+        showRetry
+      />
+    )
+
+    expect(screen.queryByRole('button', { name: '继续上次执行' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '从头重试' })).toBeNull()
+    expect(screen.getByText('会话记录暂时无法安全恢复。请新建会话继续；此会话仍可查看。')).toBeDefined()
+  })
+
   it('保留很长且没有空格的失败原因，交给失败区换行显示', () => {
     const longReason = '路径'.repeat(2048)
     render(<ChatBubble message={assistantMessage({ status: 'failed' })} failureReason={longReason} />)

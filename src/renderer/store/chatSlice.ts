@@ -227,13 +227,36 @@ export const chatSlice = createSlice({
       const terminal = status === 'completed' || status === 'error' || status === 'idle'
       if (terminal && sessionId) {
         const running = state.runningSessions[sessionId]
-        if (!turnId || !running || (running.turnId === turnId && (!requestId || running.requestId === requestId))) delete state.runningSessions[sessionId]
+        const sameTurn = !turnId || !running || running.turnId === turnId
+        const sameRequest = !requestId || !running || running.requestId === requestId
+        // requestId 是 turnId 尚未写入/旧格式运行态的兼容身份；有新 requestId 时仍保护新一轮。
+        if (!running || (sameRequest && (sameTurn || Boolean(requestId)))) delete state.runningSessions[sessionId]
       } else if (terminal && !sessionId && requestId === null) {
         state.runningSessions = {}
       }
     },
     removeRunningSession(state, action: PayloadAction<string>) {
       delete state.runningSessions[action.payload]
+    },
+    reconcileRunningSessions(state, action: PayloadAction<{
+      activeTurns: Array<{ sessionId: string; requestId: string; turnId: string }>
+      observedRunning: Array<{ sessionId: string; requestId: string; turnId?: string }>
+    }>) {
+      const activeBySession = new Map<string, Array<{ requestId: string; turnId: string }>>()
+      for (const { sessionId, requestId, turnId } of action.payload.activeTurns) {
+        const active = activeBySession.get(sessionId) ?? []
+        active.push({ requestId, turnId })
+        activeBySession.set(sessionId, active)
+      }
+      const observedBySession = new Map(action.payload.observedRunning.map((running) => [running.sessionId, running]))
+      for (const [sessionId, running] of Object.entries(state.runningSessions)) {
+        const observed = observedBySession.get(sessionId)
+        // 异步快照返回前若 renderer 已开始新请求，不用旧快照清掉新状态。
+        if (!observed || observed.requestId !== running.requestId || observed.turnId !== running.turnId) continue
+        const active = activeBySession.get(sessionId) ?? []
+        const stillActive = active.some((turn) => turn.requestId === running.requestId || Boolean(running.turnId && turn.turnId === running.turnId))
+        if (!stillActive) delete state.runningSessions[sessionId]
+      }
     },
     setTurnFailure(
       state,
@@ -298,6 +321,7 @@ export const {
   setConfirmFocusToolUseId,
   setScrollToMessageId,
   removeRunningSession,
+  reconcileRunningSessions,
   resetChatUi,
   setLastUsage,
   restoreLastUsage,
