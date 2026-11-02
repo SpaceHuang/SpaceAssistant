@@ -321,6 +321,17 @@ async function runSettings(win) {
   await waitFor('models tab selected', () => execute(win, `Boolean([...document.querySelectorAll('button')].find((node) => node.innerText.trim() === '大模型服务' && node.getAttribute('aria-current') === 'page'))`))
   await clickButton(win, '通用')
   stage('settings-general-restored')
+  if (process.env.CRITICAL_USER_FLOW_FAULT === FLOW) {
+    console.log(`CRITICAL_FLOW_FAULT_INJECTED ${JSON.stringify({ flow: FLOW })}`)
+    const injected = await execute(win, `(() => {
+      const item = [...document.querySelectorAll('.ant-form-item')].find((node) => node.innerText.includes('并行会话上限'))
+      const input = item?.querySelector('input')
+      if (!input) return false
+      input.remove()
+      return true
+    })()`)
+    assert(injected, 'settings control could not be removed for the lost-value fault injection')
+  }
   await waitFor('general tab restored with entered value', () => execute(win, `(() => { const item=[...document.querySelectorAll('.ant-form-item')].find((node)=>node.innerText.includes('并行会话上限')); return item?.querySelector('input')?.value === '4' })()`))
   const saveDispatch = execute(win, `(() => { const button=[...document.querySelectorAll('button')].find((node)=>(node.getAttribute('aria-label')||node.innerText.trim())==='保存并返回'); if(!button || button.disabled) return false; button.click(); return true })()`).catch(() => 'page-transition')
   const dispatched = await Promise.race([saveDispatch, delay(300).then(() => 'page-transition')])

@@ -32,6 +32,8 @@ jobs:
         run: npm run check:ci-required-coverage
       - name: Test required CI coverage checker
         run: node --test scripts/check-ci-required-coverage.test.mjs scripts/check-ci-required-results.test.mjs scripts/summarize-vitest-report.test.mjs scripts/ci-failure-review.test.mjs
+      - name: Test local pre-push and critical-flow harnesses
+        run: node --test scripts/check-pre-push.test.cjs scripts/pre-push-hook.integration.test.cjs scripts/run-critical-user-flows.test.cjs scripts/verify-critical-user-flow-faults.test.cjs
       - name: Summarize recorded CI failure reviews
         run: npm run check:ci-failure-review
       - run: npm run i18n:generate-types

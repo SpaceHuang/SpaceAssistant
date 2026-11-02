@@ -109,12 +109,14 @@ function createFakeAnthropicServer(certRoot) {
       return
     }
     const flow = activeFlow
+    const injectFault = process.env.CRITICAL_USER_FLOW_FAULT === flow
+    if (injectFault) console.log(`CRITICAL_FLOW_FAULT_INJECTED ${JSON.stringify({ flow })}`)
     requests.push({ flow, body })
     console.log(`CRITICAL_MODEL_REQUEST ${JSON.stringify({ flow, request: requests.length, messageCount: body.messages?.length, toolCount: body.tools?.length || 0 })}`)
     const hasTools = Array.isArray(body.tools) && body.tools.length > 0
     if (hasTools) actualRequestsByFlow.set(flow, (actualRequestsByFlow.get(flow) || 0) + 1)
-    if (flow === 'tool-roundtrip' && JSON.stringify(body.messages).includes('critical-flow-tool-fixture')) toolResultSeenByFlow.set(flow, true)
-    if (flow === 'restart-recovery' && JSON.stringify(body.messages).includes('critical-flow-interrupt-before-restart')) restartContextSeenByFlow.set(flow, true)
+    if (flow === 'tool-roundtrip' && !injectFault && JSON.stringify(body.messages).includes('critical-flow-tool-fixture')) toolResultSeenByFlow.set(flow, true)
+    if (flow === 'restart-recovery' && !injectFault && JSON.stringify(body.messages).includes('critical-flow-interrupt-before-restart')) restartContextSeenByFlow.set(flow, true)
     const priorTurnRequests = requests.slice(0, -1).filter((item) => item.flow === flow && Array.isArray(item.body.tools) && item.body.tools.length > 0).length
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
     const send = (event, data) => response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
@@ -191,9 +193,12 @@ function createFakeAnthropicServer(certRoot) {
     } else {
       output = `固定模型回复 ${index + 1}`
     }
+    if (injectFault && flow === 'new-session' && hasTools) output = '故障注入：新会话回复内容丢失'
+    if (injectFault && flow === 'continue-session' && hasTools && priorTurnRequests === 1) output = '故障注入：续聊历史校验失败'
     const actualTurn = hasTools
-    const timer = setTimeout(() => finish(output), flow === 'cancel-stale-response' && actualTurn ? 5000 : 40)
-    console.log(`CRITICAL_MODEL_RESPONSE_SCHEDULED ${JSON.stringify({ flow, request: requests.length, actualTurn, delayMs: flow === 'cancel-stale-response' && actualTurn ? 5000 : 40 })}`)
+    const delayMs = flow === 'cancel-stale-response' && actualTurn && !injectFault ? 5000 : 40
+    const timer = setTimeout(() => finish(output), delayMs)
+    console.log(`CRITICAL_MODEL_RESPONSE_SCHEDULED ${JSON.stringify({ flow, request: requests.length, actualTurn, delayMs })}`)
     timer.unref()
     pending.add(response)
     response.once('close', () => {
