@@ -26,6 +26,21 @@ function storage(): TurnStorage {
 }
 
 describe('TurnRuntime', () => {
+  it('持久化受理后立即发布运行态快照，且不伪造一条 assistant fact', () => {
+    const events: Array<{ version: number; type: string; status: string }> = []
+    const runtime = new TurnRuntime({
+      storage: storage(),
+      deps: { now: () => 1, id: () => 'accepted-turn' },
+      onEvent: (turn, event) => events.push({ version: turn.version, type: event.type, status: turn.assistantMessage.status })
+    })
+    const turn = runtime.prepare({ mode: 'create-user', requestId: 'accepted-request', sessionId: 's1', input: { text: 'hi' }, config: {} }, 'configuring')
+
+    runtime.publishStarted(turn)
+
+    expect(events).toEqual([{ version: 0, type: 'turn-started', status: 'streaming' }])
+    expect(runtime.getTurn(turn.turnId)?.version).toBe(0)
+  })
+
   it('consumes sequence numbers for ignored finishing facts so late tool results remain attachable', async () => {
     vi.useFakeTimers()
     const runtime = new TurnRuntime({ storage: storage(), deps: { now: () => 1, id: () => 'turn' } })
