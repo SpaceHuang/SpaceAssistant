@@ -24,25 +24,43 @@ export type SessionTranscriptProjectionRead =
 type RetryHistoryRow = { assistantMessageId: string; kind: string; payloadJson: string; createdAt: number }
 /** Reattach authoritative terminal tool records from History on every chat-page read path, including prepared caches. */
 export function attachRecoveredToolCallsToChatPage(db: AppDatabase, page: ChatMessagePage): ChatMessagePage {
-  const terminalEntries = page.entries.filter(({ message }) => {
-    if (message.role !== 'assistant') return false
-    if (message.status === 'cancelled' || message.status === 'failed') return true
-    // Completed turns only need a History read when the persisted card is visibly stale.
-    // readRecoverableToolCallsForSession synchronously scans and hydrates the full event stream,
-    // so rereading it for every already-complete card can block the Electron main thread on page load.
-    return message.status === 'completed' && message.toolCalls?.some((call) =>
-      call.status === 'calling' || call.status === 'confirming' || call.status === 'executing' ||
-      (call.status === 'completed' && call.result === undefined)) === true
-  })
+  const terminalEntries = page.entries.filter(({ message }) => message.role === 'assistant' &&
+    (message.status === 'completed' || message.status === 'cancelled' || message.status === 'failed'))
   if (terminalEntries.length === 0) return page
   const conn = getDbConnection(db)
   const ids = terminalEntries.map(({ message }) => message.id)
   const turns = conn.prepare(`SELECT assistant_message_id AS assistantMessageId,turn_id AS turnId,request_id AS requestId
     FROM turns WHERE session_id=? AND assistant_message_id IN (${ids.map(() => '?').join(',')})`).all(
       terminalEntries[0]!.message.sessionId, ...ids) as Array<{ assistantMessageId: string; turnId: string; requestId: string }>
+  const entriesById = new Map(terminalEntries.map(({ message }) => [message.id, message]))
+  const candidates = new Set(turns.filter((turn) => {
+    const message = entriesById.get(turn.assistantMessageId)
+    if (!message || message.status === 'cancelled' || message.status === 'failed') return true
+    // The terminal SDK mirror can mark the assistant complete without copying tool_calls.
+    // Compare lightweight tool-call IDs from History before deciding whether to scan and hydrate
+    // the full event stream. Empty and partial cards are not proof of a complete projection.
+    if (message.toolCalls?.some((call) =>
+      call.status === 'calling' || call.status === 'confirming' || call.status === 'executing' ||
+      (call.status === 'completed' && call.result === undefined)) === true) return true
+    const historyInvocationIds = turn.requestId === turn.turnId ? [turn.turnId] : [turn.turnId, turn.requestId]
+    let historyToolCallIds: string[]
+    try {
+      historyToolCallIds = conn.prepare(`SELECT DISTINCT json_extract(tool.value,'$.id') AS toolCallId
+        FROM agent_history_events event, json_each(event.payload_json,'$.message.toolCalls') tool
+        WHERE (event.session_id=? OR event.session_id IS NULL) AND event.invocation_id IN (${historyInvocationIds.map(() => '?').join(',')})
+          AND event.kind='model-response-committed' AND json_type(tool.value,'$.id')='text'`).all(
+        message.sessionId, ...historyInvocationIds).map((row) => (row as { toolCallId: string }).toolCallId)
+    } catch {
+      // If the lightweight probe cannot safely interpret a legacy/malformed event, prefer recovery.
+      return true
+    }
+    const persistedIds = new Set((message.toolCalls ?? []).map((call) => call.id))
+    return historyToolCallIds.some((toolCallId) => !persistedIds.has(toolCallId))
+  }).map((turn) => turn.assistantMessageId))
+  if (candidates.size === 0) return page
   const history = new SqliteAgentHistory(conn, 1, Date.now, terminalEntries[0]!.message.sessionId)
   const recovered = new Map<string, ToolCallRecord[]>()
-  for (const turn of turns) {
+  for (const turn of turns.filter(({ assistantMessageId }) => candidates.has(assistantMessageId))) {
     const calls = history.readRecoverableToolCallsForSession(turn.turnId, terminalEntries[0]!.message.sessionId, turn.turnId) ??
       (turn.requestId !== turn.turnId
         ? history.readRecoverableToolCallsForSession(turn.requestId, terminalEntries[0]!.message.sessionId, turn.turnId)

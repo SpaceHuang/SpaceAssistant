@@ -64,6 +64,23 @@ describe('turn projection bridge', () => {
     off()
   })
 
+  it('接受 turn-started 显示快照后立即标记会话运行中', () => {
+    let listener: ((data: any) => void) | undefined
+    vi.stubGlobal('window', { api: { chatOnTurnDisplay: vi.fn((cb) => { listener = cb; return () => undefined }) } })
+    const off = initTurnProjectionBridge()
+
+    listener?.({ display: {
+      turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: 's1', version: 0,
+      lifecycle: 'running',
+      message: { id: 'accepted-assistant', content: '', contentSegments: [], toolCalls: [], activity: [] }
+    } })
+
+    expect(dispatch).toHaveBeenCalledWith(setChatStatus({
+      status: 'streaming', requestId: 'accepted-request', sessionId: 's1', turnId: 'accepted-turn'
+    }))
+    off()
+  })
+
   it.each(['commit-uncertain', 'interrupted'] as const)('%s terminal settles the existing chat state as an error with its cause', async (outcome) => {
     let listener: ((data: any) => void) | undefined
     vi.stubGlobal('window', {
