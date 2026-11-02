@@ -53,6 +53,28 @@ const trustedTodo = {
 }
 
 describe('压缩换入后复用 store 跨 reopen（闭包连接现取化回归）', () => {
+  it('does not recover a newly accepted in-memory turn while Hosted execution is acquiring its first owner', () => {
+    const { db, cleanup } = createTempDatabase('target-recovery-preserves-live-turn-')
+    try {
+      const session = createSession(db, { name: 'live turn recovery fence', model: 'test' })
+      const execution = createSessionExecutionStore(db)
+      const runtime = createTurnRuntimeForSessionExecution(execution, { deps: { now: () => 1, id: (() => { let id = 0; return () => `live-turn-${++id}` })() } })
+      const started = runtime.prepare({ mode: 'create-user', requestId: 'live-turn-request', sessionId: session.id,
+        input: { text: 'send before first hosted owner claim' }, config: {} })
+
+      const recovery = execution.recoverExecutionTarget(session.id)
+
+      expect(recovery.status).toBe('active-owner')
+      expect(runtime.terminal(started.turnId)).toBeUndefined()
+      expect(getDbConnection(db).prepare('SELECT state,outcome FROM turns WHERE turn_id=?').get(started.turnId))
+        .toEqual({ state: 'prepared', outcome: null })
+      expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(started.assistantMessage.id))
+        .toEqual({ status: 'streaming' })
+    } finally {
+      cleanup()
+    }
+  })
+
   it('target recovery rebuilds committed tool results from History after a result checkpoint was omitted', async () => {
     const { db, cleanup } = createTempDatabase('target-tool-recovery-history-')
     try {

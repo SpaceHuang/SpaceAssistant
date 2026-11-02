@@ -177,6 +177,13 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
         return { status: 'active-owner', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }
       }
       const turnRuntime = turnRuntimeByExecution.get(execution)
+      // Hosted execution asks for stale-target recovery while it is acquiring the
+      // first session owner. A turn accepted in this process is already live even
+      // though that owner has not yet been registered; recovering it here would
+      // finalize the request before its provider can run.
+      if (turnRuntime?.listActive(sessionId).length) {
+        return { status: 'active-owner', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }
+      }
       if (turnRuntime) turnRuntime.recoverSession(sessionId)
       else cleanupStreamingResiduesForSession(db, sessionId)
       const recovered = transcriptRecovery.recoverTarget(sessionId)
