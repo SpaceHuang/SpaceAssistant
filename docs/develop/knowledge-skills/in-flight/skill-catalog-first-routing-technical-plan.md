@@ -1,13 +1,13 @@
 # Skill 目录优先与按需加载技术方案
 
-> 状态：草稿（未实施）｜核验：基线 `codex/session-runtime-ended-tool-timer` `9ad6631e`（2026-11-03）；专属符号命中 `buildSkillCatalogSection`、`skillsReadTool`、`skillManager.route`；本地 Codex 参考仓库 `/Volumes/MacHub/Hub-Develop/codex` 基线 `c0e88f3c04`。
+> 状态：草稿（未实施）｜方案复审修订：待复审｜核验：实现分支基线 `codex/session-runtime-ended-tool-timer` `9ad6631e`（2026-11-03）；主线评审代码基线 `ebe299f5`；专属符号命中 `buildSkillCatalogSection`、`skillsReadTool`、`skillManager.route`；本地 Codex 参考仓库 `/Volumes/MacHub/Hub-Develop/codex` 基线 `c0e88f3c04`。
 > 篇内路由：决策人读第 0 层；评审读第 0–1 层与 RP-2~RP-6；实现者读第 2 层及附录。
 
 ## 第 0 层 决策界面【人必读】
 
 **一句话：** 现在每条消息会先等一个专门的技能推荐请求，再开始主要工作；目标是让主要模型先看到可用技能目录，只在任务确实需要时读取技能正文。
 
-**只有 3 分钟的话：** 看 D-01、目标链路、权限不变量和 AC-01~AC-04。
+**只有 3 分钟的话：** 看 D-01、D-02、目标链路、权限不变量和 AC-01~AC-04。
 
 **需要你决定的事项**
 
@@ -20,6 +20,17 @@
 - **依据强度：** 代码已确认独立路由发生在主要模型调用之前；历史运行日志记录过 3 个技能、未命中时路由耗时约 1.609 秒。尚无目录优先实现后的真实模型时延分布。
 - **未作选择时：** 本文保持草稿，不进入实现阶段。
 - **下钻：** `skillManager.route`、`agentProtocolIpc.prepareTurnInternal`、`buildSkillCatalogSection`、`skills.read`；`INV-01`、`AC-01`、`AC-02`。
+
+### D-02：技能设置变更何时影响正在执行的消息
+
+应用开始处理一条消息时，会冻结本轮可用技能名单和正文。若用户随后禁用某个技能或更新正文，需要明确当前轮是否仍可读取受理时的版本。
+
+- **A：本轮沿用受理时快照（推荐）**。当前轮继续读取受理时获准的版本，禁用和更新从下一轮开始生效；设置变更不能撤回已交付或仍在当前轮范围内的读取。实现可通过代码回退，无数据迁移。
+- **B：设置变更即时撤销未交付的读取**。禁用 / 更新后，本轮尚未交付的读取必须失败；已交付给模型的正文无法从本轮上下文中收回。需要增加实时授权代次和内容版本核验，并处理缓存、配置、会话技能状态之间的竞态。
+- **依据强度：** 代码已确认工具读取包装器不查询 Skill 配置代次或正文版本；尚无产品约定说明运行中变更的当前语义。
+- **未作选择时：** 本文保持草稿，不进入实现阶段。
+- **选 B 时的后续动作：** 当前机层规格只适用于 A；选择 B 后必须先补实时授权 / 正文代次的唯一 owner、校验点、失败分类和新增变更面，再重新评审，不能沿用 INV-03 / INV-05 的冻结授权实现。
+- **下钻：** `INV-03`、`INV-05`、`AC-08`、评审核销 B-01。
 
 **不需要你决定：** Skill 目录过滤、读取授权、并发读取预算、快照一致性、取消与回退测试由实现者按规格落实；不新增设置开关、IPC、持久化字段或 SDK 接口。
 
@@ -70,15 +81,15 @@ flowchart LR
 
 | 单元 | 作用简述 | 改动类型 | 对应 `D/INV` | 跨边界 |
 |---|---|---|---|---|
-| `electron/ipc/agentProtocolIpc.ts` | 接收桌面端 Agent 请求并准备本轮上下文 | 改造 | D-01、INV-01 | 向主要请求交接硬规则 Skill 快照 |
+| `electron/ipc/agentProtocolIpc.ts` | 接收桌面端 Agent 请求并准备本轮上下文 | 改造 | D-01、D-02、INV-01 | 向主要请求交接本轮 Skill scope |
 | `electron/skills/skillManager.ts` | 管理 Skill 查询、匹配、路由和正文读取 | 改造 | D-01、INV-01 | 保留 legacy 路由行为 |
 | `electron/skills/skillRouter.ts` | 计算硬规则激活与本地 / 模型匹配结果 | 改造 | INV-01 | 移除默认模式的前置模型调用 |
 | `src/shared/skillPrompt.ts` | 构造目录提示并按名称读取 Skill 正文 | 改造 | INV-02、INV-03 | 目录不暴露文件系统路径 |
 | `electron/toolChatLoop.ts` | 组装主要模型上下文并执行工具循环 | 改承重边界 | INV-02、INV-04 | 创建并传递本轮 Skill 范围与预算 |
-| `electron/tools/skillsReadTool.ts` | 执行模型发起的 Skill 正文读取 | 改造 | INV-03、INV-04 | 强制本轮授权与读取预算 |
+| `electron/tools/skillsReadTool.ts` | 执行模型发起的 Skill 正文读取 | 改造 | INV-03、INV-04、INV-05 | 专用 planned tool 管理读取预算 |
 | `electron/tools/types.ts` | 定义主进程工具执行上下文 | 改承重边界 | INV-03、INV-04 | 增加内部 per-turn Skill 读取范围，不改变公共端口 |
 | `electron/tools/builtinExecutors.ts` | 注册内置工具执行器 | 复用不改 | INV-03 | 已注册 `skills.read` |
-| `electron/tools/snapshotReadRegisteredTool.ts` | 校验只读工具计划与执行快照一致 | 复用不改 | INV-05 | 既有上下文 / 结果哈希校验继续生效 |
+| `electron/tools/plannedToolRegistry.ts` | 管理工具计划、核验、执行及释放状态 | 复用不改 | INV-04、INV-05 | 使用既有 planned 生命周期，不向通用快照包装器加入预算副作用 |
 | `src/shared/domainTypes.ts` | 定义共享领域配置和 Skill 类型 | 复用不改 | INV-06 | 保持配置字段及持久化形状 |
 
 **计数：** 改既有 7 个、新建 0 个、复用不改 3 个；改对外契约 0 行；改承重边界 2 处。无新增持久化字段、稳定错误码或对外数据项。两个内部承重边界共同闭合工具读取授权与调用上下文，不拆分为多份方案。
@@ -92,15 +103,15 @@ flowchart LR
 | ③ IPC / 预加载 | 不改 | 路由调用是主进程内部调用；不增加通道或参数 |
 | ④ `src/shared/` 类型 | 不改 | 既有 `SkillsConfig`、`SkillRouteResult` 形状不变；内部工具上下文是 `electron/tools/types.ts` 私有类型 |
 | ⑤ 持久化格式 / 迁移 | 不改 | 不新增数据库字段、版本或迁移；旧设置仍可解析 |
-| ⑥ 领域数据格式 | 形状不改，`mode='llm'` 语义改变 | 现有路由专用设置字段保留但在此模式不再生效；由 D-01 批准，旧值读取兼容测试覆盖 |
+| ⑥ 领域数据格式 | 形状不改，配置行为语义按 D-01 / D-02 改变 | 路由专用字段保留但 `mode='llm'` 不再发专用请求；若 D-02 选 A，活动轮次冻结设置、下一轮生效；旧配置值往返不变，兼容测试覆盖 |
 
 ### RP-5 量级与拆分判断【人机共读】
 
-改既有 7 个单元、新建 0 个、复用 3 个；改对外契约 0 行、改承重边界 2 处；新增持久化字段 0 个、新增错误码 / 对外数据项 0 个；实现阶段 1 个。单阶段可以先实现范围快照，再接入 `skills.read` 并验证完整请求链；没有跨版本迁移或外部契约需要拆方案。
+改既有 7 个单元、新建 0 个、复用 3 个；改对外契约 0 行、改承重边界 2 处；新增持久化字段 0 个、新增错误码 / 对外数据项 0 个；实现阶段 1 个。专用 planned tool 复用现有工具生命周期，不扩展通用快照包装器。单阶段可以先实现范围快照，再接入 `skills.read` 并验证完整请求链；没有跨版本迁移或外部契约需要拆方案。
 
 ### RP-6 待批准清单与三处弱点【人必读】
 
-**待批准：** 仅需批准 D-01，即 `mode='llm'` 不再先做专门技能推荐请求，改为主要模型按目录决定是否读取技能。该选择可用代码回退，不迁移用户数据。真实模型下的新时延分布尚未验证。
+**待批准：** D-01 决定默认路由是否移到主要模型；D-02 决定已受理轮次面对技能禁用 / 更新时的权限生效时点。两项都未批准前，不进入实现。D-02 A 不增加实时撤销机制，B 会增加实时版本 / 授权核验边界。均无数据迁移；真实模型下的新时延分布尚未验证。
 
 **最可能被推翻的三处：**
 
@@ -112,7 +123,7 @@ flowchart LR
 
 ### F-01 代码事实与边界
 
-基线 `9ad6631e`（2026-11-03），复核命令：
+实现分支事实基线 `9ad6631e`（2026-11-03）；评审所用主线代码基线 `ebe299f5`（2026-11-03）。调用契约核验命令：
 
 ```text
 rg -n 'skillManager\.route|buildSkillCatalogSection|skills\.read|shouldCallLlm|getAvailableSkills|collectHardRuleSkills' electron src/shared
@@ -125,28 +136,37 @@ rg -n 'skillManager\.route|buildSkillCatalogSection|skills\.read|shouldCallLlm|g
 - 目录条目当前包含 `skill.filePath`；正文读取目前不按本轮禁用集合过滤。目录展示和正文读取必须同时修正，不能仅移除路由调用。
 - 绕过通道清单：显式 Skill `/` 命令或会话激活路径、`alwaysLoad`、飞书来源、Wiki 关键词硬规则、`mode='legacy'` 本地匹配，以及除 `agentProtocolIpc` 外的 `skillManager.route` 调用（包括独立路由 IPC）均须分别保留既有语义；主模型工具循环中的 `skills.read` 是本方案新增的自动读取入口。
 
+### 评审意见修订记录【机｜人工可跳过】
+
+以下是文档规格层的修订，不代表评审结论已经关闭；需要复审方案，并在后续实现时提供表中列出的自动化证据。
+
+| 评审项 | 本轮修订 | 复核证据 / 尚待事项 |
+|---|---|---|
+| B-01 冻结正文与实时撤销冲突 | 新增 D-02 明确两种用户可见语义；推荐 A：轮次受理时冻结名单、授权和正文，禁用 / 更新下一轮生效。移除“既有结果哈希会检测配置 / 正文变化”的断言，改为校验执行仍绑定同一活动 turn scope | INV-05、AC-08 与场景矩阵改为验证当前轮读 v1、下一轮读 v2 / 拒绝禁用项；D-02 未批准前不得实现 |
+| B-02 读取预算缺少提交 / 释放协议 | `skills.read` 改为专用 `definePlannedTool`；plan 与 validate 不留名额、不改变预算；execute 同步提交成功读取。未执行、plan / validate 失败、执行失败都不占名额；成功结果返回后不因之后的 turn 取消退款 | INV-04、AC-09、AC-10 增加 plan → validate → execute、失败后另一名称可读、同名并发与随机序列不变量测试；通用 `snapshotReadRegisteredTool` 不再用于 Skill 预算 |
+
 ### 目标链路与状态所有权
 
 1. turn 准备阶段读取当前 Skills 配置、会话激活状态、Skill 缓存和请求来源，生成不可变的本轮 Skill 范围快照。
 2. `alwaysLoad`、会话手动激活、飞书 / Wiki 硬规则继续在主模型请求前直接加载；其余自动 Skill 仅将允许的稳定元数据放入目录。
 3. 默认 `mode='llm'` 不调用专门路由模型；主要模型通过目录决定是否调用 `skills.read({name})`。
 4. `mode='legacy'` 保留现有本地匹配和预加载，不调用模型路由。
-5. `skills.read` 只接受本轮快照中获准的 Skill 名称，基于冻结的同一 Skill 内容执行；按本轮计数器同步预留名额，成功读取后才记为已消耗，重复读取同一 Skill 不重复占额。
+5. `skills.read` 只接受受理时冻结快照中获准的 Skill 名称，基于冻结正文执行；plan / validate 不预留或消费名额，execute 同步提交成功的唯一 Skill 名称；重复读取同一名称不额外占额。
 6. 请求结束、取消或失败时销毁范围快照和读取预算，不写入会话或全局缓存。
 
 | 状态 | 唯一 writer | 生命周期 / 恢复 |
 |---|---|---|
-| 当前 turn 可见 Skill 集合 | turn 准备逻辑 | 以本轮配置与 Skill 内容快照创建；请求结束即销毁；失败不重试外部路由 |
-| 每轮不同 Skill 的读取名额 | `toolChatLoop` 持有的读取预算对象 | 主进程内同步预留；单次调用失败可释放；请求结束销毁 |
-| Skill 正文快照 | Skill 缓存读取边界 | turn 开始时冻结；读取前不刷新；快照一致性由既有 snapshot-read 校验确认 |
+| 当前 turn 可见 Skill 集合 | turn 准备逻辑 | 以本轮配置与 Skill 内容快照创建；`toolChatLoop` 在成功、失败、取消的最终收尾中关闭；失败不重试外部路由 |
+| 每轮不同 Skill 的读取名额 | `toolChatLoop` 创建并交给该 turn 的 Skill scope | 预加载名称初始化为已占名额；plan / validate 不修改；execute 同步检查并提交成功读取；turn 关闭即销毁 |
+| Skill 正文与授权快照 | turn 准备逻辑 | 受理时冻结可用名单、配置授权和正文；本轮不刷新，变更从下一轮生效（D-02 A） |
 
 ### 不变量
 
 - **INV-01｜默认链路不等待独立路由模型：** `mode='llm'` 的 turn 在首个主要模型请求前不得调用 `routeSkills` 的模型分支。证明：provider client spy 验证调用顺序和请求数。
 - **INV-02｜模型只看到本轮可用目录：** 目录仅含未在全局或会话级禁用的 Skill，排除列表以外的 Skill 不通过“Additional skills”提示暗示存在；目录排序和预算稳定。证明：禁用组合、预算截断测试。
-- **INV-03｜读取受本轮授权：** `skills.read` 只能读取冻结快照中授权的精确名称，不接受任意路径或本轮禁用项；读取正文上限仍为 32,000 字符，超限返回工具失败而不终止 turn。证明：越权名、路径输入、超限与同名更新快照测试。
-- **INV-04｜每轮 Skill 正文加载有界：** 自动按需读取与直接预加载共同遵循 `maxConcurrent` 的不同 Skill 总量上限；重复读取已加载 Skill 不占新名额；多个并发读取先同步预留，不能超额。证明：并发工具调用测试。
-- **INV-05｜只读快照有效：** 读取计划和执行之间上下文 / 正文变化仍由 `createSnapshotReadRegisteredTool` 拒绝；拒绝只让工具调用失败，不污染后续读取。
+- **INV-03｜读取受本轮授权：** `skills.read` 只能读取受理时冻结快照中授权的精确名称，不接受任意路径或快照内禁用项；正文上限仍为 32,000 字符。D-02 A 下，受理后的实时配置变化不撤回本轮授权；下一轮按新配置重建范围。证明：准备后禁用的当前轮 / 下一轮边界测试。
+- **INV-04｜读取预算只在执行成功时提交：** plan、validate 都是无预算副作用的纯准备；只有 execute 在确认请求未取消且容量足够后，同步提交一个不同 Skill 名称。执行失败不提交；同名重复读取不占额。`maxConcurrent` 沿用现有语义：硬规则预加载和按需读取的不同 Skill 合计不得超过该值。证明：生命周期故障注入、同名并发及随机操作不变量测试。
+- **INV-05｜正文快照与 turn 生命周期一致：** Skill 正文版本和授权名单在受理时冻结；validate 只确认调用仍绑定到同一个未关闭 turn scope，不能声称发现实时配置 / 缓存更新。禁用和正文更新下一轮生效；turn 终态 / 取消关闭 scope，尚未执行的计划随之拒绝。证明：准备后修改配置、准备后更新正文、turn 关闭后 validate 三类测试。
 - **INV-06｜兼容配置及硬规则：** 配置 JSON 形状不变；`alwaysLoad`、手动激活、飞书 / Wiki 硬规则和 `legacy` 本地匹配保持既有选择结果与来源信息。
 - **INV-07｜逐 turn 隔离：** 一个会话的并发 turn、取消 turn 和后续 turn 不共享读取范围或预算；较早 turn 的工具不能读取较新 turn 新增或被授权的 Skill。
 
@@ -154,17 +174,24 @@ rg -n 'skillManager\.route|buildSkillCatalogSection|skills\.read|shouldCallLlm|g
 
 目录每项只包含 Skill 名称、描述，以及模型可直接使用的 `skills.read` 指引；不得出现绝对路径或主机文件系统位置。若目录预算截断，尾部只说明目录已截断及需基于已展示目录作选择，不得暗示可读取未授权的隐藏 Skill。
 
-读取工具输入仍为 `{ name: string, max_chars?: number }`。`name` 必须精确匹配冻结快照；`max_chars` 取请求值与 32,000 字符上限的较小值。失败结果采用现有工具失败表示，不新增稳定错误码。当前快照中的 `SkillDefinition.content` 作为读取正文；相对附件读取沿用 Skill 文本自身现有安全规则，不向模型暴露绝对位置。
+读取工具输入仍为 `{ name: string, max_chars?: number }`。`name` 必须精确匹配冻结快照；`max_chars` 取请求值与 32,000 字符上限的较小值。失败结果采用现有工具失败表示，不新增稳定错误码。当前 turn scope 中冻结的 `SkillDefinition.content` 是正文唯一来源；相对附件读取沿用 Skill 文本自身现有安全规则，不向模型暴露绝对位置。
 
-`maxConcurrent` 的口径在此固定为：每轮被预加载或通过 `skills.read` 成功读取的不同 Skill 正文总数上限；一次 turn 已预加载的正文先占名额，读取同名正文幂等，不额外扣减。若历史行为的 `maxConcurrent` 仅限制自动路由结果，需通过现有测试和实现核对确认此调整不会削弱手动激活 / alwaysLoad 的语义；若会改变配置含义，先补 D 决策，不得静默修改。
+`skills.read` 使用 `definePlannedTool`，不使用 `createSnapshotReadRegisteredTool`：
+
+1. **plan：** 校验输入和冻结 scope，读取 scope 内正文并生成不可变计划；不预留或消费预算。plan 因取消、读取错误或准备后取消而失败时，没有预算状态需要释放。
+2. **validate：** 核对 scope 身份与 turn 仍处于活动态、校验正文 / 计划摘要一致；不刷新 Skill 缓存、不重新读取当前设置、不预留 / 消费预算。validate 拒绝后 handle 释放计划，后续名称仍可取得名额。
+3. **execute：** 进入执行时先同步检查取消信号、活动 scope、输入名与计划身份。若该名称已预加载或成功读取，幂等返回正文；若当前已提交名额达到上限，返回现有工具失败结果且不改状态；否则在同步临界区读取冻结正文，只有成功结果才将名称写入 `committedNames`，失败则集合不变。无 await 的 check-and-commit 是唯一提交点；提交后到工具结果返回之间不得再做可失败的异步工作。
+4. **释放：** execute 前取消、gate / 确认拒绝、validate 失败、scope 提前关闭均不占名额；planned handle 的 `fail()` / `release()` 清理计划引用，不需释放预算 reservation，因为此前不存在 reservation。成功结果已返回工具循环后，之后的 turn 取消不回滚已交付读取。
+
+当前 `maxConcurrent` 在 `mergeRouteSkills` / `matchSkills` 中限制最终选择的不同 Skill 总量，硬规则也受此上限约束。因此本方案沿用同一语义：硬规则预加载的不同 Skill 先计入，按需读取只可消耗剩余数量；同一名称重复读取幂等。
 
 ### 配置兼容与失败处理
 
 - 保持 `SkillsConfig` 与 `SkillsRoutingConfig` 的字段、缺省值、反序列化和 IPC 形状。
 - `mode='llm'` 下 `model`、`context`、`contextTurns`、`contextMaxChars`、`timeoutMs`、`includeTriggersInCatalog` 不再控制独立路由；不得删除或重置旧值。
-- `autoDetect=false` 或 `routing.enabled=false` 时，目录中不暴露自动发现 Skill，也不允许 `skills.read` 自动读取；直接激活与硬规则仍按既有规则运行。
+- `autoDetect=false` 或 `routing.enabled=false` 时，turn snapshot 不暴露自动发现 Skill，也不允许 `skills.read` 自动读取；直接激活与硬规则仍按既有规则运行。
 - `mode='legacy'` 继续本地匹配；其结果受同一禁用配置过滤。
-- 目录构造失败不得阻断主请求；被授权 Skill 读取失败、超限或快照失效仅作为该工具失败反馈，模型可以不使用该 Skill 继续，是否重试由模型决定。
+- 目录构造失败不得阻断主请求；被授权 Skill 读取失败、超限或 turn scope 已关闭仅作为该工具失败反馈，模型可以不使用该 Skill 继续，是否重试由模型决定。
 - 用户取消请求时，取消信号继续传播到工具执行；正在读取正文应快速结束，且不得消费永久状态或影响下一 turn。
 
 ### 场景矩阵
@@ -177,11 +204,15 @@ rg -n 'skillManager\.route|buildSkillCatalogSection|skills\.read|shouldCallLlm|g
 | 全局禁用 / 会话禁用 | 目录与 `skills.read` 均不可访问；猜测名称返回工具失败 | AC-04 |
 | alwaysLoad / 手动 / 飞书 / Wiki | 硬规则正文仍在主模型首轮可见，来源提示准确 | AC-06 |
 | legacy 模式 | 保留本地匹配结果，不访问路由模型 | AC-07 |
-| 读取超限、快照改变、读取失败 | 工具失败反馈；后续 turn 和会话可继续 | AC-08 |
-| 两个并发读取争最后名额 | 至多一个不同 Skill 读取成功；重复读取已读 Skill 可成功 | AC-09 |
+| plan 成功后取消且未执行 | 不占用预算；之后另一名称仍可读取 | AC-09、AC-10 |
+| validate 失败 | 不占用预算；之后另一名称仍可读取 | AC-08、AC-09 |
+| turn scope 关闭后 validate / execute | 拒绝交付冻结正文，不修改预算 | AC-08、AC-10 |
+| 当前轮准备后更新正文 | 当前轮仍读冻结 v1；下一轮读 v2 | AC-08 |
+| 当前轮准备后禁用 Skill | D-02 A 下当前轮仍可读；下一轮目录隐藏且读取拒绝 | AC-04、AC-08 |
+| 两个并发读取争最后名额 | execute 阶段同步提交；至多一个不同新名称成功，同名并发幂等 | AC-09 |
 | 两个并发 turn、一个取消 | 范围与预算隔离；取消不影响另一 turn | AC-10 |
 | 旧配置含路由专用字段 | 配置加载与保存不抹除字段；`mode='llm'` 不发路由请求 | AC-11 |
-| `skills.read` 准备后 Skill 内容 / 配置变化 | 快照检查拒绝陈旧结果，不执行旧快照 | AC-08 |
+| turn scope 在工具计划后关闭 | validate / execute 失败且预算未改变 | AC-08、AC-10 |
 
 ### 验收映射
 
@@ -194,9 +225,9 @@ rg -n 'skillManager\.route|buildSkillCatalogSection|skills\.read|shouldCallLlm|g
 | AC-05 目录预算确定 | 排序稳定、预算截断稳定、路径不泄露 | INV-02 | `skillPrompt` 单测 |
 | AC-06 硬规则选择不回归 | alwaysLoad、手动、Feishu、Wiki 命中仍直接预加载且来源映射正确 | INV-06 | `skillRouter` 与 prepare-turn 测试 |
 | AC-07 legacy 可用 | 旧本地匹配选择集和来源保持，路由模型调用为零 | INV-06 | `skillRouter` 回归测试 |
-| AC-08 失败不破坏会话 | 超限、越权、快照改变和正文缺失都只产生工具级失败；后续工具 / turn 可运行 | INV-03、INV-05 | `skillsReadTool` 和 snapshot-read 故障注入测试 |
-| AC-09 并发上限正确 | 并发不同名称不超过 maxConcurrent；重复名称可并发返回且只占一名额 | INV-04 | 工具级 Promise barrier 竞态测试 |
-| AC-10 turn 隔离及取消 | 并发 turn 读写范围互不可见；取消后预算销毁，下一 turn 从零计数 | INV-07 | tool-loop 并发 / abort 测试 |
+| AC-08 版本与授权生效点明确 | 准备后正文更新时当前轮返回冻结 v1、下一轮 v2；准备后禁用时当前轮按 D-02 生效、下一轮拒绝；关闭 scope 后不再交付 | INV-03、INV-05 | 两轮集成测试 + 配置 / 缓存变更边界测试 |
+| AC-09 预算生命周期闭合 | plan 成功但取消、validate 失败、execute 失败均不消耗名额；execute 成功返回时同步提交；同名并发一成功一失败时失败方不撤销成功方提交；重复成功只计一名 | INV-04 | planned tool 完整生命周期故障注入、Promise barrier 与随机操作序列不变量测试 |
+| AC-10 turn 隔离及取消 | 并发 turn 的 scope / committedNames 互不可见；取消在 execute 前生效且预算不变，成功 execute 后取消不退款 | INV-04、INV-05、INV-07 | tool-loop 并发 / abort 与生命周期测试 |
 | AC-11 旧设置可往返 | 旧配置字段加载后保存保持原字段和原值，且默认路由不发专门请求 | INV-06 | 配置归一化与 IPC 回归测试 |
 
 ### 阶段、发布与回退
@@ -209,7 +240,7 @@ rg -n 'skillManager\.route|buildSkillCatalogSection|skills\.read|shouldCallLlm|g
 
 - **U-01｜真实模型请求时延与 Skill 选择质量：** 本文未运行真实模型；实现后需要基于真实配置做普通任务和 Skill 任务样本，记录从回车到首个 provider 请求、首个可见运行事件，以及 Skill 漏读 / 误读。本文不承诺固定毫秒改善值。
 - **U-02｜autoDetect 与 disabled 配置消费边界：** 全仓路由外调用及目录来源需实现前再 `rg` 核对，确保目录与读取权限执行完全一致。
-- **U-03｜maxConcurrent 既有语义：** 需用代码与现有测试确认硬规则预加载是否计入该数；若改变用户已配置的上限含义，应停止实现并补充人类决策。
+- **U-03｜D-02 权限时点：** D-02 需负责人明确选择；未决定前无论测试多完整都不得实现或宣称 AC-08 已定。
 
 ### 评审自曝与推翻条件
 
