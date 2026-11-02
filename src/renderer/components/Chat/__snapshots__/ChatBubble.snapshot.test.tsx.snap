@@ -1,0 +1,201 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ChatBubble snapshots > snapshots text, thinking, and tool-call render states 1`] = `
+<div>
+  <div
+    class="chat-bubble-row chat-bubble-row--assistant"
+    data-message-id="snapshot-thinking"
+  >
+    <div
+      aria-label="Assistant reply"
+      class="chat-bubble-col chat-bubble-col--assistant"
+      role="region"
+    >
+      <div
+        class="chat-activity-track"
+      >
+        <div
+          class="chat-thinking"
+        >
+          <button
+            aria-expanded="false"
+            aria-label="Expand thinking"
+            class="chat-thinking__toggle"
+            type="button"
+          >
+            <svg
+              aria-hidden="true"
+              class="lucide lucide-brain chat-thinking__icon"
+              fill="none"
+              height="14"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.75"
+              viewBox="0 0 24 24"
+              width="14"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"
+              />
+              <path
+                d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"
+              />
+              <path
+                d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"
+              />
+              <path
+                d="M17.599 6.5a3 3 0 0 0 .399-1.375"
+              />
+              <path
+                d="M6.003 5.125A3 3 0 0 0 6.401 6.5"
+              />
+              <path
+                d="M3.477 10.896a4 4 0 0 1 .585-.396"
+              />
+              <path
+                d="M19.938 10.5a4 4 0 0 1 .585.396"
+              />
+              <path
+                d="M6 18a4 4 0 0 1-1.967-.516"
+              />
+              <path
+                d="M19.967 17.484A4 4 0 0 1 18 18"
+              />
+            </svg>
+            <span>
+              Thinking
+            </span>
+            <svg
+              aria-hidden="true"
+              class="lucide lucide-chevron-right chat-thinking__chevron"
+              fill="none"
+              height="12"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="12"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="m9 18 6-6-6-6"
+              />
+            </svg>
+          </button>
+          <div
+            class="chat-thinking__panel"
+          >
+            <div
+              class="chat-thinking__panel-inner"
+            >
+              <div
+                class="chat-thinking__body"
+                data-search-fragment-id="snapshot-thinking|thinking:0"
+              >
+                Check the result before replying.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div
+    class="chat-bubble-row chat-bubble-row--assistant"
+    data-message-id="snapshot-tool"
+  >
+    <div
+      aria-label="Assistant reply"
+      class="chat-bubble-col chat-bubble-col--assistant"
+      role="region"
+    >
+      <div
+        class="chat-activity-track"
+      >
+        <div
+          class="tool-row"
+        >
+          <div
+            class="tool-row__main"
+          >
+            <span
+              aria-describedby="test-id"
+              class="tool-row__icon-wrap"
+            >
+              <svg
+                class="lucide lucide-glasses tool-row__icon"
+                fill="none"
+                height="14"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.75"
+                viewBox="0 0 24 24"
+                width="14"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <circle
+                  cx="6"
+                  cy="15"
+                  r="4"
+                />
+                <circle
+                  cx="18"
+                  cy="15"
+                  r="4"
+                />
+                <path
+                  d="M14 15a2 2 0 0 0-2-2 2 2 0 0 0-2 2"
+                />
+                <path
+                  d="M2.5 13 5 7c.7-1.3 1.4-2 3-2"
+                />
+                <path
+                  d="M21.5 13 19 7c-.7-1.3-1.5-2-3-2"
+                />
+              </svg>
+            </span>
+            <span
+              class="tool-row__label"
+              data-search-fragment-id="snapshot-tool|tool-label:snapshot-read"
+              title="src/app.ts"
+            >
+              app.ts
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div
+    class="chat-bubble-row chat-bubble-row--assistant"
+    data-message-id="snapshot-long"
+  >
+    <div
+      aria-label="Assistant reply"
+      class="chat-bubble-col chat-bubble-col--assistant"
+      role="region"
+    >
+      <div
+        class="chat-activity-track"
+      >
+        <div
+          class="chat-bubble chat-bubble--assistant"
+        >
+          <div
+            class="sa-prose chat-md-assistant"
+            data-search-fragment-id="snapshot-long|assistant-markdown-text:0:0"
+          >
+            <p>
+              Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text. Long response text.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+`;

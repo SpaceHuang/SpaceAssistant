@@ -3,7 +3,37 @@ import { describe, expect, it, vi } from 'vitest'
 import { ChatMarkdown } from './ChatMarkdown'
 import { maskSensitiveText } from '../../../shared/mcpSensitiveText'
 
+function withoutFormattingWhitespace(element: Element): Element {
+  const clone = element.cloneNode(true) as Element
+  const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT)
+  const whitespaceNodes: Node[] = []
+  while (walker.nextNode()) {
+    if (!walker.currentNode.textContent?.trim()) whitespaceNodes.push(walker.currentNode)
+  }
+  whitespaceNodes.forEach((node) => node.parentNode?.removeChild(node))
+  return clone
+}
+
 describe('ChatMarkdown', () => {
+  it('snapshots representative bilingual Markdown, code, table, and long text output', () => {
+    const longText = '长文本 mixed content。'.repeat(40)
+    const content = [
+      '你好，assistant：**已完成**。',
+      '',
+      '```ts',
+      'const answer: string = "ready"',
+      '```',
+      '',
+      '| 项目 | 状态 |',
+      '| --- | --- |',
+      '| renderer | ready |',
+      '',
+      longText
+    ].join('\n')
+    const { container } = render(<ChatMarkdown content={content} messageId="snapshot-markdown" />)
+    expect(withoutFormattingWhitespace(container.querySelector('.chat-md-assistant')!)).toMatchSnapshot()
+  })
+
   it('sanitizes MCP text after Markdown parsing, including escapes and entities', () => {
     const token = 'ghp_abcdefghijklmnopqrstuvwxyz1234567890'
     const { container } = render(<ChatMarkdown
