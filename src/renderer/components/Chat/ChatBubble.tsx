@@ -258,6 +258,7 @@ export const ChatBubble = memo(function ChatBubble({
   const failed = message.status === 'failed'
   // 只在失败消息上展示原因：成功/进行中的气泡即便残留旧原因也不能显示。
   const visibleFailureReason = failed ? failureReason?.trim() || undefined : undefined
+  const transcriptRecoveryBlocked = visibleFailureReason?.includes('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED') ?? false
   const searchRevealPath = activeSearchTarget?.revealPath
 
   const activityModel = useMemo(() => {
@@ -552,17 +553,20 @@ export const ChatBubble = memo(function ChatBubble({
                 {visibleFailureReason}
               </span>
             ) : null}
+            {transcriptRecoveryBlocked ? (
+              <span className="chat-message-error__reason">{t('bubble.transcriptRecoveryBlocked')}</span>
+            ) : null}
             {visibleFailureReason?.includes('LLM_KEY_') && onOpenModelSettings ? (
               <button type="button" className="chat-message-error__retry" onClick={onOpenModelSettings}>
                 {t('bubble.openModelSettings')}
               </button>
             ) : null}
-            {showRetry && handleContinue ? (
+            {showRetry && !transcriptRecoveryBlocked && handleContinue ? (
               <button type="button" className="chat-message-error__retry" onClick={handleContinue}>
                 {t('bubble.continueFromCheckpoint')}
               </button>
             ) : null}
-            {showRetry && handleRetry ? (
+            {showRetry && !transcriptRecoveryBlocked && handleRetry ? (
               <button type="button" className="chat-message-error__retry" onClick={handleRetry}>
                 {t('bubble.retry')}
               </button>

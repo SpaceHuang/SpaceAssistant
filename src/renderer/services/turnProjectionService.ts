@@ -3,7 +3,7 @@ import { routePatchMessage } from './chatRunnerService'
 import { pendingConfirmStore } from './pendingConfirmStore'
 import type { SessionUsage } from '../../shared/sessionUsage'
 import { store } from '../store'
-import { setChatStatus, setContextProjection, setLastUsage } from '../store/chatSlice'
+import { reconcileRunningSessions, setChatStatus, setContextProjection, setLastUsage } from '../store/chatSlice'
 import { turnDisplayToMessage } from '../../shared/turnDisplayProtocol'
 import { setTurnFailure } from '../store/chatSlice'
 import { requestChatMessagePageWithTraceMetadata } from './sessionSwitchTrace'
@@ -18,7 +18,7 @@ function applyTerminalStatus(payload: TurnProjectionPayload): void {
   if (type !== 'source-completed' && type !== 'source-failed' && type !== 'source-cancelled' && type !== 'source-timeout' && type !== 'source-uncertain') return
   store.dispatch(setChatStatus({
     status: type === 'source-failed' || type === 'source-timeout' || type === 'source-uncertain' ? 'error' : 'completed',
-    requestId: null,
+    requestId: payload.turn.requestId,
     sessionId: payload.turn.sessionId,
     turnId: payload.turn.turnId,
     ...(type === 'source-failed' ? { error: 'source-failed' } : {}),
@@ -69,6 +69,21 @@ export type TurnProjectionMetric = {
   version: number
   eventType: string
   durationMs: number
+}
+
+/** 用主进程活动 turn 快照收敛 renderer 孤儿运行标记；仅清理请求开始前已存在且仍匹配的状态。 */
+export function reconcileRendererRunningSessions(): Promise<void> {
+  const api = typeof window !== 'undefined' ? window.api : undefined
+  if (typeof api?.chatListActiveTurns !== 'function') return Promise.resolve()
+  const observedRunning = Object.entries(store.getState().chat.runningSessions ?? {}).map(([sessionId, running]) => ({
+    sessionId, requestId: running.requestId, ...(running.turnId ? { turnId: running.turnId } : {})
+  }))
+  return api.chatListActiveTurns().then((turns) => {
+    store.dispatch(reconcileRunningSessions({
+      observedRunning,
+      activeTurns: turns.map(({ sessionId, requestId, turnId }) => ({ sessionId, requestId, turnId }))
+    }))
+  })
 }
 
 /** 应用级 turn snapshot 投影：只接受单调版本，事实仍由主进程持有。 */
@@ -132,13 +147,13 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
         // 评审 2.4：checkpoint 持续不就绪（重试耗尽）时按失败落终态并移除 display——
         // 否则无限退避重试会让会话永久卡在 running（中止按钮失效）。
         terminalRetries.delete(display.turnId)
-        store.dispatch(setChatStatus({ status: 'error', error: 'TURN_CHECKPOINT_FAILED', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
+        store.dispatch(setChatStatus({ status: 'error', error: 'TURN_CHECKPOINT_FAILED', requestId: display.requestId, sessionId: display.sessionId, turnId: display.turnId }))
         import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
       }
       void window.api.chatGetTurnTerminal(display.turnId).then((terminal) => {
         if (!terminal || terminal.version < display.version || terminal.committedVersion === undefined || terminal.committedVersion < display.version) {
           if (terminal?.commitStatus === 'failed') {
-            store.dispatch(setChatStatus({ status: 'error', error: 'TURN_CHECKPOINT_FAILED', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
+            store.dispatch(setChatStatus({ status: 'error', error: 'TURN_CHECKPOINT_FAILED', requestId: display.requestId, sessionId: display.sessionId, turnId: display.turnId }))
             import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
             return undefined
           }
@@ -165,14 +180,28 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
           // 评审 2.4：terminal 已 committed 但 60 条消息窗口内找不到该 assistant 消息（提交后
           // 拉页前同会话又写入大量消息）——移除 display 的同时必须落终态，否则会话永久卡 running。
           terminalRetries.delete(display.turnId)
-          store.dispatch(setChatStatus({ status: display.outcome === 'failed' || display.outcome === 'timed-out' || display.outcome === 'interrupted' || display.outcome === 'commit-uncertain' ? 'error' : 'completed', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
+          store.dispatch(setChatStatus({ status: display.outcome === 'failed' || display.outcome === 'timed-out' || display.outcome === 'interrupted' || display.outcome === 'commit-uncertain' ? 'error' : 'completed', requestId: display.requestId, sessionId: display.sessionId, turnId: display.turnId }))
           import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
+          return
+        }
+        if (message.status === 'streaming') {
+          // cancel is acknowledged before the tool loop necessarily persists its terminal
+          // transcript. Keep the renderer snapshot attached to the row and retry the page read;
+          // removing it here leaves a cancelled assistant bubble with no tool calls to render.
+          const attempt = terminalRetries.get(display.turnId) ?? 0
+          if (attempt >= TURN_CHECKPOINT_MAX_RETRIES) {
+            settleAsCheckpointFailed()
+            return
+          }
+          terminalRetries.set(display.turnId, attempt + 1)
+          void window.api.chatRetryTurnCheckpoint?.(display.turnId)
+          window.setTimeout(() => { if (!disposed) applyDisplay({ display, retry: true }) }, Math.min(30_000, 100 * 2 ** Math.min(attempt, 8)))
           return
         }
         routePatchMessage(display.sessionId, message.id, message)
         if (result.failureReason) store.dispatch(setTurnFailure({ messageId: message.id, reason: result.failureReason }))
         terminalRetries.delete(display.turnId)
-        store.dispatch(setChatStatus({ status: display.outcome === 'failed' || display.outcome === 'timed-out' || display.outcome === 'interrupted' || display.outcome === 'commit-uncertain' ? 'error' : 'completed', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
+        store.dispatch(setChatStatus({ status: display.outcome === 'failed' || display.outcome === 'timed-out' || display.outcome === 'interrupted' || display.outcome === 'commit-uncertain' ? 'error' : 'completed', requestId: display.requestId, sessionId: display.sessionId, turnId: display.turnId }))
         import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
       }).catch(() => {
         const attempt = terminalRetries.get(display.turnId) ?? 0

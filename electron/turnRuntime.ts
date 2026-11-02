@@ -5,10 +5,11 @@ export type TurnRuntimeOptions = {
   storage: TurnStorage
   deps: CoordinatorDeps
   source?: ModelSource
-  onEvent?: (turn: TurnStarted, event: AssistantFactEvent) => void
+  onEvent?: (turn: TurnStarted, event: TurnRuntimeProjectionEvent) => void
   onCancel?: (turn: TurnStarted) => void
 }
 
+export type TurnRuntimeProjectionEvent = AssistantFactEvent | { type: 'turn-started' }
 export type TurnProjectionListener = (turn: TurnStarted, event: AssistantFactEvent) => void
 
 /** 主进程唯一 turn owner：Coordinator、source 和事实 projection 在此装配。 */
@@ -30,6 +31,13 @@ export class TurnRuntime {
   }
 
   prepare(intent: TurnIntent): TurnStarted { return this.coordinator.prepare(intent) }
+
+  /** 持久化受理后立即发布；后续异步上下文与配置工作继续保持运行态。 */
+  publishStarted(turn: TurnStarted): void {
+    const current = this.coordinator.getTurn(turn.turnId)
+    if (!current || current.requestId !== turn.requestId || current.version !== turn.version) return
+    try { this.onEvent?.(current, { type: 'turn-started' }) } catch (error) { console.warn('[turn-display] start projection failed', { turnId: turn.turnId, version: turn.version, error }) }
+  }
 
   prepareContinuation(input: Parameters<TurnCoordinator['prepareContinuation']>[0]): TurnStarted {
     return this.coordinator.prepareContinuation(input)
@@ -138,7 +146,7 @@ export class TurnRuntime {
     this.publishControlProjection(turnId, before, result.outcome === 'cancelled' ? 'source-cancelled' : 'source-timeout')
   }
   recover(): number { return this.coordinator.recover() }
-  recoverSession(sessionId: string): number { return this.coordinator.recover(sessionId) }
+  recoverSession(sessionId: string, excludeTurnId?: string): number { return this.coordinator.recover(sessionId, excludeTurnId) }
   terminal(turnId: string): TurnTerminal | undefined { return this.coordinator.getTerminal(turnId) }
   listTerminals(sessionId?: string): TurnTerminal[] { return this.coordinator.listTerminals(sessionId) }
   retryCheckpoint(turnId: string): void { this.coordinator.retryCheckpoint(turnId) }

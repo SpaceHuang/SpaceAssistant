@@ -29,6 +29,36 @@ function storage(): TurnStorage {
 }
 
 describe('TurnCoordinator', () => {
+  it('recover 可排除刚启动且正在交给 Hosted 执行的当前 turn', () => {
+    const db = storage()
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' })
+    const started = coordinator.prepare({ mode: 'create-user', requestId: 'r-current', sessionId: 's1', input: { text: 'hi' }, config: {} })
+    db.listUnfinishedTurns = vi.fn(() => [{ turnId: started.turnId, assistantMessageId: started.assistantMessage.id }])
+    db.recoverTurn = vi.fn().mockReturnValue(true)
+
+    expect(coordinator.recover('s1', started.turnId)).toBe(0)
+    expect(db.recoverTurn).not.toHaveBeenCalled()
+    expect(coordinator.getTurn(started.turnId)?.assistantMessage.status).toBe('streaming')
+  })
+
+  it('recover residues 时跳过当前 turn，但仍恢复旧 turn', () => {
+    const db = storage()
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' })
+    const started = coordinator.prepare({ mode: 'create-user', requestId: 'r-current-residue', sessionId: 's1', input: { text: 'hi' }, config: {} })
+    const oldAssistant = { ...assistant, id: 'a-old' }
+    db.listUnfinishedTurns = vi.fn(() => [])
+    db.listRecoverableResidues = vi.fn(() => [
+      { message: started.assistantMessage, turnId: started.turnId },
+      { message: oldAssistant, turnId: 'old-turn' }
+    ])
+    db.recoverTurn = vi.fn().mockReturnValue(true)
+
+    expect(coordinator.recover('s1', started.turnId)).toBe(1)
+    expect(db.recoverTurn).toHaveBeenCalledOnce()
+    expect(db.recoverTurn).toHaveBeenCalledWith('old-turn', oldAssistant.id)
+    expect(coordinator.getTurn(started.turnId)?.assistantMessage.status).toBe('streaming')
+  })
+
   it('冻结配置规范化时保留上下文压缩触发比例', () => {
     expect(normalizeTurnExecutionConfig({ lane: 'desktop', contextCompactionTriggerRatio: 0.6 })).toMatchObject({ contextCompactionTriggerRatio: 0.6 })
   })
@@ -722,7 +752,7 @@ describe('TurnCoordinator', () => {
     expect(db.checkpoint).toHaveBeenLastCalledWith('id', 3, expect.objectContaining({ content: '', status: 'cancelled' }))
   })
 
-  it('finishing 窗口只接受在途工具结果，屏蔽新的 tool-use 和 source completed', () => {
+  it('finishing 窗口保留已提交响应迟到的 tool-use 与结果，屏蔽 source completed', () => {
     const db = storage()
     const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id', finishingWindowMs: 5_000 }, undefined, vi.fn())
     const started = coordinator.prepare({ mode: 'create-user', requestId: 'r-finishing', sessionId: 's1', input: { text: 'hi' }, config: {} })
@@ -730,10 +760,17 @@ describe('TurnCoordinator', () => {
     vi.useFakeTimers()
     void coordinator.execute(started.turnId, started.startToken, source)
     coordinator.cancel(started.turnId)
-    coordinator.consume(started.turnId, { type: 'tool-use', id: 'new-tool', toolName: 'run_shell', input: {} })
-    coordinator.consume(started.turnId, { type: 'tool-result', id: 'old-tool', result: { success: false, error: 'interrupted' } })
-    expect(coordinator.getTurn(started.turnId)?.assistantMessage.toolCalls ?? []).toHaveLength(0)
+    coordinator.consume(started.turnId, { type: 'tool-use', id: 'late-tool', toolName: 'run_shell', input: { command: 'pwd' } })
+    coordinator.consume(started.turnId, { type: 'tool-result', id: 'late-tool', result: { success: true, output: '/project' } })
+    coordinator.consume(started.turnId, { type: 'source-completed' })
+    expect(coordinator.getTurn(started.turnId)?.assistantMessage.toolCalls).toMatchObject([
+      { id: 'late-tool', toolName: 'run_shell', status: 'completed', result: { success: true, output: '/project' } }
+    ])
     vi.advanceTimersByTime(5_000)
+    expect(coordinator.getTerminal(started.turnId)?.message).toMatchObject({
+      status: 'cancelled',
+      toolCalls: [{ id: 'late-tool', toolName: 'run_shell', status: 'completed', result: { success: true, output: '/project' } }]
+    })
     vi.useRealTimers()
   })
 

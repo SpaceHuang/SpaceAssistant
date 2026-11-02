@@ -865,6 +865,7 @@ describe('file IPC handlers', () => {
       version: 3,
       assistantMessage: { ...started.assistantMessage, status: 'failed' as const }
     }))
+    const runtimePublishStarted = vi.fn()
     ctx.turnRuntime = {
       coordinator: {
         prepare: vi.fn().mockReturnValue(started),
@@ -874,6 +875,7 @@ describe('file IPC handlers', () => {
         getTerminal: vi.fn()
       },
       consume: runtimeConsume,
+      publishStarted: runtimePublishStarted,
       cancel: vi.fn(),
       listActive: vi.fn(() => []),
       subscribe: vi.fn(() => () => undefined)
@@ -896,6 +898,7 @@ describe('file IPC handlers', () => {
     await expect(handler({}, {
       mode: 'create-user', requestId: 'failed-configuring-request', sessionId: 'session-1', input: { text: 'hello' }, config: {}
     })).resolves.toMatchObject({ turnId: 'failed-configuring-turn' })
+    expect(runtimePublishStarted).toHaveBeenCalledWith(started)
 
     // 直接调用 coordinator.consume 不会经过 runtime 的 projection 出口，渲染层会一直停在「生成中」。
     await vi.waitFor(() => expect(runtimeConsume).toHaveBeenCalled())

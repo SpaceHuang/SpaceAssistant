@@ -627,7 +627,7 @@ export function ConfigSettingsPage() {
         locale: v.locale,
 
         thinkingEffort: v.thinkingEffort,
-        contextCompactionTriggerRatio: v.contextCompactionTriggerRatio / 100,
+        contextCompactionTriggerRatio: (v.contextCompactionTriggerRatio ?? Math.round((cfg?.contextCompactionTriggerRatio ?? 0.8) * 100)) / 100,
 
         models,
 

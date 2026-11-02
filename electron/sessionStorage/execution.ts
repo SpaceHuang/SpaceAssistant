@@ -172,12 +172,12 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       return true
     },
     invalidateHostedContext: (sessionId) => { hostedContextBySession.delete(sessionId) },
-    recoverExecutionTarget: (sessionId) => {
+    recoverExecutionTarget: (sessionId, excludeTurnId) => {
       if (hasActiveSessionExecutionOwner(sessionId)) {
         return { status: 'active-owner', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }
       }
       const turnRuntime = turnRuntimeByExecution.get(execution)
-      if (turnRuntime) turnRuntime.recoverSession(sessionId)
+      if (turnRuntime) turnRuntime.recoverSession(sessionId, excludeTurnId)
       else cleanupStreamingResiduesForSession(db, sessionId)
       const recovered = transcriptRecovery.recoverTarget(sessionId)
       return { status: recovered.status, releasedUnstarted: recovered.releasedUnstarted,

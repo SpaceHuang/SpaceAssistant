@@ -19,9 +19,273 @@ import { createStorageLifecycleControl } from '../sessionStorage/lifecycle'
 import { readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import { publishTranscriptParityProof } from '../sessionStorage/sqliteRuntimeBindings'
 import * as agentLogger from '../agentLogger/agentLogger'
-import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, hasSessionProjectionEligibility, readSessionTranscriptProjection, reconstructProviderRetryOperations, refreshSessionTranscriptParityProof, resolveProjectedRetryContext, searchProjectedMessages } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
+import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, getProjectedTurnContext, hasSessionProjectionEligibility, readSessionTranscriptProjection, reconstructProviderRetryOperations, refreshSessionTranscriptParityProof, resolveProjectedRetryContext, searchProjectedMessages } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 
 const runStoragePerf = process.env.SPACEASSISTANT_RUN_STORAGE_PERF === '1'
+
+describe('interrupted turn step display reconstruction', () => {
+  it('keeps tool outcomes isolated when different turns reuse a provider tool call id', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'reused interrupted tool id', model: 'test' })
+    const turns = [
+      { prefix: 'reuse-a', turnId: 'reuse-turn-a', assistantId: 'reuse-assistant-a', path: 'a.txt', result: { success: true, data: 'A' }, kind: 'tool-call-finished' as const },
+      { prefix: 'reuse-b', turnId: 'reuse-turn-b', assistantId: 'reuse-assistant-b', path: 'b.txt', result: { success: false, error: 'B failed' }, kind: 'tool-call-finished' as const },
+      { prefix: 'reuse-c', turnId: 'reuse-turn-c', assistantId: 'reuse-assistant-c', path: 'c.txt', result: { success: false }, kind: 'tool-call-not-dispatched' as const }
+    ]
+    for (const [index, turn] of turns.entries()) {
+      appendMessage(db, { id: `${turn.prefix}-user`, sessionId: session.id, role: 'user', content: 'run tool', timestamp: index * 10 + 1, status: 'sent' })
+      appendMessage(db, { id: turn.assistantId, sessionId: session.id, role: 'assistant', content: '', timestamp: index * 10 + 2, status: 'streaming' })
+      createPersistedTurn(db, { turnId: turn.turnId, requestId: `${turn.turnId}-request`, sessionId: session.id,
+        userMessageId: `${turn.prefix}-user`, assistantMessageId: turn.assistantId, state: 'terminal', outcome: 'cancelled' })
+    }
+    for (const [index, turn] of turns.entries()) {
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 50, session.id)
+      const sequence = 0
+      await history.appendBatch([
+        { invocationId: turn.turnId, turnId: turn.turnId, sequence: sequence + 1, schemaVersion: 1,
+          eventId: `${turn.turnId}-response`, idempotencyKey: `${turn.turnId}-response`, kind: 'model-response-committed',
+          payload: { message: { id: turn.assistantId, role: 'assistant', content: '', toolCalls: [{ id: 'call_0', name: 'read_file', input: { path: turn.path } }] } } },
+        { invocationId: turn.turnId, turnId: turn.turnId, sequence: sequence + 2, schemaVersion: 1,
+          eventId: `${turn.turnId}-started`, idempotencyKey: `${turn.turnId}-started`, kind: 'tool-call-started', payload: { toolCallId: 'call_0' } },
+        { invocationId: turn.turnId, turnId: turn.turnId, sequence: sequence + 3, schemaVersion: 1,
+          eventId: `${turn.turnId}-settled`, idempotencyKey: `${turn.turnId}-settled`, kind: turn.kind,
+          payload: turn.kind === 'tool-call-finished'
+            ? { toolCallId: 'call_0', success: turn.result.success, result: turn.result }
+            : { toolCallId: 'call_0', result: turn.result } }
+      ], sequence)
+      updateMessageContent(db, turn.assistantId, { status: 'cancelled' })
+    }
+
+    const page = getProjectedChatMessagePage(db, session.id, null, 20)
+    const recovered = turns.map((turn) => page.entries.find(({ message }) => message.id === turn.assistantId)!.message.toolCalls![0]!)
+    expect(recovered[0]).toMatchObject({ id: 'call_0', input: { path: 'a.txt' }, status: 'completed', result: { success: true, data: 'A' } })
+    expect(recovered[1]).toMatchObject({ id: 'call_0', input: { path: 'b.txt' }, status: 'failed', result: { success: false, error: 'B failed' } })
+    expect(recovered[2]).toMatchObject({ id: 'call_0', input: { path: 'c.txt' }, status: 'failed', result: { success: false, notExecuted: true } })
+    db.close()
+  })
+
+  it('replaces a stale executing card with the completed tool result from History', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'completed tool history recovery', model: 'test' })
+    appendMessage(db, { id: 'completed-recovery-user', sessionId: session.id, role: 'user', content: 'pull changes', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'completed-recovery-assistant', sessionId: session.id, role: 'assistant', content: 'Pull complete', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'completed-recovery-turn', requestId: 'completed-recovery-request', sessionId: session.id,
+      userMessageId: 'completed-recovery-user', assistantMessageId: 'completed-recovery-assistant', state: 'terminal', outcome: 'completed' })
+    getDbConnection(db).prepare('UPDATE messages SET tool_calls=? WHERE id=?').run(JSON.stringify([
+      { id: 'fetch-call', toolName: 'run_shell', input: {}, status: 'executing', riskLevel: 'high' }
+    ]), 'completed-recovery-assistant')
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 50, session.id)
+    const stdout = 'Updating abc..def\nFast-forward\n 20 files changed\n'
+    await history.appendBatch([
+      { invocationId: 'completed-recovery-turn', turnId: 'completed-recovery-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'completed-recovery-context', idempotencyKey: 'completed-recovery-context', kind: 'invocation-context-committed',
+        payload: { messages: [{ id: 'completed-recovery-user', role: 'user', content: 'pull changes', timestamp: 1 }] } },
+      { invocationId: 'completed-recovery-turn', turnId: 'completed-recovery-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'completed-recovery-response', idempotencyKey: 'completed-recovery-response', kind: 'model-response-committed',
+        payload: { message: { id: 'completed-recovery-assistant', role: 'assistant', content: 'Pull complete', timestamp: 2,
+          toolCalls: [{ id: 'fetch-call', name: 'run_shell', input: { command: 'git fetch origin --prune' } }] } } },
+      { invocationId: 'completed-recovery-turn', turnId: 'completed-recovery-turn', sequence: 3, schemaVersion: 1,
+        eventId: 'completed-recovery-started', idempotencyKey: 'completed-recovery-started', kind: 'tool-call-started', payload: { toolCallId: 'fetch-call' } },
+      { invocationId: 'completed-recovery-turn', turnId: 'completed-recovery-turn', sequence: 4, schemaVersion: 1,
+        eventId: 'completed-recovery-finished', idempotencyKey: 'completed-recovery-finished', kind: 'tool-call-finished',
+        payload: { toolCallId: 'fetch-call', success: true, result: { success: true, data: { stdout, stderr: '', exitCode: 0, status: 'completed' } } } },
+      { invocationId: 'completed-recovery-turn', turnId: 'completed-recovery-turn', sequence: 5, schemaVersion: 1,
+        eventId: 'completed-recovery-terminal', idempotencyKey: 'completed-recovery-terminal', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    updateMessageContent(db, 'completed-recovery-assistant', { status: 'completed' })
+
+    const assistant = getProjectedChatMessagePage(db, session.id, null, 20).entries.find(({ message }) => message.id === 'completed-recovery-assistant')!.message
+    expect(assistant.toolCalls).toEqual([expect.objectContaining({
+      id: 'fetch-call', toolName: 'run_shell', input: { command: 'git fetch origin --prune' }, status: 'completed',
+      result: { success: true, data: { stdout, stderr: '', exitCode: 0, status: 'completed' } }
+    })])
+    db.close()
+  })
+
+  it('recovers missing tools when a completed message has an empty or partial tool list', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'completed tool list recovery', model: 'test' })
+    appendMessage(db, { id: 'missing-cards-user', sessionId: session.id, role: 'user', content: 'run tools', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'missing-cards-assistant', sessionId: session.id, role: 'assistant', content: 'done', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'missing-cards-turn', requestId: 'missing-cards-request', sessionId: session.id,
+      userMessageId: 'missing-cards-user', assistantMessageId: 'missing-cards-assistant', state: 'terminal', outcome: 'completed' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 50, session.id)
+    const calls = [
+      { id: 'missing-call-a', name: 'read_file', input: { path: 'a.txt' } },
+      { id: 'missing-call-b', name: 'read_file', input: { path: 'b.txt' } }
+    ]
+    const events = [
+      { invocationId: 'missing-cards-turn', turnId: 'missing-cards-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'missing-cards-context', idempotencyKey: 'missing-cards-context', kind: 'invocation-context-committed' as const,
+        payload: { messages: [{ id: 'missing-cards-user', role: 'user', content: 'run tools', timestamp: 1 }] } },
+      { invocationId: 'missing-cards-turn', turnId: 'missing-cards-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'missing-cards-response', idempotencyKey: 'missing-cards-response', kind: 'model-response-committed' as const,
+        payload: { message: { id: 'missing-cards-assistant', role: 'assistant', content: 'done', toolCalls: calls } } },
+      ...calls.flatMap((call, index) => [
+        { invocationId: 'missing-cards-turn', turnId: 'missing-cards-turn', sequence: 3 + index * 2, schemaVersion: 1,
+          eventId: `missing-cards-start-${index}`, idempotencyKey: `missing-cards-start-${index}`, kind: 'tool-call-started' as const,
+          payload: { toolCallId: call.id } },
+        { invocationId: 'missing-cards-turn', turnId: 'missing-cards-turn', sequence: 4 + index * 2, schemaVersion: 1,
+          eventId: `missing-cards-finish-${index}`, idempotencyKey: `missing-cards-finish-${index}`, kind: 'tool-call-finished' as const,
+          payload: { toolCallId: call.id, success: true, result: { success: true, data: `result-${index}` } } }
+      ]),
+      { invocationId: 'missing-cards-turn', turnId: 'missing-cards-turn', sequence: 7, schemaVersion: 1,
+        eventId: 'missing-cards-terminal', idempotencyKey: 'missing-cards-terminal', kind: 'invocation-completed' as const, payload: { status: 'completed' } }
+    ]
+    await history.appendBatch(events, 0)
+    updateMessageContent(db, 'missing-cards-assistant', { status: 'completed' })
+
+    const readPage = () => getProjectedChatMessagePage(db, session.id, null, 20).entries
+      .find(({ message }) => message.id === 'missing-cards-assistant')!.message
+    expect(readPage().toolCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'missing-call-a', status: 'completed', result: { success: true, data: 'result-0' } }),
+      expect.objectContaining({ id: 'missing-call-b', status: 'completed', result: { success: true, data: 'result-1' } })
+    ]))
+
+    getDbConnection(db).prepare('UPDATE messages SET tool_calls=? WHERE id=?').run(JSON.stringify([
+      { id: 'missing-call-a', toolName: 'read_file', input: { path: 'a.txt' }, status: 'completed', result: { success: true, data: 'result-0' } }
+    ]), 'missing-cards-assistant')
+    expect(readPage().toolCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'missing-call-a', status: 'completed', result: { success: true, data: 'result-0' } }),
+      expect.objectContaining({ id: 'missing-call-b', status: 'completed', result: { success: true, data: 'result-1' } })
+    ]))
+    db.close()
+  })
+
+  it('does not synchronously reread History for an already complete tool card', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'complete tool card avoids history scan', model: 'test' })
+    appendMessage(db, { id: 'complete-card-user', sessionId: session.id, role: 'user', content: 'run tool', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'complete-card-assistant', sessionId: session.id, role: 'assistant', content: 'done', timestamp: 2, status: 'streaming', toolCalls: [
+      { id: 'complete-card-tool', toolName: 'read_file', input: { path: 'README.md' }, status: 'completed', result: { success: true, data: 'done' } }
+    ] })
+    createPersistedTurn(db, { turnId: 'complete-card-turn', requestId: 'complete-card-request', sessionId: session.id,
+      userMessageId: 'complete-card-user', assistantMessageId: 'complete-card-assistant', state: 'terminal', outcome: 'completed' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 50, session.id)
+    await history.appendBatch([
+      { invocationId: 'complete-card-turn', turnId: 'complete-card-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'complete-card-response', idempotencyKey: 'complete-card-response', kind: 'model-response-committed',
+        payload: { message: { id: 'complete-card-assistant', role: 'assistant', content: 'done', toolCalls: [
+          { id: 'complete-card-tool', name: 'read_file', input: { path: 'README.md' } }
+        ] } } },
+      { invocationId: 'complete-card-turn', turnId: 'complete-card-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'complete-card-start', idempotencyKey: 'complete-card-start', kind: 'tool-call-started', payload: { toolCallId: 'complete-card-tool' } },
+      { invocationId: 'complete-card-turn', turnId: 'complete-card-turn', sequence: 3, schemaVersion: 1,
+        eventId: 'complete-card-finish', idempotencyKey: 'complete-card-finish', kind: 'tool-call-finished',
+        payload: { toolCallId: 'complete-card-tool', success: true, result: { success: true, data: 'done' } } },
+      { invocationId: 'complete-card-turn', turnId: 'complete-card-turn', sequence: 4, schemaVersion: 1,
+        eventId: 'complete-card-terminal', idempotencyKey: 'complete-card-terminal', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    updateMessageContent(db, 'complete-card-assistant', { status: 'completed' })
+    const readHistory = vi.spyOn(SqliteAgentHistory.prototype, 'readRecoverableToolCallsForSession')
+
+    try {
+      getProjectedChatMessagePage(db, session.id, null, 20)
+      expect(readHistory).not.toHaveBeenCalled()
+    } finally {
+      readHistory.mockRestore()
+      db.close()
+    }
+  })
+
+  it('hydrates spilled tool output before rebuilding an interrupted chat card', async () => {
+    const temp = createTempDatabase('interrupted-tool-spill-')
+    const db = temp.db
+    try {
+      const session = createSession(db, { name: 'interrupted spilled tool output', model: 'test' })
+      appendMessage(db, { id: 'spill-user', sessionId: session.id, role: 'user', content: 'read large file', timestamp: 1, status: 'sent' })
+      appendMessage(db, { id: 'spill-assistant', sessionId: session.id, role: 'assistant', content: 'reading', timestamp: 2, status: 'streaming' })
+      createPersistedTurn(db, { turnId: 'spill-turn', requestId: 'spill-request', sessionId: session.id,
+        userMessageId: 'spill-user', assistantMessageId: 'spill-assistant', state: 'terminal', outcome: 'cancelled' })
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 50, session.id)
+      const output = 'x'.repeat(70_000)
+      await history.appendBatch([
+        { invocationId: 'spill-turn', turnId: 'spill-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'spill-context', idempotencyKey: 'spill-context', kind: 'invocation-context-committed',
+          payload: { messages: [{ id: 'spill-user', role: 'user', content: 'read large file', timestamp: 1 }] } },
+        { invocationId: 'spill-turn', turnId: 'spill-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'spill-response', idempotencyKey: 'spill-response', kind: 'model-response-committed',
+          payload: { message: { id: 'spill-assistant', role: 'assistant', content: 'reading', timestamp: 2,
+            toolCalls: [{ id: 'large-call', name: 'read_file', input: { path: 'large.txt' } }] } } },
+        { invocationId: 'spill-turn', turnId: 'spill-turn', sequence: 3, schemaVersion: 1,
+          eventId: 'spill-started', idempotencyKey: 'spill-started', kind: 'tool-call-started', payload: { toolCallId: 'large-call' } },
+        { invocationId: 'spill-turn', turnId: 'spill-turn', sequence: 4, schemaVersion: 1,
+          eventId: 'spill-finished', idempotencyKey: 'spill-finished', kind: 'tool-call-finished',
+          payload: { toolCallId: 'large-call', success: true, result: { success: true, data: output } } },
+        { invocationId: 'spill-turn', turnId: 'spill-turn', sequence: 5, schemaVersion: 1,
+          eventId: 'spill-interrupted', idempotencyKey: 'spill-interrupted', kind: 'invocation-interrupted', payload: { status: 'cancelled' } }
+      ], 0)
+      updateMessageContent(db, 'spill-assistant', { status: 'cancelled' })
+      getDbConnection(db).prepare('UPDATE messages SET tool_calls=? WHERE id=?').run(JSON.stringify([
+        { id: 'large-call', toolName: 'read_file', input: {}, status: 'failed', riskLevel: 'low' }
+      ]), 'spill-assistant')
+      getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      getDbConnection(db).prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE session_id=?").run(session.id)
+      expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
+
+      const assistant = getProjectedChatMessagePage(db, session.id, null, 20).entries.find(({ message }) => message.id === 'spill-assistant')!.message
+      const call = assistant.toolCalls!.find(({ id }) => id === 'large-call')!
+      expect(typeof call.result?.data).toBe('string')
+      expect(call.result?.data).toHaveLength(output.length)
+      expect(call.result?.data).toBe(output)
+    } finally {
+      temp.cleanup()
+    }
+  })
+
+  it('shows completed and in-flight tool steps on the chat page without adding them to model context', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'interrupted tool display', model: 'test' })
+    appendMessage(db, { id: 'interrupted-display-user', sessionId: session.id, role: 'user', content: 'do work', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'interrupted-display-assistant', sessionId: session.id, role: 'assistant', content: 'working', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'interrupted-display-turn', requestId: 'interrupted-display-request', sessionId: session.id,
+      userMessageId: 'interrupted-display-user', assistantMessageId: 'interrupted-display-assistant', state: 'terminal', outcome: 'cancelled' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 50, session.id)
+    await history.appendBatch([
+      { invocationId: 'interrupted-display-turn', turnId: 'interrupted-display-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'interrupted-display-context', idempotencyKey: 'interrupted-display-context', kind: 'invocation-context-committed',
+        payload: { messages: [{ id: 'interrupted-display-user', role: 'user', content: 'do work', timestamp: 1 }] } },
+      { invocationId: 'interrupted-display-turn', turnId: 'interrupted-display-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'interrupted-display-response', idempotencyKey: 'interrupted-display-response', kind: 'model-response-committed',
+        payload: { message: { id: 'interrupted-display-assistant', role: 'assistant', content: 'working', timestamp: 2, toolCalls: [
+          { id: 'completed-step', name: 'read_file', input: { path: 'README.md' } },
+          { id: 'active-step', name: 'grep', input: { pattern: 'TODO' } },
+          { id: 'not-dispatched-step', name: 'write_file', input: { path: 'never-written' } }
+        ] } } },
+      { invocationId: 'interrupted-display-turn', turnId: 'interrupted-display-turn', sequence: 3, schemaVersion: 1,
+        eventId: 'interrupted-display-completed-start', idempotencyKey: 'interrupted-display-completed-start', kind: 'tool-call-started',
+        payload: { toolCallId: 'completed-step' } },
+      { invocationId: 'interrupted-display-turn', turnId: 'interrupted-display-turn', sequence: 4, schemaVersion: 1,
+        eventId: 'interrupted-display-completed-result', idempotencyKey: 'interrupted-display-completed-result', kind: 'tool-call-finished',
+        payload: { toolCallId: 'completed-step', success: true, result: { success: true, data: 'README contents' } } },
+      { invocationId: 'interrupted-display-turn', turnId: 'interrupted-display-turn', sequence: 5, schemaVersion: 1,
+        eventId: 'interrupted-display-active-start', idempotencyKey: 'interrupted-display-active-start', kind: 'tool-call-started',
+        payload: { toolCallId: 'active-step' } },
+      { invocationId: 'interrupted-display-turn', turnId: 'interrupted-display-turn', sequence: 6, schemaVersion: 1,
+        eventId: 'interrupted-display-terminal', idempotencyKey: 'interrupted-display-terminal', kind: 'invocation-interrupted',
+        payload: { status: 'cancelled' } }
+    ], 0)
+    updateMessageContent(db, 'interrupted-display-assistant', { status: 'cancelled' })
+    expect(getProjectedTurnContext(db, session.id, undefined, undefined, []).some((message) =>
+      message.role === 'assistant' && Boolean(message.toolCalls?.length))).toBe(false)
+    // Simulate the cancellation checkpoint's lightweight placeholder that raced the full projection.
+    getDbConnection(db).prepare('UPDATE messages SET tool_calls=? WHERE id=?').run(JSON.stringify([
+      { id: 'active-step', toolName: 'grep', input: {}, status: 'failed', riskLevel: 'low' }
+    ]), 'interrupted-display-assistant')
+
+    getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    getDbConnection(db).prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE session_id=?").run(session.id)
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
+
+    const page = getProjectedChatMessagePage(db, session.id, null, 20)
+    const assistant = page.entries.find(({ message }) => message.id === 'interrupted-display-assistant')!.message
+    expect(assistant.toolCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'completed-step', toolName: 'read_file', status: 'completed', result: { success: true, data: 'README contents' } }),
+      expect.objectContaining({ id: 'active-step', toolName: 'grep', input: { pattern: 'TODO' }, status: 'failed', interrupted: true })
+    ]))
+    db.close()
+  })
+})
 
 describe('provider retry card history reconstruction', () => {
   const row = (kind: string, payload: Record<string, unknown>, createdAt: number) => ({ assistantMessageId: 'assistant', kind, payloadJson: JSON.stringify(payload), createdAt })

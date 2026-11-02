@@ -1,18 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { patch, sync, dispatch } = vi.hoisted(() => ({ patch: vi.fn(), sync: vi.fn(), dispatch: vi.fn() }))
+const { patch, sync, dispatch, stateGet } = vi.hoisted(() => ({ patch: vi.fn(), sync: vi.fn(), dispatch: vi.fn(), stateGet: vi.fn() }))
 vi.mock('./chatRunnerService', () => ({ routePatchMessage: patch }))
 vi.mock('./pendingConfirmStore', () => ({ pendingConfirmStore: { syncFromProjection: sync } }))
-vi.mock('../store', () => ({ store: { getState: vi.fn(() => ({ chat: { currentSessionId: 's1' } })), dispatch } }))
+vi.mock('../store', () => ({ store: { getState: stateGet, dispatch } }))
 
-import { initTurnProjectionBridge } from './turnProjectionService'
-import { setChatStatus, setTurnFailure } from '../store/chatSlice'
+import { initTurnProjectionBridge, reconcileRendererRunningSessions } from './turnProjectionService'
+import { reconcileRunningSessions, setChatStatus, setTurnFailure } from '../store/chatSlice'
 
 describe('turn projection bridge', () => {
   beforeEach(() => {
     patch.mockReset()
     sync.mockReset()
     dispatch.mockReset()
+    stateGet.mockReturnValue({ chat: { currentSessionId: 's1', runningSessions: {} } })
+  })
+
+  it('使用主进程活动快照清理 renderer 中已结束的会话运行标记', async () => {
+    stateGet.mockReturnValue({ chat: { currentSessionId: 's1', runningSessions: {
+      stale: { requestId: 'stale-request', turnId: 'stale-turn', status: 'streaming', updatedAt: 1 }
+    } } })
+    const activeTurn = { sessionId: 'active', requestId: 'active-request', turnId: 'active-turn' }
+    vi.stubGlobal('window', { api: { chatListActiveTurns: vi.fn().mockResolvedValue([activeTurn]) } })
+
+    await reconcileRendererRunningSessions()
+
+    expect(dispatch).toHaveBeenCalledWith(reconcileRunningSessions({
+      observedRunning: [{ sessionId: 'stale', requestId: 'stale-request', turnId: 'stale-turn' }],
+      activeTurns: [activeTurn]
+    }))
   })
 
   it('同一帧只应用同一 turn 的最新 projection', () => {
@@ -45,6 +61,23 @@ describe('turn projection bridge', () => {
     expect(patch).toHaveBeenCalledWith('s1', 'a1', message)
     expect(sync).toHaveBeenCalledTimes(1)
     expect(sync).toHaveBeenCalledWith({ sessionId: 's1', requestId: 'r1', turnId: 't1', turnVersion: 2, terminal: false, message })
+    off()
+  })
+
+  it('接受 turn-started 显示快照后立即标记会话运行中', () => {
+    let listener: ((data: any) => void) | undefined
+    vi.stubGlobal('window', { api: { chatOnTurnDisplay: vi.fn((cb) => { listener = cb; return () => undefined }) } })
+    const off = initTurnProjectionBridge()
+
+    listener?.({ display: {
+      turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: 's1', version: 0,
+      lifecycle: 'running',
+      message: { id: 'accepted-assistant', content: '', contentSegments: [], toolCalls: [], activity: [] }
+    } })
+
+    expect(dispatch).toHaveBeenCalledWith(setChatStatus({
+      status: 'streaming', requestId: 'accepted-request', sessionId: 's1', turnId: 'accepted-turn'
+    }))
     off()
   })
 
@@ -109,7 +142,7 @@ describe('turn projection bridge', () => {
     listener?.({ turn: { turnId: 'terminal-turn', requestId: 'terminal-request', sessionId: 's1', assistantMessage: message, version: 1 }, event: { type: eventType } })
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({
       type: 'chat/setChatStatus',
-      payload: expect.objectContaining({ status, requestId: null, sessionId: 's1' })
+      payload: expect.objectContaining({ status, requestId: 'terminal-request', sessionId: 's1' })
     }))
     off()
   })
@@ -353,6 +386,56 @@ describe('turn projection bridge', () => {
       off()
     })
 
+    it('取消终态接管已持久化的工具步骤，不让临时 display 随运行状态一起消失', async () => {
+      const { emit, chatGetTurnTerminal, chatGetMessagePage } = stubDisplayApi()
+      const assistant = {
+        ...failedMessage,
+        status: 'cancelled',
+        toolCalls: [{ id: 'step-1', toolName: 'toolkit_find', status: 'completed', input: {}, result: { success: true } }]
+      }
+      chatGetTurnTerminal.mockResolvedValue({ turnId: 'cancelled-turn', outcome: 'cancelled', ...committed })
+      chatGetMessagePage.mockResolvedValue({ entries: [{ message: assistant, sequence: 2 }] })
+      const off = initTurnProjectionBridge()
+      emit({ turnId: 'cancelled-turn', requestId: 'r1', sessionId: 's1', version: 1, lifecycle: 'failed', outcome: 'cancelled', message: failedMessage })
+
+      await vi.waitFor(() => expect(patch).toHaveBeenCalledWith('s1', 'a-fail', expect.objectContaining({
+        status: 'cancelled', toolCalls: expect.arrayContaining([expect.objectContaining({ id: 'step-1' })])
+      })))
+      expect(dispatch).toHaveBeenCalledWith(setChatStatus({ status: 'completed', requestId: 'r1', sessionId: 's1', turnId: 'cancelled-turn' }))
+      off()
+    })
+
+    it('终态消息页暂时仍是 streaming 时保留 display 并重试到工具调用落库', async () => {
+      vi.useFakeTimers()
+      try {
+        const { emit, chatGetTurnTerminal, chatGetMessagePage, chatRetryTurnCheckpoint } = stubDisplayApi()
+        const streaming = { ...failedMessage, status: 'streaming' }
+        const cancelled = {
+          ...failedMessage,
+          status: 'cancelled',
+          toolCalls: [{ id: 'late-tool', toolName: 'run_shell', input: {}, status: 'failed', riskLevel: 'high' }]
+        }
+        chatGetTurnTerminal.mockResolvedValue({ turnId: 'late-cancel-turn', outcome: 'cancelled', ...committed })
+        chatGetMessagePage
+          .mockResolvedValueOnce({ entries: [{ message: streaming, sequence: 1 }] })
+          .mockResolvedValueOnce({ entries: [{ message: cancelled, sequence: 1 }] })
+        const off = initTurnProjectionBridge()
+        emit({ turnId: 'late-cancel-turn', requestId: 'r1', sessionId: 's1', version: 1, lifecycle: 'failed', outcome: 'cancelled', message: failedMessage })
+
+        await vi.waitFor(() => expect(chatGetMessagePage).toHaveBeenCalledTimes(1))
+        expect(patch).not.toHaveBeenCalled()
+        expect(chatRetryTurnCheckpoint).toHaveBeenCalledWith('late-cancel-turn')
+
+        await vi.advanceTimersByTimeAsync(100)
+        await vi.waitFor(() => expect(patch).toHaveBeenCalledWith('s1', 'a-fail', expect.objectContaining({
+          status: 'cancelled', toolCalls: expect.arrayContaining([expect.objectContaining({ id: 'late-tool' })])
+        })))
+        off()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     // 评审 2.4：terminal committed 但 60 条消息窗口内找不到该 assistant 消息——移除 display 的
     // 同时必须落终态，否则会话永久卡在 running（中止按钮失效），直到同会话下一 turn 才自愈。
     it('display 终态 committed 但消息页找不到目标消息时仍落终态，不卡 running', async () => {
@@ -361,7 +444,7 @@ describe('turn projection bridge', () => {
       chatGetMessagePage.mockResolvedValue({ entries: [{ message: { ...failedMessage, id: 'a-other', status: 'completed' }, sequence: 1 }] })
       const off = initTurnProjectionBridge()
       emit({ turnId: 'd-miss-turn', requestId: 'r1', sessionId: 's1', version: 1, lifecycle: 'completed', outcome: 'completed', message: failedMessage })
-      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledWith(setChatStatus({ status: 'completed', requestId: null, sessionId: 's1', turnId: 'd-miss-turn' })))
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledWith(setChatStatus({ status: 'completed', requestId: 'r1', sessionId: 's1', turnId: 'd-miss-turn' })))
       off()
     })
 
@@ -378,7 +461,7 @@ describe('turn projection bridge', () => {
         // 退避序列 100ms*2^n（封顶 30s），10 次累计约 87s；一次快进覆盖全部重试后应落失败终态。
         await vi.advanceTimersByTimeAsync(120_000)
         expect(chatRetryTurnCheckpoint).toHaveBeenCalledTimes(10)
-        expect(dispatch).toHaveBeenCalledWith(setChatStatus({ status: 'error', error: 'TURN_CHECKPOINT_FAILED', requestId: null, sessionId: 's1', turnId: 'd-stuck-turn' }))
+        expect(dispatch).toHaveBeenCalledWith(setChatStatus({ status: 'error', error: 'TURN_CHECKPOINT_FAILED', requestId: 'r1', sessionId: 's1', turnId: 'd-stuck-turn' }))
         off()
       } finally {
         vi.useRealTimers()
