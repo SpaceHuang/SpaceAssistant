@@ -11,6 +11,7 @@ export type SettledStepFacts = Readonly<{
   settledCount: number
   settledStepIds: readonly string[]
   pendingStepIds: readonly string[]
+  settledCountByInvocation?: Readonly<Record<string, number>>
   code?: 'SOURCE_GAP'
   case?: string
 }>
@@ -18,7 +19,7 @@ export type SettledStepFacts = Readonly<{
 export type RuntimeTriggerCandidate = Readonly<{ kind: 'none' }> | Readonly<{ kind: 'expired'; case: string }> |
   Readonly<{ kind: 'source-gap'; case: string }> | Readonly<{ kind: 'candidate'; event: Readonly<Record<string, unknown>> }>
 
-export type RuntimeTurnCompletionFact = Readonly<{ kind: 'missing' }> | Readonly<{ kind: 'source-gap'; case: string }> |
+export type RuntimeTurnCompletionFact = Readonly<{ kind: 'pending' }> | Readonly<{ kind: 'missing' }> | Readonly<{ kind: 'source-gap'; case: string }> |
   Readonly<{ kind: 'terminal'; sessionId: string; turnId: string; outcome: 'completed' | 'failed' | 'cancelled' | 'timed-out'; occurredAt: number }>
 
 /** Resolve all five source types from their trusted facts; this layer extracts facts and never authorizes access. */
@@ -33,7 +34,7 @@ export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord
   const condition: RuntimeTriggerCondition = trigger.definition.condition
   if (condition.type === 'time') return runtimeTriggerCandidate(trigger, input.now)
   if (condition.type === 'session_steps') {
-    if (condition.mode === 'sync') return { kind: 'none' }
+    if (condition.mode === 'sync') return input.now >= trigger.expiresAt ? { kind: 'expired', case: 'source-expired' } : { kind: 'none' }
     if (!input.readSettledSteps) return { kind: 'source-gap', case: 'step-history-unavailable' }
     try { return runtimeTriggerCandidate(trigger, input.now, await input.readSettledSteps(condition.targetSessionId)) }
     catch { return { kind: 'source-gap', case: 'step-history-unavailable' } }
@@ -43,6 +44,7 @@ export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord
     let fact: RuntimeTurnCompletionFact
     try { fact = await input.readTurnCompletion(condition.targetSessionId, condition.turnId) }
     catch { return { kind: 'source-gap', case: 'turn-source-unavailable' } }
+    if (fact.kind === 'pending') return { kind: 'none' }
     if (fact.kind === 'missing') return { kind: 'source-gap', case: 'target-turn-missing' }
     if (fact.kind === 'source-gap') return { kind: 'source-gap', case: fact.case }
     if (fact.sessionId !== condition.targetSessionId || fact.turnId !== condition.turnId || !Number.isSafeInteger(fact.occurredAt)) {
@@ -55,7 +57,8 @@ export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord
     const runtimeGeneration = trigger.definition.sourceBaseline.runtimeGeneration
     if (typeof runtimeGeneration !== 'string' || !runtimeGeneration) return { kind: 'source-gap', case: 'process-runtime-generation-missing' }
     const fact = (input.readProcessExit ?? readManagedProcessExit)(condition.managedProcessId, runtimeGeneration)
-    if (!fact.ok) return { kind: 'source-gap', case: fact.case }
+    if (fact.kind === 'running') return { kind: 'none' }
+    if (fact.kind === 'source-gap') return { kind: 'source-gap', case: fact.case }
     if (fact.managedProcessId !== condition.managedProcessId || fact.runtimeGeneration !== runtimeGeneration || fact.sessionId !== trigger.ownerSessionId) {
       return { kind: 'source-gap', case: 'process-fact-identity-invalid' }
     }
@@ -71,7 +74,7 @@ export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord
     baseline: { through: Number(baseline.through), coverageRevision: Number(baseline.coverageRevision) } })
   if (!facts.ok) return { kind: 'source-gap', case: facts.case }
   const match = facts.matches[0]
-  if (!match) return { kind: 'none' }
+  if (!match) return input.now >= trigger.expiresAt ? { kind: 'expired', case: 'source-expired' } : { kind: 'none' }
   if (match.timestamp > trigger.expiresAt) return { kind: 'expired', case: 'im-message-after-expiry' }
   return { kind: 'candidate', event: { type: 'im_message', occurredAt: match.timestamp, acceptedSeq: match.acceptedSeq,
     channel: match.channel, accountId: match.accountId, conversationId: match.conversationId, senderId: match.senderId,
@@ -90,8 +93,8 @@ export function runtimeTriggerCandidate(trigger: RuntimeTriggerRecord, now: numb
     return { kind: 'candidate', event: { type: 'time', occurredAt: at, scheduledAt: condition.at, taskPrompt: condition.taskPrompt } }
   }
   if (condition.type !== 'session_steps') return { kind: 'none' }
-  if (condition.mode === 'sync') return { kind: 'none' }
   if (now >= trigger.expiresAt) return { kind: 'expired', case: 'source-expired' }
+  if (condition.mode === 'sync') return { kind: 'none' }
   if (!settledFacts) return { kind: 'none' }
   if (!settledFacts.ok) return { kind: 'source-gap', case: settledFacts.case ?? 'step-source-gap' }
   const baseline = trigger.definition.sourceBaseline.settledCount
@@ -299,14 +302,16 @@ export async function readSessionSettledStepFacts(execution: Pick<SessionExecuti
     const invocationIds = history.listInvocationIds()
     const settledStepIds: string[] = []
     const pendingStepIds: string[] = []
+    const settledCountByInvocation: Record<string, number> = {}
     for (const invocationId of invocationIds) {
       if (!invocationId.trim()) return gap('history-invocation-identity-invalid')
       const facts = await readSettledStepFacts(history, invocationId)
       if (!facts.ok) return facts
+      settledCountByInvocation[invocationId] = facts.settledCount
       settledStepIds.push(...facts.settledStepIds.map((id) => `${invocationId}:${id}`))
       pendingStepIds.push(...facts.pendingStepIds.map((id) => `${invocationId}:${id}`))
     }
-    return { ok: true, settledCount: settledStepIds.length, settledStepIds, pendingStepIds }
+    return { ok: true, settledCount: settledStepIds.length, settledStepIds, pendingStepIds, settledCountByInvocation }
   } catch {
     return gap('session-history-unavailable')
   }
@@ -318,7 +323,8 @@ export function readPersistedTurnTerminal(value: unknown, sessionId: string, tur
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'source-gap', case: 'turn-unavailable' }
   const turn = value as UnknownRecord
   if (turn.sessionId !== sessionId || turn.turnId !== turnId) return { kind: 'source-gap', case: 'turn-identity-mismatch' }
-  if (turn.state !== 'terminal') return { kind: 'pending' }
+  if (turn.state !== 'terminal') return ['prepared', 'configuring', 'executing'].includes(String(turn.state))
+    ? { kind: 'pending' } : { kind: 'source-gap', case: 'turn-state-invalid' }
   if (typeof turn.outcome !== 'string' || !['completed', 'parked', 'failed', 'cancelled', 'timed-out', 'timed_out', 'interrupted', 'recovered', 'commit-uncertain'].includes(turn.outcome)) {
     return { kind: 'source-gap', case: 'turn-terminal-outcome-invalid' }
   }

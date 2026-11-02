@@ -151,7 +151,8 @@ export function createRuntimeTriggerService(commands: SessionCommands, options: 
         updateRuntimeTrigger(commands, record.id, input.expectedRevision, { state: 'expired', updatedAt: timestamp })
         return null
       }
-      return updateRuntimeTrigger(commands, record.id, input.expectedRevision, { state: 'matched', matchedAt: timestamp, event: structuredClone(input.event), updatedAt: timestamp })
+      return updateRuntimeTrigger(commands, record.id, input.expectedRevision, { state: 'matched', matchedAt: timestamp,
+        event: { ...structuredClone(input.event), occurredAt: sourceAt }, updatedAt: timestamp })
     },
     expire(input: { triggerId: string; expectedRevision: number }): RuntimeTriggerOperationDto {
       const record = readRuntimeTrigger(commands, input.triggerId)

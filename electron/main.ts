@@ -845,6 +845,7 @@ app.whenReady().then(async () => {
   const runtimeTriggerDelivery = createRuntimeTriggerDelivery({
     read: (id) => sessionStorage.commands.runtimeTriggers.read(id),
     update: (id, revision, patch) => sessionStorage.commands.runtimeTriggers.update(id, revision, patch),
+    expire: (id, revision) => sessionStorage.commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: Date.now() }),
     authorize: (trigger, scope) => {
       const resolved = resolveRuntimeTriggerBinding(trigger)
       return resolved && JSON.stringify(resolved.queueScope) === JSON.stringify(scope) ? resolved : null
@@ -882,6 +883,7 @@ app.whenReady().then(async () => {
       },
       match: (id, revision, event) => sessionStorage.commands.runtimeTriggers.update(id, revision,
         { state: 'matched', matchedAt: Date.now(), event, updatedAt: Date.now() }),
+      expire: (id, revision) => sessionStorage.commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: Date.now() }),
       read: (id) => sessionStorage.commands.runtimeTriggers.read(id),
       acceptPause: ({ trigger }) => sessionStorage.commands.runtimeTriggers.update(trigger.id, trigger.revision,
         { result: { ...(trigger.result ?? {}), pauseAcceptedBySdk: true }, updatedAt: Date.now() }),
@@ -1316,7 +1318,7 @@ app.whenReady().then(async () => {
       readTurnCompletion: async (targetSessionId, targetTurnId) => {
         const turn = sessionStorage.execution.readTurn({ sessionId: targetSessionId, turnId: targetTurnId })
         const terminal = readPersistedTurnTerminal(turn, targetSessionId, targetTurnId)
-        if (terminal.kind === 'pending') return { kind: 'missing' }
+        if (terminal.kind === 'pending') return { kind: 'pending' }
         if (terminal.kind === 'source-gap') return { kind: 'source-gap', case: terminal.case }
         const occurredAt = Number((turn as { updatedAt?: unknown }).updatedAt)
         if (!Number.isSafeInteger(occurredAt)) return { kind: 'source-gap', case: 'turn-terminal-time-unavailable' }

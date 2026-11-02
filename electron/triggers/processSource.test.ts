@@ -11,19 +11,28 @@ describe('managed process trigger facts', () => {
     expect(finishManagedProcess(handle, { exitCode: 2, signal: null, reason: 'process_exit', outputRef: { bytes: 5, truncated: false } })).toBe(true)
     expect(finishManagedProcess(handle, { exitCode: 0, signal: null, reason: 'late-close' })).toBe(false)
     expect(readManagedProcessExit(handle.managedProcessId, handle.runtimeGeneration)).toMatchObject({ exitCode: 2, reason: 'process_exit' })
-    expect(readManagedProcessExit(handle.managedProcessId, 'other-generation')).toMatchObject({ ok: false, code: 'TRIGGER_SOURCE_GAP' })
+    expect(readManagedProcessExit(handle.managedProcessId, 'other-generation')).toMatchObject({ kind: 'source-gap', code: 'TRIGGER_SOURCE_GAP' })
     expect(listManagedProcessTargets('session-a')).toEqual([])
+  })
+
+  it('keeps a live process distinguishable from a lost process until its exit is recorded', () => {
+    resetManagedProcessSourceForTests()
+    const handle = beginManagedProcess({ sessionId: 'session-a', toolName: 'run_shell' })
+    expect(readManagedProcessExit(handle.managedProcessId, handle.runtimeGeneration)).toEqual({ kind: 'running' })
+    expect(finishManagedProcess(handle, { exitCode: 0, signal: null, reason: 'process_exit' })).toBe(true)
+    expect(readManagedProcessExit(handle.managedProcessId, handle.runtimeGeneration)).toMatchObject({ kind: 'terminal', exitCode: 0 })
+    expect(readManagedProcessExit('missing', handle.runtimeGeneration)).toMatchObject({ kind: 'source-gap' })
   })
 
   it('rejects arbitrary IDs and cannot infer prior-generation or restart outcomes', () => {
     resetManagedProcessSourceForTests()
-    expect(readManagedProcessExit('1234', 'current')).toMatchObject({ ok: false, code: 'TRIGGER_SOURCE_GAP' })
+    expect(readManagedProcessExit('1234', 'current')).toMatchObject({ kind: 'source-gap', code: 'TRIGGER_SOURCE_GAP' })
     const handle = beginManagedProcess({ sessionId: 'session-a', toolName: 'run_script' })
     const previousGeneration = handle.runtimeGeneration
     resetManagedProcessSourceForTests()
     expect(handle.runtimeGeneration).toBe(previousGeneration)
     expect(previousGeneration).not.toBe(managedProcessRuntimeGeneration())
-    expect(readManagedProcessExit(handle.managedProcessId, handle.runtimeGeneration)).toMatchObject({ ok: false, code: 'TRIGGER_SOURCE_GAP' })
+    expect(readManagedProcessExit(handle.managedProcessId, handle.runtimeGeneration)).toMatchObject({ kind: 'source-gap', code: 'TRIGGER_SOURCE_GAP' })
   })
 
   it.each([

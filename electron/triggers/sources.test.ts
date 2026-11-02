@@ -31,7 +31,7 @@ describe('runtime trigger History source facts', () => {
       ['inv-b', snapshot([response(1, ['tool-b']), settled('tool-call-finished', 'tool-b', 1)], 'inv-b')]])
     const execution = { historyFor: () => ({ listInvocationIds: () => ['inv-a', 'inv-b'], read: async (id: string) => histories.get(id)! }) }
     await expect(readSessionSettledStepFacts(execution as never, 'session-a')).resolves.toEqual({ ok: true, settledCount: 2,
-      settledStepIds: ['inv-a:inv-a:history:1', 'inv-b:inv-b:history:1'], pendingStepIds: [] })
+      settledStepIds: ['inv-a:inv-a:history:1', 'inv-b:inv-b:history:1'], pendingStepIds: [], settledCountByInvocation: { 'inv-a': 1, 'inv-b': 1 } })
   })
   it('incrementally appends new durable step events without rebuilding the existing History prefix', () => {
     const first = snapshot([response(1, ['tool-a'])], 'incremental')
@@ -55,6 +55,16 @@ describe('runtime trigger History source facts', () => {
     }) })).resolves.toMatchObject({ kind: 'source-gap', case: 'turn-fact-identity-invalid' })
   })
 
+  it('keeps a registered Turn pending across scans and matches only after it becomes terminal', async () => {
+    const record = trigger({ type: 'turn_completed', targetSessionId: 'target', turnId: 'active-turn' })
+    let completion = { kind: 'pending' as const }
+    const readTurnCompletion = vi.fn(async () => completion)
+    await expect(evaluateRuntimeTriggerSource(record, { now: 600, readTurnCompletion })).resolves.toEqual({ kind: 'none' })
+    await expect(evaluateRuntimeTriggerSource(record, { now: 700, readTurnCompletion })).resolves.toEqual({ kind: 'none' })
+    completion = { kind: 'terminal', sessionId: 'target', turnId: 'active-turn', outcome: 'completed', occurredAt: 800 }
+    await expect(evaluateRuntimeTriggerSource(record, { now: 800, readTurnCompletion })).resolves.toMatchObject({ kind: 'candidate', event: { turnId: 'active-turn' } })
+  })
+
   it('resolves only managed process exits from the registration runtime generation', async () => {
     resetManagedProcessSourceForTests()
     const process = beginManagedProcess({ sessionId: 'owner', toolName: 'run_shell' })
@@ -64,6 +74,18 @@ describe('runtime trigger History source facts', () => {
     await expect(evaluateRuntimeTriggerSource(record, { now: 600 })).resolves.toMatchObject({ kind: 'candidate', event: { exitCode: 4, runtimeGeneration: managedProcessRuntimeGeneration() } })
     const stale = { ...record, definition: { ...record.definition, sourceBaseline: { runtimeGeneration: 'old-generation' } } }
     await expect(evaluateRuntimeTriggerSource(stale, { now: 600 })).resolves.toMatchObject({ kind: 'source-gap', case: 'runtime-generation-mismatch' })
+    resetManagedProcessSourceForTests()
+  })
+
+  it('leaves a live managed process waiting through repeated evaluations and matches its eventual exit', async () => {
+    resetManagedProcessSourceForTests()
+    const process = beginManagedProcess({ sessionId: 'owner', toolName: 'run_shell' })
+    const base = trigger({ type: 'process_exit', managedProcessId: process.managedProcessId })
+    const record = { ...base, definition: { ...base.definition, sourceBaseline: { runtimeGeneration: process.runtimeGeneration } } }
+    await expect(evaluateRuntimeTriggerSource(record, { now: 100 })).resolves.toEqual({ kind: 'none' })
+    await expect(evaluateRuntimeTriggerSource(record, { now: 200 })).resolves.toEqual({ kind: 'none' })
+    finishManagedProcess(process, { exitCode: 0, signal: null, reason: 'process_exit', occurredAt: 300 })
+    await expect(evaluateRuntimeTriggerSource(record, { now: 300 })).resolves.toMatchObject({ kind: 'candidate', event: { exitCode: 0 } })
     resetManagedProcessSourceForTests()
   })
 
@@ -84,6 +106,12 @@ describe('runtime trigger History source facts', () => {
       .toMatchObject({ kind: 'candidate', event: { baseline: 2, actual: 4, threshold: 2 } })
     const syncRecord = trigger({ type: 'session_steps', targetSessionId: 'target', origin: 'registration', threshold: 1, mode: 'sync', pauseTimeoutMs: 1000, onPauseTimeout: 'continue' })
     expect(runtimeTriggerCandidate(syncRecord, 100, { ok: true, settledCount: 9, settledStepIds: [], pendingStepIds: [] })).toEqual({ kind: 'none' })
+    expect(runtimeTriggerCandidate({ ...syncRecord, expiresAt: 100 }, 101)).toEqual({ kind: 'expired', case: 'source-expired' })
+  })
+
+  it('lets recovery expire a sync trigger that has no further postStep callback', async () => {
+    const record = trigger({ type: 'session_steps', targetSessionId: 'target', origin: 'registration', threshold: 1, mode: 'sync', pauseTimeoutMs: 1000, onPauseTimeout: 'continue' }, 500)
+    await expect(evaluateRuntimeTriggerSource(record, { now: 501 })).resolves.toEqual({ kind: 'expired', case: 'source-expired' })
   })
 
   it('runs a one-second scanner and CAS removes a candidate from subsequent scans', async () => {
@@ -186,6 +214,8 @@ describe('runtime trigger History source facts', () => {
 
   it('requires an exact persisted terminal Turn and preserves its outcome', () => {
     expect(readPersistedTurnTerminal({ sessionId: 's', turnId: 't', state: 'executing' }, 's', 't')).toEqual({ kind: 'pending' })
+    expect(readPersistedTurnTerminal({ sessionId: 's', turnId: 't', state: 'prepared' }, 's', 't')).toEqual({ kind: 'pending' })
+    expect(readPersistedTurnTerminal({ sessionId: 's', turnId: 't', state: 'unknown' }, 's', 't')).toMatchObject({ kind: 'source-gap', case: 'turn-state-invalid' })
     expect(readPersistedTurnTerminal({ sessionId: 'other', turnId: 't', state: 'terminal', outcome: 'completed' }, 's', 't')).toMatchObject({ kind: 'source-gap' })
     expect(readPersistedTurnTerminal({ sessionId: 's', turnId: 't', state: 'terminal', outcome: 'interrupted' }, 's', 't'))
       .toEqual({ kind: 'terminal', sessionId: 's', turnId: 't', outcome: 'interrupted' })

@@ -70,6 +70,7 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
     },
     update: (id, expectedRevision, patch) => {
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || Object.keys(patch).length === 0) throw new TypeError('invalid runtime trigger update')
+      if (patch.state === 'matched' && (!Number.isSafeInteger(patch.matchedAt) || !patch.event || !Number.isSafeInteger(patch.event.occurredAt))) return null
       const columns: Record<keyof RuntimeTriggerPatch, string> = { state:'state',matchedAt:'matched_at',event:'event_json',messageId:'message_id',attempts:'attempts',nextAttemptAt:'next_attempt_at',result:'result_json',updatedAt:'updated_at' }
       const entries = Object.entries(patch) as Array<[keyof RuntimeTriggerPatch, RuntimeTriggerPatch[keyof RuntimeTriggerPatch]]>
       const assignments = entries.map(([key]) => `${columns[key]}=?`).join(',')
@@ -78,10 +79,11 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
       return runInTransaction(conn, () => {
         const transition = patch.state === undefined
           ? "state IN ('waiting','matched')"
-          : patch.state === 'matched' ? "state='waiting'"
+          : patch.state === 'matched' ? "state='waiting' AND expires_at>=? AND (json_extract(definition_json,'$.condition.type')!='session_steps' OR json_extract(definition_json,'$.condition.mode')!='sync' OR expires_at>=?)"
             : ['cancelled','expired','failed'].includes(patch.state) ? "state IN ('waiting','matched')"
               : patch.state === 'completed' ? "state='matched'" : '0'
-        const changed = conn.prepare(`UPDATE runtime_triggers SET ${assignments},revision=revision+1 WHERE id=? AND revision=? AND ${transition}`).run(...values,id,expectedRevision)
+        const transitionValues = patch.state === 'matched' ? [Number(patch.event?.occurredAt), Number(patch.matchedAt)] : []
+        const changed = conn.prepare(`UPDATE runtime_triggers SET ${assignments},revision=revision+1 WHERE id=? AND revision=? AND ${transition}`).run(...values,id,expectedRevision,...transitionValues)
         return Number(changed.changes) === 1 ? readRuntimeTrigger(id) : null
       })
     }

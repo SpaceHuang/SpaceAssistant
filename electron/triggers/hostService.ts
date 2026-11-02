@@ -36,7 +36,7 @@ export function createRuntimeTriggerHostService(input: {
       const generation = sourceBaseline?.runtimeGeneration
       if (typeof generation !== 'string') return false
       const exit = readManagedProcessExit(condition.managedProcessId, generation)
-      return exit.ok && exit.sessionId === ownerSessionId
+      return exit.kind === 'terminal' && exit.sessionId === ownerSessionId
     }
     if (condition.type === 'im_message') {
       if (ownerSessionId !== receiverSessionId) return false
@@ -82,7 +82,7 @@ export function createRuntimeTriggerHostService(input: {
       if (condition.type === 'session_steps') {
         const facts = await readSessionSettledStepFacts(input.execution, condition.targetSessionId)
         if (!facts.ok) throw new Error(facts.case ?? 'step-baseline-unavailable')
-        return { settledCount: facts.settledCount }
+        return { settledCount: facts.settledCount, settledCountByInvocation: facts.settledCountByInvocation ?? {} }
       }
       if (condition.type === 'process_exit') return { runtimeGeneration: processGeneration() }
       if (condition.type === 'im_message') return input.queries.imAcceptedFacts.captureFrontier({

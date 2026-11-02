@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeTriggerRecord } from '../sessionStorage/public/model'
 import { createRuntimeTriggerRecovery } from './recovery'
+import { beginManagedProcess, finishManagedProcess, resetManagedProcessSourceForTests } from './processSource'
+import { evaluateRuntimeTriggerSource } from './sources'
 
 function matched(overrides: Partial<RuntimeTriggerRecord> = {}): RuntimeTriggerRecord {
   return { id: 'trigger-1', ownerSessionId: 'owner', receiverSessionId: 'receiver', clientKey: 'key',
@@ -68,6 +70,49 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
     await recovery.scan()
     expect(record.attempts).toBe(0)
     expect(startReceiver).not.toHaveBeenCalled()
+  })
+
+  it('removes expired no-match source rows from the bounded waiting scan on the first recovery pass', async () => {
+    let record = matched({ state: 'waiting', expiresAt: 10 })
+    const evaluateWaiting = vi.fn(() => ({ kind: 'expired' as const, case: 'source-expired' }))
+    const expire = vi.fn((_id: string, _revision: number) => { record = { ...record, state: 'expired', revision: record.revision + 1 } })
+    const recovery = createRuntimeTriggerRecovery({
+      listWaiting: () => record.state === 'waiting' ? [record] : [], listMatched: () => [], read: () => record,
+      evaluateWaiting, match: vi.fn(), expire, fail: vi.fn(), deliver: vi.fn(), update: vi.fn(() => null), readReceipt: () => undefined,
+      isSessionBusy: () => false, startReceiver: vi.fn(() => 'unavailable' as const), readTurnTerminal: vi.fn(() => ({ kind: 'missing' as const })), now: () => 11
+    })
+    await recovery.scan()
+    expect(record.state).toBe('expired')
+    await recovery.scan()
+    expect(evaluateWaiting).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a live managed process waiting over scans and matches exactly once after its exit', async () => {
+    resetManagedProcessSourceForTests()
+    const process = beginManagedProcess({ sessionId: 'owner', toolName: 'run_shell' })
+    let record = matched({ id: 'process-trigger', ownerSessionId: 'owner', receiverSessionId: 'receiver', state: 'waiting', expiresAt: 10_000,
+      definition: { version: 1, condition: { type: 'process_exit', managedProcessId: process.managedProcessId }, sourceBaseline: { runtimeGeneration: process.runtimeGeneration } } })
+    const match = vi.fn((_id: string, _revision: number, event: Readonly<Record<string, unknown>>) => {
+      record = { ...record, state: 'matched', revision: record.revision + 1, event }
+      return record
+    })
+    const recovery = createRuntimeTriggerRecovery({
+      listWaiting: () => record.state === 'waiting' ? [record] : [], listMatched: () => record.state === 'matched' ? [record] : [], read: () => record,
+      evaluateWaiting: (trigger, now) => evaluateRuntimeTriggerSource(trigger, { now }), match, expire: vi.fn(), fail: vi.fn(),
+      deliver: vi.fn(() => ({ kind: 'enqueued' as const, messageId: 'marker-1' })), update: vi.fn(() => record),
+      readReceipt: () => ({ queuedMessageId: 'marker-1', state: 'queued' }), isSessionBusy: () => true,
+      startReceiver: vi.fn(() => 'busy' as const), readTurnTerminal: vi.fn(() => ({ kind: 'active' as const })), now: () => 200
+    })
+    await recovery.scan()
+    await recovery.scan()
+    expect(record.state).toBe('waiting')
+    expect(match).not.toHaveBeenCalled()
+    finishManagedProcess(process, { exitCode: 0, signal: null, reason: 'process_exit', occurredAt: 300 })
+    await recovery.scan()
+    await recovery.scan()
+    expect(record).toMatchObject({ state: 'matched', event: { managedProcessId: process.managedProcessId, occurredAt: 300 } })
+    expect(match).toHaveBeenCalledOnce()
+    resetManagedProcessSourceForTests()
   })
 
   it('retries transient delivery errors with the shared wake retry policy and fails after exhaustion', async () => {

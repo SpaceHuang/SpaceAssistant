@@ -50,7 +50,7 @@ describe('sync runtime trigger checkpoint', () => {
     const assembled = createRuntimeTriggerLifecycleAssembly({
       sessionId: 'receiver', listWaitingSync: () => [], listMatchedForExecution: () => [],
       readStepFacts: async () => ({ historyVersion: 0, facts: { ok: true, settledCount: 0, settledStepIds: [], pendingStepIds: [] } }),
-      match: () => null, read: () => null, acceptPause: () => null,
+      match: () => null, expire: () => null, read: () => null, acceptPause: () => null,
       activateDelivery: async () => ({ sessionId: 'receiver', turnId: 'receiver-turn' }),
       subscribeReceiver: () => () => undefined, readReceiver: async () => ({ kind: 'terminal', sessionId: 'receiver', turnId: 'receiver-turn', outcome: 'completed' }),
       fail: () => undefined
@@ -69,6 +69,7 @@ describe('sync runtime trigger checkpoint', () => {
       listMatchedForExecution: () => [],
       readStepFacts: async () => ({ historyVersion: 5, facts: { ok: true, settledCount: 1, settledStepIds: ['step-event'], pendingStepIds: [] } }),
       match: vi.fn((id, revision, event) => { order.push('match'); record = { ...record, state: 'matched', revision: revision + 1, matchedAt: 1000, event }; return record }),
+      expire: () => null,
       read: () => record,
       acceptPause: vi.fn((id, revision, checkpoint) => { order.push('accept'); record = { ...record, revision: revision + 1, result: { pauseAcceptedBySdk: true } }; return record }),
       activateDelivery: vi.fn(async () => { order.push('activate'); return { sessionId: 'receiver', turnId: 'receiver-turn' } }),
@@ -90,6 +91,67 @@ describe('sync runtime trigger checkpoint', () => {
     expect(record.result).toEqual({ pauseAcceptedBySdk: true })
   })
 
+  it('uses the session baseline plus the current invocation delta after older invocations', async () => {
+    let record = { ...syncRecord(), definition: { ...syncRecord().definition,
+      sourceBaseline: { settledCount: 5, settledCountByInvocation: { 'old-invocation': 5 } } } }
+    const match = vi.fn((_id, _revision, event) => { record = { ...record, state: 'matched', revision: record.revision + 1, event }; return record })
+    const expire = vi.fn()
+    const hooks = createSyncCheckpointLifecycleHooks({
+      sessionId: 'target', limits, now: () => 1000,
+      listWaitingSync: () => record.state === 'waiting' ? [record] : [], listMatchedForExecution: () => [],
+      readStepFacts: async () => ({ historyVersion: 6, facts: { ok: true, settledCount: 1, settledStepIds: ['new-step'], pendingStepIds: [] } }),
+      match, expire, read: () => record, acceptPause: () => null, activateDelivery: vi.fn(),
+      subscribeReceiver: () => () => undefined, readReceiver: async () => ({ kind: 'pending' }), fail: vi.fn()
+    })
+    await hooks.postStep!({ invocationId: 'new-invocation', turnId: 'turn', stepKey: 'new-invocation:turn:1', modelTurn: 1,
+      historyVersion: 6, hasNextStep: true, executionGeneration: 1, signal: new AbortController().signal })
+    expect(match).toHaveBeenCalledOnce()
+    expect(match.mock.calls[0]![2]).toMatchObject({ baseline: 5, actual: 6, settledStepIds: ['new-step'] })
+    expect(expire).not.toHaveBeenCalled()
+  })
+
+  it('expires a sync trigger at its deadline without matching or returning an SDK pause', async () => {
+    const record = { ...syncRecord(), expiresAt: 1000 }
+    const match = vi.fn()
+    const expire = vi.fn()
+    const activateDelivery = vi.fn()
+    const hooks = createSyncCheckpointLifecycleHooks({
+      sessionId: 'target', limits, now: () => 1001,
+      listWaitingSync: () => [record], listMatchedForExecution: () => [],
+      readStepFacts: async () => ({ historyVersion: 5, facts: { ok: true, settledCount: 1, settledStepIds: ['s'], pendingStepIds: [] } }),
+      match, expire, read: () => record, acceptPause: () => null, activateDelivery,
+      subscribeReceiver: () => () => undefined, readReceiver: async () => ({ kind: 'pending' }), fail: vi.fn()
+    })
+    await expect(hooks.postStep!({ invocationId: 'inv', turnId: 'turn', stepKey: 'inv:turn:1', modelTurn: 1,
+      historyVersion: 5, hasNextStep: true, executionGeneration: 1, signal: new AbortController().signal })).resolves.toBeUndefined()
+    expect(expire).toHaveBeenCalledWith(record.id, record.revision)
+    expect(match).not.toHaveBeenCalled()
+    expect(activateDelivery).not.toHaveBeenCalled()
+  })
+
+  it('expires a pre-deadline sync match before SDK pause acceptance if wait starts late', async () => {
+    let timestamp = 999
+    let record: RuntimeTriggerRecord = { ...syncRecord(), expiresAt: 1000 }
+    const acceptPause = vi.fn()
+    const activateDelivery = vi.fn()
+    const expire = vi.fn((_id: string, _revision: number) => { record = { ...record, state: 'expired', revision: record.revision + 1 }; return record })
+    const hooks = createSyncCheckpointLifecycleHooks({
+      sessionId: 'target', limits, now: () => timestamp,
+      listWaitingSync: () => record.state === 'waiting' ? [record] : [], listMatchedForExecution: () => [],
+      readStepFacts: async () => ({ historyVersion: 5, facts: { ok: true, settledCount: 1, settledStepIds: ['s'], pendingStepIds: [] } }),
+      match: (_id, _revision, event) => { record = { ...record, state: 'matched', revision: record.revision + 1, matchedAt: timestamp, event }; return record },
+      expire, read: () => record, acceptPause, activateDelivery, subscribeReceiver: () => () => undefined,
+      readReceiver: async () => ({ kind: 'pending' }), fail: vi.fn()
+    })
+    const pause = await hooks.postStep!({ invocationId: 'inv', turnId: 'turn', stepKey: 'inv:turn:1', modelTurn: 1,
+      historyVersion: 5, hasNextStep: true, executionGeneration: 1, signal: new AbortController().signal })
+    timestamp = 1001
+    await expect(pause!.wait(new AbortController().signal)).rejects.toThrow('sync trigger expired before SDK pause acceptance')
+    expect(expire).toHaveBeenCalledWith(record.id, 2)
+    expect(acceptPause).not.toHaveBeenCalled()
+    expect(activateDelivery).not.toHaveBeenCalled()
+  })
+
   it('does not allow an old checkpoint or execution generation to activate delivery', async () => {
     const record = syncRecord()
     const fail = vi.fn()
@@ -97,7 +159,7 @@ describe('sync runtime trigger checkpoint', () => {
       sessionId: 'target', limits, now: () => 1000,
       listWaitingSync: () => [record], readStepFacts: async () => ({ historyVersion: 5, facts: { ok: true, settledCount: 1, settledStepIds: ['s'], pendingStepIds: [] } }),
       listMatchedForExecution: () => [],
-      match: () => null, read: () => null, acceptPause: () => null, activateDelivery: vi.fn(),
+      match: () => null, expire: () => null, read: () => null, acceptPause: () => null, activateDelivery: vi.fn(),
       subscribeReceiver: () => () => {}, readReceiver: async () => ({ kind: 'pending' }), fail
     })
     await expect(hooks.postStep!({ invocationId: 'inv', turnId: 'source-turn', stepKey: 'inv:turn:2', modelTurn: 1, historyVersion: 4,
@@ -114,6 +176,7 @@ describe('sync runtime trigger checkpoint', () => {
       listWaitingSync: () => [record], listMatchedForExecution: () => [],
       readStepFacts: async () => ({ historyVersion: 5, facts: { ok: true, settledCount: 1, settledStepIds: ['s'], pendingStepIds: [] } }),
       match: (_id, _revision, event) => { record = { ...record, state: 'matched', revision: record.revision + 1, matchedAt: 1000, event }; return record },
+      expire: () => null,
       read: () => record,
       acceptPause: ({ trigger }) => { record = { ...trigger, revision: trigger.revision + 1, result: { pauseAcceptedBySdk: true } }; return record },
       activateDelivery: async () => ({ sessionId: 'receiver', turnId: 'receiver-turn' }),
@@ -143,6 +206,7 @@ describe('sync runtime trigger checkpoint', () => {
       listMatchedForExecution: () => record.state === 'matched' ? [record] : [],
       readStepFacts: async () => ({ historyVersion: 5, facts: { ok: true, settledCount: 1, settledStepIds: ['s'], pendingStepIds: [] } }),
       match: (id, revision, event) => { record = { ...record, state: 'matched', revision: revision + 1, event, matchedAt: 1000 }; return record },
+      expire: () => null,
       read: () => record,
       acceptPause: ({ trigger }) => { record = { ...trigger, revision: trigger.revision + 1, result: { pauseAcceptedBySdk: true } }; return record },
       activateDelivery: async () => ({ sessionId: 'receiver', turnId: 'receiver-turn' }), subscribeReceiver,

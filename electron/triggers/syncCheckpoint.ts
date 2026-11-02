@@ -16,6 +16,7 @@ export type SyncCheckpointLifecycleDependencies = Readonly<{
   listMatchedForExecution: (invocationId: string, turnId: string) => readonly RuntimeTriggerRecord[]
   readStepFacts: (invocationId: string) => Promise<Readonly<{ historyVersion: number; facts: SettledStepFacts }>>
   match: (triggerId: string, expectedRevision: number, event: Readonly<Record<string, unknown>>) => RuntimeTriggerRecord | null
+  expire: (triggerId: string, expectedRevision: number) => RuntimeTriggerRecord | null
   read: (triggerId: string) => RuntimeTriggerRecord | null
   acceptPause: (input: { trigger: RuntimeTriggerRecord; checkpoint: SyncCheckpointStep }) => RuntimeTriggerRecord | null
   activateDelivery: (trigger: RuntimeTriggerRecord) => Promise<ReceiverTurnRef>
@@ -51,16 +52,25 @@ export function createSyncCheckpointLifecycleHooks(input: SyncCheckpointLifecycl
     const timestamp = now()
     for (const waiting of input.listWaitingSync(input.sessionId)) {
       if (!isSync(waiting) || waiting.state !== 'waiting' || waiting.definition.condition.targetSessionId !== input.sessionId) continue
+      if (timestamp >= waiting.expiresAt) {
+        input.expire(waiting.id, waiting.revision)
+        continue
+      }
       if (!snapshot.facts.ok) {
         input.fail(waiting.id, waiting.revision, 'TRIGGER_SOURCE_GAP', snapshot.facts.case ?? 'history-unavailable')
         continue
       }
       const baseline = waiting.definition.sourceBaseline.settledCount
-      if (!Number.isSafeInteger(baseline) || Number(baseline) < 0 || snapshot.facts.settledCount < Number(baseline)) {
+      const invocationBaselines = waiting.definition.sourceBaseline.settledCountByInvocation
+      const invocationBaseline = invocationBaselines && typeof invocationBaselines === 'object' && !Array.isArray(invocationBaselines)
+        ? (invocationBaselines as Record<string, unknown>)[step.invocationId] ?? 0
+        : Number(baseline) === 0 ? 0 : undefined
+      if (!Number.isSafeInteger(baseline) || Number(baseline) < 0 || !Number.isSafeInteger(invocationBaseline) || Number(invocationBaseline) < 0 ||
+        snapshot.facts.settledCount < Number(invocationBaseline)) {
         input.fail(waiting.id, waiting.revision, 'TRIGGER_SOURCE_GAP', 'step-baseline-invalid')
         continue
       }
-      const actual = snapshot.facts.settledCount - Number(baseline)
+      const actual = Number(baseline) + snapshot.facts.settledCount - Number(invocationBaseline)
       if (actual < waiting.definition.condition.threshold) continue
       if (snapshot.historyVersion !== step.historyVersion || step.stepKey !== `${step.invocationId}:turn:${step.modelTurn}`) {
         input.fail(waiting.id, waiting.revision, 'TRIGGER_HANDLING_FAILED', 'checkpoint-unavailable')
@@ -69,8 +79,8 @@ export function createSyncCheckpointLifecycleHooks(input: SyncCheckpointLifecycl
       if (step.signal.aborted) return
       const pauseTimeoutMs = Math.min(waiting.definition.condition.pauseTimeoutMs, input.limits.maxPauseMs)
       const pauseDeadlineAt = timestamp + pauseTimeoutMs
-      const event = { type: 'session_steps', occurredAt: timestamp, targetSessionId: input.sessionId, baseline: Number(baseline), actual: snapshot.facts.settledCount,
-        threshold: waiting.definition.condition.threshold, settledStepIds: snapshot.facts.settledStepIds.slice(Number(baseline)), targetTurnId: step.turnId,
+      const event = { type: 'session_steps', occurredAt: timestamp, targetSessionId: input.sessionId, baseline: Number(baseline), actual,
+        threshold: waiting.definition.condition.threshold, settledStepIds: snapshot.facts.settledStepIds.slice(Number(invocationBaseline)), targetTurnId: step.turnId,
         invocationId: step.invocationId, checkpointKey: step.stepKey, executionGeneration: step.executionGeneration, pauseDeadlineAt }
       const matched = input.match(waiting.id, waiting.revision, event)
       if (!matched || matched.state !== 'matched' || matched.event?.checkpointKey !== step.stepKey ||
@@ -148,6 +158,7 @@ export function createRuntimeTriggerSyncWaitRegistry(): Readonly<{
 
 async function waitForAcceptedReceiverTurn(input: SyncCheckpointLifecycleDependencies, matched: RuntimeTriggerRecord, checkpoint: SyncCheckpointStep,
   signal: AbortSignal, pauseDeadlineAt: number): Promise<void> {
+  const now = input.now ?? Date.now
   let cancelled = false
   let cancelActiveWait: (() => void) | undefined
   let unregisterWaiter: (() => void) | undefined
@@ -168,6 +179,10 @@ async function waitForAcceptedReceiverTurn(input: SyncCheckpointLifecycleDepende
     fail('TRIGGER_HANDLING_FAILED', 'checkpoint-not-accepted')
     throw new Error('sync checkpoint is no longer current')
   }
+  if (now() >= current.expiresAt) {
+    input.expire(current.id, current.revision)
+    throw new Error('sync trigger expired before SDK pause acceptance')
+  }
   if (!nowWithinDeadline(input, pauseDeadlineAt)) {
     fail('TRIGGER_HANDLING_FAILED', 'pause-timeout')
     throw new AgentTurnPauseTimedOutError()
@@ -177,6 +192,10 @@ async function waitForAcceptedReceiverTurn(input: SyncCheckpointLifecycleDepende
     fail('TRIGGER_HANDLING_FAILED', 'checkpoint-not-accepted')
     throw new Error('SDK pause acceptance was not persisted')
   }
+  if (now() >= accepted.expiresAt) {
+    input.expire(accepted.id, accepted.revision)
+    throw new Error('sync trigger expired before delivery')
+  }
   unregisterWaiter = input.registerWaiter?.(matched.id, () => { cancelled = true; cancelActiveWait?.() })
   let unsubscribe: (() => void) | undefined
   let abortListener: (() => void) | undefined
@@ -185,6 +204,11 @@ async function waitForAcceptedReceiverTurn(input: SyncCheckpointLifecycleDepende
     const receiver = await input.activateDelivery(accepted)
     if (cancelled) throw new Error('sync wait cancelled')
     if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason ?? 'pause aborted'))
+    const afterDelivery = input.read(accepted.id)
+    if (afterDelivery?.state === 'matched' && now() >= afterDelivery.expiresAt) {
+      input.expire(afterDelivery.id, afterDelivery.revision)
+      throw new Error('sync trigger expired during delivery')
+    }
     await new Promise<void>((resolve, reject) => {
       let settled = false
       const finish = (error?: Error) => {

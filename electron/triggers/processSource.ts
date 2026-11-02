@@ -2,16 +2,17 @@ import { randomUUID } from 'node:crypto'
 import type { RuntimeTriggerTargetDto } from '../../src/shared/domainTypes'
 
 export type ManagedProcessHandle = Readonly<{ managedProcessId: string; runtimeGeneration: string }>
-export type ManagedProcessExit = Readonly<{ ok: true; managedProcessId: string; runtimeGeneration: string; sessionId: string; toolName: string; occurredAt: number; exitCode: number | null; signal: string | null; reason: string; outputRef?: Readonly<{ bytes: number; truncated: boolean; sha256?: string }> }> |
-  Readonly<{ ok: false; code: 'TRIGGER_SOURCE_GAP'; case: 'managed-process-unavailable' | 'runtime-generation-mismatch' }>
-type RunningProcess = { handle: ManagedProcessHandle; sessionId: string; toolName: string; state: 'running' | 'settled'; exit?: Extract<ManagedProcessExit, { ok: true }> }
-type ProcessExitListener = (exit: Extract<ManagedProcessExit, { ok: true }>) => void
+export type ManagedProcessExitFact = Readonly<{ ok: true; managedProcessId: string; runtimeGeneration: string; sessionId: string; toolName: string; occurredAt: number; exitCode: number | null; signal: string | null; reason: string; outputRef?: Readonly<{ bytes: number; truncated: boolean; sha256?: string }> }>
+export type ManagedProcessExit = Readonly<{ kind: 'running' }> | (ManagedProcessExitFact & Readonly<{ kind: 'terminal' }>) |
+  Readonly<{ kind: 'source-gap'; code: 'TRIGGER_SOURCE_GAP'; case: 'managed-process-unavailable' | 'runtime-generation-mismatch' }>
+type RunningProcess = { handle: ManagedProcessHandle; sessionId: string; toolName: string; state: 'running' | 'settled'; exit?: ManagedProcessExitFact }
+type ProcessExitListener = (exit: ManagedProcessExitFact) => void
 
 let generation = randomUUID()
 const processes = new Map<string, RunningProcess>()
 const listeners = new Set<ProcessExitListener>()
 const MAX_RETAINED_EXIT_FACTS = 512
-const gap = (caseId: Extract<ManagedProcessExit, { ok: false }>['case']): ManagedProcessExit => ({ ok: false, code: 'TRIGGER_SOURCE_GAP', case: caseId })
+const gap = (caseId: Extract<ManagedProcessExit, { kind: 'source-gap' }>['case']): ManagedProcessExit => ({ kind: 'source-gap', code: 'TRIGGER_SOURCE_GAP', case: caseId })
 
 export function managedProcessRuntimeGeneration(): string { return generation }
 
@@ -47,7 +48,8 @@ export function readManagedProcessExit(managedProcessId: string, runtimeGenerati
   const current = processes.get(managedProcessId)
   if (!current) return gap('managed-process-unavailable')
   if (current.handle.runtimeGeneration !== runtimeGeneration || runtimeGeneration !== generation) return gap('runtime-generation-mismatch')
-  return current.exit ?? gap('managed-process-unavailable')
+  if (current.state === 'running') return { kind: 'running' }
+  return current.exit ? { ...current.exit, kind: 'terminal' } : gap('managed-process-unavailable')
 }
 
 export function listManagedProcessTargets(sessionId: string): RuntimeTriggerTargetDto[] {

@@ -5,6 +5,24 @@ import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerHostService } from './hostService'
 
 describe('runtime trigger host capability adapter', () => {
+  it('captures a settled baseline for each existing invocation at registration', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'step baseline owner' })
+      const invocationIds = ['old-invocation-a', 'old-invocation-b']
+      const execution = { historyFor: () => ({ listInvocationIds: () => invocationIds, read: async (invocationId: string) => ({
+        invocationId, version: 1, schemaVersion: 1, events: [{ eventId: `${invocationId}:response`, idempotencyKey: `${invocationId}:key`,
+          invocationId, turnId: `${invocationId}:turn`, sequence: 1, schemaVersion: 1, kind: 'model-response-committed',
+          payload: { modelTurn: 1, message: { role: 'assistant', toolCalls: [] } } }]
+      }) }) }
+      const service = createRuntimeTriggerHostService({ commands: createSessionCommands(db),
+        queries: { listSessions: () => [owner], imAcceptedFacts: {} } as never, execution: execution as never })
+      const result = await service.register({ ownerSessionId: owner.id, params: { clientKey: 'cross-invocation-baseline', receiverSessionId: owner.id,
+        expiresAt: Date.now() + 60_000, condition: { type: 'session_steps', targetSessionId: owner.id, origin: 'registration', threshold: 1, mode: 'async' } } })
+      expect(result.trigger.definition.sourceBaseline).toEqual({ settledCount: 2, settledCountByInvocation: { 'old-invocation-a': 1, 'old-invocation-b': 1 } })
+    } finally { db.close() }
+  })
+
   it('rejects new registrations once application shutdown has closed admission', async () => {
     const db = createMemoryAppDb()
     try {

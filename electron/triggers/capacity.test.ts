@@ -55,8 +55,9 @@ describe('runtime trigger capacity and local registration latency', () => {
       const scheduledAt = Date.parse(first.definition.condition.type === 'time' ? first.definition.condition.at : '')
       now = scheduledAt
       const queueScope = { kind: 'desktop' } as const
-      const delivery = createRuntimeTriggerDelivery({ read: (id) => commands.runtimeTriggers.read(id),
+      const delivery = createRuntimeTriggerDelivery({ now: () => now, read: (id) => commands.runtimeTriggers.read(id),
         update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: now }),
         authorize: (trigger) => ({ bindingVersion: 1, requestId: `runtime-trigger:${trigger.id}`, ownerSessionId: owner, receiverSessionId: owner,
           queueScope, sourceIdentity: trigger.definition.condition, payloadDigest: 'capacity-event', policyRevision: 'policy',
           authorizationGeneration: 'auth', runtimeGeneration: 'runtime' }), queueScope: () => queueScope,

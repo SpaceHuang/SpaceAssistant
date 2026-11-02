@@ -23,6 +23,7 @@ export type RuntimeTriggerAuthorizationBinding = Readonly<{
 export function createRuntimeTriggerDelivery(input: {
   read(triggerId: string): RuntimeTriggerRecord | null
   update(triggerId: string, expectedRevision: number, patch: Partial<Pick<RuntimeTriggerRecord, 'messageId' | 'result' | 'updatedAt'>>): RuntimeTriggerRecord | null
+  expire: (triggerId: string, expectedRevision: number) => unknown
   authorize(trigger: RuntimeTriggerRecord, queueScope: QueueScope): RuntimeTriggerAuthorizationBinding | null
   queueScope(receiverSessionId: string): QueueScope
   enqueue(input: { sessionId: string; requestId: string; content: string; queueScope: QueueScope }): {
@@ -36,6 +37,10 @@ export function createRuntimeTriggerDelivery(input: {
   return (triggerId: string): RuntimeTriggerDeliveryResult => {
     const trigger = input.read(triggerId)
     if (!trigger || trigger.state !== 'matched') return { kind: 'deferred', case: 'not-matched' }
+    if (now() >= trigger.expiresAt) {
+      input.expire(trigger.id, trigger.revision)
+      return { kind: 'deferred', case: 'not-matched' }
+    }
     const sync = trigger.definition.condition.type === 'session_steps' && trigger.definition.condition.mode === 'sync'
     if (sync && trigger.result?.pauseAcceptedBySdk !== true) return { kind: 'deferred', case: 'sync-pause-not-accepted' }
     const requestId = `runtime-trigger:${trigger.id}`

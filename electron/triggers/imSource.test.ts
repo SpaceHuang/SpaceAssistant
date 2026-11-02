@@ -50,6 +50,24 @@ describe('IM runtime trigger source', () => {
     expect(scanImTriggerFacts(f.queries, { type: 'im_message', ...f.scope }, { pageSize: 2, baseline: fromBeginning })).toMatchObject({ ok: false, code: 'TRIGGER_SOURCE_GAP' })
   })
 
+  it('expires an unmatched IM trigger after scanning its accepted-fact window', async () => {
+    const f = fixture('feishu', [])
+    const record = { id: 'im-trigger', ownerSessionId: 'owner', receiverSessionId: 'receiver', clientKey: 'key',
+      definition: { version: 1 as const, condition: { type: 'im_message' as const, ...f.scope }, sourceBaseline: { through: 0, coverageRevision: 4 } },
+      state: 'waiting' as const, createdAt: 0, expiresAt: 500, attempts: 0, revision: 1, updatedAt: 0 }
+    await expect(evaluateRuntimeTriggerSource(record, { now: 501, queries: f.queries })).resolves.toEqual({ kind: 'expired', case: 'source-expired' })
+  })
+
+  it('still recovers a pre-deadline accepted message after expiry, while rejecting post-deadline messages', async () => {
+    const f = fixture('feishu', [{ senderId: 'sender', body: 'eligible' }])
+    const record = { id: 'im-trigger', ownerSessionId: 'owner', receiverSessionId: 'receiver', clientKey: 'key',
+      definition: { version: 1 as const, condition: { type: 'im_message' as const, ...f.scope }, sourceBaseline: fromBeginning },
+      state: 'waiting' as const, createdAt: 0, expiresAt: 500, attempts: 0, revision: 1, updatedAt: 0 }
+    await expect(evaluateRuntimeTriggerSource(record, { now: 501, queries: f.queries })).resolves.toMatchObject({ kind: 'candidate', event: { platformMessageId: 'platform-1' } })
+    f.facts[0] = { ...f.facts[0]!, timestamp: 501 }
+    await expect(evaluateRuntimeTriggerSource(record, { now: 501, queries: f.queries })).resolves.toEqual({ kind: 'expired', case: 'im-message-after-expiry' })
+  })
+
   it('allows sparse per-conversation accepted sequences below the global frontier', () => {
     const f = fixture('feishu', [{ senderId: 'owner', body: 'first' }, { senderId: 'owner', body: 'second' }])
     f.facts[1] = { ...f.facts[1]!, acceptedSeq: 7 }
