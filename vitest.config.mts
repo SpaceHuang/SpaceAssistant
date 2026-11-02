@@ -8,6 +8,21 @@ export default defineConfig({
     reporter: 'dot',
     // 大量通过用例会打印重复的 runtime 警告；仅失败用例输出 console，减少终端 IO。
     silent: 'passed-only',
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html'],
+      include: [
+        'electron/**/*.ts',
+        'src/**/*.ts',
+        'src/**/*.tsx',
+        'packages/agent-sdk/src/**/*.ts',
+        'packages/agent-provider-testing/src/**/*.ts',
+        'packages/agent-provider-pi-ai/src/**/*.ts'
+      ],
+      // Exclusions apply only to non-production test harness and declarations; do not add implementation exemptions silently.
+      // Each future implementation exclusion must include a reason and a TODO in this list, and be reviewed before R-01.
+      exclude: ['**/*.test.ts', '**/*.test.tsx', '**/*.d.ts', '**/test/**', '**/testSupport/**']
+    },
     projects: [
       {
         // 主进程测试：macOS threads 池并行实测更快；Windows 上 threads 易启动超时，保留 forks + 单 worker。
