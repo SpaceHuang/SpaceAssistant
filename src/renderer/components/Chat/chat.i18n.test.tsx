@@ -1,24 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import type { Message } from '../../../shared/domainTypes'
+import { assistantMessage } from '../../../test/factories/message'
 import { ChatBubble } from './ChatBubble'
 import { ThinkingBlock } from './ThinkingBlock'
 import { changeAppLocale } from '../../i18n/localeSync'
-
-function assistantMessage(over: Partial<Message> = {}): Message {
-  const now = Date.now()
-  return {
-    id: 'a1',
-    sessionId: 's1',
-    role: 'assistant',
-    content: 'Hello world',
-    timestamp: now,
-    status: 'streaming',
-    schemaVersion: 1,
-    contentSegments: [{ content: 'Hello world', startTime: now }],
-    ...over
-  }
-}
 
 describe('chat i18n', () => {
   beforeEach(async () => {

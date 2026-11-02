@@ -1,28 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { buildToolChatPayload } from './chatToolSessionService'
-import { CURRENT_SCHEMA_VERSION } from '../../shared/domainTypes'
 import type { Message } from '../../shared/domainTypes'
+import { assistantMessage as assistantMessageFactory, userMessage } from '../../test/factories/message'
 
 describe('buildToolChatPayload', () => {
-    const stubMessage: Message = {
-      id: '00000000-0000-4000-8000-000000000001',
-      sessionId: 'sess-1',
-      role: 'user',
-      content: 'hello',
-      timestamp: 1,
-      status: 'completed',
-      schemaVersion: CURRENT_SCHEMA_VERSION
-    }
+    const stubMessage: Message = userMessage({ id: '00000000-0000-4000-8000-000000000001', sessionId: 'sess-1', content: 'hello', timestamp: 1, status: 'completed' })
 
-    const assistantMessage: Message = {
-      id: '00000000-0000-4000-8000-000000000002',
-      sessionId: 'sess-1',
-      role: 'assistant',
-      content: 'hi there',
-      timestamp: 2,
-      status: 'completed',
-      schemaVersion: CURRENT_SCHEMA_VERSION
-    }
+    const assistantReply: Message = assistantMessageFactory({ id: '00000000-0000-4000-8000-000000000002', sessionId: 'sess-1', content: 'hi there', timestamp: 2, status: 'completed' })
 
   it('includes locale in payload when provided', () => {
     const payload = buildToolChatPayload({

@@ -1,6 +1,4 @@
 import fs from 'fs'
-import os from 'os'
-import path from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase, getConfigValue, type AppDatabase } from '../database'
 import {
@@ -10,13 +8,14 @@ import {
   syncShellDeniedTools
 } from './shellConfigDb'
 import { DEFAULT_SHELL_CONFIG } from '../../src/shared/domainTypes'
+import { uniqueFilePath } from '../testSupport/tempPaths'
 
 describe('shellConfigDb', () => {
   let dbPath: string
   let db: AppDatabase
 
   beforeEach(() => {
-    dbPath = path.join(os.tmpdir(), `sa-shell-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+    dbPath = uniqueFilePath('sa-shell-', '.json')
     db = openDatabase(dbPath)
   })
 
