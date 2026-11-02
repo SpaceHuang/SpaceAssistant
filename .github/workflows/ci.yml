@@ -71,7 +71,7 @@ jobs:
   storage-perf:
     name: CI / Storage performance (observation)
     runs-on: macos-latest
-    # Storage performance is observational until R-03 is decided; do not add it to ci-required.
+    # Keep this observational while collecting five runs for R-03; review results before changing ci-required.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
