@@ -5,6 +5,7 @@ const fs = require('node:fs')
 const { setTimeout: delay } = require('node:timers/promises')
 const { app, BrowserWindow } = require('electron')
 const { configureCriticalFlowLocale } = require('./critical-user-flow-environment.cjs')
+const { waitForCriticalFlowAssistant } = require('./wait-for-critical-flow-assistant.cjs')
 
 // Must run before app.whenReady(): i18next reads navigator.language during renderer startup.
 configureCriticalFlowLocale(app)
@@ -167,18 +168,15 @@ async function createSessionThroughUi(win) {
 }
 
 async function waitForAssistant(win, sessionId, text) {
-  stage('wait-assistant-persisted', { sessionId, text })
-  let found
   try {
-    found = await waitFor(`assistant result ${text}`, async () => {
-      const all = await Promise.race([messages(win, sessionId), delay(2000).then(() => false)])
-      if (all === false) {
-        stage('assistant-message-query-stalled', { sessionId })
-        return false
-      }
-      const assistant = all.find((item) => item.role === 'assistant' && String(item.content || '').includes(text))
-      if (!assistant) return false
-      return { assistant, all }
+    return await waitForCriticalFlowAssistant({
+      sessionId,
+      text,
+      stage,
+      waitFor,
+      assistantIsVisible: () => execute(win, `document.body.innerText.includes(${JSON.stringify(text)})`),
+      listActiveTurns: () => execute(win, `window.api.chatListActiveTurns({sessionId:${JSON.stringify(sessionId)}})`),
+      readMessages: () => messages(win, sessionId)
     })
   } catch (error) {
     const facts = inspectDatabase(sessionId)
@@ -186,17 +184,10 @@ async function waitForAssistant(win, sessionId, text) {
       terminal: await execute(win, `window.api.chatGetTurnTerminal(${JSON.stringify(turn.turn_id)})`) })))
     stage('assistant-persist-timeout-diagnostics', { turns: facts.turns, terminals,
       messages: facts.messages.map((item) => ({ role: item.role, status: item.status, content: item.content?.slice(0, 180) })) })
-    throw error
-  }
-  try {
-    await waitFor(`assistant result visible in renderer ${text}`, () => execute(win, `document.body.innerText.includes(${JSON.stringify(text)})`), 8_000)
-  } catch (error) {
     const diagnostics = await execute(win, `({currentSessionId:window.__store?.getState?.().chat?.currentSessionId, body:document.body.innerText.slice(-1800), messages:[...document.querySelectorAll('[data-message-id],.message-item,.chat-message')].slice(-8).map((node)=>({id:node.getAttribute('data-message-id'),text:node.innerText.slice(0,240),className:node.className}))})`)
     stage('assistant-not-visible-diagnostics', diagnostics)
     throw error
   }
-  stage('assistant-visible', { sessionId, text })
-  return found
 }
 
 function inspectDatabase(sessionId) {
