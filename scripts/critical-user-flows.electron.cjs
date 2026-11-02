@@ -4,6 +4,10 @@ const path = require('node:path')
 const fs = require('node:fs')
 const { setTimeout: delay } = require('node:timers/promises')
 const { app, BrowserWindow } = require('electron')
+const { configureCriticalFlowLocale } = require('./critical-user-flow-environment.cjs')
+
+// Must run before app.whenReady(): i18next reads navigator.language during renderer startup.
+configureCriticalFlowLocale(app)
 
 const FLOW = process.env.CRITICAL_USER_FLOW
 const DATA_DIR = process.env.CRITICAL_USER_DATA_DIR
@@ -103,7 +107,7 @@ async function waitForWindow() {
   stage('window-observed', { url: win.webContents.getURL(), loading: win.webContents.isLoading() })
   stage('wait-renderer-and-preload')
   const loaded = await waitFor('renderer did finish loading with root and real preload API', async () => {
-    const snapshot = await execute(win, `({rootChildren:document.querySelector('#root')?.children.length, apiPresent:Boolean(window.api), methods:{sessionList:typeof window.api?.sessionList,chatGetMessages:typeof window.api?.chatGetMessages,configGet:typeof window.api?.configGet}, ready:document.readyState})`)
+    const snapshot = await execute(win, `({rootChildren:document.querySelector('#root')?.children.length, apiPresent:Boolean(window.api), methods:{sessionList:typeof window.api?.sessionList,chatGetMessages:typeof window.api?.chatGetMessages,configGet:typeof window.api?.configGet}, ready:document.readyState, language:navigator.language})`)
     if (snapshot.rootChildren && snapshot.methods.sessionList === 'function' && snapshot.methods.chatGetMessages === 'function' && snapshot.methods.configGet === 'function') return snapshot
     return false
   })
