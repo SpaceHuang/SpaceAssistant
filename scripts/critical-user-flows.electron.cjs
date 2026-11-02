@@ -270,6 +270,8 @@ async function runToolRoundtrip(win) {
   assert(data.all.some((item) => item.role === 'assistant' && item.content?.includes('critical-flow-tool-fixture')), 'real tool result was not returned to the model')
   const modelStatus = await fetch(new URL('/__critical/status', process.env.CRITICAL_MODEL_URL)).then((response) => response.json())
   assert(modelStatus.toolResultSeen, 'real tool result was not included in the follow-up provider request')
+  await waitFor('tool turn terminal state committed and active turn cleared', async () =>
+    (await execute(win, `window.api.chatListActiveTurns({sessionId:${JSON.stringify(session.id)}})`)).length === 0)
   const facts = inspectDatabase(session.id)
   assert(facts.turns.some((item) => item.state === 'terminal' && item.outcome === 'completed'), 'tool turn did not finish in SQLite')
   return { summary: 'real read_file dispatch and model roundtrip completed', sessionId: session.id }
