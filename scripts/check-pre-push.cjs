@@ -20,6 +20,10 @@ function isRelatedTestPath(file) {
   return /^(electron|packages|src)\//.test(file) && /\.[cm]?[jt]sx?$/i.test(file)
 }
 
+function isTestFile(file) {
+  return /\.test\.[cm]?[jt]sx?$/i.test(file)
+}
+
 function buildCheckCommands(changedFiles) {
   const uniqueFiles = [...new Set(changedFiles)].sort()
   const commands = [
@@ -34,8 +38,10 @@ function buildCheckCommands(changedFiles) {
   if (uniqueFiles.some((file) => file.startsWith('packages/agent-sdk/'))) {
     commands.push({ label: 'typecheck:agent-sdk', args: ['run', 'typecheck:agent-sdk'] })
   }
-  const testFiles = uniqueFiles.filter(isRelatedTestPath)
-  if (testFiles.length) commands.push({ label: 'test:related', args: ['run', 'test:related', '--', ...testFiles] })
+  const changedTestFiles = uniqueFiles.filter((file) => isRelatedTestPath(file) && isTestFile(file))
+  if (changedTestFiles.length) commands.push({ label: 'changed tests', args: ['exec', 'vitest', 'run', ...changedTestFiles] })
+  const changedSourceFiles = uniqueFiles.filter((file) => isRelatedTestPath(file) && !isTestFile(file))
+  if (changedSourceFiles.length) commands.push({ label: 'test:related', args: ['run', 'test:related', '--', ...changedSourceFiles] })
   return commands
 }
 
@@ -133,4 +139,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { parsePushInput, isRelatedTestPath, buildCheckCommands, shouldSkip, runCommands, changedFilesFromRange, discoverChangedFiles }
+module.exports = { parsePushInput, isRelatedTestPath, isTestFile, buildCheckCommands, shouldSkip, runCommands, changedFilesFromRange, discoverChangedFiles }

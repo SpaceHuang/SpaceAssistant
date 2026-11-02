@@ -18,6 +18,22 @@ test('runs renderer typecheck and related tests for renderer changes', () => {
   assert.ok(commands.some(({ args }) => args.join(' ') === 'run test:related -- src/renderer/App.tsx'))
 })
 
+test('runs changed test files directly and uses dependency-related tests only for production source', () => {
+  const testCommands = buildCheckCommands([
+    'electron/shell/shellCommandTrust.test.ts',
+    'electron/shell/shellConfigDb.test.ts'
+  ])
+  assert.ok(testCommands.some(({ args }) => args.join(' ') === 'exec vitest run electron/shell/shellCommandTrust.test.ts electron/shell/shellConfigDb.test.ts'))
+  assert.ok(!testCommands.some(({ args }) => args.includes('test:related')))
+
+  const mixedCommands = buildCheckCommands([
+    'electron/database/schema.ts',
+    'electron/shell/shellConfigDb.test.ts'
+  ])
+  assert.ok(mixedCommands.some(({ args }) => args.includes('test:related') && args.includes('electron/database/schema.ts')))
+  assert.ok(mixedCommands.some(({ args }) => args.join(' ') === 'exec vitest run electron/shell/shellConfigDb.test.ts'))
+})
+
 test('runs the Agent SDK typecheck for package changes and does not run related tests for docs only', () => {
   const sdkCommands = buildCheckCommands(['packages/agent-sdk/src/sessionContext.ts'])
   assert.ok(sdkCommands.some(({ args }) => args.join(' ') === 'run typecheck:agent-sdk'))
