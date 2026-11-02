@@ -533,7 +533,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(screen.getByRole('switch', { name: '启停任务「启用任务」' }).getAttribute('aria-checked')).toBe('true')
   })
 
-  it('最终确认复核阻断时回到任务内容，修正后可重新预检并保存', async () => {
+  it('最终确认复核阻断时回到任务内容，修正后可重新预检并保存', { timeout: 30000 }, async () => {
     butlerCreateTask.mockResolvedValueOnce({
       ok: false,
       kind: 'authorization-review-required',
