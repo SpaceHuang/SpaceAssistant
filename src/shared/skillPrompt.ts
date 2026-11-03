@@ -4,19 +4,29 @@ import { skillCatalogBudget, type PromptSection } from './promptAssembly'
 /** 仅暴露稳定元数据；正文通过 user fragment 或 skills.read 按需取得。 */
 export function buildSkillCatalogSection(skills: SkillDefinition[], contextWindow: number): PromptSection {
   const budget = skillCatalogBudget(contextWindow)
-  const header = '## Skills\n\n### Available skills\n\n'
+  const header = '## Skills\n\n### Available skills\n\nUse `skills.read` with the exact listed name to load a matching skill before acting.\n'
   const entries = skills
     .slice()
     .sort((a, b) => a.meta.name < b.meta.name ? -1 : a.meta.name > b.meta.name ? 1 : 0)
-    .map((skill) => `- **${skill.meta.name}**: ${skill.meta.description || 'No description'} (read: ${skill.filePath})`)
+    .map((skill) => `- **${skill.meta.name}**: ${skill.meta.description || 'No description'}`)
+  const bodyBudget = Math.max(0, Math.floor(budget * 3.5))
+  const truncationMarker = '- Catalog truncated.'
   let body = ''
+  let included = 0
   for (const entry of entries) {
     const candidate = body ? `${body}\n${entry}` : entry
-    if (candidate.length > Math.max(0, budget * 3.5)) break
+    if (candidate.length > bodyBudget) break
     body = candidate
+    included += 1
   }
-  if (entries.length > body.split('\n').filter(Boolean).length) {
-    body += `${body ? '\n' : ''}- Additional skills are available through skills.read.`
+  if (included < entries.length) {
+    while (body && `${body}\n${truncationMarker}`.length > bodyBudget) {
+      const lines = body.split('\n')
+      lines.pop()
+      body = lines.join('\n')
+      included -= 1
+    }
+    if (truncationMarker.length <= bodyBudget) body += `${body ? '\n' : ''}${truncationMarker}`
   }
   return { name: 'skills:catalog', order: 50, text: `${header}${body}` }
 }

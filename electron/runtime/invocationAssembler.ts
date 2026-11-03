@@ -176,6 +176,8 @@ export interface AgentInvocationMaterials {
   locale?: import('../../src/shared/domainTypes').AppLocale
   projectMemoryEnabled?: boolean
   skillFragments?: string[]
+  /** Electron-owned per-turn Skill scope; intentionally carried in private additional context. */
+  skillTurnScope?: import('../skills/skillTurnScope').SkillTurnScope
   /** Test composition hook for IM-only orchestration capabilities; production adapters are added by the ordered tool tasks. */
   imOrchestrationToolRegistry?: import('../tools/plannedToolRegistry').TypedToolRegistry
   currentUserMessageId?: string
@@ -414,6 +416,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     ? listValidSessionDirectoryGrantsSync(sessionStorage?.queries.readSession(materials.sessionId) ?? { id: materials.sessionId, metadata: {} })
     : []
   const additionalContext: Record<string, unknown> = {}
+  if (materials.skillTurnScope) additionalContext['electron.skillTurnScope'] = materials.skillTurnScope
   if (materials.approvalTaskDigest !== undefined) {
     additionalContext[AGENT_ADDITIONAL_CONTEXT_KEYS.approvalTaskDigest] = materials.approvalTaskDigest
   }
@@ -512,6 +515,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(invocationSkillFragments.length > 0 ? { skillFragments: invocationSkillFragments } : {}),
       tools: {
         toolsConfig: materials.toolsConfig,
+        ...(materials.skillTurnScope ? { skillTurnScope: materials.skillTurnScope } : {}),
         ...(materials.browserConfig !== undefined ? { browserConfig: materials.browserConfig } : {}),
         ...(materials.shellConfig !== undefined ? { shellConfig: materials.shellConfig } : {}),
         ...(materials.wikiConfig !== undefined ? { wikiConfig: materials.wikiConfig } : {}),
@@ -1008,6 +1012,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         signal: call.signal ?? new AbortController().signal,
         fileStateCache,
         toolsConfig: materials.toolsConfig,
+        ...(materials.skillTurnScope ? { skillTurnScope: materials.skillTurnScope } : {}),
         ...(materials.browserConfig !== undefined ? { browserConfig: materials.browserConfig } : {}),
         ...(materials.shellConfig !== undefined ? { shellConfig: materials.shellConfig } : {}),
         ...(materials.wikiConfig !== undefined ? { wikiConfig: materials.wikiConfig } : {}),
