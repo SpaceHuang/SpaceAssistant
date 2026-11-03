@@ -239,6 +239,7 @@ export interface ToolCallGateArgs {
    */
   internalConfirmExemption?: 'approval-agent'
   requestId?: string
+  invocationId?: string
   toolUseId?: string
   readConfirmationRegistry?: ReadConfirmationRegistry
   /** Recheck-only mode forbids confirmation registration and trusted-command writes. */
@@ -1172,6 +1173,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     args.reviewScopeCache?.revoke(reviewScopeCandidate)
     reviewScopeEntry = null
   }
+  if (reviewScopeCandidate) audit.record({ ts: Date.now(), event: 'confirm.review-scope', lane, sessionId: args.sessionId,
+    requestId: args.requestId, invocationId: args.invocationId ?? args.requestId, toolUseId: args.toolUseId, toolName: args.toolName, actor: 'system',
+    reviewScopeOutcome: reviewScopeEntry ? 'hit' : 'miss', reviewScopeReasonCode: reviewScopeEntry ? 'grant_lookup_hit' : 'grant_lookup_miss',
+    ...(reviewScopeEntry ? { reviewScopeSource: reviewScopeEntry.source } : {}), reviewScopeCandidateVersion: 'review-scope-candidate-v1' })
   const reviewScopeGrant = reviewScopeEntry ? { source: reviewScopeEntry.source } : undefined
   const deps: PolicyEngineDeps = {
     cache,

@@ -59,6 +59,8 @@ export function createAgentSdkSafetyPolicy(input: {
         ...(result.writePathFact ? { writePathFact: result.writePathFact } : {}),
         ...(result.writeExecutionPermit ? { writeExecutionPermit: result.writeExecutionPermit } : {}),
         ...(result.reviewScopeCandidate ? { reviewScopeCandidate: result.reviewScopeCandidate } : {}),
+        ...(result.reviewScopeCandidateScope ? { reviewScopeCandidateScope: result.reviewScopeCandidateScope } : {}),
+        ...(result.reviewScopeCandidateDigest ? { reviewScopeCandidateDigest: result.reviewScopeCandidateDigest } : {}),
         ...(result.shellPrecheck ? { shellPrecheck: result.shellPrecheck } : {}),
         ...(result.autoApproveFallback ? { autoApproveFallback: result.autoApproveFallback } : {}),
         ...(result.mcpEntry ? { mcpEntry: result.mcpEntry } : {}),

@@ -507,6 +507,99 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     resetDefaultAgentRuntimeForTests()
   })
 
+  it('Agent approve 自动登记当前宿主候选，模型无需回传缓存字段', async () => {
+    const sessionId = 'auto-scope-grant-session'
+    const scope = { lane: 'desktop' as const, sessionId, subjectId: '/profile',
+      authorizationDomain: { id: 'desktop' as const, revision: 0, epoch: 0 }, toolName: 'edit_file' as const,
+      operation: 'edit' as const, objects: [{ role: 'target', value: '/workspace/note.txt' }],
+      environment: '/workspace', policyVersion: 'desktop-policy-v1', exactParameters: { replaceAll: false }, taskConstraint: '{"task":"Update note.txt"}' }
+    const digest = runtime.reviewScopeCache.candidateDigest(scope)
+    const candidate = { scopeCandidateDigest: digest, toolName: 'edit_file' as const, operation: 'edit' as const,
+      objects: [{ role: 'target', target: '/workspace/note.txt' }] }
+    const { agentSdk } = assembleInvocation({ requestId: 'auto-scope-grant', sessionId, lane: 'desktop', model: 'test-model', locale: 'zh-CN',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/workspace', userDataDir: '/profile', getApiKey: async () => 'test-key',
+      approvalTaskDigest: 'Update note.txt', approvalReviewScopeTaskIdentity: scope.taskConstraint, approvalReviewScopeEvidenceComplete: true,
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const channel = { request: vi.fn(async (request: { reviewScopeCandidate?: unknown }) => {
+      expect(request.reviewScopeCandidate).toEqual(candidate)
+      return { kind: 'approved' as const, cause: 'agent-approved' as const, answererKind: 'agent' as const }
+    }), cancel: vi.fn() }
+    const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, {
+      createChannel: () => channel as never, publish: vi.fn(), cancel: vi.fn()
+    })
+    const result = await confirmation({ call: { invocationId: 'auto-scope-grant', toolCallId: 'scope-call', toolName: 'edit_file', input: {} },
+      confirmationId: 'scope-call', answerer: 'agent', reasonCode: 'agent-approval',
+      context: { facts: { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit note' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop',
+        reviewScopeCandidate: candidate, reviewScopeCandidateScope: scope, reviewScopeCandidateDigest: digest } })
+    expect(result).toMatchObject({ kind: 'approved', answerer: 'agent' })
+    expect(runtime.reviewScopeCache.state(scope)).toMatchObject({ source: 'agent', state: 'pending_first_write' })
+  })
+
+  it('候选缺失或审批材料不完整时不登记 grant，且非 approve 不登记', async () => {
+    const makeScope = (sessionId: string, target: string) => ({ lane: 'desktop' as const, sessionId, subjectId: '/profile',
+      authorizationDomain: { id: 'desktop' as const, revision: 0, epoch: 0 }, toolName: 'edit_file' as const,
+      operation: 'edit' as const, objects: [{ role: 'target', value: target }], environment: '/workspace',
+      policyVersion: 'desktop-policy-v1', exactParameters: { replaceAll: false }, taskConstraint: '{"task":"Update note.txt"}' })
+    const createApprovalPort = (sessionId: string, complete: boolean, answer: 'approved' | 'rejected' = 'approved') => {
+      const { agentSdk } = assembleInvocation({ requestId: `skip-scope-${sessionId}`, sessionId, lane: 'desktop', model: 'test-model', locale: 'zh-CN',
+        messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/workspace', userDataDir: '/profile', getApiKey: async () => 'test-key',
+        approvalTaskDigest: 'Update note.txt', approvalReviewScopeTaskIdentity: '{"task":"Update note.txt"}',
+        approvalReviewScopeEvidenceComplete: complete, emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+      const channel = { request: vi.fn(async () => answer === 'approved'
+        ? { kind: 'approved' as const, cause: 'agent-approved' as const, answererKind: 'agent' as const }
+        : { kind: 'rejected' as const, cause: 'agent-deny' as const, answererKind: 'agent' as const }), cancel: vi.fn() }
+      const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, {
+        createChannel: () => channel as never, publish: vi.fn(), cancel: vi.fn()
+      })
+      return { confirmation, channel }
+    }
+    const missingScope = makeScope('missing-scope-session', '/workspace/missing.txt')
+    const missing = createApprovalPort(missingScope.sessionId, true)
+    await expect(missing.confirmation({ call: { invocationId: 'missing-scope', toolCallId: 'missing-scope-call', toolName: 'edit_file', input: {} },
+      confirmationId: 'missing-scope-call', answerer: 'agent', reasonCode: 'agent-approval',
+      context: { facts: { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop' } }))
+      .resolves.toMatchObject({ kind: 'approved' })
+    expect(runtime.reviewScopeCache.state(missingScope)).toBeNull()
+
+    const mismatchedScope = makeScope('mismatched-scope-session', '/workspace/approved.txt')
+    const mismatchedDigest = runtime.reviewScopeCache.candidateDigest(mismatchedScope)
+    const mismatched = createApprovalPort(mismatchedScope.sessionId, true)
+    await mismatched.confirmation({ call: { invocationId: 'mismatched-scope', toolCallId: 'mismatched-scope-call', toolName: 'edit_file', input: {} },
+      confirmationId: 'mismatched-scope-call', answerer: 'agent', reasonCode: 'agent-approval', context: {
+        facts: { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop',
+        reviewScopeCandidate: { scopeCandidateDigest: mismatchedDigest, toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: '/workspace/different.txt' }] },
+        reviewScopeCandidateScope: mismatchedScope, reviewScopeCandidateDigest: mismatchedDigest
+      } })
+    expect(runtime.reviewScopeCache.state(mismatchedScope)).toBeNull()
+
+    const incompleteScope = makeScope('incomplete-scope-session', '/workspace/incomplete.txt')
+    const incompleteDigest = runtime.reviewScopeCache.candidateDigest(incompleteScope)
+    const incomplete = createApprovalPort(incompleteScope.sessionId, false)
+    await incomplete.confirmation({ call: { invocationId: 'incomplete-scope', toolCallId: 'incomplete-scope-call', toolName: 'edit_file', input: {} },
+      confirmationId: 'incomplete-scope-call', answerer: 'agent', reasonCode: 'agent-approval', context: {
+        facts: { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop',
+        reviewScopeCandidate: { scopeCandidateDigest: incompleteDigest, toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: '/workspace/incomplete.txt' }] },
+        reviewScopeCandidateScope: incompleteScope, reviewScopeCandidateDigest: incompleteDigest
+      } })
+    expect(runtime.reviewScopeCache.state(incompleteScope)).toBeNull()
+
+    const deniedScope = makeScope('denied-scope-session', '/workspace/denied.txt')
+    const deniedDigest = runtime.reviewScopeCache.candidateDigest(deniedScope)
+    const denied = createApprovalPort(deniedScope.sessionId, true, 'rejected')
+    await denied.confirmation({ call: { invocationId: 'denied-scope', toolCallId: 'denied-scope-call', toolName: 'edit_file', input: {} },
+      confirmationId: 'denied-scope-call', answerer: 'agent', reasonCode: 'agent-approval', context: {
+        facts: { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop',
+        reviewScopeCandidate: { scopeCandidateDigest: deniedDigest, toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: '/workspace/denied.txt' }] },
+        reviewScopeCandidateScope: deniedScope, reviewScopeCandidateDigest: deniedDigest
+      } })
+    expect(runtime.reviewScopeCache.state(deniedScope)).toBeNull()
+  })
+
   it.each(['wechat', 'feishu'] as const)('loads the same validated IM policy snapshot for %s runtime gates', async (lane) => {
     const db = createMemoryAppDb(`im-policy-assembly-${lane}`)
     const conn = getDbConnection(db)
