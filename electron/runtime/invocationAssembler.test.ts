@@ -7,6 +7,7 @@ import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
 import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
 import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
+import { createBuiltinToolRegistry } from '../tools/builtinExecutors'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { createAgentRuntime } from './agentRuntime'
 import { resetDefaultAgentRuntimeForTests, setDefaultAgentRuntime } from './agentRuntimeDefaults'
@@ -534,6 +535,86 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
         reviewScopeCandidate: candidate, reviewScopeCandidateScope: scope, reviewScopeCandidateDigest: digest } })
     expect(result).toMatchObject({ kind: 'approved', answerer: 'agent' })
     expect(runtime.reviewScopeCache.state(scope)).toMatchObject({ source: 'agent', state: 'pending_first_write' })
+  })
+
+  it('Agent 批准后真实 edit_file receipt 激活范围授权，第二次编辑命中缓存', async () => {
+    const routeId = 'agent-review-scope-receipt-route'
+    ;(runtime.modelProviders as ModelProviderRegistry).register({ routeId, protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, {
+      stream: async function* () { yield { type: 'message_stop' as const } }
+    } as never)
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agent-review-scope-receipt-')))
+    const target = path.join(workDir, 'note.txt')
+    await fs.writeFile(target, 'before')
+    const db = createMemoryAppDb('agent-review-scope-receipt')
+    commitDesktopPolicySnapshot(getDbConnection(db), { expectedRevision: 0, policyBehaviorVersion: 'desktop-v1',
+      snapshot: { selectedPackage: 'standard', ruleOverrides: {} }, updatedAt: 1, eventId: 'agent-review-scope-receipt' })
+    const taskIdentity = '{"task":"Update note.txt twice"}'
+    const assembled = assembleInvocation({
+      requestId: 'agent-review-scope-receipt', turnId: 'agent-review-scope-turn', sessionId: 'agent-review-scope-session', providerRouteId: routeId,
+      lane: 'desktop', model: 'test-model', locale: 'zh-CN', agentSdkHistory: new MemoryHistory(), appDb: db, messages: [],
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1, autoApproveMaxEditChars: 1 }, workDir, userDataDir: '/tmp',
+      approvalTaskDigest: 'Update note.txt twice', approvalReviewScopeTaskIdentity: taskIdentity, approvalReviewScopeEvidenceComplete: true,
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    const agentRequest = vi.fn(async (request: { reviewScopeCandidate?: { scopeCandidateDigest: string } }) => ({
+      kind: 'approved' as const, cause: 'agent-approved' as const, answererKind: 'agent' as const,
+      ...(request.reviewScopeCandidate ? { reviewScopeGrant: { source: 'agent' as const,
+        scopeCandidateDigest: request.reviewScopeCandidate.scopeCandidateDigest } } : {})
+    }))
+    const composed = assembled.agentSdk.createHostedTurnRuntime({ registry: createBuiltinToolRegistry(),
+      history: new MemoryHistory(), authorizedToolNames: new Set(['read_file', 'edit_file']), confirmationAdapter: {
+        cancel: vi.fn(), createChannel: () => ({ request: agentRequest, cancel: vi.fn() }) as never
+      } })
+    const capabilities = new CapabilityRegistry()
+    const permitStore = runtime.safetyPermits
+    capabilities.define('agent-review-scope-receipt', ['read_file', 'edit_file'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore, policy: composed.policy })
+    const edit = (toolCallId: string, old_string: string, new_string: string) => ({ invocationId: 'agent-review-scope-receipt', toolCallId,
+      toolName: 'edit_file', input: { path: 'note.txt', old_string, new_string } })
+    const read = { invocationId: 'agent-review-scope-receipt', toolCallId: 'read-note-before-edit', toolName: 'read_file', input: { path: 'note.txt' } }
+    try {
+      const readBinding = await composed.registeredTools.prepareTool(read, { kind: 'initial' })
+      expect(await safetyGate.evaluate(readBinding)).toMatchObject({ kind: 'allow' })
+      const readRecheck = await composed.registeredTools.prepareTool(read, { kind: 'recheck' })
+      const readPermit = await safetyGate.authorize(readRecheck)
+      expect(readPermit.kind).toBe('allow')
+      if (readPermit.kind !== 'allow') throw new Error('EXPECTED_READ_PERMIT')
+      await composed.registeredTools.toolExecution.execute(read, readPermit.permitId)
+
+      const firstCall = edit('edit-note-first', 'before', 'after')
+      const firstBinding = await composed.registeredTools.prepareTool(firstCall, { kind: 'initial' })
+      const firstDecision = await safetyGate.evaluate(firstBinding)
+      expect(firstDecision).toMatchObject({ kind: 'ask', answerer: 'agent' })
+      if (firstDecision.kind !== 'ask') throw new Error('EXPECTED_AGENT_APPROVAL')
+      await expect(composed.confirmation({ call: firstCall, confirmationId: firstDecision.confirmationId, answerer: firstDecision.answerer,
+        reasonCode: firstDecision.reasonCode, context: firstDecision.context })).resolves.toMatchObject({ kind: 'approved', answerer: 'agent' })
+      expect(agentRequest).toHaveBeenCalledWith(expect.objectContaining({ reviewScopeCandidate: { scopeCandidateDigest: expect.any(String), toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target }] } }))
+      const firstRecheck = await composed.registeredTools.prepareTool(firstCall, { kind: 'recheck', confirmation: { receipt: 'confirmation:agent-approved' } })
+      const firstAuthorization = await safetyGate.authorize(firstRecheck)
+      expect(firstAuthorization.kind).toBe('allow')
+      if (firstAuthorization.kind !== 'allow') throw new Error('EXPECTED_FIRST_WRITE_PERMIT')
+      const firstResult = await composed.registeredTools.toolExecution.execute(firstCall, firstAuthorization.permitId)
+      expect(firstResult).toMatchObject({ output: { success: true } })
+      expect(await fs.readFile(target, 'utf8')).toBe('after')
+
+      const secondCall = edit('edit-note-second', 'after', 'final')
+      const secondBinding = await composed.registeredTools.prepareTool(secondCall, { kind: 'initial' })
+      const secondDecision = await safetyGate.evaluate(secondBinding)
+      expect(secondDecision).toMatchObject({ kind: 'allow' })
+      if (secondDecision.kind !== 'allow') throw new Error('EXPECTED_SCOPE_CACHE_ALLOW')
+      const secondRecheck = await composed.registeredTools.prepareTool(secondCall, { kind: 'recheck' })
+      const secondAuthorization = await safetyGate.authorize(secondRecheck)
+      expect(secondAuthorization.kind).toBe('allow')
+      if (secondAuthorization.kind !== 'allow') throw new Error('EXPECTED_SECOND_WRITE_PERMIT')
+      const secondResult = await composed.registeredTools.toolExecution.execute(secondCall, secondAuthorization.permitId)
+      expect(secondResult).toMatchObject({ output: { success: true } })
+      expect(await fs.readFile(target, 'utf8')).toBe('final')
+      expect(agentRequest).toHaveBeenCalledTimes(1)
+    } finally {
+      await composed.dispose()
+      db.close()
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
   })
 
   it('候选缺失或审批材料不完整时不登记 grant，且非 approve 不登记', async () => {
