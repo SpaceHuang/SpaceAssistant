@@ -37,11 +37,13 @@ export function createRuntimeTriggerDelivery(input: {
   return (triggerId: string): RuntimeTriggerDeliveryResult => {
     const trigger = input.read(triggerId)
     if (!trigger || trigger.state !== 'matched') return { kind: 'deferred', case: 'not-matched' }
-    if (now() >= trigger.expiresAt) {
+    const sync = trigger.definition.condition.type === 'session_steps' && trigger.definition.condition.mode === 'sync'
+    // Sync matches are accepted only at a live SDK checkpoint. Other sources may be
+    // matched from a pre-expiry fact during recovery and must remain deliverable offline.
+    if (sync && now() >= trigger.expiresAt) {
       input.expire(trigger.id, trigger.revision)
       return { kind: 'deferred', case: 'not-matched' }
     }
-    const sync = trigger.definition.condition.type === 'session_steps' && trigger.definition.condition.mode === 'sync'
     if (sync && trigger.result?.pauseAcceptedBySdk !== true) return { kind: 'deferred', case: 'sync-pause-not-accepted' }
     const requestId = `runtime-trigger:${trigger.id}`
     const queueScope = input.queueScope(trigger.receiverSessionId)

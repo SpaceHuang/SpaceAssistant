@@ -65,6 +65,14 @@ describe('runtime trigger History source facts', () => {
     await expect(evaluateRuntimeTriggerSource(record, { now: 800, readTurnCompletion })).resolves.toMatchObject({ kind: 'candidate', event: { turnId: 'active-turn' } })
   })
 
+  it('expires a still-pending Turn at its deadline but keeps a pre-deadline terminal fact eligible offline', async () => {
+    const record = { ...trigger({ type: 'turn_completed', targetSessionId: 'target', turnId: 'active-turn' }, 500), expiresAt: 500 }
+    await expect(evaluateRuntimeTriggerSource(record, { now: 500, readTurnCompletion: async () => ({ kind: 'pending' }) }))
+      .resolves.toEqual({ kind: 'expired', case: 'source-expired' })
+    await expect(evaluateRuntimeTriggerSource(record, { now: 900, readTurnCompletion: async () => ({ kind: 'terminal', sessionId: 'target', turnId: 'active-turn', outcome: 'completed', occurredAt: 499 }) }))
+      .resolves.toMatchObject({ kind: 'candidate', event: { occurredAt: 499 } })
+  })
+
   it('resolves only managed process exits from the registration runtime generation', async () => {
     resetManagedProcessSourceForTests()
     const process = beginManagedProcess({ sessionId: 'owner', toolName: 'run_shell' })
@@ -87,6 +95,16 @@ describe('runtime trigger History source facts', () => {
     finishManagedProcess(process, { exitCode: 0, signal: null, reason: 'process_exit', occurredAt: 300 })
     await expect(evaluateRuntimeTriggerSource(record, { now: 300 })).resolves.toMatchObject({ kind: 'candidate', event: { exitCode: 0 } })
     resetManagedProcessSourceForTests()
+  })
+
+  it('expires a still-running process at its deadline but keeps a pre-deadline exit eligible offline', async () => {
+    const base = trigger({ type: 'process_exit', managedProcessId: 'managed-1' }, 500)
+    const record = { ...base, expiresAt: 500, definition: { ...base.definition, sourceBaseline: { runtimeGeneration: 'generation-1' } } }
+    const readProcessExit = vi.fn(() => ({ kind: 'running' as const, managedProcessId: 'managed-1', runtimeGeneration: 'generation-1', sessionId: 'owner' }))
+    await expect(evaluateRuntimeTriggerSource(record, { now: 500, readProcessExit })).resolves.toEqual({ kind: 'expired', case: 'source-expired' })
+    readProcessExit.mockReturnValue({ kind: 'terminal', managedProcessId: 'managed-1', runtimeGeneration: 'generation-1', sessionId: 'owner',
+      occurredAt: 499, toolName: 'run_shell', exitCode: 0, signal: null, reason: 'process_exit' })
+    await expect(evaluateRuntimeTriggerSource(record, { now: 900, readProcessExit })).resolves.toMatchObject({ kind: 'candidate', event: { occurredAt: 499 } })
   })
 
   it('treats absolute time as due at equality, retains offset meaning and permits offline delivery only within expiry', () => {

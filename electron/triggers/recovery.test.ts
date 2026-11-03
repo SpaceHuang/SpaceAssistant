@@ -3,6 +3,11 @@ import type { RuntimeTriggerRecord } from '../sessionStorage/public/model'
 import { createRuntimeTriggerRecovery } from './recovery'
 import { beginManagedProcess, finishManagedProcess, resetManagedProcessSourceForTests } from './processSource'
 import { evaluateRuntimeTriggerSource } from './sources'
+import { createMemoryAppDb } from '../database/testHelpers'
+import { createSession } from '../database/operations'
+import { createSessionCommands } from '../sessionStorage/commands'
+import { createRuntimeTriggerService } from './service'
+import { createRuntimeTriggerDelivery } from './delivery'
 
 function matched(overrides: Partial<RuntimeTriggerRecord> = {}): RuntimeTriggerRecord {
   return { id: 'trigger-1', ownerSessionId: 'owner', receiverSessionId: 'receiver', clientKey: 'key',
@@ -13,6 +18,50 @@ function matched(overrides: Partial<RuntimeTriggerRecord> = {}): RuntimeTriggerR
 
 describe('runtime trigger recovery and delivery lifecycle', () => {
   afterEach(() => { vi.useRealTimers() })
+
+  it('recovers a pre-expiry time fact from SQLite and delivers it once after expiry', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const commands = createSessionCommands(db)
+      const owner = createSession(db, { name: 'offline-owner' }).id
+      const receiver = createSession(db, { name: 'offline-receiver' }).id
+      const due = Date.parse('2030-01-01T00:00:00Z')
+      let timestamp = due - 1000
+      const scope = { kind: 'desktop' } as const
+      const service = createRuntimeTriggerService(commands, { now: () => timestamp, authorize: () => true, authorizeTarget: () => true })
+      const created = await service.register({ ownerSessionId: owner, params: { clientKey: 'offline-recovery', receiverSessionId: receiver,
+        expiresAt: due, condition: { type: 'time', at: new Date(due).toISOString(), taskPrompt: 'wake once' } } })
+      timestamp = due + 60_000
+      const delivery = createRuntimeTriggerDelivery({ now: () => timestamp, read: (id) => commands.runtimeTriggers.read(id),
+        update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: timestamp }),
+        authorize: (trigger, queueScope) => ({ bindingVersion: 1, requestId: `runtime-trigger:${trigger.id}`, ownerSessionId: owner,
+          receiverSessionId: receiver, queueScope, sourceIdentity: trigger.definition.condition, payloadDigest: 'offline-payload',
+          policyRevision: 'policy', authorizationGeneration: 'auth', runtimeGeneration: 'runtime' }),
+        queueScope: () => scope, enqueue: (request) => commands.scopedQueue.enqueue(request),
+        readReceipt: (request) => commands.scopedQueue.readReceipt(request) })
+      const recovery = createRuntimeTriggerRecovery({
+        listWaiting: () => commands.runtimeTriggers.listByState('waiting', 4096), listMatched: () => commands.runtimeTriggers.listByState('matched', 4096),
+        read: (id) => commands.runtimeTriggers.read(id),
+        evaluateWaiting: (trigger, now) => evaluateRuntimeTriggerSource(trigger, { now }),
+        match: (id, revision, event) => commands.runtimeTriggers.update(id, revision, { state: 'matched', matchedAt: timestamp, event, updatedAt: timestamp }),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: timestamp }),
+        fail: (id, revision, code, caseId) => commands.runtimeTriggers.update(id, revision, { state: 'failed', result: { code, case: caseId }, updatedAt: timestamp }),
+        deliver: delivery, update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        readReceipt: (trigger) => commands.scopedQueue.readReceipt({ sessionId: receiver, requestId: `runtime-trigger:${trigger.id}`, queueScope: scope }),
+        isSessionBusy: () => true, startReceiver: () => 'busy', readTurnTerminal: () => ({ kind: 'active' }), now: () => timestamp
+      })
+      await recovery.scan()
+      const matched = commands.runtimeTriggers.read(created.trigger.triggerId)
+      expect(matched).toMatchObject({ state: 'matched', event: { occurredAt: due }, messageId: expect.any(String) })
+      expect(commands.scopedQueue.readReceipt({ sessionId: receiver, requestId: `runtime-trigger:${created.trigger.triggerId}`, queueScope: scope }))
+        .toMatchObject({ queuedMessageId: matched!.messageId })
+      await recovery.scan()
+      expect(commands.scopedQueue.readReceipt({ sessionId: receiver, requestId: `runtime-trigger:${created.trigger.triggerId}`, queueScope: scope }))
+        .toMatchObject({ queuedMessageId: matched!.messageId })
+      expect(commands.runtimeTriggers.read(created.trigger.triggerId)?.state).toBe('matched')
+    } finally { db.close() }
+  })
 
   it('stops the recovery timer idempotently and admits no later scans', async () => {
     vi.useFakeTimers()

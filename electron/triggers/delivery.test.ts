@@ -34,4 +34,14 @@ describe('runtime trigger delivery', () => {
     expect(expire).toHaveBeenCalledWith(record.id, record.revision)
     expect(enqueue).not.toHaveBeenCalled()
   })
+
+  it('delivers an offline time match whose scheduled occurrence was before expiry', () => {
+    const enqueue = vi.fn(({ content }: { content: string }) => ({ receipt: { queuedMessageId: 'offline-message' }, persisted: { message: { id: 'offline-message', content } } }))
+    const record = { id: 'offline-time', ownerSessionId: 'owner', receiverSessionId: 'receiver', state: 'matched', expiresAt: 100,
+      matchedAt: 200, event: { type: 'time', occurredAt: 50 }, definition: { condition: { type: 'time' } }, result: {}, revision: 2 }
+    const deliver = createRuntimeTriggerDelivery({ enqueue, read: () => record, update: vi.fn(() => record), expire: vi.fn(), now: () => 200,
+      authorize, queueScope: () => ({ kind: 'desktop' }) })
+    expect(deliver(record.id)).toMatchObject({ kind: 'enqueued', messageId: 'offline-message' })
+    expect(enqueue).toHaveBeenCalledOnce()
+  })
 })

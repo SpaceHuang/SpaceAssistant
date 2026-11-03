@@ -44,7 +44,7 @@ export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord
     let fact: RuntimeTurnCompletionFact
     try { fact = await input.readTurnCompletion(condition.targetSessionId, condition.turnId) }
     catch { return { kind: 'source-gap', case: 'turn-source-unavailable' } }
-    if (fact.kind === 'pending') return { kind: 'none' }
+    if (fact.kind === 'pending') return input.now >= trigger.expiresAt ? { kind: 'expired', case: 'source-expired' } : { kind: 'none' }
     if (fact.kind === 'missing') return { kind: 'source-gap', case: 'target-turn-missing' }
     if (fact.kind === 'source-gap') return { kind: 'source-gap', case: fact.case }
     if (fact.sessionId !== condition.targetSessionId || fact.turnId !== condition.turnId || !Number.isSafeInteger(fact.occurredAt)) {
@@ -57,7 +57,7 @@ export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord
     const runtimeGeneration = trigger.definition.sourceBaseline.runtimeGeneration
     if (typeof runtimeGeneration !== 'string' || !runtimeGeneration) return { kind: 'source-gap', case: 'process-runtime-generation-missing' }
     const fact = (input.readProcessExit ?? readManagedProcessExit)(condition.managedProcessId, runtimeGeneration)
-    if (fact.kind === 'running') return { kind: 'none' }
+    if (fact.kind === 'running') return input.now >= trigger.expiresAt ? { kind: 'expired', case: 'source-expired' } : { kind: 'none' }
     if (fact.kind === 'source-gap') return { kind: 'source-gap', case: fact.case }
     if (fact.managedProcessId !== condition.managedProcessId || fact.runtimeGeneration !== runtimeGeneration || fact.sessionId !== trigger.ownerSessionId) {
       return { kind: 'source-gap', case: 'process-fact-identity-invalid' }

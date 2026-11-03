@@ -881,6 +881,13 @@ app.whenReady().then(async () => {
         }
         return { historyVersion: tracker.currentVersion, facts }
       },
+      saveProgress: (id, revision, progress) => {
+        const current = sessionStorage.commands.runtimeTriggers.read(id)
+        if (!current || current.revision !== revision || current.state !== 'waiting') return null
+        return sessionStorage.commands.runtimeTriggers.update(id, revision, {
+          result: { ...(current.result ?? {}), syncStepProgress: progress }, updatedAt: Date.now()
+        })
+      },
       match: (id, revision, event) => sessionStorage.commands.runtimeTriggers.update(id, revision,
         { state: 'matched', matchedAt: Date.now(), event, updatedAt: Date.now() }),
       expire: (id, revision) => sessionStorage.commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: Date.now() }),

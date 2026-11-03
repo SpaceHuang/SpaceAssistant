@@ -15,6 +15,7 @@ export type SyncCheckpointLifecycleDependencies = Readonly<{
   listWaitingSync: (targetSessionId: string) => readonly RuntimeTriggerRecord[]
   listMatchedForExecution: (invocationId: string, turnId: string) => readonly RuntimeTriggerRecord[]
   readStepFacts: (invocationId: string) => Promise<Readonly<{ historyVersion: number; facts: SettledStepFacts }>>
+  saveProgress?: (triggerId: string, expectedRevision: number, progress: Readonly<{ settledStepIdsByInvocation: Readonly<Record<string, readonly string[]>> }>) => RuntimeTriggerRecord | null
   match: (triggerId: string, expectedRevision: number, event: Readonly<Record<string, unknown>>) => RuntimeTriggerRecord | null
   expire: (triggerId: string, expectedRevision: number) => RuntimeTriggerRecord | null
   read: (triggerId: string) => RuntimeTriggerRecord | null
@@ -35,6 +36,7 @@ export function createSyncCheckpointLifecycleHooks(input: SyncCheckpointLifecycl
     throw new TypeError('lifecycle limits must be finite positive numbers')
   }
   const now = input.now ?? Date.now
+  const localProgress = new Map<string, Readonly<{ settledStepIdsByInvocation: Readonly<Record<string, readonly string[]>> }>>()
   const failIfMatchedButNotAccepted = (record: RuntimeTriggerRecord, caseId: string) => {
     if (record.state === 'matched' && record.result?.pauseAcceptedBySdk !== true) {
       input.fail(record.id, record.revision, 'TRIGGER_HANDLING_FAILED', caseId)
@@ -62,27 +64,87 @@ export function createSyncCheckpointLifecycleHooks(input: SyncCheckpointLifecycl
       }
       const baseline = waiting.definition.sourceBaseline.settledCount
       const invocationBaselines = waiting.definition.sourceBaseline.settledCountByInvocation
-      const invocationBaseline = invocationBaselines && typeof invocationBaselines === 'object' && !Array.isArray(invocationBaselines)
-        ? (invocationBaselines as Record<string, unknown>)[step.invocationId] ?? 0
-        : Number(baseline) === 0 ? 0 : undefined
-      if (!Number.isSafeInteger(baseline) || Number(baseline) < 0 || !Number.isSafeInteger(invocationBaseline) || Number(invocationBaseline) < 0 ||
-        snapshot.facts.settledCount < Number(invocationBaseline)) {
+      if (!Number.isSafeInteger(baseline) || Number(baseline) < 0 || !Number.isSafeInteger(snapshot.facts.settledCount) ||
+        snapshot.facts.settledCount < 0 || snapshot.facts.settledStepIds.length !== snapshot.facts.settledCount ||
+        !invocationBaselines && Number(baseline) !== 0 || invocationBaselines !== undefined &&
+          (invocationBaselines === null || typeof invocationBaselines !== 'object' || Array.isArray(invocationBaselines))) {
         input.fail(waiting.id, waiting.revision, 'TRIGGER_SOURCE_GAP', 'step-baseline-invalid')
         continue
       }
-      const actual = Number(baseline) + snapshot.facts.settledCount - Number(invocationBaseline)
-      if (actual < waiting.definition.condition.threshold) continue
-      if (snapshot.historyVersion !== step.historyVersion || step.stepKey !== `${step.invocationId}:turn:${step.modelTurn}`) {
+      const baselineCounts = (invocationBaselines ?? {}) as Record<string, unknown>
+      const baselineTotal = Object.values(baselineCounts).reduce<number>((total, count) =>
+        Number.isSafeInteger(count) && Number(count) >= 0 ? total + Number(count) : Number.NaN, 0)
+      if (!Number.isSafeInteger(baselineTotal) || baselineTotal !== Number(baseline)) {
+        input.fail(waiting.id, waiting.revision, 'TRIGGER_SOURCE_GAP', 'step-baseline-invalid')
+        continue
+      }
+      const storedProgress = waiting.result?.syncStepProgress ?? localProgress.get(waiting.id)
+      const rawProgress = storedProgress && typeof storedProgress === 'object' && !Array.isArray(storedProgress)
+        ? (storedProgress as Record<string, unknown>).settledStepIdsByInvocation : undefined
+      if (storedProgress !== undefined && (!rawProgress || typeof rawProgress !== 'object' || Array.isArray(rawProgress))) {
+        input.fail(waiting.id, waiting.revision, 'TRIGGER_SOURCE_GAP', 'step-progress-invalid')
+        continue
+      }
+      const settledStepIdsByInvocation: Record<string, readonly string[]> = {}
+      let invalidProgress = false
+      for (const [invocationId, ids] of Object.entries((rawProgress ?? {}) as Record<string, unknown>)) {
+        if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {
+          invalidProgress = true
+          break
+        }
+        settledStepIdsByInvocation[invocationId] = ids as string[]
+      }
+      if (invalidProgress) {
+        input.fail(waiting.id, waiting.revision, 'TRIGGER_SOURCE_GAP', 'step-progress-invalid')
+        continue
+      }
+      const rawCurrentBaseline = (invocationBaselines as Record<string, unknown> | undefined)?.[step.invocationId] ?? 0
+      if (!Number.isSafeInteger(rawCurrentBaseline) || Number(rawCurrentBaseline) < 0 || snapshot.facts.settledCount < Number(rawCurrentBaseline)) {
+        input.fail(waiting.id, waiting.revision, 'TRIGGER_SOURCE_GAP', 'step-baseline-invalid')
+        continue
+      }
+      const newlySettledForCurrentInvocation = snapshot.facts.settledStepIds.slice(Number(rawCurrentBaseline))
+      const previouslyObservedForCurrentInvocation = settledStepIdsByInvocation[step.invocationId]
+      if (previouslyObservedForCurrentInvocation && (newlySettledForCurrentInvocation.length < previouslyObservedForCurrentInvocation.length ||
+        previouslyObservedForCurrentInvocation.some((id, index) => id !== newlySettledForCurrentInvocation[index]))) {
+        input.fail(waiting.id, waiting.revision, 'TRIGGER_SOURCE_GAP', 'step-history-regressed')
+        continue
+      }
+      // Persist only the registration-relative suffix: the trigger's pre-registration history
+      // is neither progress nor needed to reconstruct its threshold.
+      settledStepIdsByInvocation[step.invocationId] = newlySettledForCurrentInvocation
+      let actual = 0
+      const settledStepIds: string[] = []
+      for (const ids of Object.values(settledStepIdsByInvocation)) {
+        actual += ids.length
+        settledStepIds.push(...ids)
+      }
+      if (!Number.isSafeInteger(actual)) {
+        input.fail(waiting.id, waiting.revision, 'TRIGGER_SOURCE_GAP', 'step-baseline-invalid')
+        continue
+      }
+      if (actual >= waiting.definition.condition.threshold &&
+        (snapshot.historyVersion !== step.historyVersion || step.stepKey !== `${step.invocationId}:turn:${step.modelTurn}`)) {
         input.fail(waiting.id, waiting.revision, 'TRIGGER_HANDLING_FAILED', 'checkpoint-unavailable')
         continue
       }
+      let effective: RuntimeTriggerRecord = waiting
+      const progress = { settledStepIdsByInvocation }
+      if (JSON.stringify(storedProgress) !== JSON.stringify(progress)) {
+        if (input.saveProgress) {
+          const saved = input.saveProgress(waiting.id, waiting.revision, progress)
+          if (!saved || saved.state !== 'waiting') continue
+          effective = saved
+        } else localProgress.set(waiting.id, progress)
+      }
+      if (actual < waiting.definition.condition.threshold) continue
       if (step.signal.aborted) return
       const pauseTimeoutMs = Math.min(waiting.definition.condition.pauseTimeoutMs, input.limits.maxPauseMs)
       const pauseDeadlineAt = timestamp + pauseTimeoutMs
       const event = { type: 'session_steps', occurredAt: timestamp, targetSessionId: input.sessionId, baseline: Number(baseline), actual,
-        threshold: waiting.definition.condition.threshold, settledStepIds: snapshot.facts.settledStepIds.slice(Number(invocationBaseline)), targetTurnId: step.turnId,
+        threshold: waiting.definition.condition.threshold, settledStepIds, targetTurnId: step.turnId,
         invocationId: step.invocationId, checkpointKey: step.stepKey, executionGeneration: step.executionGeneration, pauseDeadlineAt }
-      const matched = input.match(waiting.id, waiting.revision, event)
+      const matched = input.match(effective.id, effective.revision, event)
       if (!matched || matched.state !== 'matched' || matched.event?.checkpointKey !== step.stepKey ||
         matched.event?.executionGeneration !== step.executionGeneration || matched.event?.invocationId !== step.invocationId) continue
       const timeoutMs = Math.max(0, pauseDeadlineAt - now())

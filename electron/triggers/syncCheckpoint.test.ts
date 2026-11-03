@@ -91,23 +91,54 @@ describe('sync runtime trigger checkpoint', () => {
     expect(record.result).toEqual({ pauseAcceptedBySdk: true })
   })
 
-  it('uses the session baseline plus the current invocation delta after older invocations', async () => {
-    let record = { ...syncRecord(), definition: { ...syncRecord().definition,
-      sourceBaseline: { settledCount: 5, settledCountByInvocation: { 'old-invocation': 5 } } } }
-    const match = vi.fn((_id, _revision, event) => { record = { ...record, state: 'matched', revision: record.revision + 1, event }; return record })
+  it('counts only steps after registration and matches at the threshold', async () => {
+    const base = syncRecord()
+    let record: RuntimeTriggerRecord = { ...base, definition: { ...base.definition,
+      condition: { ...base.definition.condition, threshold: 3 }, sourceBaseline: { settledCount: 5, settledCountByInvocation: { 'old-invocation': 5 } } } }
+    let settledCount = 1
+    const match = vi.fn((_id: string, _revision: number, event: Readonly<Record<string, unknown>>) => { record = { ...record, state: 'matched', revision: record.revision + 1, event }; return record })
     const expire = vi.fn()
     const hooks = createSyncCheckpointLifecycleHooks({
       sessionId: 'target', limits, now: () => 1000,
       listWaitingSync: () => record.state === 'waiting' ? [record] : [], listMatchedForExecution: () => [],
-      readStepFacts: async () => ({ historyVersion: 6, facts: { ok: true, settledCount: 1, settledStepIds: ['new-step'], pendingStepIds: [] } }),
+      readStepFacts: async () => ({ historyVersion: 6, facts: { ok: true, settledCount, settledStepIds: Array.from({ length: settledCount }, (_, index) => `new-step-${index + 1}`), pendingStepIds: [] } }),
+      saveProgress: (_id, revision, progress) => { record = { ...record, revision: revision + 1, result: { ...record.result, syncStepProgress: progress } }; return record },
       match, expire, read: () => record, acceptPause: () => null, activateDelivery: vi.fn(),
       subscribeReceiver: () => () => undefined, readReceiver: async () => ({ kind: 'pending' }), fail: vi.fn()
     })
-    await hooks.postStep!({ invocationId: 'new-invocation', turnId: 'turn', stepKey: 'new-invocation:turn:1', modelTurn: 1,
+    const postStep = (modelTurn: number) => hooks.postStep!({ invocationId: 'new-invocation', turnId: 'turn', stepKey: `new-invocation:turn:${modelTurn}`, modelTurn,
       historyVersion: 6, hasNextStep: true, executionGeneration: 1, signal: new AbortController().signal })
+    await postStep(1)
+    expect(match).not.toHaveBeenCalled()
+    settledCount = 2
+    await postStep(2)
+    expect(match).not.toHaveBeenCalled()
+    settledCount = 3
+    await postStep(3)
     expect(match).toHaveBeenCalledOnce()
-    expect(match.mock.calls[0]![2]).toMatchObject({ baseline: 5, actual: 6, settledStepIds: ['new-step'] })
+    expect(match.mock.calls[0]![2]).toMatchObject({ baseline: 5, actual: 3, threshold: 3, settledStepIds: ['new-step-1', 'new-step-2', 'new-step-3'] })
     expect(expire).not.toHaveBeenCalled()
+  })
+
+  it('accumulates settled steps across invocations after registration', async () => {
+    const base = syncRecord()
+    let record: RuntimeTriggerRecord = { ...base, definition: { ...base.definition, condition: { ...base.definition.condition, threshold: 3 } } }
+    const match = vi.fn((_id: string, _revision: number, event: Readonly<Record<string, unknown>>) => { record = { ...record, state: 'matched', revision: record.revision + 1, event }; return record })
+    const hooks = createSyncCheckpointLifecycleHooks({
+      sessionId: 'target', limits, now: () => 1000,
+      listWaitingSync: () => record.state === 'waiting' ? [record] : [], listMatchedForExecution: () => [],
+      readStepFacts: async (invocationId) => ({ historyVersion: 1, facts: { ok: true, settledCount: 1, settledStepIds: [`${invocationId}-step`], pendingStepIds: [] } }),
+      saveProgress: (_id, revision, progress) => { record = { ...record, revision: revision + 1, result: { ...record.result, syncStepProgress: progress } }; return record },
+      match, expire: () => null, read: () => record, acceptPause: () => null, activateDelivery: vi.fn(),
+      subscribeReceiver: () => () => undefined, readReceiver: async () => ({ kind: 'pending' }), fail: vi.fn()
+    })
+    for (const [index, invocationId] of ['inv-a', 'inv-b', 'inv-c'].entries()) {
+      await hooks.postStep!({ invocationId, turnId: 'turn', stepKey: `${invocationId}:turn:1`, modelTurn: 1, historyVersion: 1,
+        hasNextStep: true, executionGeneration: index + 1, signal: new AbortController().signal })
+      if (index < 2) expect(match).not.toHaveBeenCalled()
+    }
+    expect(match).toHaveBeenCalledOnce()
+    expect(match.mock.calls[0]![2]).toMatchObject({ actual: 3, threshold: 3, settledStepIds: ['inv-a-step', 'inv-b-step', 'inv-c-step'] })
   })
 
   it('expires a sync trigger at its deadline without matching or returning an SDK pause', async () => {
