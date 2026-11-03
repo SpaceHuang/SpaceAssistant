@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createRuntimeTriggerReceiverStarter, runtimeTriggerQueueLane } from './receiverStarter'
+import { createRuntimeTriggerReceiverStarter, runtimeTriggerQueueLane, waitForRuntimeTriggerReceiverTurn } from './receiverStarter'
+import { AgentTurnPauseTimedOutError } from '../../packages/agent-sdk/src/turn'
 
 describe('runtime trigger receiver starter', () => {
   it('maps the trusted queue scope to the matching policy lane', () => {
@@ -31,5 +32,23 @@ describe('runtime trigger receiver starter', () => {
     const starter = createRuntimeTriggerReceiverStarter({ prepare: async () => { throw new Error('SESSION_EXECUTION_ACTIVE_OWNER') }, dispatch: vi.fn() })
     await expect(starter({ sessionId: 'receiver', requestId: 'runtime-trigger:t1', messageId: 'marker-1', queueScope: { kind: 'desktop' } }))
       .resolves.toBe('busy')
+  })
+
+  it('waits for recovery to persist the queued receiver Turn identity', async () => {
+    let receipt = { queuedMessageId: 'marker-1', state: 'queued' }
+    setTimeout(() => { receipt = { queuedMessageId: 'marker-1', state: 'claimed', turnId: 'receiver-turn' } }, 15)
+    await expect(waitForRuntimeTriggerReceiverTurn({ readReceipt: () => receipt, expectedMessageId: 'marker-1',
+      signal: new AbortController().signal, deadlineAt: Date.now() + 1000, pollIntervalMs: 5 })).resolves.toBe('receiver-turn')
+  })
+
+  it('honors sync pause timeout and explicit cancellation while the receiver remains busy', async () => {
+    const signal = new AbortController().signal
+    await expect(waitForRuntimeTriggerReceiverTurn({ readReceipt: () => ({ queuedMessageId: 'marker-1', state: 'queued' }),
+      expectedMessageId: 'marker-1', signal, deadlineAt: 10, now: () => 10 })).rejects.toBeInstanceOf(AgentTurnPauseTimedOutError)
+    const cancelled = new AbortController()
+    const pending = waitForRuntimeTriggerReceiverTurn({ readReceipt: () => ({ queuedMessageId: 'marker-1', state: 'queued' }),
+      expectedMessageId: 'marker-1', signal: cancelled.signal, deadlineAt: Date.now() + 1000 })
+    cancelled.abort('trigger-cancelled')
+    await expect(pending).rejects.toThrow('trigger-cancelled')
   })
 })

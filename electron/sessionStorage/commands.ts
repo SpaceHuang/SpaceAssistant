@@ -10,6 +10,7 @@ import type { SessionCommands } from './public/ports'
 import type { RuntimeTriggerRecord, RuntimeTriggerPatch } from './public/model'
 import { classifyQueueInputSource } from '../database/queueInputSource'
 import { serializeQueueScope } from '../../src/shared/queueScope'
+import { queueInputFingerprint } from '../queueInputFingerprint'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../../src/shared/planTypes'
 
@@ -111,7 +112,24 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
         const conn = getDbConnection(db)
         const cancelled = runInTransaction(conn, () => {
           const receipt = getQueueInputReceiptInScope(db, sessionId, requestId, queueScope)
-          if (!receipt?.queuedMessageId || classifyQueueInputSource(db, { sessionId, requestId, queueScope, queuedMessageId: receipt.queuedMessageId }) !== 'runtime-trigger') return false
+          if (!receipt?.queuedMessageId) return false
+          const source = classifyQueueInputSource(db, { sessionId, requestId, queueScope, queuedMessageId: receipt.queuedMessageId })
+          if (source !== 'runtime-trigger') {
+            const triggerId = requestId.slice('runtime-trigger:'.length)
+            const trigger = conn.prepare('SELECT owner_session_id,receiver_session_id,state,result_json FROM runtime_triggers WHERE id=?').get(triggerId) as
+              { owner_session_id: string; receiver_session_id: string; state: string; result_json: string | null } | undefined
+            const message = conn.prepare("SELECT content FROM messages WHERE id=? AND session_id=? AND role='user'").get(receipt.queuedMessageId, sessionId) as { content: string } | undefined
+            let authorization: Record<string, unknown> | undefined
+            try {
+              const result = trigger?.result_json ? JSON.parse(trigger.result_json) as Record<string, unknown> : undefined
+              authorization = result?.authorization as Record<string, unknown> | undefined
+            } catch { return false }
+            const marker = `运行时事件待处理：${triggerId}`
+            if (trigger?.state !== 'cancelled' || trigger.receiver_session_id !== sessionId || !authorization ||
+              authorization.requestId !== requestId || authorization.ownerSessionId !== trigger.owner_session_id ||
+              authorization.receiverSessionId !== sessionId || JSON.stringify(authorization.queueScope) !== JSON.stringify(queueScope) ||
+              receipt.fingerprint !== queueInputFingerprint({ text: marker }) || message?.content !== marker) return false
+          }
           const scope = serializeQueueScope(queueScope)
           if (receipt.state === 'queued') {
             const deleted = deleteQueuedUserMessageInScope(db, receipt.queuedMessageId, queueScope)

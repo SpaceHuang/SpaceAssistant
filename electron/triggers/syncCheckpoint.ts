@@ -20,7 +20,9 @@ export type SyncCheckpointLifecycleDependencies = Readonly<{
   expire: (triggerId: string, expectedRevision: number) => RuntimeTriggerRecord | null
   read: (triggerId: string) => RuntimeTriggerRecord | null
   acceptPause: (input: { trigger: RuntimeTriggerRecord; checkpoint: SyncCheckpointStep }) => RuntimeTriggerRecord | null
-  activateDelivery: (trigger: RuntimeTriggerRecord) => Promise<ReceiverTurnRef>
+  activateDelivery: (trigger: RuntimeTriggerRecord, input: { signal: AbortSignal; deadlineAt: number }) => Promise<ReceiverTurnRef | 'busy'>
+  waitForReceiverTurn?: (trigger: RuntimeTriggerRecord, input: { signal: AbortSignal; deadlineAt: number }) => Promise<ReceiverTurnRef>
+  cancelPendingDelivery?: (trigger: RuntimeTriggerRecord) => void
   subscribeReceiver: (sessionId: string, turnId: string, listener: (terminal: PersistedTurnTerminal) => void) => () => void
   readReceiver: (sessionId: string, turnId: string) => Promise<PersistedTurnTerminal>
   fail: (triggerId: string, expectedRevision: number, code: 'TRIGGER_SOURCE_GAP' | 'TRIGGER_HANDLING_FAILED' | 'TRIGGER_DELIVERY_FAILED', caseId: string) => unknown
@@ -259,13 +261,22 @@ async function waitForAcceptedReceiverTurn(input: SyncCheckpointLifecycleDepende
     throw new Error('sync trigger expired before delivery')
   }
   unregisterWaiter = input.registerWaiter?.(matched.id, () => { cancelled = true; cancelActiveWait?.() })
+  const waitController = new AbortController()
+  const relayAbort = () => waitController.abort(signal.reason)
+  signal.addEventListener('abort', relayAbort, { once: true })
+  cancelActiveWait = () => waitController.abort('sync wait cancelled')
   let unsubscribe: (() => void) | undefined
   let abortListener: (() => void) | undefined
   try {
-    if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason ?? 'pause aborted'))
-    const receiver = await input.activateDelivery(accepted)
+    if (signal.aborted) relayAbort()
+    if (waitController.signal.aborted) throw waitController.signal.reason instanceof Error ? waitController.signal.reason : new Error(String(waitController.signal.reason ?? 'pause aborted'))
+    let receiver = await input.activateDelivery(accepted, { signal: waitController.signal, deadlineAt: pauseDeadlineAt })
+    if (receiver === 'busy') {
+      if (!input.waitForReceiverTurn) throw new Error('runtime trigger receiver wait is unavailable')
+      receiver = await input.waitForReceiverTurn(accepted, { signal: waitController.signal, deadlineAt: pauseDeadlineAt })
+    }
     if (cancelled) throw new Error('sync wait cancelled')
-    if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason ?? 'pause aborted'))
+    if (waitController.signal.aborted) throw waitController.signal.reason instanceof Error ? waitController.signal.reason : new Error(String(waitController.signal.reason ?? 'pause aborted'))
     const afterDelivery = input.read(accepted.id)
     if (afterDelivery?.state === 'matched' && now() >= afterDelivery.expiresAt) {
       input.expire(afterDelivery.id, afterDelivery.revision)
@@ -277,7 +288,7 @@ async function waitForAcceptedReceiverTurn(input: SyncCheckpointLifecycleDepende
         if (settled) return
         settled = true
         if (unsubscribe) unsubscribe()
-        if (abortListener) signal.removeEventListener('abort', abortListener)
+        if (abortListener) waitController.signal.removeEventListener('abort', abortListener)
         if (error) reject(error)
         else resolve()
       }
@@ -288,21 +299,23 @@ async function waitForAcceptedReceiverTurn(input: SyncCheckpointLifecycleDepende
       cancelActiveWait = () => finish(new Error('sync wait cancelled'))
       if (cancelled) cancelActiveWait()
       abortListener = () => {
-        if (signal.reason === 'lifecycle-pause-timeout') fail('TRIGGER_HANDLING_FAILED', 'pause-timeout')
-        finish(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason ?? 'pause aborted')))
+        if (waitController.signal.reason === 'lifecycle-pause-timeout') fail('TRIGGER_HANDLING_FAILED', 'pause-timeout')
+        finish(waitController.signal.reason instanceof Error ? waitController.signal.reason : new Error(String(waitController.signal.reason ?? 'pause aborted')))
       }
-      signal.addEventListener('abort', abortListener, { once: true })
-      if (signal.aborted) { abortListener(); return }
+      waitController.signal.addEventListener('abort', abortListener, { once: true })
+      if (waitController.signal.aborted) { abortListener(); return }
       void input.readReceiver(receiver.sessionId, receiver.turnId).then((terminal) => {
         if (terminal.kind === 'terminal') finish()
         else if (terminal.kind === 'source-gap') finish(new Error(`receiver terminal unavailable: ${terminal.case}`))
       }, (error) => finish(error instanceof Error ? error : new Error(String(error))))
     })
   } catch (error) {
-    if (signal.reason === 'lifecycle-pause-timeout') fail('TRIGGER_HANDLING_FAILED', 'pause-timeout')
-    else if (!signal.aborted) fail('TRIGGER_DELIVERY_FAILED', 'receiver-wait-failed')
+    input.cancelPendingDelivery?.(accepted)
+    if (waitController.signal.reason === 'lifecycle-pause-timeout' || error instanceof AgentTurnPauseTimedOutError) fail('TRIGGER_HANDLING_FAILED', 'pause-timeout')
+    else if (!signal.aborted && !cancelled) fail('TRIGGER_DELIVERY_FAILED', 'receiver-wait-failed')
     throw error
   } finally {
+    signal.removeEventListener('abort', relayAbort)
     cancelActiveWait = undefined
     unregisterWaiter?.()
   }

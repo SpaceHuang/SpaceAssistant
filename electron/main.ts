@@ -32,6 +32,7 @@ import {
   autoStartFeishuEventIfNeeded,
   createFeishuBundle,
   getFeishuBundle,
+  readFeishuConfigFromDb,
   registerFeishuIpcHandlers,
   shutdownFeishuServices
 } from './feishu/feishuIpc'
@@ -39,6 +40,7 @@ import {
   autoStartWeChatPollIfNeeded,
   createWeChatBundle,
   getWeChatBundle,
+  readWeChatConfigFromDb,
   pauseWeChatPollIfWindowClosed,
   registerWeChatIpcHandlers,
   shutdownWeChatServices
@@ -53,12 +55,15 @@ import { createRuntimeTriggerExecutionMaterials } from './triggers/runtimeMateri
 import { createRuntimeTriggerAuthorizationBinding, runtimeTriggerAuthorizationMatches, type RuntimeTriggerAuthoritySnapshot } from './triggers/hostAuthorization'
 import { createSecuritySettingsStorage } from './confirmation/securitySettingsStorage'
 import { readImPolicySnapshot } from './confirmation/imPolicyStore'
+import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
+import { evaluateImInboundGuard, readImPolicyAuthorizationRevision } from './remote/imInboundGuard'
 import { classifyQueueInputSource } from './database/queueInputSource'
 import { createRuntimeTriggerDelivery } from './triggers/delivery'
 import { createRuntimeTriggerRecovery } from './triggers/recovery'
 import { evaluateRuntimeTriggerSource, readPersistedTurnTerminal, readSessionSettledStepFacts, readSettledStepFacts, SettledStepFactsTracker, turnTerminalBusForExecution } from './triggers/sources'
 import { createRuntimeTriggerStartAuthorizer } from './triggers/authorization'
 import { createRuntimeTriggerLifecycleAssembly, createRuntimeTriggerSyncWaitRegistry, failOrphanedRuntimeSyncTriggers } from './triggers/syncCheckpoint'
+import { waitForRuntimeTriggerReceiverTurn } from './triggers/receiverStarter'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createTurnDisplayPublisher } from './turnDisplayPublisher'
 import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask,
@@ -783,6 +788,32 @@ app.whenReady().then(async () => {
   runtimeTriggerSyncWaitStop = runtimeTriggerSyncWaiters.cancelAll
   const runtimeTriggerService = createRuntimeTriggerHostService({ commands: sessionStorage.commands,
     queries: sessionStorage.queries, execution: sessionStorage.execution,
+    authorizeImSource: ({ channel, accountId, senderId }) => {
+      const policyRevision = readImPolicyAuthorizationRevision(db)
+      const authorizationGeneration = `${channel}:${remoteAuthorizationRegistry.getGeneration(channel)}:${remoteAuthorizationRegistry.getAuthorizationEpoch(channel)}`
+      if (channel === 'feishu') {
+        const config = readFeishuConfigFromDb(db)
+        if (!config.enabled || !config.appConfigured || !config.userAuthorized || !config.remoteEnabled ||
+          accountId !== senderId || !(config.remoteSenderAllowlist ?? []).includes(accountId)) return { allowed: false }
+        const guard = evaluateImInboundGuard({ channel, senderId,
+          getConfig: () => ({ enabled: config.enabled && config.appConfigured && config.userAuthorized,
+            remoteEnabled: config.remoteEnabled, remoteSenderAllowlist: config.remoteSenderAllowlist }),
+          getPolicyRules: () => loadEffectivePolicyRules(db, 'feishu'), getPolicyRevision: () => readImPolicyAuthorizationRevision(db) })
+        if (!guard.ok || !guard.snapshot.ingressDecision) return { allowed: false }
+        return { allowed: true, policyTrace: { ...guard.snapshot.ingressDecision, authorizationGeneration, accountId,
+          senderIdDigest: createHash('sha256').update(senderId).digest('hex') } }
+      }
+      const config = readWeChatConfigFromDb(db)
+      if (!config.enabled || !config.loggedIn || !config.remoteEnabled || accountId !== senderId ||
+        !(config.remoteSenderAllowlist ?? []).includes(accountId)) return { allowed: false }
+      const guard = evaluateImInboundGuard({ channel, senderId,
+        getConfig: () => ({ enabled: config.enabled, remoteEnabled: config.remoteEnabled, loggedIn: config.loggedIn,
+          remoteSenderAllowlist: config.remoteSenderAllowlist }), getPolicyRules: () => loadEffectivePolicyRules(db, 'wechat'),
+        getPolicyRevision: () => readImPolicyAuthorizationRevision(db), isLoggedIn: () => config.loggedIn })
+      if (!guard.ok || !guard.snapshot.ingressDecision) return { allowed: false }
+      return { allowed: true, policyTrace: { ...guard.snapshot.ingressDecision, authorizationGeneration, accountId,
+        senderIdDigest: createHash('sha256').update(senderId).digest('hex') } }
+    },
     accepting: () => !isQuitting,
     cancelSyncWait: (trigger) => runtimeTriggerSyncWaiters.cancel(trigger.id) })
   const runtimeTriggerSecuritySettings = createSecuritySettingsStorage(db)
@@ -804,9 +835,11 @@ app.whenReady().then(async () => {
     const queueScope = runtimeTriggerQueueScope(trigger.receiverSessionId)
     const authority = runtimeTriggerAuthoritySnapshot(trigger)
     if (!queueScope || !authority) return null
-    return createRuntimeTriggerAuthorizationBinding({ trigger, queueScope, authority,
-      isAuthorized: () => runtimeTriggerService.isSourceAuthorized(trigger.ownerSessionId, trigger.receiverSessionId,
-        trigger.definition.condition, trigger.definition.sourceBaseline) })
+    const sourceAuthorization = runtimeTriggerService.authorizeSource(trigger.ownerSessionId, trigger.receiverSessionId,
+      trigger.definition.condition, trigger.definition.sourceBaseline, trigger.event)
+    if (!sourceAuthorization.allowed) return null
+    return createRuntimeTriggerAuthorizationBinding({ trigger, queueScope, authority, isAuthorized: () => true,
+      ...(sourceAuthorization.policyTrace ? { sourceDecisionTrace: { kind: 'im-ingress', decisions: sourceAuthorization.policyTrace } } : {}) })
   }
   const runtimeTriggerExecutionMaterials = createRuntimeTriggerExecutionMaterials({
     read: (triggerId) => sessionStorage.commands.runtimeTriggers.read(triggerId),
@@ -832,9 +865,12 @@ app.whenReady().then(async () => {
     isCurrentAuthorization: (trigger, approved) => {
       const queueScope = runtimeTriggerQueueScope(trigger.receiverSessionId)
       const authority = runtimeTriggerAuthoritySnapshot(trigger)
-      return Boolean(queueScope && authority && runtimeTriggerService.isSourceAuthorized(trigger.ownerSessionId,
-        trigger.receiverSessionId, trigger.definition.condition, trigger.definition.sourceBaseline) &&
-        runtimeTriggerAuthorizationMatches(trigger, queueScope, authority, approved))
+      if (!queueScope || !authority) return false
+      const sourceAuthorization = runtimeTriggerService.authorizeSource(trigger.ownerSessionId, trigger.receiverSessionId,
+        trigger.definition.condition, trigger.definition.sourceBaseline, trigger.event)
+      if (!sourceAuthorization.allowed) return false
+      return runtimeTriggerAuthorizationMatches(trigger, queueScope, authority, approved,
+        sourceAuthorization.policyTrace ? { kind: 'im-ingress', decisions: sourceAuthorization.policyTrace } : undefined)
     }
   })
   const runtimeTriggerReadReceipt = (trigger: import('./sessionStorage/public/model').RuntimeTriggerRecord) => {
@@ -894,18 +930,33 @@ app.whenReady().then(async () => {
       read: (id) => sessionStorage.commands.runtimeTriggers.read(id),
       acceptPause: ({ trigger }) => sessionStorage.commands.runtimeTriggers.update(trigger.id, trigger.revision,
         { result: { ...(trigger.result ?? {}), pauseAcceptedBySdk: true }, updatedAt: Date.now() }),
-      activateDelivery: async (trigger) => {
+      activateDelivery: async (trigger, { signal }) => {
         const delivered = runtimeTriggerDelivery(trigger.id)
         if (delivered.kind !== 'enqueued') throw new Error(`TRIGGER_SYNC_DELIVERY_${delivered.kind}`)
         const scope = runtimeTriggerQueueScope(trigger.receiverSessionId)
         const starter = runtimeTriggerReceiverStarter
         if (!scope || !starter) throw new Error('TRIGGER_SYNC_RECEIVER_UNAVAILABLE')
         const started = await starter({ sessionId: trigger.receiverSessionId, requestId: `runtime-trigger:${trigger.id}`, messageId: delivered.messageId, queueScope: scope })
-        if (started === 'busy') throw new Error('TRIGGER_SYNC_RECEIVER_BUSY')
+        if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason ?? 'sync wait aborted'))
+        if (started === 'busy') return 'busy'
         if (started === 'unavailable') throw new Error('TRIGGER_SYNC_RECEIVER_UNAVAILABLE')
         const receipt = runtimeTriggerReadReceipt(trigger)
         if (!receipt?.turnId) throw new Error('TRIGGER_SYNC_RECEIVER_TURN_MISSING')
         return { sessionId: trigger.receiverSessionId, turnId: receipt.turnId }
+      },
+      waitForReceiverTurn: async (trigger, { signal, deadlineAt }) => {
+        const scope = runtimeTriggerQueueScope(trigger.receiverSessionId)
+        if (!scope) throw new Error('TRIGGER_SYNC_RECEIVER_UNAVAILABLE')
+        const receipt = runtimeTriggerReadReceipt(trigger)
+        if (!receipt?.queuedMessageId) throw new Error('TRIGGER_SYNC_RECEIVER_RECEIPT_MISSING')
+        const turnId = await waitForRuntimeTriggerReceiverTurn({ readReceipt: () => runtimeTriggerReadReceipt(trigger),
+          expectedMessageId: receipt.queuedMessageId, signal, deadlineAt })
+        return { sessionId: trigger.receiverSessionId, turnId }
+      },
+      cancelPendingDelivery: (trigger) => {
+        const queueScope = runtimeTriggerQueueScope(trigger.receiverSessionId)
+        if (queueScope) sessionStorage.commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId: trigger.receiverSessionId,
+          requestId: `runtime-trigger:${trigger.id}`, queueScope })
       },
       subscribeReceiver: (receiverSessionId, receiverTurnId, listener) => turnTerminalBusForExecution(sessionStorage.execution)
         .subscribe(receiverSessionId, receiverTurnId, listener),

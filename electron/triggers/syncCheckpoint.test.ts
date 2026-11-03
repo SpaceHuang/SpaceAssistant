@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentTurnLifecycleLimits } from '../../packages/agent-sdk/src/turn'
+import { AgentTurnPauseTimedOutError, type AgentTurnLifecycleLimits } from '../../packages/agent-sdk/src/turn'
 import type { RuntimeTriggerRecord } from '../sessionStorage/public/model'
 import { createRuntimeTriggerLifecycleAssembly, createRuntimeTriggerSyncWaitRegistry, createSyncCheckpointLifecycleHooks, failOrphanedRuntimeSyncTriggers } from './syncCheckpoint'
 import { RUNTIME_TRIGGER_LIMITS } from './limits'
@@ -225,6 +225,95 @@ describe('sync runtime trigger checkpoint', () => {
     await expect(waiting).rejects.toThrow('sync wait cancelled')
     expect(fail).not.toHaveBeenCalled()
     expect(cancelWait).toBeUndefined()
+  })
+
+  it('keeps a busy receiver delivery matched until recovery starts its queued Turn', async () => {
+    let record = syncRecord()
+    let resolveTurn!: (value: { sessionId: string; turnId: string }) => void
+    const waitForReceiverTurn = vi.fn(() => new Promise<{ sessionId: string; turnId: string }>((resolve) => { resolveTurn = resolve }))
+    const fail = vi.fn()
+    const hooks = createSyncCheckpointLifecycleHooks({
+      sessionId: 'target', limits, now: () => 1000,
+      listWaitingSync: () => record.state === 'waiting' ? [record] : [], listMatchedForExecution: () => [],
+      readStepFacts: async () => ({ historyVersion: 5, facts: { ok: true, settledCount: 1, settledStepIds: ['s'], pendingStepIds: [] } }),
+      match: (_id, _revision, event) => { record = { ...record, state: 'matched', revision: record.revision + 1, matchedAt: 1000, event }; return record },
+      expire: () => null, read: () => record,
+      acceptPause: ({ trigger }) => { record = { ...trigger, revision: trigger.revision + 1, result: { pauseAcceptedBySdk: true } }; return record },
+      activateDelivery: async () => 'busy', waitForReceiverTurn,
+      subscribeReceiver: () => () => undefined,
+      readReceiver: async () => ({ kind: 'terminal', sessionId: 'receiver', turnId: 'receiver-turn', outcome: 'completed' }),
+      fail
+    })
+    const pause = await hooks.postStep!({ invocationId: 'inv', turnId: 'source-turn', stepKey: 'inv:turn:1', modelTurn: 1,
+      historyVersion: 5, hasNextStep: true, executionGeneration: 7, signal: new AbortController().signal })
+    const waiting = pause!.wait(new AbortController().signal)
+    await vi.waitFor(() => expect(waitForReceiverTurn).toHaveBeenCalledOnce())
+    expect(record.state).toBe('matched')
+    expect(fail).not.toHaveBeenCalled()
+    resolveTurn({ sessionId: 'receiver', turnId: 'receiver-turn' })
+    await expect(waiting).resolves.toBeUndefined()
+    expect(fail).not.toHaveBeenCalled()
+  })
+
+  it('cancels queued delivery and does not fail the trigger when cancellation interrupts busy recovery wait', async () => {
+    let record = syncRecord()
+    let cancelWait: (() => void) | undefined
+    let waitingSignal: AbortSignal | undefined
+    const cancelPendingDelivery = vi.fn()
+    const fail = vi.fn()
+    const hooks = createSyncCheckpointLifecycleHooks({
+      sessionId: 'target', limits, now: () => 1000,
+      listWaitingSync: () => [record], listMatchedForExecution: () => [],
+      readStepFacts: async () => ({ historyVersion: 5, facts: { ok: true, settledCount: 1, settledStepIds: ['s'], pendingStepIds: [] } }),
+      match: (_id, _revision, event) => { record = { ...record, state: 'matched', revision: record.revision + 1, matchedAt: 1000, event }; return record },
+      expire: () => null, read: () => record,
+      acceptPause: ({ trigger }) => { record = { ...trigger, revision: trigger.revision + 1, result: { pauseAcceptedBySdk: true } }; return record },
+      activateDelivery: async () => 'busy', waitForReceiverTurn: (_trigger, { signal }) => {
+        waitingSignal = signal
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error(String(signal.reason))), { once: true }))
+      }, cancelPendingDelivery,
+      subscribeReceiver: () => () => undefined, readReceiver: async () => ({ kind: 'pending' }),
+      registerWaiter: (_id, cancel) => { cancelWait = cancel; return () => undefined }, fail
+    })
+    const pause = await hooks.postStep!({ invocationId: 'inv', turnId: 'source-turn', stepKey: 'inv:turn:1', modelTurn: 1,
+      historyVersion: 5, hasNextStep: true, executionGeneration: 7, signal: new AbortController().signal })
+    const waiting = pause!.wait(new AbortController().signal)
+    await vi.waitFor(() => expect(waitingSignal).toBeDefined())
+    record = { ...record, state: 'cancelled', revision: record.revision + 1 }
+    cancelWait!()
+    await expect(waiting).rejects.toThrow('sync wait cancelled')
+    expect(waitingSignal!.aborted).toBe(true)
+    expect(cancelPendingDelivery).toHaveBeenCalledOnce()
+    expect(fail).not.toHaveBeenCalled()
+  })
+
+  it('cleans up a busy queued marker when the SDK pause deadline expires', async () => {
+    let record = syncRecord()
+    let waitingSignal: AbortSignal | undefined
+    const cancelPendingDelivery = vi.fn()
+    const fail = vi.fn()
+    const hooks = createSyncCheckpointLifecycleHooks({
+      sessionId: 'target', limits, now: () => 1000,
+      listWaitingSync: () => [record], listMatchedForExecution: () => [],
+      readStepFacts: async () => ({ historyVersion: 5, facts: { ok: true, settledCount: 1, settledStepIds: ['s'], pendingStepIds: [] } }),
+      match: (_id, _revision, event) => { record = { ...record, state: 'matched', revision: record.revision + 1, matchedAt: 1000, event }; return record },
+      expire: () => null, read: () => record,
+      acceptPause: ({ trigger }) => { record = { ...trigger, revision: trigger.revision + 1, result: { pauseAcceptedBySdk: true } }; return record },
+      activateDelivery: async () => 'busy', waitForReceiverTurn: (_trigger, { signal }) => {
+        waitingSignal = signal
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new AgentTurnPauseTimedOutError()), { once: true }))
+      }, cancelPendingDelivery,
+      subscribeReceiver: () => () => undefined, readReceiver: async () => ({ kind: 'pending' }), fail
+    })
+    const pause = await hooks.postStep!({ invocationId: 'inv', turnId: 'source-turn', stepKey: 'inv:turn:1', modelTurn: 1,
+      historyVersion: 5, hasNextStep: true, executionGeneration: 7, signal: new AbortController().signal })
+    const signal = new AbortController()
+    const waiting = pause!.wait(signal.signal)
+    await vi.waitFor(() => expect(waitingSignal).toBeDefined())
+    signal.abort('lifecycle-pause-timeout')
+    await expect(waiting).rejects.toBeInstanceOf(AgentTurnPauseTimedOutError)
+    expect(cancelPendingDelivery).toHaveBeenCalledOnce()
+    expect(fail).toHaveBeenCalledWith(record.id, record.revision, 'TRIGGER_HANDLING_FAILED', 'pause-timeout')
   })
 
   it('settles pause timeout and cleans up an unaccepted matched checkpoint at Turn terminal', async () => {

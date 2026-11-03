@@ -13,6 +13,8 @@ export function createRuntimeTriggerHostService(input: {
   execution: Pick<SessionExecutionStore, 'historyFor'>
   listProcesses?: typeof listManagedProcessTargets
   processGeneration?: typeof managedProcessRuntimeGeneration
+  authorizeImSource?: (source: Readonly<{ channel: 'feishu' | 'wechat'; accountId: string; conversationId: string; senderId: string }>) =>
+    Readonly<{ allowed: boolean; policyTrace?: Readonly<Record<string, unknown>> }>
   accepting?: () => boolean
   cancelSyncWait?: (record: import('../sessionStorage/public/model').RuntimeTriggerRecord) => void
 }) {
@@ -25,34 +27,51 @@ export function createRuntimeTriggerHostService(input: {
     const right = sessions.find((session) => session.id === rightId)
     return Boolean(left && right && left.workDirProfileId === right.workDirProfileId)
   }
-  const isSourceAuthorized = (ownerSessionId: string, receiverSessionId: string, condition: import('../../src/shared/domainTypes').RuntimeTriggerCondition,
-    sourceBaseline?: Readonly<Record<string, unknown>>) => {
-    if (!sameProfile(ownerSessionId, receiverSessionId)) return false
+  const authorizeSource = (ownerSessionId: string, receiverSessionId: string, condition: import('../../src/shared/domainTypes').RuntimeTriggerCondition,
+    sourceBaseline?: Readonly<Record<string, unknown>>, sourceEvent?: Readonly<Record<string, unknown>>) => {
+    const reject = () => ({ allowed: false as const })
+    if (!sameProfile(ownerSessionId, receiverSessionId)) return reject()
     const owner = visibleSessions().find((session) => session.id === ownerSessionId)
-    if (!owner) return false
-    if (condition.type === 'time') return true
+    if (!owner) return reject()
+    if (condition.type === 'time') return { allowed: true as const }
     if (condition.type === 'process_exit') {
-      if (listProcesses(ownerSessionId).some((target) => target.id === condition.managedProcessId)) return true
+      if (listProcesses(ownerSessionId).some((target) => target.id === condition.managedProcessId)) return { allowed: true as const }
       const generation = sourceBaseline?.runtimeGeneration
-      if (typeof generation !== 'string') return false
+      if (typeof generation !== 'string') return reject()
       const exit = readManagedProcessExit(condition.managedProcessId, generation)
-      return exit.kind === 'terminal' && exit.sessionId === ownerSessionId
+      return exit.kind === 'terminal' && exit.sessionId === ownerSessionId ? { allowed: true as const } : reject()
     }
     if (condition.type === 'im_message') {
-      if (ownerSessionId !== receiverSessionId) return false
+      if (ownerSessionId !== receiverSessionId || !input.authorizeImSource) return reject()
       const metadata = owner.metadata as Record<string, unknown> | undefined
+      const metadataSource = condition.channel
+      const boundSenderId = condition.channel === 'feishu' ? metadata?.feishuSenderOpenId
+        : (metadata?.wechatMeta as { userId?: unknown } | undefined)?.userId
       const conversationMatches = condition.channel === 'feishu'
-        ? metadata?.source === 'feishu' && metadata.feishuChatId === condition.conversationId
-        : metadata?.source === 'wechat' && (metadata.wechatMeta as { userId?: unknown } | undefined)?.userId === condition.conversationId
-      if (!conversationMatches) return false
+        ? metadata?.source === metadataSource && metadata.feishuChatId === condition.conversationId
+        : metadata?.source === metadataSource && boundSenderId === condition.conversationId
+      if (!conversationMatches || typeof boundSenderId !== 'string' || !boundSenderId.trim()) return reject()
+      if (sourceEvent && (sourceEvent.type !== 'im_message' || sourceEvent.channel !== condition.channel ||
+        sourceEvent.accountId !== condition.accountId || sourceEvent.conversationId !== condition.conversationId ||
+        typeof sourceEvent.senderId !== 'string' || sourceEvent.senderId !== boundSenderId ||
+        (condition.senderIds && !condition.senderIds.includes(sourceEvent.senderId)))) return reject()
+      const senderIds = sourceEvent ? [sourceEvent.senderId as string] : condition.senderIds?.length ? [...condition.senderIds] : [boundSenderId]
+      if (senderIds.some((senderId) => senderId !== boundSenderId)) return reject()
       try {
         const frontier = input.queries.imAcceptedFacts.captureFrontier({ channel: condition.channel,
           accountId: condition.accountId, conversationId: condition.conversationId })
-        return Number.isSafeInteger(frontier.through) && frontier.through > 0
-      } catch { return false }
+        if (!Number.isSafeInteger(frontier.through) || frontier.through <= 0) return reject()
+        const decisions = senderIds.map((senderId) => input.authorizeImSource!({ channel: condition.channel, accountId: condition.accountId,
+          conversationId: condition.conversationId, senderId }))
+        if (decisions.some((decision) => !decision.allowed || !decision.policyTrace)) return reject()
+        return { allowed: true as const, policyTrace: decisions.map((decision) => decision.policyTrace!) }
+      } catch { return reject() }
     }
-    return sameProfile(ownerSessionId, condition.targetSessionId)
+    return sameProfile(ownerSessionId, condition.targetSessionId) ? { allowed: true as const } : reject()
   }
+  const isSourceAuthorized = (ownerSessionId: string, receiverSessionId: string, condition: import('../../src/shared/domainTypes').RuntimeTriggerCondition,
+    sourceBaseline?: Readonly<Record<string, unknown>>, sourceEvent?: Readonly<Record<string, unknown>>) =>
+    authorizeSource(ownerSessionId, receiverSessionId, condition, sourceBaseline, sourceEvent).allowed
   const resolveQueueScope = (receiverSessionId: string): QueueScope | undefined => {
     const session = input.queries.readSession(receiverSessionId)
     if (!session) return undefined
@@ -94,6 +113,7 @@ export function createRuntimeTriggerHostService(input: {
   const register = service.register.bind(service)
   return Object.assign(service, {
     isSourceAuthorized,
+    authorizeSource,
     resolveQueueScope,
     async register(request: Parameters<typeof service.register>[0]) {
       if (input.accepting && !input.accepting()) throw new Error('TRIGGER_ADMISSION_CLOSED')

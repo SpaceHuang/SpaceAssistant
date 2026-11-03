@@ -15,6 +15,7 @@ export function createRuntimeTriggerAuthorizationBinding(input: {
   queueScope: QueueScope
   authority: RuntimeTriggerAuthoritySnapshot
   isAuthorized: () => boolean
+  sourceDecisionTrace?: Readonly<Record<string, unknown>>
 }): RuntimeTriggerAuthorizationBinding | null {
   const { trigger, queueScope, authority } = input
   if (trigger.state !== 'matched' || !trigger.event || !authority.policyRevision.trim() ||
@@ -29,15 +30,18 @@ export function createRuntimeTriggerAuthorizationBinding(input: {
     payloadDigest: createHash('sha256').update(JSON.stringify(trigger.event)).digest('hex'),
     policyRevision: authority.policyRevision,
     authorizationGeneration: authority.authorizationGeneration,
-    runtimeGeneration: authority.runtimeGeneration
+    runtimeGeneration: authority.runtimeGeneration,
+    ...(input.sourceDecisionTrace ? { sourceDecisionTrace: structuredClone(input.sourceDecisionTrace) } : {})
   }
 }
 
 export function runtimeTriggerAuthorizationMatches(trigger: RuntimeTriggerRecord, queueScope: QueueScope,
-  authority: RuntimeTriggerAuthoritySnapshot, approved: RuntimeTriggerAuthorizationBinding): boolean {
+  authority: RuntimeTriggerAuthoritySnapshot, approved: RuntimeTriggerAuthorizationBinding,
+  sourceDecisionTrace?: Readonly<Record<string, unknown>>): boolean {
   if (approved.requestId !== `runtime-trigger:${trigger.id}` || approved.ownerSessionId !== trigger.ownerSessionId ||
     approved.receiverSessionId !== trigger.receiverSessionId || JSON.stringify(approved.queueScope) !== JSON.stringify(queueScope) ||
     JSON.stringify(approved.sourceIdentity) !== JSON.stringify(trigger.definition.condition) || !trigger.event) return false
-  const current = createRuntimeTriggerAuthorizationBinding({ trigger, queueScope, authority, isAuthorized: () => true })
+  const current = createRuntimeTriggerAuthorizationBinding({ trigger, queueScope, authority, isAuthorized: () => true,
+    ...(sourceDecisionTrace ? { sourceDecisionTrace } : {}) })
   return Boolean(current && JSON.stringify(current) === JSON.stringify(approved))
 }

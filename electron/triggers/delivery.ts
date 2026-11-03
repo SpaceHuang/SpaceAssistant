@@ -17,6 +17,7 @@ export type RuntimeTriggerAuthorizationBinding = Readonly<{
   policyRevision: string
   authorizationGeneration: string
   runtimeGeneration: string
+  sourceDecisionTrace?: Readonly<Record<string, unknown>>
 }>
 
 /** Queue only a fixed wake marker. The matched event remains in the trigger record. */

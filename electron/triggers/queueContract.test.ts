@@ -116,4 +116,23 @@ describe('trusted queue input source classification', () => {
       expect(commands.scopedQueue.cancelUnstartedInput({ sessionId: session, requestId: input.requestId, queueScope: scope, expectedSource: 'ordinary-desktop' })).toBe(false)
     } finally { db.close() }
   })
+
+  it('removes a queued trigger marker after the trigger has atomically entered cancelled state', () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'cancelled trigger owner' }).id
+      const receiver = createSession(db, { name: 'cancelled trigger receiver' }).id
+      const commands = createSessionCommands(db)
+      const scope = { kind: 'desktop' } as const
+      insertRuntimeTrigger(commands, { id: 'cancelled-trigger', ownerSessionId: owner, receiverSessionId: receiver, clientKey: 'key',
+        definition: { version: 1, condition: { type: 'turn_completed', targetSessionId: owner, turnId: 'turn-1' }, sourceBaseline: {} },
+        state: 'matched', result: authorization('cancelled-trigger', owner, receiver, scope), createdAt: 1, expiresAt: 9, attempts: 0, revision: 1, updatedAt: 1 })
+      const queued = enqueueQueuedUserMessageInScope(db, { sessionId: receiver, requestId: 'runtime-trigger:cancelled-trigger',
+        content: '运行时事件待处理：cancelled-trigger', queueScope: scope })
+      getDbConnection(db).prepare("UPDATE runtime_triggers SET state='cancelled' WHERE id='cancelled-trigger'").run()
+      expect(commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId: receiver, requestId: queued.receipt.requestId, queueScope: scope })).toBe(true)
+      expect(commands.scopedQueue.readReceipt({ sessionId: receiver, requestId: queued.receipt.requestId, queueScope: scope })?.state).toBe('cancelled')
+      expect(listQueuedUserMessages(db, { sessionId: receiver, queueScope: scope })).toEqual([])
+    } finally { db.close() }
+  })
 })

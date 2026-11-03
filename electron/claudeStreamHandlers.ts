@@ -515,6 +515,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         const replayApplied = JSON.stringify(replayedMessages) !== JSON.stringify(replaySurface)
         if (replayApplied) builtMessages = restoreReplaySurface(builtMessages, replayedMessages)
         const runtimeTriggerSource = deps.runtimeTriggerSourceContext?.({ sessionId, turnId, requestId })
+        if (requestId.startsWith('runtime-trigger:') && !runtimeTriggerSource) throw new Error('RUNTIME_TRIGGER_SOURCE_MATERIALS_REQUIRED')
         if (runtimeTriggerSource) {
           builtMessages = [...builtMessages, {
             id: `runtime-trigger-source:${runtimeTriggerSource.triggerId}`, role: 'user',
@@ -616,6 +617,9 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           historyForSession: (scopeSessionId: string) => {
             const admission = scopeSessionId === sessionId
               ? deps.runtimeTriggerAdmission?.({ sessionId, turnId, requestId }) : undefined
+            if (requestId.startsWith('runtime-trigger:') && scopeSessionId === sessionId && !admission) {
+              throw new Error('RUNTIME_TRIGGER_HISTORY_ADMISSION_REQUIRED')
+            }
             return sessionStorage.execution.historyFor({ sessionId: scopeSessionId, ...(admission ? { runtimeTriggerAdmission: admission } : {}) })
           },
           ...(session ? { sessionEventLocation: { workDir: deps.getWorkDir(), sessionId, createdAt: session.createdAt } } : {}),
@@ -856,6 +860,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           }
         })
         const triggerAdmission = deps.runtimeTriggerAdmission?.({ sessionId, turnId, requestId })
+        if (requestId.startsWith('runtime-trigger:') && !triggerAdmission) throw new Error('RUNTIME_TRIGGER_HISTORY_ADMISSION_REQUIRED')
         const triggerLifecycleHistory = sessionStorage.execution.historyFor({ sessionId, ...(triggerAdmission ? { runtimeTriggerAdmission: triggerAdmission } : {}) })
         const triggerLifecycle = deps.runtimeTriggerLifecycle?.({ sessionId, turnId, history: triggerLifecycleHistory })
         const hostedHandoffOptions = {

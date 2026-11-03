@@ -3,6 +3,7 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { createSession } from '../database/operations'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerHostService } from './hostService'
+import { evaluateImInboundGuard } from '../remote/imInboundGuard'
 
 describe('runtime trigger host capability adapter', () => {
   it('captures a settled baseline for each existing invocation at registration', async () => {
@@ -65,12 +66,49 @@ describe('runtime trigger host capability adapter', () => {
         through: accountId === 'account-a' && conversationId === 'alice' ? through : 0, coverageRevision: 1
       }) } }
       const service = createRuntimeTriggerHostService({ commands: createSessionCommands(db), queries: queries as never,
-        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }) } as never })
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }) } as never,
+        authorizeImSource: ({ senderId }) => {
+          const guard = evaluateImInboundGuard({ channel: 'wechat', senderId, getConfig: () => ({ enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['alice'] }),
+            getPolicyRules: () => [] })
+          return guard.ok ? { allowed: true, policyTrace: { ruleId: guard.snapshot.ingressDecision?.ruleId, policyRevision: 'test-policy' } } : { allowed: false }
+        } })
       const params = { clientKey: 'im-trigger', receiverSessionId: owner.id, expiresAt: Date.now() + 60_000,
         condition: { type: 'im_message', channel: 'wechat', accountId: 'account-a', conversationId: 'alice' } }
       await expect(service.register({ ownerSessionId: owner.id, params })).rejects.toMatchObject({ failure: { code: 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' } })
       through = 1
       await expect(service.register({ ownerSessionId: owner.id, params })).resolves.toMatchObject({ trigger: { state: 'waiting', definition: { sourceBaseline: { through: 1, coverageRevision: 1 } } } })
+    } finally { db.close() }
+  })
+
+  it('rechecks the current IM channel, account and exact sender policy against matched history facts', () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'live IM authorization', metadata: { source: 'wechat', wechatMeta: { userId: 'alice' } } })
+      let remoteEnabled = true
+      let allowedSenders = ['alice']
+      let through = 1
+      const queries = { listSessions: () => [owner], imAcceptedFacts: { captureFrontier: () => ({ through, coverageRevision: 7 }) } }
+      const service = createRuntimeTriggerHostService({ commands: createSessionCommands(db), queries: queries as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }) } as never,
+        authorizeImSource: ({ channel, accountId, conversationId, senderId }) => {
+          const guard = evaluateImInboundGuard({ channel, senderId,
+            getConfig: () => ({ enabled: true, remoteEnabled, loggedIn: true, remoteSenderAllowlist: allowedSenders }), getPolicyRules: () => [] })
+          return guard.ok && allowedSenders.includes(senderId) && accountId === 'alice' && conversationId === 'alice'
+            ? { allowed: true, policyTrace: { ruleId: guard.snapshot.ingressDecision?.ruleId, policyRevision: 'policy-r7' } }
+            : { allowed: false }
+        } })
+      const condition = { type: 'im_message' as const, channel: 'wechat' as const, accountId: 'alice', conversationId: 'alice' }
+      const event = { type: 'im_message', channel: 'wechat', accountId: 'alice', conversationId: 'alice', senderId: 'alice', occurredAt: 10 }
+      expect(service.authorizeSource(owner.id, owner.id, condition, {}, event)).toMatchObject({ allowed: true, policyTrace: [{ ruleId: 'ingress-default-allow' }] })
+      remoteEnabled = false
+      expect(service.authorizeSource(owner.id, owner.id, condition, {}, event)).toMatchObject({ allowed: false })
+      remoteEnabled = true
+      allowedSenders = []
+      expect(service.authorizeSource(owner.id, owner.id, condition, {}, event)).toMatchObject({ allowed: false })
+      allowedSenders = ['alice']
+      expect(service.authorizeSource(owner.id, owner.id, condition, {}, { ...event, senderId: 'mallory' })).toMatchObject({ allowed: false })
+      through = 2
+      expect(service.authorizeSource(owner.id, owner.id, condition, {}, event)).toMatchObject({ allowed: true })
     } finally { db.close() }
   })
 })
