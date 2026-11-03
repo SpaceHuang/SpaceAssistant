@@ -30,6 +30,7 @@ import { runHostedAgentTurn, type AgentTurnHost } from '../packages/agent-sdk/sr
 import { ModelProviderRegistry } from '../packages/agent-sdk/src/model'
 import { RecordingModelProvider } from '../packages/agent-provider-testing/src'
 import { createSkillTurnScope } from './skills/skillTurnScope'
+import { registerAgentIpc } from './ipc/agentProtocolIpc'
 
 const database = {
   listSessions: vi.fn(() => []),
@@ -594,6 +595,48 @@ describe('file IPC handlers', () => {
     expect(executeTurn).toHaveBeenCalledWith(sender, {
       requestId: 'request-1', turnId: 'turn-1', turnStartToken: 'token-1', sessionId: 'session-1'
     }, undefined)
+  })
+
+  it('错误 start token 请求不关闭合法 turn 的共享 Skill scope', async () => {
+    let releaseSource!: () => void
+    const sourceGate = new Promise<void>((resolve) => { releaseSource = resolve })
+    const skill = { meta: { name: 'authorized-skill', description: '', version: '1', author: '', triggers: [] }, content: 'safe content', scope: 'user' as const, directoryPath: '/skill', filePath: '/skill/SKILL.md', lastModified: 1 }
+    const skillScope = createSkillTurnScope({ catalogSkills: [skill], preloadedSkills: [], maxConcurrent: 1 })
+    const started = {
+      turnId: 'credential-scope-turn', requestId: 'credential-scope-request', sessionId: 'session-1',
+      userMessage: { id: 'credential-user', sessionId: 'session-1', role: 'user' as const, content: 'hello', timestamp: 1, status: 'sent' as const, schemaVersion: 1 },
+      assistantMessage: { id: 'credential-assistant', sessionId: 'session-1', role: 'assistant' as const, content: '', timestamp: 2, status: 'streaming' as const, schemaVersion: 1 },
+      version: 0, startToken: 'correct-token', intentFingerprint: '{}', executionConfig: {}
+    }
+    const coordinatorWithMessage = new TurnCoordinator({
+      findByRequestId: () => undefined, hasActiveTurn: () => false, getMessage: (id: string) => id === started.userMessage.id ? started.userMessage : undefined,
+      append: (message) => ({ message: { ...message, schemaVersion: 1 } as never, sequence: 1 }), appendMany: () => [],
+      prepareAtomic: () => ({ user: { message: started.userMessage, sequence: 1 }, assistant: { message: started.assistantMessage, sequence: 2 } }),
+      claimQueuedAtomic: () => { throw new Error('unused') }, update: () => null, updateIfStreaming: () => null, checkpoint: () => true,
+      listUnfinishedTurns: () => [], recoverTurn: () => false, saveTurn: () => undefined, updateTurnState: () => undefined
+    } as never, { now: () => 3, id: () => 'generated' })
+    coordinatorWithMessage.prepare({ mode: 'reuse-user', requestId: started.requestId, sessionId: started.sessionId, userMessageId: started.userMessage.id, excludeMessageIds: [], config: {} }, 'prepared', { turnId: started.turnId, startToken: started.startToken })
+    ctx.turnRuntime = { coordinator: coordinatorWithMessage, cancel: vi.fn(), listActive: vi.fn(() => []), subscribe: vi.fn(() => () => undefined), executeWithSource: (id: string, token: string, source: never) => coordinatorWithMessage.execute(id, token, source) } as unknown as AppIpcContext['turnRuntime']
+    const executeTurn = vi.fn(async () => await sourceGate)
+    ctx.executeTurn = executeTurn
+    const finish = vi.spyOn(skillScope, 'close')
+    mockReadTurnByRequest.mockReturnValue(undefined)
+    vi.mocked(database.getPersistedTurn).mockReturnValue({ turnId: started.turnId, requestId: started.requestId, sessionId: started.sessionId,
+      assistantMessageId: started.assistantMessage.id, userMessageId: started.userMessage.id, state: 'prepared', version: 0, startToken: started.startToken } as never)
+    ipc = mockIpcMain()
+    routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
+    registerAgentIpc(ipc as unknown as import('electron').IpcMain, ctx)
+    const execute = ipc.getHandler('chat:execute-turn')!
+    const validPayload = { requestId: started.requestId, turnId: started.turnId, turnStartToken: started.startToken, sessionId: started.sessionId }
+    await expect(execute({ sender: {} }, { ...validPayload, turnStartToken: 'wrong-token' })).resolves.toMatchObject({ accepted: true })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(finish).not.toHaveBeenCalled()
+    // 错误凭证先到也不能关闭准备中的 scope；其授权快照仍可完成读取。
+    await expect(execute({ sender: {} }, validPayload)).resolves.toMatchObject({ accepted: true })
+    await vi.waitFor(() => expect(executeTurn).toHaveBeenCalledTimes(2))
+    expect(() => skillScope.planRead('authorized-skill', 1000)).not.toThrow()
+    releaseSource()
   })
 
   it('相同 requestId 重放优先返回冻结 turn，不读取漂移后的当前配置', async () => {

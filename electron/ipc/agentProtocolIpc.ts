@@ -993,9 +993,12 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     if (persisted?.state === 'configuring' && !configuring) throw new Error('TURN_CONFIGURATION_INCOMPLETE')
     void (async () => {
       let preparedRuntime: PreparedTurnRuntime | undefined
+      let executionClaimed = false
       try {
         if (configuring) preparedRuntime = await configuring
+        // scope 归属于成功认领的 turn source；无效凭证拒绝时不能释放共享准备快照。
         await ctx.executeTurn!(sender, executionPayload, preparedRuntime?.skillTurnScope)
+        executionClaimed = true
         if (continuationId) {
           const persistedAfterExecution = sessionStorage.execution.readTurn({ sessionId: payload.sessionId, turnId: payload.turnId })
           const status = persistedAfterExecution?.outcome === 'completed' ? 'completed'
@@ -1007,8 +1010,10 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         // 配置失败/取消已由 configuring 路径写入 terminal，不能把它伪装成 legacy config 错误。
         if (continuationId) sessionStorage.execution.continuations.settleForTurn({ targetTurnId: payload.turnId, status: 'failed' })
       } finally {
-        preparedRuntime?.skillTurnScope?.close()
-        if (configuringTurnsById.get(payload.turnId) === configuring) configuringTurnsById.delete(payload.turnId)
+        if (executionClaimed) {
+          preparedRuntime?.skillTurnScope?.close()
+          if (configuringTurnsById.get(payload.turnId) === configuring) configuringTurnsById.delete(payload.turnId)
+        }
       }
     })()
     return { ok: true as const, accepted: true as const, turnId: payload.turnId }

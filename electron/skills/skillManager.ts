@@ -1,11 +1,12 @@
-import type {
-  GithubInstallResult,
-  SessionSkillsState,
-  SkillDefinition,
-  SkillRouteRecentMessage,
-  SkillRouteResult,
-  SkillsConfig,
-  WikiConfig
+import {
+  isLlmRoutingExcludedSkill,
+  type GithubInstallResult,
+  type SessionSkillsState,
+  type SkillDefinition,
+  type SkillRouteRecentMessage,
+  type SkillRouteResult,
+  type SkillsConfig,
+  type WikiConfig
 } from '../../src/shared/domainTypes'
 import { buildSystemPromptFromSkills, readSkillForTool, truncateSystemPrompt } from '../../src/shared/skillPrompt'
 import { getCachedSkills, invalidateSkillsCache } from './skillCache'
@@ -139,7 +140,7 @@ export function createSkillManager(ctx: SkillManagerContext) {
             skipLlmRouting: true
           })
       const canDiscover = config.autoDetect && config.routing.mode !== 'legacy' && config.routing.enabled !== false
-      const catalogSkills = canDiscover ? available : []
+      const catalogSkills = canDiscover ? available.filter((skill) => !isLlmRoutingExcludedSkill(skill.meta.name)) : []
       const scope = createSkillTurnScope({
         catalogSkills,
         preloadedSkills: route.skills,

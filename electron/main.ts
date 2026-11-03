@@ -1090,8 +1090,10 @@ app.whenReady().then(async () => {
   ) => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
     turnRuntime.bindRequest(payload.requestId, payload.turnId)
+    let executionClaimed = false
     try {
       return await turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (_turn) => {
+        executionClaimed = true
         const result = await executeClaudeRequest(sender, { ...payload, ...(skillTurnScope ? { skillTurnScope } : {}) }) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
         if (result.ok) {
           turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' }, payload.turnId)
@@ -1108,7 +1110,7 @@ app.whenReady().then(async () => {
         return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
       })
     } finally {
-      skillTurnScope?.close()
+      if (executionClaimed) skillTurnScope?.close()
     }
   }
 

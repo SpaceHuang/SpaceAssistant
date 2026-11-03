@@ -181,6 +181,26 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
     }
   })
 
+  it('默认自动目录排除恢复专用技能，猜名读取也不授权', async () => {
+    const dirs = makeTempDirs()
+    try {
+      createUserSkill(dirs.userDataPath, 'browser-setup-guide', 'browser recovery')
+      createUserSkill(dirs.userDataPath, 'shell-setup-guide', 'shell recovery')
+      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG })
+
+      const prepared = await manager.prepareTurn({ userInput: '普通问题', sessionState: emptyState })
+
+      expect(prepared.catalogSkills.map((skill) => skill.meta.name)).not.toEqual(expect.arrayContaining([
+        'browser-setup-guide', 'shell-setup-guide'
+      ]))
+      expect(() => prepared.scope.planRead('browser-setup-guide', 1000)).toThrow('SKILL_NOT_AUTHORIZED')
+      expect(() => prepared.scope.planRead('shell-setup-guide', 1000)).toThrow('SKILL_NOT_AUTHORIZED')
+      prepared.scope.close()
+    } finally {
+      dirs.cleanup()
+    }
+  })
+
   it('禁用自动发现时仍预加载手动 skill，但不给目录或 skills.read 授权', async () => {
     const dirs = makeTempDirs()
     try {
