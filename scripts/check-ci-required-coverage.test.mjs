@@ -153,6 +153,10 @@ test('tracks the observational chat business probe and protects its Electron ini
 test('tracks the storage performance observation lane and sanitized artifact contract', () => {
   assert.deepEqual(checkWorkflow(validWorkflow()), [])
 
+  const blockingObservation = validWorkflow()
+  delete blockingObservation.jobs['storage-perf']['continue-on-error']
+  assert.ok(checkWorkflow(blockingObservation).some((issue) => issue.includes('storage-perf must not fail the overall workflow')))
+
   const changed = validWorkflow()
   const steps = changed.jobs['storage-perf'].steps
   const buildIndex = steps.findIndex((step) => step.run === 'npm run build:agent-provider-pi-ai')

@@ -101,6 +101,7 @@ export function checkWorkflow(workflow) {
     if (storagePerf.name !== 'CI / Storage performance (observation)' || storagePerf['runs-on'] !== 'macos-latest' || storagePerf.strategy?.matrix) {
       issues.push('storage-perf must use the single macOS observation runner')
     }
+    if (storagePerf['continue-on-error'] !== true) issues.push('storage-perf must not fail the overall workflow')
     const steps = storagePerf.steps ?? []
     const buildIndex = steps.findIndex((step) => step.run === 'npm run build:agent-provider-pi-ai')
     const perfIndex = steps.findIndex((step) => step.run === 'npm run test:storage-perf -- --reporter=json --outputFile=.ci/storage-perf-report.json')

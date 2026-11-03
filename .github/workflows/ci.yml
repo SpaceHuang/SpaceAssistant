@@ -71,6 +71,7 @@ jobs:
   storage-perf:
     name: CI / Storage performance (observation)
     runs-on: macos-latest
+    continue-on-error: true
     # Keep this observational while collecting five runs for R-03; review results before changing ci-required.
     timeout-minutes: 20
     steps:
