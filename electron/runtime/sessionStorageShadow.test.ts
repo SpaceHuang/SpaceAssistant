@@ -9,6 +9,7 @@ import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { refreshSessionTranscriptParityProof } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { fieldDifferences, readCanonicalTurnContextCandidate, shadowAcceptedTurnContext, shadowTurnRoutingInput } from '../sessionStorage/infrastructure/sqlite/sessionStorageShadow'
 import { projectAgentLogFields } from '../agentLogger/agentLogProjection'
+import { STORAGE_PERF_BUDGET } from './storagePerfBudget'
 import * as agentLogger from '../agentLogger/agentLogger'
 import { createSpillStore } from '../storage/spillStore'
 import { queueInputFingerprint } from '../queueInputFingerprint'
@@ -693,8 +694,8 @@ describe('Phase 5.2 canonical shadow reads', () => {
     const legacyP95 = p95(pairedLegacyMs)
     const shadowP95 = p95(pairedShadowMs)
     process.stdout.write(`shadow-p95 legacy=${legacyP95.toFixed(2)}ms candidate=${shadowP95.toFixed(2)}ms samples=${pairedLegacyMs.length}\n`)
-    expect(shadowP95).toBeLessThanOrEqual(legacyP95 * 2 + 5)
-    expect(shadowP95).toBeLessThanOrEqual(50)
+    expect(shadowP95).toBeLessThanOrEqual(legacyP95 * STORAGE_PERF_BUDGET.relativeP95.multiplier + STORAGE_PERF_BUDGET.relativeP95.allowanceMs)
+    expect(shadowP95).toBeLessThanOrEqual(STORAGE_PERF_BUDGET.apiShadowP95Ms)
     db.close()
   })
 
@@ -742,7 +743,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     const legacyP95 = p95(legacyMs)
     const canonicalP95 = p95(canonicalMs)
     process.stdout.write(`canonical-api-p95 legacy=${legacyP95.toFixed(2)}ms candidate=${canonicalP95.toFixed(2)}ms samples=${legacyMs.length}\n`)
-    expect(canonicalP95).toBeLessThanOrEqual(legacyP95 * 2 + 5)
-    expect(canonicalP95).toBeLessThanOrEqual(50)
+    expect(canonicalP95).toBeLessThanOrEqual(legacyP95 * STORAGE_PERF_BUDGET.relativeP95.multiplier + STORAGE_PERF_BUDGET.relativeP95.allowanceMs)
+    expect(canonicalP95).toBeLessThanOrEqual(STORAGE_PERF_BUDGET.canonicalApiP95Ms)
     db.close()
   })})

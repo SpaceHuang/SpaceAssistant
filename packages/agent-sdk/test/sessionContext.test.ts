@@ -110,6 +110,34 @@ describe('shared session context rules', () => {
     expect(restored.completedToolResults.size).toBe(0)
   })
 
+  it('keeps a process-restarted turn and its unresolved tool call in working context', () => {
+    const input = user('restart-user', 'continue the task')
+    const call = { id: 'restart-tool', name: 'write_file', input: { path: 'x' } }
+    const events = [
+      { kind: 'invocation-context-committed', payload: { contextProtocol: 2, inputMode: 'delta', inputMessages: [input], failureInputMessages: [input], scope: { kind: 'session', sessionId: 'restart-session' } } },
+      { kind: 'model-response-committed', payload: { message: { role: 'assistant', content: '', toolCalls: [call] } } },
+      { kind: 'tool-call-started', payload: { toolCall: call } },
+      { kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart', contextSelection: { contextProtocol: 2, target: 'working', baseVersion: 0 } } }
+    ] as import('../src/history').HistoryEvent[]
+
+    const restored = restoreSessionContextFromOwnedEvents({ committedVersion: 1, events })
+
+    expect(restored.committed).toEqual([input, { role: 'assistant', content: '', toolCalls: [call] }, {
+      role: 'tool', toolCallId: 'restart-tool',
+      content: 'The previous run ended before its result was recorded. The operation may have started; inspect the current state, ask the user, or retry if appropriate.', isError: true
+    }])
+    expect(restored.pendingTools.has('restart-tool')).toBe(false)
+
+    expect(() => restoreSessionContextFromOwnedEvents({ committedVersion: 1, events: [
+      ...events.slice(0, -1),
+      { ...events.at(-1)!, payload: { status: 'interrupted', reason: 'user-cancelled' } }
+    ] })).not.toThrow()
+    expect(restoreSessionContextFromOwnedEvents({ committedVersion: 1, events: [
+      ...events.slice(0, -1),
+      { ...events.at(-1)!, payload: { status: 'interrupted', reason: 'user-cancelled' } }
+    ] }).committed).toEqual([input])
+  })
+
   it('owns incoming messages once and shares frozen historical message objects across turns', () => {
     const sourceMessage = { role: 'user' as const, id: 'shared-user', content: [{ type: 'text' as const, text: 'original' }] }
     const seed = restoreLegacySessionContextSnapshot({ invocationId: 'shared-seed', turnId: 'shared-seed', committedVersion: 1, messages: [sourceMessage] })

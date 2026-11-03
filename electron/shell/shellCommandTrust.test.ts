@@ -1,8 +1,7 @@
 import fs from 'fs'
-import os from 'os'
-import path from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase, type AppDatabase } from '../database'
+import { uniqueFilePath } from '../testSupport/tempPaths'
 import {
   addTrustedCommand,
   addTrustedCommandAtomic,
@@ -82,11 +81,12 @@ describe('shellCommandTrust', () => {
   let db: AppDatabase
 
   beforeEach(() => {
-    dbPath = path.join(os.tmpdir(), `sa-trust-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+    dbPath = uniqueFilePath('sa-trust-', '.json')
     db = openDatabase(dbPath)
   })
 
   afterEach(() => {
+    db.close()
     try {
       fs.unlinkSync(dbPath)
     } catch {

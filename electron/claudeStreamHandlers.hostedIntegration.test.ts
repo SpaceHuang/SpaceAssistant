@@ -30,6 +30,7 @@ import { ensureLegacyLedgerReadiness } from './sessionLedgerReadiness'
 import { runApprovalAgent } from './confirmation/approvalAgent'
 import { PolicyAuthorizationChangeRegistry } from './runtime/policyAuthorizationChangeRegistry'
 import { readPolicyPackages, writePolicyPackages } from './confirmation/policyRulesRuntime'
+import { createAnthropicStreamHarness } from './testSupport/anthropicStreamHarness'
 import { appendCompactionTransaction, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from './sessionEvents'
 import { prepareToolConfirm, waitForToolConfirm } from './toolConfirmRegistry'
 import { MCP_CONFIG_KEYS } from './mcp/mcpConfigStore'
@@ -76,10 +77,7 @@ function expectLifecycleTerminal(events: readonly { kind: string; payload: unkno
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
-const summaryStub = vi.hoisted(() => ({ enabled: false, call: vi.fn() }))
-vi.mock('./anthropicClientFactory', () => ({
-  createAnthropicClient: () => ({ messages: { create: (...args: unknown[]) => summaryStub.call(...args) } })
-}))
+const summaryStub = vi.hoisted(() => ({ call: vi.fn() }))
 vi.mock('electron', () => ({
   app: { getLocale: vi.fn(() => 'en-US') },
   safeStorage: { isEncryptionAvailable: vi.fn(() => true), decryptString: vi.fn((value: Buffer) => value.toString()) },
@@ -212,11 +210,20 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
   let runtime: ReturnType<typeof createAgentRuntime>
   let providerCalls: number
   let workDir: string
+  let summaryHarness: ReturnType<typeof createAnthropicStreamHarness>
 
   beforeEach(() => {
     vi.clearAllMocks()
-    summaryStub.enabled = true
     summaryStub.call.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({ task: 'Continue task', completed: 'Reviewed history', decisions: 'Keep constraints', constraints: 'Preserve required messages', pending: 'Continue work', blockers: 'None', nextStep: 'Proceed' }) }] })
+    summaryHarness = createAnthropicStreamHarness()
+    summaryHarness.setFallback({ kind: 'handler', respond: async (request) => {
+      const summary = await summaryStub.call(JSON.parse(request.body ?? '{}'), { signal: request.signal ?? undefined })
+      return new Response(JSON.stringify({
+        id: 'msg_summary', type: 'message', role: 'assistant', model: 'claude-test', content: summary.content,
+        stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    } })
+    vi.stubGlobal('fetch', summaryHarness.fetch)
     vi.mocked(waitForToolConfirm).mockReset().mockResolvedValue('approved' as never)
     vi.mocked(runApprovalAgent).mockReset().mockResolvedValue({
       ok: true,
@@ -241,6 +248,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     db.close()
     if (workDir) await fs.rm(workDir, { recursive: true, force: true })
     resetDefaultAgentRuntimeForTests()
+    vi.unstubAllGlobals()
   })
 
   it('uses a positive Hosted checkpoint at the next real provider request', async () => {

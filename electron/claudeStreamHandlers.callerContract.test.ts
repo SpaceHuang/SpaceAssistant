@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
 import { appendMessage, createPersistedTurn, createSession } from './database/operations'
 import { openDatabase, setConfigValue, type AppDatabase } from './database'
@@ -6,6 +6,7 @@ import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
+import { createAnthropicStreamHarness } from './testSupport/anthropicStreamHarness'
 
 /**
  * P0 特征化基线（桌面调用方）：桌面 execute → runToolChatSession 入参契约。
@@ -27,7 +28,6 @@ vi.mock('electron', () => ({
 }))
 
 const mockRunToolChatSession = vi.fn()
-const mockCreateAnthropicClient = vi.fn()
 const mockGetSessionEventSink = vi.fn()
 const mockReadCompactionMarkers = vi.fn(async () => [])
 const mockReadCompactionReplay = vi.fn(async () => ({ committed: [], rejected: [] }))
@@ -70,11 +70,6 @@ vi.mock('./projectMemory', async (importOriginal) => {
 
 vi.mock('./safeWebContentsSend', () => ({
   safeWebContentsSend: vi.fn()
-}))
-
-vi.mock('./anthropicClientFactory', () => ({
-  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
-  createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
 }))
 
 vi.mock('./chatCancelRegistry', () => ({
@@ -136,24 +131,16 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     handlers.clear()
+    vi.stubGlobal('fetch', createAnthropicStreamHarness().fetch)
     mockGetSessionEventSink.mockReturnValue(makeEventSink())
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
       content: [{ type: 'text', text: 'ok' }],
       stopReason: 'end_turn'
     })
-    mockCreateAnthropicClient.mockReturnValue({
-      messages: {
-        stream: vi.fn(() => ({
-          async *[Symbol.asyncIterator]() {},
-          finalMessage: vi.fn(async () => ({
-            content: [{ type: 'text', text: 'hi' }],
-            stop_reason: 'end_turn'
-          }))
-        }))
-      }
-    })
   })
+
+  afterEach(() => vi.unstubAllGlobals())
 
   it('execute → Core args：出口接线 + 会话锚点 + appDb 注入 + lane 缺省（desktop）', async () => {
     const db = makeDb()

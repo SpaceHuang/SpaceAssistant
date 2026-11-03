@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { createPagedChatBodyStore } from './pagedChatBodyStore'
+import { mkdtempRoot } from '../../../testSupport/tempPaths'
 
 describe('paged chat body store', () => {
   let temp: ReturnType<typeof createTempDatabase> | undefined
@@ -19,7 +19,7 @@ describe('paged chat body store', () => {
 
   async function createStore() {
     temp = createTempDatabase('paged-chat-body-')
-    root = path.join(os.tmpdir(), `paged-chat-body-blobs-${Date.now()}-${Math.random()}`)
+    root = mkdtempRoot('paged-chat-body-blobs-')
     const blobs = createSessionProjectionBlobStore(root)
     return { blobs, store: createPagedChatBodyStore(blobs) }
   }

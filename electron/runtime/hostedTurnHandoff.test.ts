@@ -178,6 +178,33 @@ describe('createHostedTurnHandoff', () => {
     db.close()
   })
 
+  it('recovers the target while excluding the accepted turn acquiring its first execution claim', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'accepted-turn-first-claim', model: 'test' })
+    const storage = createSqliteSessionStorage(db)
+    const recoverExecutionTarget = vi.fn(storage.execution.recoverExecutionTarget)
+    const sessionExecution = { ...storage.execution, recoverExecutionTarget }
+    const claimExecution = vi.spyOn(sessionExecution, 'claimExecution')
+    const user = { role: 'user' as const, content: 'accepted in this process' }
+    const acceptedTurn = { turnId: 'accepted-first-claim-turn', requestId: 'accepted-first-claim-request', sessionId: session.id,
+      lane: 'desktop' as const, startToken: 'accepted-first-claim-token', currentUserMessageId: 'accepted-first-claim-user',
+      transcriptVersion: 0, config: { lane: 'desktop' as const } }
+    mockRunHostedAgentTurn.mockRejectedValueOnce(new Error('stop-after-first-claim'))
+    const history = { read: async () => ({ events: [{ kind: 'invocation-failed', payload: { status: 'failed' } }] }),
+      readLatestInvocationForSession: async () => ({ kind: 'none' }) }
+    const handoff = createHostedTurnHandoff({ agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history,
+      invocationId: acceptedTurn.requestId, turnId: acceptedTurn.turnId, acceptedTurn,
+      routeId: 'route', sessionId: session.id, sessionDb: db, sessionExecution })
+
+    await expect(handoff({ request: { messages: [user] }, currentUserMessageId: acceptedTurn.currentUserMessageId,
+      requiredUserMessage: { id: acceptedTurn.currentUserMessageId, message: user } })).rejects.toThrow('stop-after-first-claim')
+
+    expect(recoverExecutionTarget).toHaveBeenCalledWith(session.id, acceptedTurn.turnId)
+    expect(claimExecution).toHaveBeenCalledOnce()
+    db.close()
+  })
+
   it('reuses the committed SDK context across turns without loading the transcript again', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'warm-session-context', model: 'test' })

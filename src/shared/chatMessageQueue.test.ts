@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Message } from './domainTypes'
+import { userMessage } from '../test/factories/message'
 import {
   countQueuedUserMessages,
   filterOutQueuedUserMessages,
@@ -7,18 +8,6 @@ import {
   getNextQueuedUserMessage,
   MAX_CHAT_MESSAGE_QUEUE_SIZE
 } from './chatMessageQueue'
-
-function userMessage(id: string, status: Message['status'], sessionId = 's1'): Message {
-  return {
-    id,
-    sessionId,
-    role: 'user',
-    content: `msg-${id}`,
-    timestamp: Number(id.replace(/\D/g, '') || 0),
-    status,
-    schemaVersion: 1
-  }
-}
 
 describe('chatMessageQueue', () => {
   it('exports queue size limit', () => {

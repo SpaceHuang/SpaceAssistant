@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import type { Message } from '../../../shared/domainTypes'
+import { assistantMessage } from '../../../test/factories/message'
 import { ChatBubble } from './ChatBubble'
 import { changeAppLocale } from '../../i18n/localeSync'
 
@@ -12,21 +13,6 @@ vi.mock('./ChatMarkdown', () => ({
     return <div data-testid="chat-markdown">{content}</div>
   }
 }))
-
-function assistantMessage(over: Partial<Message> = {}): Message {
-  const now = Date.now()
-  return {
-    id: 'a1',
-    sessionId: 's1',
-    role: 'assistant',
-    content: 'Hello world',
-    timestamp: now,
-    status: 'streaming',
-    schemaVersion: 1,
-    contentSegments: [{ content: 'Hello world', startTime: now }],
-    ...over
-  }
-}
 
 describe('ChatBubble streaming render', () => {
   beforeEach(async () => {

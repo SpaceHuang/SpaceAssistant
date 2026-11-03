@@ -464,6 +464,43 @@ export function reconcileCommittedSessionTranscripts(db: AppDatabase, now = Date
     let count = 0
     for (const checkpoint of uncertain) {
       if (!checkpoint.last_turn_id) continue
+      const restartTerminal = conn.prepare(`SELECT event_id,turn_id,payload_json,session_seq FROM agent_history_events
+        WHERE session_id=? AND turn_id=? AND kind='invocation-interrupted' ORDER BY session_seq DESC LIMIT 1`)
+        .get(checkpoint.session_id, checkpoint.last_turn_id) as { event_id: string; turn_id: string; payload_json: string; session_seq: number } | undefined
+      if (restartTerminal) {
+        let restartPayload: { status?: unknown; reason?: unknown; contextSelection?: { contextProtocol?: unknown; target?: unknown; baseVersion?: unknown } }
+        try { restartPayload = JSON.parse(restartTerminal.payload_json) as typeof restartPayload } catch { restartPayload = {} }
+        const selection = restartPayload.contextSelection
+        const baseVersion = checkpoint.version
+        if (restartPayload.status === 'interrupted' && restartPayload.reason === 'process-restart' &&
+          selection?.contextProtocol === 2 && selection.target === 'working' && selection.baseVersion === baseVersion &&
+          Number.isSafeInteger(restartTerminal.session_seq)) {
+          const priorReceipt = conn.prepare('SELECT next_version,payload_sha256,base_version,outcome FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+            .get(checkpoint.session_id, checkpoint.last_turn_id) as { next_version: number; payload_sha256: string; base_version: number; outcome: string } | undefined
+          const nextVersion = baseVersion + 1
+          const payloadSha256 = transcriptPayloadHash('interrupted', JSON.stringify({ contextSelection: selection }))
+          if (priorReceipt && (priorReceipt.next_version !== nextVersion || priorReceipt.base_version !== baseVersion ||
+            priorReceipt.outcome !== 'interrupted' || priorReceipt.payload_sha256 !== payloadSha256)) continue
+          if (!priorReceipt) {
+            const eventRange = conn.prepare(`SELECT MIN(session_seq) AS event_start,MAX(session_seq) AS event_end FROM agent_history_events
+              WHERE session_id=? AND turn_id=?`).get(checkpoint.session_id, checkpoint.last_turn_id) as { event_start: number | null; event_end: number | null }
+            if (!Number.isSafeInteger(eventRange.event_start) || eventRange.event_end !== restartTerminal.session_seq) continue
+            conn.prepare(`INSERT INTO session_turn_commit_receipts(session_id,turn_id,payload_sha256,base_version,next_version,outcome,event_start,event_end,created_at)
+              VALUES(?,?,?,?,?,'interrupted',?,?,?)`).run(checkpoint.session_id, checkpoint.last_turn_id, payloadSha256,
+              baseVersion, nextVersion, eventRange.event_start, eventRange.event_end, now)
+          }
+          const checkpointUpdate = conn.prepare(`UPDATE session_transcript_checkpoints SET version=?,status='ready',updated_at=?
+            WHERE session_id=? AND version=? AND last_turn_id=? AND status='commit_uncertain'`).run(nextVersion, now,
+            checkpoint.session_id, baseVersion, checkpoint.last_turn_id)
+          if (Number(checkpointUpdate.changes) !== 1) continue
+          conn.prepare(`UPDATE session_execution_claims SET turn_id='',owner_id='',status='queued',updated_at=?
+            WHERE session_id=? AND turn_id=? AND status='commit_uncertain'`).run(now, checkpoint.session_id, checkpoint.last_turn_id)
+          conn.prepare(`DELETE FROM session_execution_queue WHERE session_id=? AND turn_id=? AND status='commit_uncertain'`)
+            .run(checkpoint.session_id, checkpoint.last_turn_id)
+          count += 1
+          continue
+        }
+      }
       const entry = conn.prepare(`SELECT turn_id,version,context_selection_json FROM session_transcript_entries WHERE session_id=? AND turn_id=?`).get(checkpoint.session_id, checkpoint.last_turn_id) as { turn_id: string; version: number; context_selection_json: string | null } | undefined
       const receipt = conn.prepare(`SELECT turn_id,next_version,base_version,outcome,event_start,event_end FROM session_turn_commit_receipts WHERE session_id=? AND next_version=?`).get(checkpoint.session_id, checkpoint.version) as
         { turn_id: string; next_version: number; base_version: number; outcome: string; event_start: number | null; event_end: number | null } | undefined
@@ -505,6 +542,40 @@ export function reconcileCommittedSessionTranscripts(db: AppDatabase, now = Date
   return reconciled
 }
 
+/** Record a process-restart terminal in the targeted session's canonical History when its executing turn has no terminal event. */
+function recordRestartTerminalForUnfinishedTarget(db: AppDatabase, sessionId: string, now: number): boolean {
+  const conn = getDbConnection(db)
+  const checkpoint = conn.prepare(`SELECT version,last_turn_id,status FROM session_transcript_checkpoints WHERE session_id=?`)
+    .get(sessionId) as { version: number; last_turn_id: string | null; status: string } | undefined
+  if (!checkpoint || checkpoint.status !== 'commit_uncertain' || !checkpoint.last_turn_id) return false
+  const stream = conn.prepare(`SELECT invocation_id,version,schema_version FROM agent_history_streams
+    WHERE invocation_id=? AND session_id=?`).get(checkpoint.last_turn_id, sessionId) as
+    { invocation_id: string; version: number; schema_version: number } | undefined
+  if (!stream || stream.version < 1) return false
+  const terminal = conn.prepare(`SELECT kind FROM agent_history_events WHERE invocation_id=? AND sequence=?`)
+    .get(stream.invocation_id, stream.version) as { kind: string } | undefined
+  if (terminal && ['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(terminal.kind)) return false
+  const lastEvent = conn.prepare(`SELECT turn_id FROM agent_history_events WHERE invocation_id=? AND sequence=?`)
+    .get(stream.invocation_id, stream.version) as { turn_id: string } | undefined
+  if (!lastEvent || lastEvent.turn_id !== checkpoint.last_turn_id) return false
+  const sequence = stream.version + 1
+  const eventId = `${stream.invocation_id}:process-restart:${sequence}`
+  const event: HistoryEvent = {
+    invocationId: stream.invocation_id, turnId: checkpoint.last_turn_id, sequence,
+    schemaVersion: stream.schema_version, eventId, idempotencyKey: eventId,
+    kind: 'invocation-interrupted', payload: {
+      status: 'interrupted', reason: 'process-restart',
+      contextSelection: { contextProtocol: 2, target: 'working', baseVersion: checkpoint.version }
+    }
+  }
+  const appended = appendSqliteAgentHistoryBatchInTransaction(conn, [event], stream.version, {
+    schemaVersion: stream.schema_version, sessionId, now: () => now
+  })
+  if (appended.version !== sequence) throw new Error('SESSION_RESTART_HISTORY_TERMINAL_APPEND_INCOMPLETE')
+  db.save()
+  return true
+}
+
 /** Reconciles only one target session before a normal execution claim is attempted. */
 export function recoverSessionExecutionForTarget(db: AppDatabase, sessionId: string, now = Date.now()): {
   status: 'ready' | 'blocked'
@@ -515,6 +586,7 @@ export function recoverSessionExecutionForTarget(db: AppDatabase, sessionId: str
 } {
   if (!sessionId.trim()) throw new Error('SESSION_EXECUTION_SESSION_ID_REQUIRED')
   const stale = recoverStaleSessionExecutionClaims(db, now, sessionId)
+  recordRestartTerminalForUnfinishedTarget(db, sessionId, now)
   const reconciled = reconcileCommittedSessionTranscripts(db, now, sessionId)
   const checkpoint = getDbConnection(db).prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?')
     .get(sessionId) as { status: string } | undefined

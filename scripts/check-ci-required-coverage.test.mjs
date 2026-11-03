@@ -125,3 +125,51 @@ test('requires Electron initialization before the full job starts any Vitest wor
   steps.push(initStep)
   assert.ok(checkWorkflow(changed).some((issue) => issue.includes('test: Electron initialization must precede Vitest workers')))
 })
+
+test('tracks the observational chat business probe and protects its Electron initialization barrier', () => {
+  assert.deepEqual(checkWorkflow(validWorkflow()), [])
+
+  const missing = validWorkflow()
+  delete missing.jobs.chat_business_probe
+  assert.ok(checkWorkflow(missing).some((issue) => issue.includes('chat_business_probe')))
+
+  const reordered = validWorkflow()
+  const steps = reordered.jobs.chat_business_probe.steps
+  const initIndex = steps.findIndex((step) => step.name === 'Initialize Electron binary before probe')
+  const probeIndex = steps.findIndex((step) => step.name === 'Probe chat IPC business lifecycle')
+  ;[steps[initIndex], steps[probeIndex]] = [steps[probeIndex], steps[initIndex]]
+  assert.ok(checkWorkflow(reordered).some((issue) => issue.includes('chat_business_probe: Electron initialization must precede the probe')))
+
+  const ignored = validWorkflow()
+  ignored.jobs.chat_business_probe.steps.find((step) => step.name === 'Initialize Electron binary before probe')['continue-on-error'] = true
+  assert.ok(checkWorkflow(ignored).some((issue) => issue.includes('chat_business_probe: Electron initialization failure must stop the probe')))
+
+  const required = validWorkflow()
+  required.jobs['ci-required'].needs.push('chat_business_probe', 'storage-perf')
+  assert.ok(checkWorkflow(required).some((issue) => issue.includes('ci-required must not depend on observational job chat_business_probe')))
+  assert.ok(checkWorkflow(required).some((issue) => issue.includes('ci-required must not depend on observational job storage-perf')))
+})
+
+test('tracks the storage performance observation lane and sanitized artifact contract', () => {
+  assert.deepEqual(checkWorkflow(validWorkflow()), [])
+
+  const jobLevelContinuation = validWorkflow()
+  jobLevelContinuation.jobs['storage-perf']['continue-on-error'] = true
+  assert.ok(checkWorkflow(jobLevelContinuation).some((issue) => issue.includes('storage-perf must not use job-level continue-on-error')))
+
+  const budgetFailureBlocksJob = validWorkflow()
+  const perfStep = budgetFailureBlocksJob.jobs['storage-perf'].steps.find((step) => step.run === 'npm run test:storage-perf -- --reporter=json --outputFile=.ci/storage-perf-report.json')
+  delete perfStep['continue-on-error']
+  assert.ok(checkWorkflow(budgetFailureBlocksJob).some((issue) => issue.includes('storage-perf must continue after a budget-only failure')))
+
+  const changed = validWorkflow()
+  const steps = changed.jobs['storage-perf'].steps
+  const buildIndex = steps.findIndex((step) => step.run === 'npm run build:agent-provider-pi-ai')
+  const build = steps.splice(buildIndex, 1)[0]
+  steps.push(build)
+  assert.ok(checkWorkflow(changed).some((issue) => issue.includes('storage-perf must build the provider before running its selected tests')))
+
+  const missingSummary = validWorkflow()
+  missingSummary.jobs['storage-perf'].steps.find((step) => step.name === 'Summarize selected storage performance results').if = 'success()'
+  assert.ok(checkWorkflow(missingSummary).some((issue) => issue.includes('storage-perf must always create its sanitized summary')))
+})

@@ -32,6 +32,8 @@ jobs:
         run: npm run check:ci-required-coverage
       - name: Test required CI coverage checker
         run: node --test scripts/check-ci-required-coverage.test.mjs scripts/check-ci-required-results.test.mjs scripts/summarize-vitest-report.test.mjs scripts/ci-failure-review.test.mjs
+      - name: Test local pre-push and critical-flow harnesses
+        run: node --test scripts/check-pre-push.test.cjs scripts/pre-push-hook.integration.test.cjs scripts/critical-user-flow-environment.test.cjs scripts/run-critical-user-flows.test.cjs scripts/verify-critical-user-flow-faults.test.cjs scripts/wait-for-critical-flow-assistant.test.cjs scripts/wait-for-critical-flow-confirmation.test.cjs
       - name: Summarize recorded CI failure reviews
         run: npm run check:ci-failure-review
       - run: npm run i18n:generate-types
@@ -44,7 +46,8 @@ jobs:
       - run: npm run typecheck:agent-sdk
       # SDK 包边界和生产依赖闭包护栏。
       - run: npm run check:agent-sdk
-      - run: npm run build:electron
+      - name: Build app and verify six critical user flows
+        run: npm run verify:critical-user-flows
       # SDK turn 与 Hosted Host 生命周期回归，不启动 Electron UI。
       - run: npm exec vitest run packages/agent-sdk/test/agentCore.test.ts packages/agent-sdk/test/turn.test.ts electron/runtime/hostedAgentTurnHost.test.ts
       - name: Prepare Vitest report directory
@@ -65,6 +68,63 @@ jobs:
           path: .ci/vitest-summary.json
           retention-days: 14
           if-no-files-found: error
+  storage-perf:
+    name: CI / Storage performance (observation)
+    runs-on: macos-latest
+    # Keep this observational while collecting five runs for R-03; review results before changing ci-required.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Test sanitized storage performance summarizer
+        run: node --test scripts/summarize-storage-perf-report.test.mjs
+      - run: npm run build:agent-provider-pi-ai
+      - name: Prepare storage performance report directory
+        run: mkdir -p .ci
+      - name: Measure storage performance budgets
+        # Keep budget violations visible in the report without marking the observation job as failed.
+        continue-on-error: true
+        run: npm run test:storage-perf -- --reporter=json --outputFile=.ci/storage-perf-report.json
+      - name: Summarize selected storage performance results
+        if: always()
+        run: node scripts/summarize-storage-perf-report.mjs
+      - name: Upload sanitized storage performance summary
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: storage-perf-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci/storage-perf-summary.json
+          retention-days: 14
+          if-no-files-found: error
+  chat_business_probe:
+    name: CI / Chat business IPC probe (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS
+            runner: macos-latest
+          - label: Windows
+            runner: windows-latest
+    env:
+      SPACEASSISTANT_IPC_SAMPLES: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build:electron
+      - name: Initialize Electron binary before probe
+        run: node scripts/initialize-electron-ci.mjs
+      - name: Probe chat IPC business lifecycle
+        run: npm run probe:chat-business-ipc
   golden_windows:
     name: CI / Shell golden (Windows)
     runs-on: windows-latest

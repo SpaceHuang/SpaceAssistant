@@ -62,6 +62,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
   const coordinator = createTurnCoordinatorStorage(db)
   const transcriptRecovery = createSessionTranscriptRecoveryAdapter(db)
   const hostedContextBySession = new Map<string, HostedContextCacheEntry>()
+  const acceptedInProcess = new Set<string>()
   const execution: SessionExecutionStore = {
     continuations: Object.freeze({
       createOrGet: ({ sessionId, sourceInvocationId, requestIdempotencyKey, createdBy, frozenConfig }: Parameters<SessionExecutionStore['continuations']['createOrGet']>[0]) => {
@@ -104,8 +105,11 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
         })
       }
     }),
-    prepareTurn: (input) => createSessionCommitService({ sessionId: input.turn.sessionId, invocationId: input.turn.requestId,
-      turnId: input.turn.turnId, history: createSessionHistoryPort(db, input.turn.sessionId) }).prepareTurn(input, coordinator.prepareAtomic),
+    prepareTurn: (input) => {
+      const result = createSessionCommitService({ sessionId: input.turn.sessionId, invocationId: input.turn.requestId,
+        turnId: input.turn.turnId, history: createSessionHistoryPort(db, input.turn.sessionId) }).prepareTurn(input, coordinator.prepareAtomic)
+      return result
+    },
     claimQueuedTurn: (input) => createSessionCommitService({ sessionId: input.sessionId, invocationId: input.requestId,
       turnId: input.turnId, history: createSessionHistoryPort(db, input.sessionId) }).claimQueuedTurn(input, coordinator.claimQueuedAtomic),
     historyFor: ({ sessionId }) => createSessionHistoryPort(db, sessionId, options.requestBodySourceBackfill),
@@ -120,7 +124,9 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       })
       const commitService = createSessionCommitService({ sessionId: prepared.sessionId, invocationId: prepared.requestId,
         turnId: prepared.turnId, history: createSessionHistoryPort(db, prepared.sessionId) })
-      return commitService.acceptTurn(candidate, (accepted) => acceptTurnContext(db, accepted))
+      const accepted = commitService.acceptTurn(candidate, (value) => acceptTurnContext(db, value))
+      acceptedInProcess.add(accepted.turnId)
+      return accepted
     },
     readTurn: ({ sessionId, turnId }) => {
       const turn = getPersistedTurn(db, turnId)
@@ -177,8 +183,16 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
         return { status: 'active-owner', releasedUnstarted: 0, markedUncertain: 0, reconciled: 0 }
       }
       const turnRuntime = turnRuntimeByExecution.get(execution)
-      if (turnRuntime) turnRuntime.recoverSession(sessionId, excludeTurnId)
-      else cleanupStreamingResiduesForSession(db, sessionId)
+      const protectedTurnId = excludeTurnId ?? [...acceptedInProcess].find((turnId) => {
+        const turn = getPersistedTurn(db, turnId)
+        if (!turn || !['prepared', 'executing', 'waiting-confirm'].includes(turn.state)) {
+          acceptedInProcess.delete(turnId)
+          return false
+        }
+        return turn.sessionId === sessionId
+      })
+      if (turnRuntime) turnRuntime.recoverSession(sessionId, protectedTurnId)
+      else if (!protectedTurnId) cleanupStreamingResiduesForSession(db, sessionId)
       const recovered = transcriptRecovery.recoverTarget(sessionId)
       return { status: recovered.status, releasedUnstarted: recovered.releasedUnstarted,
         markedUncertain: recovered.markedUncertain, reconciled: recovered.reconciled }
@@ -222,7 +236,10 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
     },
     claimExecution: (input) => {
       const claim = claimSessionExecution(db, input)
-      if (claim.acquired) registerActiveSessionExecutionOwner(input.sessionId)
+      if (claim.acquired) {
+        acceptedInProcess.delete(input.turnId)
+        registerActiveSessionExecutionOwner(input.sessionId)
+      }
       return claim
     },
     markExecutionStarted: (input) => markSessionExecutionStarted(db, input),

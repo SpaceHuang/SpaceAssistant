@@ -5,6 +5,7 @@ import { App, ConfigProvider } from 'antd'
 import React from 'react'
 import { ChatView } from './ChatView'
 import type { AppConfig, Message, Session } from '../../../shared/domainTypes'
+import { message as makeSharedMessage } from '../../../test/factories/message'
 import {
   CURRENT_SCHEMA_VERSION,
   DEFAULT_BROWSER_CONFIG,
@@ -160,14 +161,13 @@ const testSession: Session = {
 }
 
 function makeMessage(overrides: Partial<Message> & Pick<Message, 'id' | 'role'>): Message {
-  return {
+  return makeSharedMessage(overrides, {
     sessionId: testSession.id,
-    content: overrides.content ?? 'hello',
-    timestamp: overrides.timestamp ?? Date.now(),
-    status: overrides.status ?? 'completed',
-    schemaVersion: CURRENT_SCHEMA_VERSION,
-    ...overrides
-  }
+    content: 'hello',
+    timestamp: Date.now(),
+    status: 'completed',
+    schemaVersion: CURRENT_SCHEMA_VERSION
+  })
 }
 
 function setupScrollContainer(

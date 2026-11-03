@@ -1,0 +1,136 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ChatMarkdown > snapshots representative bilingual Markdown, code, table, and long text output 1`] = `
+<div
+  class="sa-prose chat-md-assistant"
+  data-search-fragment-id="snapshot-markdown|assistant-markdown-text:0:0"
+>
+  <p>
+    你好，assistant：
+    <strong>
+      已完成
+    </strong>
+    。
+  </p>
+  <div
+    data-search-fragment-id="snapshot-markdown|assistant-code:0:0:block"
+  >
+    <div
+      class="sa-shiki-block sa-code-surface sa-subtle-scrollbar"
+    >
+      <button
+        class="ant-btn css-dev-only-do-not-override-mncuj7 ant-btn-text ant-btn-color-default ant-btn-variant-text ant-btn-sm sa-shiki-copy"
+        type="button"
+      >
+        <span
+          class="ant-btn-icon"
+        >
+          <svg
+            class="lucide lucide-copy"
+            fill="none"
+            height="14"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="14"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <rect
+              height="14"
+              rx="2"
+              ry="2"
+              width="14"
+              x="8"
+              y="8"
+            />
+            <path
+              d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"
+            />
+          </svg>
+        </span>
+        <span>
+          复制
+        </span>
+      </button>
+      <pre
+        class="sa-chat-code-block"
+      >
+        const answer: string = "ready"
+      </pre>
+    </div>
+  </div>
+  <div
+    class="chat-md-table-shell chat-md-table-shell--mouse-left"
+  >
+    <button
+      aria-label="复制 Markdown 表格"
+      class="ant-btn css-dev-only-do-not-override-mncuj7 ant-btn-text ant-btn-color-default ant-btn-variant-text ant-btn-sm chat-md-table-copy"
+      title="复制 Markdown 表格"
+      type="button"
+    >
+      <span
+        class="ant-btn-icon"
+      >
+        <svg
+          class="lucide lucide-copy"
+          fill="none"
+          height="14"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="14"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <rect
+            height="14"
+            rx="2"
+            ry="2"
+            width="14"
+            x="8"
+            y="8"
+          />
+          <path
+            d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"
+          />
+        </svg>
+      </span>
+      <span>
+        复制 Markdown 表格
+      </span>
+    </button>
+    <div
+      class="chat-md-table-wrap"
+    >
+      <table>
+        <thead>
+          <tr>
+            <th>
+              项目
+            </th>
+            <th>
+              状态
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              renderer
+            </td>
+            <td>
+              ready
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p>
+    长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。长文本 mixed content。
+  </p>
+</div>
+`;

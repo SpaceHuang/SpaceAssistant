@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase, type AppDatabase } from '../database'
 import { addTrustedCommand } from './shellCommandTrust'
 import { precheckRunShellTool } from './shellToolLoopHelpers'
+import { uniqueFilePath } from '../testSupport/tempPaths'
 
 describe('shellToolLoopHelpers', () => {
   let dbPath: string
@@ -12,12 +13,13 @@ describe('shellToolLoopHelpers', () => {
   let workDir: string
 
   beforeEach(() => {
-    dbPath = path.join(os.tmpdir(), `sa-shell-loop-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+    dbPath = uniqueFilePath('sa-shell-loop-', '.json')
     db = openDatabase(dbPath)
     workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-shell-wd-'))
   })
 
   afterEach(() => {
+    db.close()
     try {
       fs.unlinkSync(dbPath)
     } catch {

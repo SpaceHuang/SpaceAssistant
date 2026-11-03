@@ -92,9 +92,13 @@
 
 #### 2.3 本地门禁与远端门禁边界
 
-本地门禁用于在推送前更早发现可复现的问题，远端门禁负责验证 GitHub runner 上的目标平台并执行合并规则，两者职责不同。建议在后续实施阶段增加可手动运行的 `npm run check:pre-push`，并由本地 Git `pre-push` hook 调用；hook 只编排现有脚本，不另造一套规则。
+本地门禁用于在推送前更早发现可复现的问题，远端门禁负责验证 GitHub runner 上的目标平台并执行合并规则，两者职责不同。实现为 `.githooks/pre-push`，由 hook 调用 `npm run check:pre-push`；checker 解析 Git 传入的 refs，只对本次 push 改动选择相关检查，不另造测试规则。
 
-本地快速层可包含 `npm run check:no-nul`、`npm run check:treesitter-wasm`、`npm run check:agent-sdk`、相关 typecheck 和 `npm run test:related -- <改动文件>`；完整验收再运行 `npm test`，主进程/渲染进程专项分别可用 `npm run test:electron` / `npm run test:renderer`。hook 应支持明确的本地跳过选项，以免紧急情况下锁死开发，但跳过不会改变 GitHub 必需检查，也不能绕开 PR 规则。
+本仓库本地安装与卸载：`npm run hooks:install` 将仓库本地 `core.hooksPath` 设为 `.githooks`；`npm run hooks:uninstall` 撤销该设置。clone 后不由 `npm install` 自动安装。快速层运行 `check:no-nul`、`check:treesitter-wasm`、`check:agent-sdk`、`typecheck:shared`；涉及 renderer/shared 或 Agent SDK 源码时追加对应 typecheck；Electron、renderer、SDK 源码有改动时运行 `npm run test:related -- <改动文件>`。任何检查非零即停止并阻断 push。
+
+紧急情况下可显式设置 `SPACEASSISTANT_SKIP_PRE_PUSH=1` 跳过本地 hook；checker 会打印跳过提示。跳过只影响本地 Git hook，不改变 GitHub 必需检查，也不能绕过 PR 规则。完整验收仍运行 `npm test`，主进程/渲染进程专项分别可用 `npm run test:electron` / `npm run test:renderer`。
+
+本地验收（2026-11-02）：`scripts/check-pre-push.test.cjs` 覆盖 refs 解析、检查选择、显式跳过和失败传播；本仓已执行 `npm run hooks:install` 并核对 `core.hooksPath=.githooks`。`scripts/pre-push-hook.integration.test.cjs` 使用临时 bare remote 验证 Git 实际调用 hook、显式 skip 可通过、checker 失败时 push 被拒绝。`npm run check:pre-push` 对 86 个分支变更路径通过，相关 Vitest 481 个文件通过、1 个跳过；6146 项通过、137 项跳过。本地通过不代表 Windows/macOS 矩阵通过，也不能作为 `CI / required` 的成功信号；GitHub 端本次 hook 单测结果须待 push 后确认。
 
 本地通过不代表 Windows/macOS 矩阵通过，也不能作为 `CI / required` 的成功信号；本地 hook 是开发反馈，不是仓库保护边界。远端 PR 上仍须等待所有 required job 完成。
 
