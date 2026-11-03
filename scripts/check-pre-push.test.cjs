@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-const { parsePushInput, buildCheckCommands, shouldSkip, runCommands } = require('./check-pre-push.cjs')
+const { parsePushInput, buildCheckCommands, shouldSkip, runCommands, changedFilesFromPushRange } = require('./check-pre-push.cjs')
 
 const zero = '0000000000000000000000000000000000000000'
 
@@ -10,6 +10,21 @@ test('parses multiple push refs and excludes branch deletions', () => {
     `refs/heads/topic abc123 refs/heads/topic def456`,
     `refs/heads/remove ${zero} refs/heads/remove abc789`
   ].join('\n')), [{ localRef: 'refs/heads/topic', localSha: 'abc123', remoteRef: 'refs/heads/topic', remoteSha: 'def456' }])
+})
+
+test('limits related test discovery to branch commits not already on main', () => {
+  const calls = []
+  const fakeGit = (args) => {
+    calls.push(args)
+    if (args[0] === 'rev-list') return { status: 0, stdout: Buffer.from('feature-change\n') }
+    return { status: 0, stdout: Buffer.from('src/renderer/Chat.tsx\0') }
+  }
+
+  const changed = changedFilesFromPushRange('remote-head', 'local-head', 'origin/main', fakeGit)
+
+  assert.deepEqual(changed, ['src/renderer/Chat.tsx'])
+  assert.deepEqual(calls[0], ['rev-list', '--no-merges', 'local-head', '^remote-head', '^origin/main'])
+  assert.deepEqual(calls[1], ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', 'feature-change'])
 })
 
 test('runs renderer typecheck and related tests for renderer changes', () => {

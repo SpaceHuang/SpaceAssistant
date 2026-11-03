@@ -68,6 +68,21 @@ function changedFilesFromRange(base, head) {
   return result.stdout.toString('utf8').split('\0').filter(Boolean)
 }
 
+function changedFilesFromPushRange(base, head, mainRef, gitImpl = git) {
+  const args = ['rev-list', '--no-merges', head, `^${base}`]
+  if (mainRef) args.push(`^${mainRef}`)
+  const commits = gitImpl(args)
+  if (commits.status !== 0) throw new Error(`Could not list branch commits between ${base} and ${head}: ${commits.stderr?.toString() || 'git rev-list failed'}`)
+
+  const changed = new Set()
+  for (const commit of commits.stdout.toString('utf8').split(/\r?\n/).filter(Boolean)) {
+    const result = gitImpl(['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', commit])
+    if (result.status !== 0) throw new Error(`Could not read files changed by ${commit}: ${result.stderr?.toString() || 'git diff-tree failed'}`)
+    for (const file of result.stdout.toString('utf8').split('\0').filter(Boolean)) changed.add(file)
+  }
+  return [...changed]
+}
+
 function findMainBase(head) {
   const result = git(['merge-base', head, 'refs/remotes/origin/main'])
   return result.status === 0 ? result.stdout.toString('utf8').trim() : undefined
@@ -80,11 +95,10 @@ function discoverChangedFiles(pushInput) {
     const head = 'HEAD'
     if (upstream.status === 0) {
       const upstreamRef = upstream.stdout.toString('utf8').trim()
-      const base = git(['merge-base', head, upstreamRef])
-      if (base.status === 0) return changedFilesFromRange(base.stdout.toString('utf8').trim(), head)
+      return changedFilesFromPushRange(upstreamRef, head, 'refs/remotes/origin/main')
     }
     const mainBase = findMainBase(head)
-    if (mainBase) return changedFilesFromRange(mainBase, head)
+    if (mainBase) return changedFilesFromPushRange(mainBase, head, 'refs/remotes/origin/main')
     const workingTree = git(['diff', '--name-only', '-z', 'HEAD'])
     if (workingTree.status !== 0) throw new Error('Could not discover local changes for check:pre-push')
     console.warn('No upstream or origin/main found; related tests cover only uncommitted changes.')
@@ -92,6 +106,8 @@ function discoverChangedFiles(pushInput) {
   }
 
   const changed = new Set()
+  const mainRef = git(['rev-parse', '--verify', 'refs/remotes/origin/main'])
+  const excludeMain = mainRef.status === 0 ? 'refs/remotes/origin/main' : undefined
   for (const ref of refs) {
     let base = ref.remoteSha
     if (ZERO_SHA.test(base)) {
@@ -101,7 +117,7 @@ function discoverChangedFiles(pushInput) {
         continue
       }
     }
-    for (const file of changedFilesFromRange(base, ref.localSha)) changed.add(file)
+    for (const file of changedFilesFromPushRange(base, ref.localSha, excludeMain)) changed.add(file)
   }
   return [...changed]
 }
@@ -139,4 +155,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { parsePushInput, isRelatedTestPath, isTestFile, buildCheckCommands, shouldSkip, runCommands, changedFilesFromRange, discoverChangedFiles }
+module.exports = { parsePushInput, isRelatedTestPath, isTestFile, buildCheckCommands, shouldSkip, runCommands, changedFilesFromRange, changedFilesFromPushRange, discoverChangedFiles }
