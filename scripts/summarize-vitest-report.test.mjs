@@ -74,6 +74,12 @@ test('counts all test states and tolerates malformed optional report fields', ()
   assert.deepEqual(summary.failedTests, [])
 })
 
+test('marks a missing report as unavailable instead of failing the diagnostic step', () => {
+  const summary = summarizeVitestReport(undefined, { platform: 'macOS arm64', nodeVersion: 'v22.1.0' })
+  assert.equal(summary.reportAvailable, false)
+  assert.deepEqual(summary.counts, { passed: 0, failed: 0, skipped: 0, other: 0 })
+})
+
 test('includes test files that fail during collection before individual tests start', () => {
   const summary = summarizeVitestReport({ testResults: [{
     name: '/runner/SpaceAssistant/electron/broken.test.ts',
