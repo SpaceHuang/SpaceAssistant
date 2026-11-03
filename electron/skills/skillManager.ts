@@ -10,7 +10,8 @@ import type {
 import { buildSystemPromptFromSkills, readSkillForTool, truncateSystemPrompt } from '../../src/shared/skillPrompt'
 import { getCachedSkills, invalidateSkillsCache } from './skillCache'
 import { matchSkills } from './skillMatcher'
-import { routeSkills } from './skillRouter'
+import { getAvailableSkills, routeSkills } from './skillRouter'
+import { createSkillTurnScope, type SkillTurnScope } from './skillTurnScope'
 import { getSkillByName } from './skillScanner'
 import {
   deleteUserSkill,
@@ -28,6 +29,13 @@ export type SkillManagerContext = {
   getWorkDir: () => string
   getSkillsConfig: () => SkillsConfig
   getWikiConfig?: () => WikiConfig
+}
+
+export type PreparedSkillTurn = {
+  skills: SkillDefinition[]
+  meta: SkillRouteResult['meta']
+  catalogSkills: readonly SkillDefinition[]
+  scope: SkillTurnScope
 }
 
 export function createSkillManager(ctx: SkillManagerContext) {
@@ -100,6 +108,44 @@ export function createSkillManager(ctx: SkillManagerContext) {
       })
 
       return result
+    },
+
+    async prepareTurn(args: {
+      userInput: string
+      sessionState: SessionSkillsState
+      sessionMetadata?: Record<string, unknown>
+      recentMessages?: SkillRouteRecentMessage[]
+      sessionId?: string
+      signal?: AbortSignal
+    }): Promise<PreparedSkillTurn> {
+      const skills = getCachedSkills(ctx.getUserDataPath(), ctx.getWorkDir())
+      const config = ctx.getSkillsConfig()
+      const wikiConfig = ctx.getWikiConfig?.()
+      const available = getAvailableSkills(skills, config, args.sessionState)
+      const route = config.routing.mode === 'legacy'
+        ? await this.route({
+            ...args,
+            model: '',
+            getApiKey: async () => null
+          })
+        : await routeSkills({
+            ...args,
+            skills,
+            config,
+            sessionState: args.sessionState,
+            wikiConfig,
+            model: '',
+            getApiKey: async () => null,
+            skipLlmRouting: true
+          })
+      const canDiscover = config.autoDetect && config.routing.mode !== 'legacy' && config.routing.enabled !== false
+      const catalogSkills = canDiscover ? available : []
+      const scope = createSkillTurnScope({
+        catalogSkills,
+        preloadedSkills: route.skills,
+        maxConcurrent: config.maxConcurrent
+      })
+      return { ...route, catalogSkills: scope.catalogSkills, scope }
     },
 
     buildSystemPrompt(skills: SkillDefinition[], maxChars?: number): string {

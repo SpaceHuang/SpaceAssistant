@@ -1083,25 +1083,33 @@ app.whenReady().then(async () => {
     sessionStorage
   })
 
-  const executeTurn = async (sender: Electron.WebContents | null, payload: ClaudeChatCreateWithToolsPayload) => {
+  const executeTurn = async (
+    sender: Electron.WebContents | null,
+    payload: ClaudeChatCreateWithToolsPayload,
+    skillTurnScope?: import('./skills/skillTurnScope').SkillTurnScope
+  ) => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
     turnRuntime.bindRequest(payload.requestId, payload.turnId)
-    return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (_turn) => {
-      const result = await executeClaudeRequest(sender, payload) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
-      if (result.ok) {
-        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' }, payload.turnId)
-        return { outcome: 'completed' as const, usage: result.usage }
-      }
-      if (result.outcome === 'commit-uncertain') {
-        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-uncertain', message: result.error }, payload.turnId)
-        return {
-          outcome: 'commit-uncertain' as const,
-          error: { code: 'SESSION_TRANSCRIPT_COMMIT_UNCERTAIN', message: result.error ?? 'Session transcript commit is uncertain' }
+    try {
+      return await turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (_turn) => {
+        const result = await executeClaudeRequest(sender, { ...payload, ...(skillTurnScope ? { skillTurnScope } : {}) }) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
+        if (result.ok) {
+          turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' }, payload.turnId)
+          return { outcome: 'completed' as const, usage: result.usage }
         }
-      }
-      turnRuntime.consumeForRequest(payload.requestId, { type: 'source-failed', message: result.error }, payload.turnId)
-      return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
-    })
+        if (result.outcome === 'commit-uncertain') {
+          turnRuntime.consumeForRequest(payload.requestId, { type: 'source-uncertain', message: result.error }, payload.turnId)
+          return {
+            outcome: 'commit-uncertain' as const,
+            error: { code: 'SESSION_TRANSCRIPT_COMMIT_UNCERTAIN', message: result.error ?? 'Session transcript commit is uncertain' }
+          }
+        }
+        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-failed', message: result.error }, payload.turnId)
+        return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
+      })
+    } finally {
+      skillTurnScope?.close()
+    }
   }
 
   storageProfileCoordinator = registerAppIpcHandlers(ipcMain, {

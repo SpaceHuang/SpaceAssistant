@@ -29,6 +29,7 @@ import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch,
 import { runHostedAgentTurn, type AgentTurnHost } from '../packages/agent-sdk/src/turn'
 import { ModelProviderRegistry } from '../packages/agent-sdk/src/model'
 import { RecordingModelProvider } from '../packages/agent-provider-testing/src'
+import { createSkillTurnScope } from './skills/skillTurnScope'
 
 const database = {
   listSessions: vi.fn(() => []),
@@ -107,6 +108,7 @@ vi.mock('./anthropicClientFactory', () => ({
 
 const mockSkillManager = vi.hoisted(() => ({
   route: vi.fn().mockResolvedValue({ skills: [] }),
+  prepareTurn: vi.fn(),
   buildSystemPrompt: vi.fn(() => '')
 }))
 
@@ -340,6 +342,12 @@ describe('file IPC handlers', () => {
       destroy = vi.fn()
     } as never)
     mockSkillManager.route.mockResolvedValue({ skills: [] })
+    mockSkillManager.prepareTurn.mockImplementation(async (args: { signal?: AbortSignal }) => {
+      const route = await mockSkillManager.route(args)
+      const skills = Array.isArray(route?.skills) ? route.skills : []
+      const scope = createSkillTurnScope({ catalogSkills: skills, preloadedSkills: skills, maxConcurrent: 5 })
+      return { ...route, meta: route?.meta ?? { sources: {}, durationMs: 0 }, catalogSkills: scope.catalogSkills, scope }
+    })
     vi.mocked(sessionContentWriteAuthority.writeCanonicalBackedMessageContent).mockResolvedValue(true)
     mockSkillManager.buildSystemPrompt.mockReturnValue('')
     vi.mocked(getMainWindow).mockReturnValue(undefined)
@@ -585,7 +593,7 @@ describe('file IPC handlers', () => {
     await expect(handler({ sender }, payload)).resolves.toEqual({ ok: true, accepted: true, turnId: 'turn-1' })
     expect(executeTurn).toHaveBeenCalledWith(sender, {
       requestId: 'request-1', turnId: 'turn-1', turnStartToken: 'token-1', sessionId: 'session-1'
-    })
+    }, undefined)
   })
 
   it('相同 requestId 重放优先返回冻结 turn，不读取漂移后的当前配置', async () => {
@@ -700,9 +708,9 @@ describe('file IPC handlers', () => {
       recentMessages: canonicalRecentMessages,
       sessionId: 'session-1'
     }))
+    expect(mockSkillManager.route).not.toHaveBeenCalledWith(expect.objectContaining({ model: expect.any(String), baseUrl: expect.any(String) }))
     expect(shadowRouteInput).toMatchObject({
-      userInput: 'original queued text', recentMessages, sessionState: {}, sessionMetadata: {},
-      model: 'deepseek-chat', baseUrl: 'https://example.test', sessionId: 'session-1'
+      userInput: 'original queued text', recentMessages, sessionState: {}, sessionMetadata: {}, sessionId: 'session-1'
     })
     expect(database.setPersistedTurnExecutionConfig).toHaveBeenCalledWith(ctx.db, started.turnId, expect.any(Object), expect.any(String), {
       sessionId: 'session-1', generation: 'generation-1', messageRevision: 1
@@ -783,6 +791,8 @@ describe('file IPC handlers', () => {
     await expect(retry).resolves.toMatchObject({ turnId: started.turnId, startToken: started.startToken })
     await vi.waitFor(() => expect(executeTurn).toHaveBeenCalledTimes(1))
     expect(database.setPersistedTurnExecutionConfig).toHaveBeenCalledTimes(1)
+    expect(executeTurn.mock.calls[0]?.[2]).toMatchObject({ catalogSkills: [], isActive: false })
+    expect(database.setPersistedTurnExecutionConfig.mock.calls[0]?.[2]).not.toHaveProperty('skillTurnScope')
   })
 
   it('技能路由等待期间 session revision 改变时拒绝冻结旧配置并终结 configuring turn', async () => {
@@ -853,7 +863,7 @@ describe('file IPC handlers', () => {
     expect(provider.calls).toHaveLength(0)
   })
 
-  it('配置阶段失败时把 source-failed 事实（含真实原因）交给 projection，渲染层才能标失败并显示原因', async () => {
+  it('Skill 快照准备失败时把 source-failed 事实交给 projection，渲染层才能标失败并显示原因', async () => {
     const started = {
       turnId: 'failed-configuring-turn', requestId: 'failed-configuring-request', sessionId: 'session-1',
       userMessage: { id: 'user-1', sessionId: 'session-1', role: 'user' as const, content: 'hello', timestamp: 1, status: 'sent' as const, schemaVersion: 1 },
@@ -887,7 +897,7 @@ describe('file IPC handlers', () => {
       contextBoundarySequence: 0, state: 'configuring', version: 0, startToken: started.startToken
     })
     vi.mocked(database.getSession).mockReturnValue({ id: 'session-1', model: 'deepseek-chat', skillsState: {}, metadata: {} } as never)
-    mockSkillManager.route.mockRejectedValueOnce(new Error('会话模型「claude-sonnet-4-20250514」当前不可用'))
+    mockSkillManager.prepareTurn.mockRejectedValueOnce(new Error('SKILL_SNAPSHOT_PREPARATION_FAILED'))
 
     ipc = mockIpcMain()
     routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
@@ -904,7 +914,7 @@ describe('file IPC handlers', () => {
     await vi.waitFor(() => expect(runtimeConsume).toHaveBeenCalled())
     expect(runtimeConsume).toHaveBeenCalledWith('failed-configuring-turn', {
       type: 'source-failed',
-      message: '会话模型「claude-sonnet-4-20250514」当前不可用'
+      message: 'SKILL_SNAPSHOT_PREPARATION_FAILED'
     })
     expect(database.failConfiguringTurn).toHaveBeenCalledWith(
       expect.anything(),
