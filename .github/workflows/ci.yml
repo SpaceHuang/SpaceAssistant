@@ -71,7 +71,6 @@ jobs:
   storage-perf:
     name: CI / Storage performance (observation)
     runs-on: macos-latest
-    continue-on-error: true
     # Keep this observational while collecting five runs for R-03; review results before changing ci-required.
     timeout-minutes: 20
     steps:
@@ -86,7 +85,9 @@ jobs:
       - run: npm run build:agent-provider-pi-ai
       - name: Prepare storage performance report directory
         run: mkdir -p .ci
-      - name: Run storage performance regression lane
+      - name: Measure storage performance budgets
+        # Keep budget violations visible in the report without marking the observation job as failed.
+        continue-on-error: true
         run: npm run test:storage-perf -- --reporter=json --outputFile=.ci/storage-perf-report.json
       - name: Summarize selected storage performance results
         if: always()

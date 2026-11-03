@@ -101,10 +101,11 @@ export function checkWorkflow(workflow) {
     if (storagePerf.name !== 'CI / Storage performance (observation)' || storagePerf['runs-on'] !== 'macos-latest' || storagePerf.strategy?.matrix) {
       issues.push('storage-perf must use the single macOS observation runner')
     }
-    if (storagePerf['continue-on-error'] !== true) issues.push('storage-perf must not fail the overall workflow')
+    if (storagePerf['continue-on-error'] === true) issues.push('storage-perf must not use job-level continue-on-error')
     const steps = storagePerf.steps ?? []
     const buildIndex = steps.findIndex((step) => step.run === 'npm run build:agent-provider-pi-ai')
     const perfIndex = steps.findIndex((step) => step.run === 'npm run test:storage-perf -- --reporter=json --outputFile=.ci/storage-perf-report.json')
+    if (perfIndex >= 0 && steps[perfIndex]['continue-on-error'] !== true) issues.push('storage-perf must continue after a budget-only failure')
     const summary = steps.find((step) => step.name === 'Summarize selected storage performance results')
     const artifact = steps.find((step) => step.name === 'Upload sanitized storage performance summary')
     if (buildIndex < 0 || perfIndex < 0 || buildIndex > perfIndex) issues.push('storage-perf must build the provider before running its selected tests')

@@ -153,9 +153,14 @@ test('tracks the observational chat business probe and protects its Electron ini
 test('tracks the storage performance observation lane and sanitized artifact contract', () => {
   assert.deepEqual(checkWorkflow(validWorkflow()), [])
 
-  const blockingObservation = validWorkflow()
-  delete blockingObservation.jobs['storage-perf']['continue-on-error']
-  assert.ok(checkWorkflow(blockingObservation).some((issue) => issue.includes('storage-perf must not fail the overall workflow')))
+  const jobLevelContinuation = validWorkflow()
+  jobLevelContinuation.jobs['storage-perf']['continue-on-error'] = true
+  assert.ok(checkWorkflow(jobLevelContinuation).some((issue) => issue.includes('storage-perf must not use job-level continue-on-error')))
+
+  const budgetFailureBlocksJob = validWorkflow()
+  const perfStep = budgetFailureBlocksJob.jobs['storage-perf'].steps.find((step) => step.run === 'npm run test:storage-perf -- --reporter=json --outputFile=.ci/storage-perf-report.json')
+  delete perfStep['continue-on-error']
+  assert.ok(checkWorkflow(budgetFailureBlocksJob).some((issue) => issue.includes('storage-perf must continue after a budget-only failure')))
 
   const changed = validWorkflow()
   const steps = changed.jobs['storage-perf'].steps
