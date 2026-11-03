@@ -1,8 +1,18 @@
 # IM 助理与执行 Agent 协同技术方案
 
-> 日期：2026-11-03｜状态：方案草案，未实施；T-01 已确认采用 Markdown 业务记录＋最小执行控制记录；T-02 已确认采用 A：送达不确定时核对，无法核实不自动重发。
+> 日期：2026-11-03｜状态：评审修订版，未实施；R-01—R-03 已补规格，待复审与实现验证；T-01 已确认采用 Markdown 业务记录＋最小执行控制记录；T-02 已确认采用 A：送达不确定时核对，无法核实不自动重发。
 > 需求：[IM 助理 Agent 与执行 Agent 协同需求](../../../requirement/im-remote/in-flight/im-assistant-execution-coordination-requirement.md)。
 > 核查基线：`596104f9`；核查时工作区另有未提交改动，本文不依赖其中的数据库 schema 变更。代码事实与设计提案分别标注。
+
+## 本轮评审核销入口【人机共读】
+
+对照 [2026-11-03 评审报告](../../../review/im-assistant-execution-coordination-technical-design-review-2026-11-03.md)，本轮调整状态、身份与存储模型，不仅补原则句。原报告保持不动；下表表示规格回应，**不表示原评审已通过或实现测试已完成**。
+
+| 阻断 | 本轮规格回应 | 关闭证据出口 | 当前状态 |
+|---|---|---|---|
+| R-01 等待回答早于旧执行退出 | 报告、回答和退出三个独立事实；宿主阻止新工具派发，等待旧调用和在途执行排空后才续跑 | §2.6.0；A-15；U-01/02 原型 | 待复审、待测试 |
+| R-02 跨 turn 缺少业务身份 | 先持久化同一输入单元的完整任务槽位，再按 taskId/代次派发；重试不能追加一套任务 | §2.4.1；A-16 | 待复审、待测试 |
+| R-03 scope 与实际主键冲突 | 完整 scope 摘要派生 workflowId；真实 originSessionId 保留为外键；代次变更保留旧行和旧文件 | §2.3.0；A-17 | 待复审、待测试 |
 
 ## 第 0 层：决策摘要【人必读】
 
@@ -19,6 +29,8 @@
 **方案决定 T-01：Markdown 保存协作业务内容，数据库仅保留必要执行控制信息（用户已确认，2026-11-03）。** 任务目标、背景、计划、进展、待决问题、用户回答和结果放在本机 Markdown 文件，方便 Agent 使用和人类检查维护；执行代次、认领、批次时刻、去重和发送回执复用已有数据库能力。助理统一维护 Markdown，执行者通过报告工具交回信息，不并发改同一文件。恢复时读文件重建业务上下文，再核对实际执行记录；文件中的“完成”或“已批准”不能替代执行事实或授权。原来“业务过程整体保存到数据库 JSON”的选择已被本决定取代。下钻：§2.3、§2.8，需求 AC-10。
 
 **方案决定 T-02：采用 A，送达不确定时先核对，无法核实不自动重发（用户已确认，2026-11-03）。** 现有发送方式存在“平台已收到、应用尚未记账就退出”的窗口。遇到该窗口保留待核实状态，先用平台回执或幂等查询核对；无法核实时不自动重发，并在后续用户查询时说明送达未确认。这避免自动重试造成重复打扰，同时接受可能有消息实际未送达的取舍。待核实不等于发送失败或已送达，不能把状态改成 sent，也不能自动生成新发送标识绕过去重。两渠道的核对能力仍需真实验证；本决定确认的是处置方式，不代表端到端送达能力已经验证。下钻：§2.7、U-03。
+
+**本轮可靠性交接调整：** 用户或助理可以提前回答，但旧执行者完全交回后才续跑；同一事项重试沿用已经登记的任务，只有新的明确请求才创建另一轮；授权更新后的新旧任务分别保存，旧记录不会覆盖新记录。这些是原恢复要求的技术闭合，不改变 T-01、T-02。下钻：§2.3.0、§2.4.1、§2.6.0。
 
 **不需要你决定：** 内部文件拆分、事务、租约、标识生成、提示词版本管理、定向测试和故障注入由实现者负责。本轮不实施功能，不要求提供真实 IM 环境。
 
@@ -109,7 +121,7 @@
 | ⑤ 其他持久化 | 改 | 新增 Markdown 文件协议及已有工作流 JSON 的 `coordinationControl` 根属性；无新 SQL 表/列；见 T-01、§2.3、§2.8 |
 | ⑥ 领域格式 | 改 | 5 个主进程模型工具、1 组内部失败分类；无新共享错误码、策略规则和配置开关；见 §2.4 |
 
-**量级：** 改既有 7 个单元，新建 5 个，复用 7 个；既有单元中改承重边界 3 处、改对外契约 0 行。新增 SQL 字段 0；新增数据库 JSON 根属性 1（`coordinationControl`，内含 10 个顶层键）；新增 Markdown 文件格式 1 种、头部元数据 4 项，契约见 §2.3；新增模型工具 5 个；内部稳定失败分类 6 个；新增共享错误码/设置项 0。实施划分 3 个阶段。
+**量级：** 改既有 7 个单元，新建 5 个，复用 7 个；既有单元中改承重边界 3 处、改对外契约 0 行。新增 SQL 字段 0；新增数据库 JSON 根属性 1（`coordinationControl`，内含 10 个顶层键）；新增 Markdown 文件格式 1 种、头部元数据 4 项，契约见 §2.3；新增模型工具 5 个；内部稳定失败分类 6 个；新增共享错误码/设置项 0。实施划分 3 个阶段。本轮在原控制键内补充 inputUnit/任务槽位、交接与退出证明字段，未新增顶层键、工具或模块，字段定义见 §2.3/2.4.1/2.6.0；按完整 scope 派生 workflowId，不改变 SQL 主键或会话接口。
 
 达到拆分门槛，仍保留一份方案：问题提交、分派和恢复必须使用同一份业务文档与受绑定的执行控制记录，否则两个方案可能分别确认互不兼容的协议。按三阶段交付，不把各渠道实现或 Runtime 改造另立为平台项目；若 U-01 证明必须修改 SDK 或会话存储接口，则停止本方案的对应实现，另出专项设计。
 
@@ -130,7 +142,7 @@
 | INV-03 | 封批只由持久化时刻、项数和任务阻塞事实触发；事项只属于一个普通批次 | A-08、A-09 |
 | INV-04 | 业务回答不产生安全授权；未回答、歧义和过期授权均不执行对应操作 | A-04、A-13 |
 | INV-05 | Markdown 业务记录与执行控制各有唯一写入者，跨存储交接可恢复；原消息和审批真相不迁移 | A-02、A-10 |
-| INV-06 | 一个助理会话单飞；执行者独立会话；派发键和执行代次阻止旧执行者覆盖新结果 | A-06、A-07、A-10 |
+| INV-06 | 助理单飞、执行会话隔离；同一输入槽位只派发一次；续跑须有旧执行退出/排空证明及明确答案 | A-06、A-07、A-10、A-15、A-16 |
 | INV-07 | 不增加 SDK/Runtime 协调状态；每个执行 turn 仍经过原接纳、安全与事实提交链 | A-12、A-13 |
 | INV-08 | 完成依据为执行终态和结果引用，不能凭模型总结变更任务终态 | A-11、A-14 |
 | INV-09 | 用户消息不依赖内部上下文或历史消息才能理解；必要背景和影响真实、可见且完整 | A-03、A-04、A-11、A-14；§2.6.4 |
@@ -146,6 +158,29 @@
 - 安全审批唯一 writer 维持既有审批/permit 链；发送状态唯一 writer 为协调器的发送提交动作。恢复唯一入口为协调器启动扫描，渠道重连只触发同一入口，不另建恢复算法。
 
 ### 2.3 Markdown 业务记录与最小执行控制契约
+
+#### 2.3.0 scope 到文件与数据库主键的唯一映射（R-03）
+
+身份算法固定如下，不使用随机映射、不使用派生 sessionId，也不依赖当前选中的渠道会话：
+
+```text
+scopeTuple = ["im-coordination-scope-v1", channel, ownerId, originSessionId, authorizationEpoch]
+opaqueScopeId = lowerHex(SHA256(UTF8(JSON.stringify(scopeTuple))))
+workflowId = "im-assistant-coordination:" + opaqueScopeId
+workflowStateKey = (sessionId=originSessionId, workflowId=workflowId, version=1)
+markdownPath = {userData}/im-coordination/<opaqueScopeId>/coordination.md
+```
+
+channel 只接受 feishu/wechat；ownerId、originSessionId 使用认证层的非空规范身份原值，不另行 trim/大小写折叠；epoch 使用可信非负安全整数。数组序列化避免连接符歧义。数据库内容的 scope 保留完整元组，每次读写同时核验摘要与完整值，不以摘要等价放过内容失配。文件头 workflowId 必须与该行一致；修改文件头不能改变归属。
+
+`im_workflow_state` 的实际主键为 `(session_id, workflow_id, version)`，session_id 外键指向真实 sessions(id)。本方案保持 originSessionId 原值，通过不同 workflowId 隔离各 scope；get/put 显式传入上述三元组及该行 expectedRevision。固定字符串 `im-assistant-coordination` 仅是前缀，不再作为所有 scope 的共同 workflowId。
+
+协作存储在既有工作流表内按保留前缀枚举行并验证 scope/digest，恢复对应文件和控制；这个私有查询不写 sessions、不增加 workflowState 公共方法。不能只用当前 epoch 推导后便忽略旧行。发现非法键或同摘要不同元组时归为 scope-mismatch，停止该条消费并保留现场。
+
+授权代次变更的唯一流程：既有授权链先使旧代次操作资格失效；协调器阻止旧 scope 新派发/续跑/发送，按原取消机制让旧 running 安全退出并核对结果。旧文件、控制、去重键和 uncertain 回执保留；其迟到结果只能更新旧 scope 的实际事实，不能生成新 scope 的动作。新 epoch 使用不同 workflowId/路径独立创建，不等待旧回执确定才接纳新请求；若与旧在途操作争同一资源，仍受既有资源锁与授权边界限制。旧答案或任务不自动移植；用户明确续接时按新入站请求创建新任务并引用旧材料，不能复制旧 permit。旧主体已无权接收消息时，不向它补发状态。
+
+该流程不修改不可见性规则：旧回执仅按其原 scopeId/deliveryId 回填；用户查询旧任务也须通过当前身份的既有访问校验。行创建用 expectedRevision=null，重复创建读取同键已有状态，不覆盖其他 scope。
+
 
 #### 业务记录：一份 Markdown 为主，不复制进数据库
 
@@ -176,22 +211,22 @@ lastOperationId: <宿主提交标识>
 
 #### 数据库：仅执行控制与尚未吸收的交接
 
-复用 `im_workflow_state`，保留 workflowId `im-assistant-coordination`、version=1；`data` 新增 `coordinationControl` 根属性，10 个顶层键固定为：
+复用 `im_workflow_state`，workflowId 与真实 sessionId 严格按 §2.3.0 定位、version=1；`data` 新增 `coordinationControl` 根属性，10 个顶层键固定为：
 
 | 键 | 仅保存的内容 | 所有权和恢复用途 |
 |---|---|---|
 | formatVersion | 控制格式版本，首版 1 | 未知版本停止消费，不能覆盖为空 |
 | scope | channel、ownerId、originSessionId、authorizationEpoch | 宿主认证绑定，不由文件或模型自报 |
 | documentHead | 当前文档 revision、digest、lastOperationId | 检测草稿过期、人工修改及跨存储提交窗口 |
-| taskBindings | taskId、taskRevision、executionSessionId、state、dependsOn、resultRef | 保存实际执行关系与状态；不保存业务 instruction 和计划正文 |
+| taskBindings | inputUnitId、planRevision、planDigest、slotOrdinal、taskId、taskRevision、executionSessionId、state、dependsOn、resultRef、handoff | 保存实际执行关系与状态；不保存业务 instruction 和计划正文 |
 | pendingEvents | eventId、来源任务/代次、kind、deadlineAt、payloadRef 或必要 payload、消费状态 | durable 交接；助理提交文档并确认消费后清理内容，不长期保存第二份问题/回答档案 |
 | batches | batchId、itemIds、openedAt、sealAt、priority、state、claim | 确定性计时、认领和队列恢复；不保存面向用户的问题解释 |
 | dispatches | dispatchKey、taskId、taskRevision、executionId、state、leaseUntil、执行输入引用及 digest | 可靠派发/去重；输入引用指向此次冻结的任务材料，不把可变 Markdown 当已接纳执行输入 |
 | deliveries | deliveryId、batchIds、itemIds、冻结待发送正文、state、platformReceipt | 发送控制；仅在等待/发送不确定期间保留正文，确认后保留回执与摘要指纹，结果说明仍在 Markdown |
-| processedInputs | 来源消息/工具调用/operationId 的去重结果与关联 ID | 重试返回已提交结果；不重复保存用户回答正文 |
+| processedInputs | inputUnitId、冻结来源集、输入状态、planDigest/槽位引用、来源消息/工具调用/operationId 的去重结果与关联 ID | 重试返回已提交结果；不重复保存用户回答正文 |
 | fileCommits | operationId、parentRevision、targetRevision、draftRef、digest、后续控制命令、提交状态 | 仅未完成的文件交接日志；提交并核销后清理草稿与命令材料 |
 
-这是执行控制白名单，不能逐步扩展成另一套 Task/Item/Reply 业务模型。任务目标、完整计划、问题说明、解释过的用户决定和业务结果以 Markdown 为唯一业务记录；原始用户消息、审批与工具执行仍以各自既有存储为真相。控制枚举固定为：任务 queued/running/blocked/completed/failed/cancelled/uncertain；报告 kind=progress/information/decision/result/failure，消费状态 pending/answered/closed；批次 collecting/sealed/claimed/waiting-user/closed、priority=urgent/normal；派发 queued/claimed/running/settled/uncertain；发送 prepared/sending/sent/uncertain。报告回答后的长期业务内容转入 Markdown，控制层仅留去重引用。空集合初始为空，未取得回执/执行 ID 时为 null，必填控制字段缺失拒绝写入。
+这是执行控制白名单，不能逐步扩展成另一套 Task/Item/Reply 业务模型。任务目标、完整计划、问题说明、解释过的用户决定和业务结果以 Markdown 为唯一业务记录；原始用户消息、审批与工具执行仍以各自既有存储为真相。控制枚举固定为：任务 queued/running/yielding/blocked/completed/failed/cancelled/uncertain；报告 kind=progress/information/decision/result/failure，消费状态 pending/answered/closed；批次 collecting/sealed/claimed/waiting-user/closed、priority=urgent/normal；派发 queued/claimed/running/settled/uncertain；发送 prepared/sending/sent/uncertain。报告回答后的长期业务内容转入 Markdown，控制层仅留去重引用。空集合初始为空，未取得回执/执行 ID 时为 null，必填控制字段缺失拒绝写入。
 
 所有 taskId/itemId/operationId 由宿主生成，模型只能引用当前 scope 已返回的标识。报告 payload 仅是短期交接材料，原消息有引用时优先引用；已消费内容必须随文档 checkpoint 核销，不能以“便于恢复”为由永久双写。正文、payload 和冻结发送内容均不得进入生产日志。
 
@@ -213,14 +248,23 @@ lastOperationId: <宿主提交标识>
 | 工具 | 角色 / 输入 | 输出和提交效果 |
 |---|---|---|
 | `im_coordination_read` | 助理：cursor；执行者：无参数 | 助理获得 Markdown 路径/版本、执行控制与未消费报告；执行者只见冻结的本任务材料及明确回答 |
-| `im_execution_dispatch` | 助理：instruction、dependsOn、expectedRevision | 宿主分配 taskId、dispatchKey；确认文档版本及冻结执行材料，提交 queued 后立即返回，不等待执行完成；按当前调用工具身份去重 |
-| `im_execution_report` | 执行者：kind、payload、deadlineAt、waitForAnswer | 持久化事项并返回 itemId；可在执行 turn 中调用，立即触发协调器调度检查 |
+| `im_execution_dispatch` | 助理：mode=registerPlan 时提交 inputUnitId、完整 slots、expectedRevision；mode=dispatch 时提交 taskId、taskRevision、expectedRevision | registerPlan 一次提交全部稳定槽位和冻结材料，不启动执行；dispatch 只认领已存在槽位，返回原 dispatch 或新 queued；见 §2.4.1 |
+| `im_execution_report` | 执行者：kind、payload、deadlineAt、waitForAnswer | 持久化事项并返回 itemId；waitForAnswer 同时提交 yielding 屏障，不等旧 turn 退出即可唤醒助理；续跑另受 §2.6.0 约束 |
 | `im_decision_apply` | 助理：逐项 itemId/answer/evidence、sourceMessageId、expectedRevision | 将明确业务回答写入 Markdown checkpoint 后确认已处理输入，返回已应用和仍待回答项；不接受 approve/permit/安全回执字段 |
 | `im_assistant_publish` | 助理：text、itemIds、batchIds、expectedRevision | 冻结正文和发送意图，返回 deliveryId；成功入队与平台已送达分开报告 |
 
-读取/报告/写意图不代表取得工具操作权限；既有工具安全链照常运行。宿主维护两类去重：工具重试使用 invocationId/toolCallId；助理 turn 重试使用其认领批次和已提交意图。模型不通过换一个自报 ID 来重复派发。
+读取/报告/写意图不代表取得工具操作权限；既有工具安全链照常运行。invocationId/toolCallId 仅处理原调用重试，跨 turn 使用 §2.4.1 的 inputUnitId/稳定 taskId 和 §2.6.0 的 waitId/resumeGeneration。批次 ID、正文相似度和模型自行避免重复都不是业务幂等保证。
 
 新增内部失败分类固定 6 个：`scope-mismatch`、`revision-conflict`、`stale-execution`、`invalid-transition`、`unsupported-format`、`delivery-uncertain`。它们是主进程工具结果分类，不新增 shared 错误码；用户文案由助理解释。冲突重读、不匹配拒绝、过期结果仅记录为过期不影响当前任务、格式不支持停止恢复、送达不确定按 T-02。
+
+#### 2.4.1 先登记任务槽位，再派发（R-02）
+
+1. **宿主冻结输入身份。** inputUnitId 只能来自当前宿主认领上下文，工具输入中的值必须与它相同；原始请求以已入库的 sourceMessageId 定义 inputUnitId；重复平台消息先走既有入站去重。事件处理在第一次认领事务中分配 inputUnitId，并把本次冻结的 eventId/batchId 集合及 inputUnitId 写入 processedInputs；部分处理失败只释放 owner/租约，不拆分、重建或吸收新的来源集。新到事项另建 inputUnit。重试、重启均认领同一 inputUnit，不以新 invocationId 作为新输入。
+2. **计划登记是派发前置提交点。** `registerPlan` 对当前 inputUnitId 一次提交完整、有序 slots（每槽 instruction 与依赖的槽序号）；宿主校验完整依赖图；planDigest 取有序 `[[instruction,已排序且去重的依赖槽序号数组], ...]` 的 UTF-8 JSON 的 SHA256，instruction 保留原文，不做语义归一；在同一文档 checkpoint/控制提交协议中冻结 planDigest、planRevision=1，分配所有 taskId 和输入材料引用。taskId 固定为 `task:` 加 `SHA256(JSON.stringify([scopeId,inputUnitId,planRevision,slotOrdinal]))` 的小写十六进制值，序号从 0 开始；完整关联保存在 taskBindings。此步不启动任何执行。
+3. **计划重试规则。** inputUnit 已有计划时先查已登记摘要；相同 digest 返回原结果且不再分配槽位，不同 digest 返回 invalid-transition 并附原任务引用，要求读取已有计划，不能用新槽号/新文本追加第二套。认领可在不同助理 turn 之间变化，计划和槽位不随认领重建。计划登记前失败尚未执行任何子任务；登记后失败按原冻结计划继续。
+4. **单槽派发规则。** dispatch 输入只能引用 read/registerPlan 返回的 taskId/taskRevision，不接收新 instruction。业务 dispatchKey 固定为 `dispatch:` 加 `SHA256(JSON.stringify([scopeId,taskId,taskRevision,resumeGeneration]))` 的小写十六进制值，首轮 resumeGeneration=0。宿主先查该键，已提交则无论调用 ID、expectedRevision 是否变化均返回原状态和 executionId（仍先核对 scope/任务绑定及参数一致性），不得新建任务；不存在时再做 CAS、依赖与授权校验并写 queued。不同槽位有不同键，第一项已派发不妨碍第二项。
+5. **真正的新工作。** 用户明确要求“再做一次”产生新的 sourceMessageId/inputUnitId，因此可创建另一组任务；同一入站重放仍为原输入。计划修订只能由新的明确用户目标/已核验需要修订的协调输入，经既有 task_revise_plan 更新代次并关联修订来源；重试 registerPlan 不具备自动推进 planRevision 的权限。不允许模型为绕过冲突自增代次。
+6. **恢复和归档。** read 返回 inputUnit、完整槽位与逐槽已派发状态；可提示模型继续第二项，但即使模型再派第一项，宿主也返回旧派发。已提交计划身份、槽位与去重结果在对应工作保留期间不可清除；尚未终结或未过既有入站重放保留期不得删去幂等墓碑。冻结业务材料仍以文件/已有材料引用为主，不在控制中另存完整计划解释。
 
 ### 2.5 封批与助理调度算法
 
@@ -238,7 +282,7 @@ lastOperationId: <宿主提交标识>
 
 **助理 Skill 固定职责：** 先读状态和未处理输入；目标明确即分派；查询只读取状态；事实优先查证；原目标内可逆细节自行选择；只把实质歧义和缺失用户信息交用户；一次处理多个事项；明确 waiting/partial/failed。删除现有“复杂任务统一先确认计划”规则，安全确认仍由既有链要求。
 
-**执行 Skill 固定职责：** 读取任务和范围，完成范围内工作；不把普通实现细节交用户；通过报告工具上交问题、进度、结果。`waitForAnswer=true` 的报告使宿主记录 blocked；报告成功后本轮结束，不在内存中无限等待。回答提交后，以同 taskId/新 executionId 发起后续受控 turn，提供任务快照及回答引用，不重放已执行工具。安全挂起继续使用既有托管/异步审批接续机制。
+**执行 Skill 固定职责：** 读取任务和范围，完成范围内工作；不把普通实现细节交用户；通过报告工具上交问题、进度、结果。报告等待问题后主动结束本轮，不在内存中等待；但正确性不依赖模型听从这条提示。waitForAnswer 由宿主记录 yielding，只有 §2.6.0 的退出事实齐备才进入可续跑状态；答案可提前保存，不提前启动新 executionId。安全审批挂起继续使用既有托管/异步审批接续机制，不与业务问答混用。
 
 后台执行适配器必须保留 IM 来源及原主体安全材料，不能伪装成 desktop 绕过远程策略。执行者注册表排除 IM 发送、会话切换、面向用户的进度推送和助理分派工具；除隐藏模型定义外，宿主实际 dispatch 注册表也必须无对应能力。普通专业工具继续按原许可执行，不递归创建执行者。
 
@@ -247,6 +291,27 @@ lastOperationId: <宿主提交标识>
 **授权隔离：** `im_decision_apply` 永远不调用审批批准接口。确需用户安全授权的操作保留原审批 ID、对象、范围和有效期；助理可在同一沟通中解释多项，但每个实际批准仍经现有明确授权协议。自然语言的“按你说的做”不能由助理转成多个 permit。既有审批到期、撤销与重新校验独立运行，不被 5 分钟收集窗口延后。
 
 助理提示词的固定执行顺序为“读取输入与状态 → 查已有事实 → 分派可推进任务 → 处理多项待办 → 提交明确回答或整理用户问题 → 发布必要说明”。执行提示词的固定顺序为“核对任务范围 → 执行 → 需要协调时报告 → 受阻则交回宿主 → 提交结果材料”。提示词要求使用工具返回值核对已提交事实，不要求输出固定用户回复格式。Skill 版本随应用发布，运行记录通过既有 invocation 材料追溯；不新增在线提示词编辑开关。
+
+#### 2.6.0 等待回答与执行退出屏障（R-01）
+
+三个事实分别提交：报告已持久化、明确答案已提交、旧执行已安全交回。前两者不能代替第三者。taskBindings.handoff 固定保存 waitId、oldExecutionId、phase、answerRef、exitRef、resumeGeneration；phase 为 requested/exited/resume-queued/consumed。answerRef/exitRef 初始 null，waitId 由当前 taskId/taskRevision/oldExecutionId 和报告身份派生并持久化；同一旧执行重复报告等待返回同一 waitId。
+
+| 事件 | 宿主唯一动作/提交点 | 是否可续跑 |
+|---|---|---|
+| E1 提交 waitForAnswer 报告 | 协作存储同事务保存 item 与 handoff(requested)，任务 running→yielding；后台执行适配器关闭 E1 的后续新工具派发资格 | 否；报告可立即交助理 |
+| 助理或用户答案提前到达 | 经文档 checkpoint 保存 answerRef；若多个必要问题，仅全部明确回答/可靠消解后视为答案齐备 | 否；保持 yielding，不占用新执行槽 |
+| E1 模型/工具循环继续 | IM 执行适配器的角色工具注册包装在实际新工具派发前检查 yielding/当前 executionId；拒绝新调用为 invalid-transition | 否；已进入 executor 的调用不强行当作取消成功 |
+| E1 真正交回 | 适配器等待 run/托管交接的既有终态或 park 事实、该执行已接纳工具全部 settle，且结束/封闭其后续接续资格；finally 按 E1 owner 释放会话租约，再提交 exitRef 和 phase=exited | 此时仅证明旧执行退出 |
+| 答案与退出均齐备 | 同一控制 CAS 创建唯一后续 dispatchKey(taskRevision,resumeGeneration+1)，phase→resume-queued；旧 executionId 仍不可派发 | 新调度器可认领一次 |
+| 新执行认领 | 对稳定 dispatchKey 认领，取得同一 executionSessionId 的真实租约后接纳 E2；记录 phase=consumed 及新 executionId；忙碌则保留 queued，重试原键 | 可；不新建替代会话绕过冲突 |
+
+报告提交与新工具接纳在适配器同一个串行准入区完成；已在 report 提交前被准入的工具必须追踪并等待 settle。计数归零、Promise settle 和租约释放是宿主观测，不接受模型自报。适配器只包装本期 IM 执行工具注册和调用生命周期，不改 SDK 工具循环协议；如果托管旧执行仍能自行 resume，则不能写 exitRef，须先按原机制关闭/收回对应接续。单靠 lease 到期、发出 cancel 信号、收到 onTerminal 回调或模型说“我结束了”均不构成屏障。
+
+答案与退出分别触发同一个 `tryQueueResume(waitId)`，仅在当前 scope/任务代次有效、答案齐备、phase=exited 时 CAS 建立后续意图；先后/同时到达均得到相同派发键。原 loop 即使正常 completed，只要业务 handoff 未处理完，任务也不能变为 completed；适配器在退出提交时将任务置 blocked；若答案同时齐备，再由同一 CAS 将其置 queued 并创建续跑意图，任务终态与该模型 turn 的终态分开。任务取消/修订后只保留旧事实，不安排续跑。
+
+重启先恢复 fileCommits，再核对旧 executionId 的持久化 turn/工具结果与当前实际运行 owner：已证实退出且没有未收回接续/在途工具时补 exitRef；缺少证明或工具结果 uncertain 时任务保持 uncertain/等待核对，不因进程内租约表为空就续跑。若在释放租约后、exitRef 提交前退出，恢复同样按持久事实补记；如果不能证明排空就不自动接续。续跑提交后重启只认领原键。旧执行未及时结束时继续等待或使用既有超时取消机制，不用新执行绕过它。
+
+P1 必须验证现有调用生命周期、工具注册包装和托管恢复能提供此屏障；若不能，U-01/U-02 判失败，停止进入 P2，另行调整 IM 宿主接缝设计。不能仅靠 Skill 结束指令放行，也不能不经评审向 Runtime/SDK 加入专用问答状态机。
 
 #### 2.6.1 自说明的对话契约
 
@@ -351,10 +416,12 @@ lastOperationId: <宿主提交标识>
 |---|---|---|
 | 事项提交前退出 | 执行重试同一工具身份；无记录则重新提交 | 注入提交前失败 |
 | 已提交事项但未触发 drain | 启动/定时扫描非终态记录 | 取消内存定时器后重启 |
-| 助理认领后模型失败 | 租约到期释放批次；重试读取已提交派发和发送意图 | 模型超时及 CAS 冲突 |
+| 助理认领后模型失败 | 释放认领但保留 inputUnit/完整槽位；重试使用原 taskId/代次派发，不重建计划 | 模型在第一槽成功后失败及 CAS 冲突 |
 | queued 派发重复消费 | dispatchKey 及任务代次认领只接受一个 executionId | 两 worker 竞争 |
 | 接纳执行 turn 后、派发记账前退出 | 以稳定请求键查询既有 turn 事实；已接纳则挂接原执行，不再新建 | 接纳窗口故障注入；U-01 门禁 |
 | 工具可能执行但结果未提交 | 沿既有 uncertain/恢复事实处理；协作层不自动重跑副作用 | 执行异常与未知结果注入 |
+| 答案早于旧执行退出/释放后未记 exitRef 就重启 | 按 §2.6.0 保留答案，证明工具排空和退出后仅补同一续跑键；证明不足不续跑 | A-15 四种时序 |
+| epoch 更新、旧回执迟到 | 按 §2.3.0 保留旧行/文件，旧结果仅入旧键，新 scope 独立初始化 | A-17 |
 | 用户回答与计划修订并发 | CAS + taskRevision 拒绝旧回答，明确仍需用户处理部分 | 两事务交错 |
 | prepared 发送前退出 | 可恢复发送，正文冻结且目的地从 scope 重新校验 | 发送前退出 |
 | 标记 sending 后无平台确认 | 进入 uncertain；有平台幂等键/回执则查询或安全重试，否则不盲重发 | 平台已接收后本地提交失败 |
@@ -406,8 +473,11 @@ A-* 为本方案拟实施测试场景，不表示已有测试通过。
 | A-12 桌面隔离 | 12 | 01、07 | desktop 及未显式 Skill 的原调用装配回归；无协调器记录/工具泄露 |
 | A-13 授权边界 | 13 | 02、04、07 | 跨 owner/渠道、过期 epoch、计划修订、伪造答案、撤销均不调用 executor |
 | A-14 状态真实 | 14 | 08、09 | 部分成功、模型幻称完成、执行结果未知；业务终态不被文字覆盖；进度、失败、恢复和部分完成说明通过隔离阅读 |
+| A-15 退出屏障 | 06、07、10、14 | 04、06、08 | 注入答案先于 report 返回、先于退出、与退出同时、交接中重启；断言旧执行无新工具准入、原在途工具 settle 前 E2 接纳次数为 0，齐备后仅 1 次，等待问题不丢且 task 不被 loop completed 误结算 |
+| A-16 跨 turn 业务幂等 | 02、06、10 | 05、06 | 一个 inputUnit 注册两个槽；第一槽派发提交后模型失败，以全新 invocation/toolCall 重试并重启重放：第一槽任务/执行各仅 1 个，第二槽仍可派发；计划改文案/换槽号不得生成第二套任务 |
+| A-17 scope 主键隔离 | 10、13 | 02、04、05 | 相同真实 session 连续 epoch1/epoch2，旧行留 running 和 uncertain 发送；新行可初始化，两份文件可恢复，旧回执不更新新行；channel/owner 改变亦产生不同实际主键；验证真实 FK 和 CAS 隔离 |
 
-另须一条随机操作序列不变量测试：随机报告、封批、认领、回答、修订、取消、重复消费和重启，逐步断言事项不跨 scope、普通事项不跨批、当前任务至多一个有效 executionId、旧代次不能更新当前任务、sent 不回到 prepared。记录随机种子以复现。
+另须一条随机操作序列不变量测试：随机报告、封批、认领、提前回答、工具排空/退出、两槽计划重试、epoch 切换、修订、取消、重复消费和重启，逐步断言事项不跨 scope、普通事项不跨批、当前任务至多一个有效 executionId、旧代次不能更新当前任务、sent 不回到 prepared、答案早到不越过退出屏障、同一输入槽位不产生第二个业务派发、旧 scope 回执不更新新 scope。记录随机种子以复现。
 
 语义评测使用固定中文样本集、冻结模型/Skill 版本，保存去敏后的判定结果而非生产消息正文；模型测试和宿主确定性测试分开报告。正常、并发、超时、取消、重启、重复、乱序、部分失败和旧数据场景均见上表及 §2.7/2.8，不以 happy-path 代替恢复验证。
 
@@ -417,8 +487,8 @@ A-* 为本方案拟实施测试场景，不表示已有测试通过。
 
 | 阶段 | 输入 → 输出 | 出口证据 / 回退实体 |
 |---|---|---|
-| P1 角色与执行接缝验证 | 当前 IM 链 → 隔离助理/执行者、异步报告原型 | A-01/05/06/07/12/13；U-01/02 必须通过；回退角色材料与原型接线，不向真实用户启用 |
-| P2 协作存储和调度 | P1、已确认 T-01 → Markdown 业务记录、最小控制、批次及恢复完整宿主链 | A-02/04/08/09/10/11/14 和随机不变量测试；回退入口并冻结新记录，恢复步骤见 §2.8 |
+| P1 角色与执行接缝验证 | 当前 IM 链 → 隔离助理/执行者、异步报告原型 | A-01/05/06/07/12/13/15；U-01/02 的退出屏障必须通过；回退角色材料与原型接线，不向真实用户启用 |
+| P2 协作存储和调度 | P1、已确认 T-01 → Markdown 业务记录、最小控制、批次及恢复完整宿主链 | A-02/04/08/09/10/11/14/15/16/17 和随机不变量测试；回退入口并冻结新记录，恢复步骤见 §2.8 |
 | P3 Skill 与双渠道验收 | P2、已确认 T-02 A → 飞书/微信真实闭环 | A-03 与 §2.6.4 固定样本及人工隔离阅读、真实平台故障窗口、审批回归；不能核验项逐条保留，不报全量通过；回退双渠道入口及 Skill 版本 |
 
 开发中只合并运行定向测试；每阶段最多一次增量构建。阶段收尾及最终验收按仓库规则运行全量测试，提交阶段成果；涉及安全时补对应边界测试与 invariant registry 门禁。agent-sdk、会话存储、共享类型门禁使用 §1.4 的真实脚本名；本文未执行功能测试，未改生产代码。
@@ -426,6 +496,9 @@ A-* 为本方案拟实施测试场景，不表示已有测试通过。
 ## 附录：事实、未验证项与一致性核对【机｜人工可跳过】
 
 ### F：代码事实卡
+
+本轮 R-03 复核另对照 `electron/database/migrations.ts` 的既有建表语句与 `electron/database/workflowState.ts`：工作流主键和真实会话外键均支持 §2.3.0 方案。当前 schema 有其他在途改动，本结论不以该未提交改动为前提。复现：`rg -n 'PRIMARY KEY\(session_id,workflow_id,version\)|REFERENCES sessions' electron/database/migrations.ts`；读写定位以 workflowState 的 get/put 为准。
+
 
 核查基线均为 `596104f9`，日期 2026-11-03；命令可在仓库根目录复现。
 
@@ -447,8 +520,8 @@ A-* 为本方案拟实施测试场景，不表示已有测试通过。
 
 | ID | 未验证项 | 责任 / 通过条件 |
 |---|---|---|
-| U-01 | 原接纳/任务控制链能否支持独立执行会话与原授权主体 | 实现者 P1 做集成验证：稳定请求键查询、两会话并行、取消级联、旧审批不扩权；不通过则重设计，不直接改 SDK |
-| U-02 | 执行者提示词、工具、进度及审批接续是否能完整隔离 | 实现者 P1 测试全部出站旁路和原托管恢复；不通过不进入 P2 |
+| U-01 | 原接纳/任务控制链能否支持独立执行会话与原授权主体 | 实现者 P1 做集成验证：稳定请求键查询、两会话并行、§2.6.0 退出/排空/租约屏障与重启恢复、取消级联、旧审批不扩权；不通过则重设计，不直接改 SDK |
+| U-02 | 执行者提示词、工具、进度及审批接续是否能完整隔离 | 实现者 P1 测试全部出站旁路、yielding 后新工具准入拒绝、原托管恢复及旧接续收回；不通过不进入 P2 |
 | U-03 | 双渠道发送幂等/回执查询能力 | 渠道集成负责人 P3 在真实平台验证已接收未记账窗口；无核对能力时验证 T-02 A 的 uncertain 保留、不自动重发和查询说明；确认产品取舍不等于已通过真实渠道验收 |
 | U-04 | 模型语义和实际 IM 体验 | 实现者跑固定评测，按 §2.6.4 完成无内部上下文的隔离阅读；用户在真实微信/飞书验收简短回复、自说明问题、等待/部分失败表达及重启恢复 |
 
@@ -480,3 +553,7 @@ A-* 为本方案拟实施测试场景，不表示已有测试通过。
 ### T-02 决策落定（2026-11-03）
 
 用户确认选择 A：送达不确定先核对，无法核实不自动重发，后续查询如实说明。§0、§1.5、§2.7、P3 和 U-03 已同步；真实平台能力仍待验证，不再将处置选择列为待批准事项。
+
+### P1 阻断修订后的结论
+
+R-01—R-03 的替代模型与确定性测试要求已写入；本轮只修改技术方案并做静态一致性检查，不修改原评审报告，不将拟议测试写成已通过。需要复审确认规格闭合后再实施，U-01/U-02 仍是原型门禁；T-01 和 T-02 A 保持已确认。
