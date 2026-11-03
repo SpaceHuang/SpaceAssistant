@@ -27,6 +27,9 @@ function relativeFile(file, workspace = process.cwd()) {
 }
 
 export function summarizeVitestReport(report, { platform, nodeVersion, commitSha, runUrl, workspace = process.cwd() }) {
+  if (report !== undefined && (!report || typeof report !== 'object' || !Array.isArray(report.testResults))) {
+    throw new Error('Vitest report must be a JSON object with a testResults array')
+  }
   const counts = { passed: 0, failed: 0, skipped: 0, other: 0 }
   const failedTests = []
   for (const file of Array.isArray(report?.testResults) ? report.testResults : []) {
@@ -63,10 +66,24 @@ export function summarizeVitestReport(report, { platform, nodeVersion, commitSha
   return { reportAvailable: report !== undefined && report !== null, platform, nodeVersion, commitSha, runUrl, counts, failedTests }
 }
 
+export function readVitestReport(reportPath) {
+  if (!existsSync(reportPath)) return undefined
+  let report
+  try {
+    report = JSON.parse(readFileSync(reportPath, 'utf8'))
+  } catch (error) {
+    throw new Error(`Invalid Vitest report at ${reportPath}: ${error.message}`)
+  }
+  if (!report || typeof report !== 'object' || !Array.isArray(report.testResults)) {
+    throw new Error(`Invalid Vitest report at ${reportPath}: expected a JSON object with a testResults array`)
+  }
+  return report
+}
+
 function main() {
   const reportPath = process.env.VITEST_REPORT_PATH ?? '.ci/vitest-report.json'
   const outputPath = process.env.VITEST_SUMMARY_PATH ?? '.ci/vitest-summary.json'
-  const report = existsSync(reportPath) ? JSON.parse(readFileSync(reportPath, 'utf8')) : undefined
+  const report = readVitestReport(reportPath)
   const platform = process.env.CI_PLATFORM ?? `${process.platform} ${process.arch}`
   const commitSha = process.env.GITHUB_SHA ?? 'local'
   const runUrl = process.env.ACTIONS_URL ?? ''
