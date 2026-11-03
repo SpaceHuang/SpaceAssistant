@@ -1,6 +1,6 @@
 # IM 助理与执行 Agent 协同技术方案
 
-> 日期：2026-11-03｜状态：方案草案，未实施；持久化格式与送达不确定性处置待评审。
+> 日期：2026-11-03｜状态：方案草案，未实施；T-01 已确认采用 Markdown 业务记录＋最小执行控制记录；送达不确定性处置待评审。
 > 需求：[IM 助理 Agent 与执行 Agent 协同需求](../../../requirement/im-remote/in-flight/im-assistant-execution-coordination-requirement.md)。
 > 核查基线：`596104f9`；核查时工作区另有未提交改动，本文不依赖其中的数据库 schema 变更。代码事实与设计提案分别标注。
 
@@ -8,21 +8,23 @@
 
 **一句话：** 从“IM 请求直接交给执行者并转发过程”改成“助理统一理解、分派和沟通，执行者在后台并行工作”，用提示词和 Skill 承担协调判断，仅用少量宿主代码保障排队、计时、身份绑定与恢复。
 
-**只有 3 分钟的话：** 阅读本节两个待批准事项，以及第 1 层的软硬分工、变更面和验收边界。
+**只有 3 分钟的话：** 阅读本节已确认的保存方式及待批准的送达处置，以及第 1 层的软硬分工、变更面和验收边界。
 
 **已定范围：** 沿用需求中已确认的启动、收集、自然语言回复、查询和并行规则；普通问题 5 分钟或 5 项封批，全体受阻提前封批，紧急问题优先。不新增桌面界面、设置项或独立任务面板；桌面聊天不接入。安全审批仍逐操作校验，助理不代批。
 
 **本轮明确的沟通要求：** 助理的每条用户消息必须自说明：用户只看当前消息，就能理解在处理哪件事、当前情况、需要自己决定什么、相关后果及下一步；不能假设用户看得到执行上下文或会翻查旧消息。这由助理 Skill 的表达规则与隔离阅读验收落实，不增加 SDK/Runtime 语言处理逻辑。下钻：§2.6.1—§2.6.4。
 
-### 需要批准的事项
+### 已确认的事项
 
-**方案决定 T-01：保存协作过程，以便重启后继续。** 多任务、问题和发送进度需要在本机保存；否则重启后只能重新询问或重做。选 A：在已有工作流存储中增加一份有版本的协作记录，保留来源、任务、问题及交接状态；用户可继续查询和回答，但回退旧版本前需先停止新任务并处理未完成记录。选 B：增加专用数据库表，同样支持恢复且便于逐项查询，但需要额外的表结构迁移和读写接口维护。推荐 A，以减少本轮扩展面；已有存储支持版本和冲突检测，新增记录格式及跨重启行为尚未实现验证。不决定时仅交付本文，不开始格式迁移或实施。下钻：§2.3、§2.8，需求 AC-10。
+**方案决定 T-01：Markdown 保存协作业务内容，数据库仅保留必要执行控制信息（用户已确认，2026-11-03）。** 任务目标、背景、计划、进展、待决问题、用户回答和结果放在本机 Markdown 文件，方便 Agent 使用和人类检查维护；执行代次、认领、批次时刻、去重和发送回执复用已有数据库能力。助理统一维护 Markdown，执行者通过报告工具交回信息，不并发改同一文件。恢复时读文件重建业务上下文，再核对实际执行记录；文件中的“完成”或“已批准”不能替代执行事实或授权。原来“业务过程整体保存到数据库 JSON”的选择已被本决定取代。下钻：§2.3、§2.8，需求 AC-10。
+
+### 需要批准的事项
 
 **方案决定 T-02：渠道无法确认是否已送达时如何处理。** 现有发送方式存在“平台已收到、应用尚未记账就退出”的窗口。选 A：保留待核实状态，先用平台回执或幂等查询核对；无法核实时不自动重发，并在后续用户查询时说明送达未确认，避免再次打扰，但可能有消息实际未送达。选 B：直接重试，提高最终送达概率，但用户可能重复收到问题。推荐 A；本地代码已证实存在这个窗口，两渠道能否提供可靠核对能力仍待真实验证。该行为可通过后续升级调整，已发出的消息无法撤回。不决定时保留待核实，不宣称 AC-10 已满足；严格的跨崩溃“不重复发送”必须取得平台能力证据，不能靠提示词或本地标记承诺。下钻：§2.7、U-03。
 
 **不需要你决定：** 内部文件拆分、事务、租约、标识生成、提示词版本管理、定向测试和故障注入由实现者负责。本轮不实施功能，不要求提供真实 IM 环境。
 
-**本次评审范围：** 软硬分工、最小宿主扩展、上述保存格式和送达处置；不重新审批需求已确认的产品行为。本文提出的内部工具和存储字段均服务于既有需求，没有新增用户操作入口。
+**本次评审范围：** 软硬分工、最小宿主扩展、已确认保存方式的具体契约和待确认送达处置；不重新审批需求已确认的产品行为。本文提出的内部工具和存储字段均服务于既有需求，没有新增用户操作入口。
 
 **最可能推翻方案的三处：**
 
@@ -61,7 +63,7 @@
                   ↑    ↓         ↑                 ↓
                   │ 协作工具集 ← IM 编排 Skill ← 既有 Agent 执行链
                   │    ↓
-                  │ 协作存储（协作记录唯一 writer）
+                  │ 协作存储（助理单写 Markdown；宿主单写控制记录）
                   │    ↓ durable dispatch
                   │ 后台执行适配器 → 调用装配器 → 既有 Agent 执行链
                   │       ↑ 执行 Skill                   ↓
@@ -70,7 +72,7 @@
          渠道出站适配（仅助理表达，目的地由宿主绑定）
 ```
 
-助理会话单写串行，执行者各用独立执行会话并行；执行者的运行不能占住助理会话租约。对话事实仍由会话存储原 writer 提交，安全授权仍由既有安全链提交，图中的协作存储不写第二份消息历史或审批真相。
+助理会话单写串行，执行者各用独立执行会话并行；执行者的运行不能占住助理会话租约。对话事实仍由会话存储原 writer 提交，安全授权仍由既有安全链提交，图中的协作存储的 Markdown 保存业务上下文，数据库只保留执行控制，不写第二份消息历史或审批真相。
 
 ### 1.3 变更面表
 
@@ -87,7 +89,7 @@
 | 工作流样例：`electron/remote/imWorkflowSkillHarness.ts` | 演示工作流状态处理 | 改造 | INV-01 | 对齐新 Skill 契约；不接成生产调度器 |
 | IM 助理协调器：`electron/remote/imAssistantCoordinator.ts` | 排队并驱动协作处理 | 新建 | INV-03、05 | 两渠道及执行适配器；不被 SDK 反向依赖 |
 | 协作工具集：`electron/remote/imCoordinationTools.ts` | 提供提交和读取能力 | 新建 | INV-02、04 | 助理和执行者；身份从宿主注入 |
-| 协作存储：`electron/remote/imCoordinationStore.ts` | 保存版本化协作记录 | 新建 | INV-03、05、06 | 协调器和工具集；复用工作流存储 |
+| 协作存储：`electron/remote/imCoordinationStore.ts` | 保存文档与执行控制 | 新建 | INV-03、05、06 | 助理维护 Markdown；复用工作流存储保存控制信息 |
 | 后台执行适配器：`electron/remote/imExecutionAgent.ts` | 驱动独立执行会话 | 新建 | INV-02、06、07 | 复用既有 turn 接纳与 Agent 执行链 |
 | 执行 Skill：`electron/skills/bundled/imExecutionSkill.ts` | 执行任务并报告事项 | 新建 | INV-01、04 | 后台执行适配器装配 |
 | 工作流存储：`electron/database/workflowState.ts` | 读写带版本工作流 | 复用不改 | INV-05 | 已支持 JSON、事务与 revision 比较 |
@@ -103,15 +105,15 @@
 | 契约面 | 结论 | 依据与验证 |
 |---|---|---|
 | ① agent-sdk | 不改 | 无新增端口、HistoryEvent、审批枚举或公开导出；SDK 不依赖 remote。实施运行 `npm run check:agent-sdk`、`npm run typecheck:agent-sdk` |
-| ② 会话存储 | 接口、表和唯一 writer 不改；新增公开端口调用者 | 执行会话仍走原接纳、消息与历史端口；不写 messages SQL，不复制历史到工作流。实施运行两项 session-storage 边界及 message-fact-ownership 门禁；增加旧会话读写/备份兼容回归 |
+| ② 会话存储 | 接口、表和唯一 writer 不改；新增公开端口调用者 | 执行会话仍走原接纳、消息与历史端口；不写 messages SQL，不复制历史到协作存储。实施运行两项 session-storage 边界及 message-fact-ownership 门禁；增加旧会话读写/备份兼容回归 |
 | ③ IPC / preload | 不改 | 无新面板、通道或渲染进程能力 |
 | ④ shared 类型 | 不改 | 协作协议为主进程私有，不重复定义已有领域类型；实施跑 `npm run typecheck:shared` |
-| ⑤ 其他持久化 | 改 | 已有工作流 JSON 新增 `coordination` 根属性及内部版本协议；无新 SQL 表/列；见 T-01、§2.3、§2.8 |
+| ⑤ 其他持久化 | 改 | 新增 Markdown 文件协议及已有工作流 JSON 的 `coordinationControl` 根属性；无新 SQL 表/列；见 T-01、§2.3、§2.8 |
 | ⑥ 领域格式 | 改 | 5 个主进程模型工具、1 组内部失败分类；无新共享错误码、策略规则和配置开关；见 §2.4 |
 
-**量级：** 改既有 7 个单元，新建 5 个，复用 7 个；既有单元中改承重边界 3 处、改对外契约 0 行。新增 SQL 字段 0；新增持久化根属性 1（`coordination`，内含 8 个顶层键，嵌套协议见 §2.3）；新增模型工具 5 个；内部稳定失败分类 6 个；新增共享错误码/设置项 0。实施划分 3 个阶段。
+**量级：** 改既有 7 个单元，新建 5 个，复用 7 个；既有单元中改承重边界 3 处、改对外契约 0 行。新增 SQL 字段 0；新增数据库 JSON 根属性 1（`coordinationControl`，内含 10 个顶层键）；新增 Markdown 文件格式 1 种、头部元数据 4 项，契约见 §2.3；新增模型工具 5 个；内部稳定失败分类 6 个；新增共享错误码/设置项 0。实施划分 3 个阶段。
 
-达到拆分门槛，仍保留一份方案：问题提交、分派和恢复必须使用同一协作记录及任务代次，否则两个方案可能分别确认互不兼容的协议。按三阶段交付，不把各渠道实现或 Runtime 改造另立为平台项目；若 U-01 证明必须修改 SDK 或会话存储接口，则停止本方案的对应实现，另出专项设计。
+达到拆分门槛，仍保留一份方案：问题提交、分派和恢复必须使用同一份业务文档与受绑定的执行控制记录，否则两个方案可能分别确认互不兼容的协议。按三阶段交付，不把各渠道实现或 Runtime 改造另立为平台项目；若 U-01 证明必须修改 SDK 或会话存储接口，则停止本方案的对应实现，另出专项设计。
 
 ### 1.5 验收边界与需求外扩
 
@@ -129,7 +131,7 @@
 | INV-02 | 执行者没有用户发信/选择目的地能力；宿主绑定原渠道、身份和任务 | A-01、A-13 |
 | INV-03 | 封批只由持久化时刻、项数和任务阻塞事实触发；事项只属于一个普通批次 | A-08、A-09 |
 | INV-04 | 业务回答不产生安全授权；未回答、歧义和过期授权均不执行对应操作 | A-04、A-13 |
-| INV-05 | 协作写入以 revision 比较及事务提交为准，原消息和审批真相不迁移 | A-02、A-10 |
+| INV-05 | Markdown 业务记录与执行控制各有唯一写入者，跨存储交接可恢复；原消息和审批真相不迁移 | A-02、A-10 |
 | INV-06 | 一个助理会话单飞；执行者独立会话；派发键和执行代次阻止旧执行者覆盖新结果 | A-06、A-07、A-10 |
 | INV-07 | 不增加 SDK/Runtime 协调状态；每个执行 turn 仍经过原接纳、安全与事实提交链 | A-12、A-13 |
 | INV-08 | 完成依据为执行终态和结果引用，不能凭模型总结变更任务终态 | A-11、A-14 |
@@ -139,54 +141,83 @@
 
 - 助理作用域是已认证的渠道、owner、原始会话和授权代次的组合；不因为同一个人使用两渠道就自动合并会话。
 - 助理每次调用可以读取多个任务和多个事项。原有逐事件 wake 入口只登记到协调器并请求 drain，不让每条 wake 都直接启动助理模型。协调器从持久记录选择一组事项后启动一次助理 turn，避免原调度器的逐条 launch 语义扩散。
-- 协作存储是协作 JSON 唯一 writer；协调器和工具只能调用它的带 revision 命令，不允许 `im_workflow_state_put` 绕过它修改协调器保留的 workflowId。给模型的角色注册表中移除该保留记录的通用写入口。
+- 助理是 Markdown 业务正文的唯一写入者；协作存储负责文件提交及数据库执行控制的物理写入。执行者报告先进入短期 durable 交接队列，助理吸收后更新文档并确认消费，不并发改文档。控制记录只能通过带 revision 的宿主命令修改；模型的通用工作流写入口不得改保留 workflowId。人工编辑遵循 §2.3 的停机/冲突规则。
 - 执行适配器通过会话公开创建/接纳端口获得独立执行会话、turnId 和冻结配置；授权主体来自原请求，执行会话 ID 不是授权凭据。任务与原请求的关联保留在协作记录及可信宿主上下文，不伪造一条“用户批准”历史。
 - 每个执行者使用独立 sessionId 取得既有运行租约；助理保留原会话租约。全局执行额度不得耗尽助理处理容量：协调器接纳后台执行时保留一个既有全局槽位供协调处理，额度不足时明确排队，不无限启动模型。
 - 来源事实写入者：执行适配器提交真实 running/blocked/terminal 事件；模型可以提交问题和建议，不能自行声明进程已停止或操作已执行。
 - 安全审批唯一 writer 维持既有审批/permit 链；发送状态唯一 writer 为协调器的发送提交动作。恢复唯一入口为协调器启动扫描，渠道重连只触发同一入口，不另建恢复算法。
 
-### 2.3 协作记录契约
+### 2.3 Markdown 业务记录与最小执行控制契约
 
-在既有 `im_workflow_state` 中，使用保留 workflowId `im-assistant-coordination` 和 `version=1`。`data` 只新增根属性 `coordination`，其 8 个顶层键固定如下；这 8 个键是逻辑 JSON 协议，不是数据库列。
+#### 业务记录：一份 Markdown 为主，不复制进数据库
 
-```ts
-coordination: {
-  formatVersion: 1,
-  scope: { channel, ownerId, originSessionId, authorizationEpoch },
-  tasks: Record<TaskId, Task>,
-  items: Record<ItemId, Item>,
-  batches: Record<BatchId, Batch>,
-  dispatches: Record<DispatchKey, Dispatch>,
-  replies: Record<ReplyId, Reply>,
-  deliveries: Record<DeliveryId, Delivery>
-}
+路径为 `{userData}/im-coordination/<opaqueScopeId>/coordination.md`，由宿主按已认证 scope 分配；opaqueScopeId 不直接包含用户账号，不接受模型指定任意路径。助理读取后可通过既有文件工具编辑宿主分配的草稿路径，宿主核对版本后提交正式文件；既有 `pathSecurity`、文件工具策略和日志脱敏继续适用。无需新增文档编辑工具、IPC 或设置入口，执行者没有该业务文档的写入能力。
+
+Markdown 头部仅有 4 项宿主管理元数据：`formatVersion`（首版 1）、`workflowId`、`documentRevision`、`lastOperationId`。助理维护正文，头部由提交器写入并校验。正文按下列建议章节组织，具体措辞和任务拆分由 Skill 决定；不建设解析自然语言正文的确定性工作流引擎。
+
+```markdown
+---
+formatVersion: 1
+workflowId: <宿主分配>
+documentRevision: 3
+lastOperationId: <宿主提交标识>
+---
+# 当前委托
+用户目标、范围与必要背景。
+## 计划与任务
+使用宿主返回的任务 ID 作引用，记录任务目的、依赖和业务进展。
+## 待决问题
+问题 ID、涉及任务、背景、选项及影响。
+## 用户决定
+用户原话的必要片段、来源消息引用、明确匹配项及尚未回答项。
+## 进展与结果
+已知结果、材料引用、失败/等待原因、下一步。
 ```
 
-所有记录 ID 由宿主生成；模型只能引用返回过且属于当前 scope 的 ID。缺省：集合为空、nullable 字段为 null，必填键缺失拒绝写入。未知 formatVersion 不启动执行，保留原文交给版本恢复；不得当空状态覆盖。
+建议章节供 Agent 阅读，不要求人类用固定表格或 JSON 维护。附件、长结果和原消息以引用为主；正文不复制整份聊天历史，不保存密钥。完成/批准等文字是业务描述，恢复时仍核对数据库执行事实与原授权链；正文不产生 permit、执行代次、派发键或渠道目的地。
 
-| 记录 | 固定字段（所有时间为毫秒） | 状态定义 |
+#### 数据库：仅执行控制与尚未吸收的交接
+
+复用 `im_workflow_state`，保留 workflowId `im-assistant-coordination`、version=1；`data` 新增 `coordinationControl` 根属性，10 个顶层键固定为：
+
+| 键 | 仅保存的内容 | 所有权和恢复用途 |
 |---|---|---|
-| Task | taskId、instruction、dependsOn、taskRevision、executionSessionId、state、resultRef | queued/running/blocked/completed/failed/cancelled/uncertain；resultRef 初始 null |
-| Item | itemId、taskId、taskRevision、sourceEventId、kind、payload、deadlineAt、state、batchId、answerRef | kind=progress/information/decision/result/failure；state=pending/answered/closed；引用初始 null |
-| Batch | batchId、itemIds、openedAt、sealAt、priority、state、claim | priority=urgent/normal；state=collecting/sealed/claimed/waiting-user/closed；claim 初始 null，认领后为 ownerRunId/leaseUntil |
-| Dispatch | dispatchKey、taskId、taskRevision、executionId、state、leaseUntil | queued/claimed/running/settled/uncertain；executionId、leaseUntil 初始 null |
-| Reply | replyId、sourceMessageId、matches、state | matches 为 itemId/answer/evidence 三元组数组；state=proposed/committed；evidence 为用户原文片段，非授权凭据 |
-| Delivery | deliveryId、batchIds、itemIds、text、state、platformReceipt | prepared/sending/sent/uncertain；platformReceipt 初始 null；text 为已经助理整理且冻结的正文 |
+| formatVersion | 控制格式版本，首版 1 | 未知版本停止消费，不能覆盖为空 |
+| scope | channel、ownerId、originSessionId、authorizationEpoch | 宿主认证绑定，不由文件或模型自报 |
+| documentHead | 当前文档 revision、digest、lastOperationId | 检测草稿过期、人工修改及跨存储提交窗口 |
+| taskBindings | taskId、taskRevision、executionSessionId、state、dependsOn、resultRef | 保存实际执行关系与状态；不保存业务 instruction 和计划正文 |
+| pendingEvents | eventId、来源任务/代次、kind、deadlineAt、payloadRef 或必要 payload、消费状态 | durable 交接；助理提交文档并确认消费后清理内容，不长期保存第二份问题/回答档案 |
+| batches | batchId、itemIds、openedAt、sealAt、priority、state、claim | 确定性计时、认领和队列恢复；不保存面向用户的问题解释 |
+| dispatches | dispatchKey、taskId、taskRevision、executionId、state、leaseUntil、执行输入引用及 digest | 可靠派发/去重；输入引用指向此次冻结的任务材料，不把可变 Markdown 当已接纳执行输入 |
+| deliveries | deliveryId、batchIds、itemIds、冻结待发送正文、state、platformReceipt | 发送控制；仅在等待/发送不确定期间保留正文，确认后保留回执与摘要指纹，结果说明仍在 Markdown |
+| processedInputs | 来源消息/工具调用/operationId 的去重结果与关联 ID | 重试返回已提交结果；不重复保存用户回答正文 |
+| fileCommits | operationId、parentRevision、targetRevision、draftRef、digest、后续控制命令、提交状态 | 仅未完成的文件交接日志；提交并核销后清理草稿与命令材料 |
 
-`payload` 是有界的业务问题/进度/结果材料，不承载可信权限字段；附件和长结果保存既有材料引用。`instruction`、`payload`、`text` 允许落协作库，不写入日志。每个数组/文本在工具入口校验长度并分页读取；具体容量沿用现有工具结果预算，不新增用户配置。不得以裁剪方式删除问题对象或影响；过长时分为多条关联消息，发送记录按分片派生稳定 ID。
+这是执行控制白名单，不能逐步扩展成另一套 Task/Item/Reply 业务模型。任务目标、完整计划、问题说明、解释过的用户决定和业务结果以 Markdown 为唯一业务记录；原始用户消息、审批与工具执行仍以各自既有存储为真相。控制枚举固定为：任务 queued/running/blocked/completed/failed/cancelled/uncertain；报告 kind=progress/information/decision/result/failure，消费状态 pending/answered/closed；批次 collecting/sealed/claimed/waiting-user/closed、priority=urgent/normal；派发 queued/claimed/running/settled/uncertain；发送 prepared/sending/sent/uncertain。报告回答后的长期业务内容转入 Markdown，控制层仅留去重引用。空集合初始为空，未取得回执/执行 ID 时为 null，必填控制字段缺失拒绝写入。
 
-保留记录状态更新、后续派发意图与发送意图放在同一工作流 JSON revision 内，由现有 `runInTransaction` 同步提交。异步模型调用、网络请求一律在事务外。后台扫描未终结记录保证恢复，不以已完成 wake 标志代替协作状态。
+所有 taskId/itemId/operationId 由宿主生成，模型只能引用当前 scope 已返回的标识。报告 payload 仅是短期交接材料，原消息有引用时优先引用；已消费内容必须随文档 checkpoint 核销，不能以“便于恢复”为由永久双写。正文、payload 和冻结发送内容均不得进入生产日志。
+
+#### 文件可靠写入、人工维护与跨存储恢复
+
+- 每 scope 一个文档写入队列；助理提交携带 expectedDocumentRevision。宿主校验父版本及内容 digest，拒绝过期草稿；不靠最后写入覆盖并发修改。
+- 正式文件按同目录临时文件写入、flush/关闭、同文件系统原子替换提交；保留上一完整版本，临时文件与备份不作为第二份业务真相。结合目标平台验证落盘和异常退出恢复，不能因文件是 Markdown 就声称绝不损坏。
+- 发布文件与更新 SQLite 不在同一事务。宿主先事务保存 fileCommits 的 prepared 记录及冻结草稿引用，再替换文件，最后事务确认 documentHead 并应用后续执行控制命令及去重结果。模型、文件 IO 和网络均不放进 SQLite 同步事务。
+- 重启若发现 prepared：正式文件仍为父版本则用同一冻结草稿续交；文件 revision/operationId/digest 与目标一致则仅补数据库确认；两者均不匹配则停止该 scope 自动派发，保留现场并核对，不凭文件文字重新执行。提交器须先核销该 scope 的旧 prepared，再接受新提交。
+- 任务派发、问题消费、回答应用和消息发布均只引用已提交的文档版本；后续控制命令在文档确认后才生效。执行启动或网络发送仍在控制提交之后，由 §2.7 的稳定键及既有执行事实恢复，不宣称文件和外部操作原子完成。
+- 人可以阅读并维护正文：维护时暂停该 scope 的助理写入，保存后通过同一版本接纳流程更新 documentHead。运行中检测到未经接纳的修改时不静默覆盖，先核对差异；不通过修改 Markdown 来改审批或把执行状态强行改成 completed。无需新增 UI，维护约定先写入运维说明。
 
 ### 2.4 五个协作工具与失败语义
+
+涉及业务文档变更的工具另携带 expectedDocumentRevision 与可选 draftRef；复用 §2.3 同一提交流程，工具只有在文件和控制交接确认后才返回“已提交”。正文由助理用已有文件工具维护，不新增第六个协作工具。
 
 全部通过主进程工具注册表装配；认证 scope、角色、taskRevision、executionId 从可信调用上下文绑定，不接受模型覆写。
 
 | 工具 | 角色 / 输入 | 输出和提交效果 |
 |---|---|---|
-| `im_coordination_read` | 助理：cursor；执行者：无参数 | 当前 scope 的任务/事项分页快照及 revision；执行者只见自己的任务与已回答事项 |
-| `im_execution_dispatch` | 助理：instruction、dependsOn、expectedRevision | 宿主分配 taskId、dispatchKey；提交 queued 后立即返回，不等待执行完成；按当前调用工具身份去重 |
+| `im_coordination_read` | 助理：cursor；执行者：无参数 | 助理获得 Markdown 路径/版本、执行控制与未消费报告；执行者只见冻结的本任务材料及明确回答 |
+| `im_execution_dispatch` | 助理：instruction、dependsOn、expectedRevision | 宿主分配 taskId、dispatchKey；确认文档版本及冻结执行材料，提交 queued 后立即返回，不等待执行完成；按当前调用工具身份去重 |
 | `im_execution_report` | 执行者：kind、payload、deadlineAt、waitForAnswer | 持久化事项并返回 itemId；可在执行 turn 中调用，立即触发协调器调度检查 |
-| `im_decision_apply` | 助理：逐项 itemId/answer/evidence、sourceMessageId、expectedRevision | 提交明确业务回答，返回已应用和仍待回答项；不接受 approve/permit/安全回执字段 |
+| `im_decision_apply` | 助理：逐项 itemId/answer/evidence、sourceMessageId、expectedRevision | 将明确业务回答写入 Markdown checkpoint 后确认已处理输入，返回已应用和仍待回答项；不接受 approve/permit/安全回执字段 |
 | `im_assistant_publish` | 助理：text、itemIds、batchIds、expectedRevision | 冻结正文和发送意图，返回 deliveryId；成功入队与平台已送达分开报告 |
 
 读取/报告/写意图不代表取得工具操作权限；既有工具安全链照常运行。宿主维护两类去重：工具重试使用 invocationId/toolCallId；助理 turn 重试使用其认领批次和已提交意图。模型不通过换一个自报 ID 来重复派发。
@@ -332,17 +363,17 @@ coordination: {
 | 已记 sent 重启 | 不再次发送；重复 publish 返回同 deliveryId | 重复入站、重复 wake |
 | 取消/授权撤销期间旧执行返回 | 先撤销原任务操作资格，再使代次失效；旧结果不唤醒新执行 | 取消、撤销、迟到结果 |
 
-本地 exactly-once 意图提交不等于网络 exactly-once 送达。现有 `imLifecycleOutbox` 先 send 后记 delivered，不能直接作为 AC-10 的充分证据。本方案发送意图存在协作记录，实际发送复用渠道校验/适配；平台能力未验证前 T-02 是显式交付限制。
+本地 exactly-once 意图提交不等于网络 exactly-once 送达。现有 `imLifecycleOutbox` 先 send 后记 delivered，不能直接作为 AC-10 的充分证据。本方案发送意图存在数据库执行控制记录，实际发送复用渠道校验/适配；平台能力未验证前 T-02 是显式交付限制。
 
-锁与事务顺序：先协作记录 CAS 提交，再认领执行会话/助理会话，再启动异步调用；不在 SQLite 事务内获取或等待会话租约。释放必须匹配当前 ownerRunId；重试前读最新代次。协调记录内一次更新同时保存处理结果与后续意图，不跨两套状态声称原子提交。
+锁与事务顺序：先由每 scope 文档队列完成 §2.3 的 checkpoint 交接，再由控制记录 CAS 提交认领意图、认领执行会话/助理会话，最后启动异步调用；不在 SQLite 事务内等待文件 IO、会话租约或模型。释放必须匹配当前 ownerRunId；重试前读最新代次。文件与数据库以 prepared/确认恢复协议衔接，不声称两者原子提交。
 
 ### 2.8 兼容、迁移与回滚
 
-- 不把旧 workflow 样例的 `awaiting-confirmation` 自动解释为已批准。保留原 workflowId 和版本；新保留记录首次真实 IM 请求时创建，初始化使用 expectedRevision=null，重复初始化返回原记录。
-- 无 SQL schema 迁移；JSON 格式为新增记录，不回写旧数据。严格解析版本；未来升级先读取旧版、事务生成新版，再记录升级成功，不跳过错误后标完成。
-- 助理和执行会话继续通过原会话存储导出与备份；工作流记录不是 `sessions/` 明文备份的附带保证，需验证应用完整数据库备份/恢复能保留它。仅从 sessions 导入时不虚构已恢复协作任务。
-- 回滚前停止新分派，等待已接纳执行安全退出或经任务控制取消；保存数据库备份并冻结非终态协作记录。旧版本只处理旧链路，不消费保留记录；未完成任务向用户如实报告。不得靠切回旧 Skill 自动重做已派发任务。
-- 回滚实体为本方案文件改动、两渠道入口接线和新增协作记录；不删除既有审批、消息或结果。重新升级时先核对旧 executionId 与 turn 事实，再恢复队列。
+- 不把旧 workflow 样例的 `awaiting-confirmation` 自动解释为已批准。旧 workflowId/版本保持原样；首次新任务创建 Markdown 及其执行控制，初始化通过 §2.3 文件交接协议，重复初始化使用同一 operationId。
+- 本方案旧版全 JSON 草案未实施，因此没有“先落整套 JSON 再迁 Markdown”的中间迁移。新增 Markdown 头部版本与控制版本严格读取，未知版本保留并停止消费；未来升级保存旧版备份，文件转换成功及控制记录核对后才标记升级完成。
+- 助理和执行会话继续通过原会话存储备份。完整协作恢复需要同时备份数据库与 `{userData}/im-coordination/`，备份时暂停文档提交/派发并核销 prepared，校验 documentHead 的 revision/digest；数据库备份或 sessions 导出均不能单独宣称包含业务文档。缺失文档则保留执行事实、从上一完整备份恢复并核对，不将任务当成从未派发。
+- 回滚前停止新分派，等待执行安全退出或经任务控制取消；同时备份文档目录与数据库，冻结非终态控制。旧应用不消费新文件/控制记录；不能因切回旧 Skill 而重做已派发任务。
+- 回滚实体为本方案文件改动、两渠道接线、Markdown 文件及新增执行控制记录；不删除消息、审批或执行结果。重新升级先恢复文件交接，再核对 executionId/turn 事实，最后恢复队列。
 
 ### 2.9 安全阶段与旁路检查
 
@@ -372,7 +403,7 @@ A-* 为本方案拟实施测试场景，不表示已有测试通过。
 | A-07 运行中报告 | 07 | 06 | 执行者 A 报告后保持 turn 未结束，助理在 A 结束前读取并处理，B 不被停止 |
 | A-08 普通封批 | 08 | 03 | 注入时钟覆盖 299999/300000ms、第 5/6 项、全体受阻/独立任务可运行 |
 | A-09 忙碌紧急排队 | 09 | 03 | 助理工具未结束时不抢占；结束后 urgent 先于 normal，进度最后 |
-| A-10 重启与去重 | 10 | 05、06 | §2.7 各崩溃窗口；重复/乱序事件；已派发不重复执行；发送不确定明确暴露而非虚报通过 |
+| A-10 重启与去重 | 10 | 05、06 | §2.3 文件替换前后、数据库确认前后故障注入，含人工改写/文件缺失/上一版恢复/联合备份；§2.7 各执行窗口；重复/乱序事件；已派发不重复执行；发送不确定明确暴露而非虚报通过 |
 | A-11 查询 | 11 | 08、09 | 已完成、等待用户、失败、未知结果均可查询；只读当前回复即可辨认任务、状态、影响与下一步 |
 | A-12 桌面隔离 | 12 | 01、07 | desktop 及未显式 Skill 的原调用装配回归；无协调器记录/工具泄露 |
 | A-13 授权边界 | 13 | 02、04、07 | 跨 owner/渠道、过期 epoch、计划修订、伪造答案、撤销均不调用 executor |
@@ -389,7 +420,7 @@ A-* 为本方案拟实施测试场景，不表示已有测试通过。
 | 阶段 | 输入 → 输出 | 出口证据 / 回退实体 |
 |---|---|---|
 | P1 角色与执行接缝验证 | 当前 IM 链 → 隔离助理/执行者、异步报告原型 | A-01/05/06/07/12/13；U-01/02 必须通过；回退角色材料与原型接线，不向真实用户启用 |
-| P2 协作存储和调度 | P1、T-01 获批 → 批次、回答、恢复完整宿主链 | A-02/04/08/09/10/11/14 和随机不变量测试；回退入口并冻结新记录，恢复步骤见 §2.8 |
+| P2 协作存储和调度 | P1、已确认 T-01 → Markdown 业务记录、最小控制、批次及恢复完整宿主链 | A-02/04/08/09/10/11/14 和随机不变量测试；回退入口并冻结新记录，恢复步骤见 §2.8 |
 | P3 Skill 与双渠道验收 | P2、T-02 处置确认 → 飞书/微信真实闭环 | A-03 与 §2.6.4 固定样本及人工隔离阅读、真实平台故障窗口、审批回归；不能核验项逐条保留，不报全量通过；回退双渠道入口及 Skill 版本 |
 
 开发中只合并运行定向测试；每阶段最多一次增量构建。阶段收尾及最终验收按仓库规则运行全量测试，提交阶段成果；涉及安全时补对应边界测试与 invariant registry 门禁。agent-sdk、会话存储、共享类型门禁使用 §1.4 的真实脚本名；本文未执行功能测试，未改生产代码。
@@ -429,8 +460,8 @@ A-* 为本方案拟实施测试场景，不表示已有测试通过。
 - 软能力分工 → INV-01/04、A-03/04/05；当前是设计承诺，证据出口为 Skill 评测与集成测试。
 - 并行与运行中协调 → INV-06、A-06/07、U-01；不宣称当前已支持。
 - 批次与恢复 → INV-03/05、A-08/09/10；平台不确定窗口由 T-02/U-03 单独披露。
-- 数量核对：7 改造单元、5 新建单元、7 复用单元；3 承重边界；1 持久化根属性/8 内键；5 工具/6 内部失败分类；0 新 SQL 字段/共享错误码/配置；3 阶段/4 未验证项，与 §1.3/1.4 对齐。
-- 业务词对应：助理=IM assistant invocation；执行者=execution invocation；待处理事项=Item；决策批次=Batch；协作记录=coordination；送达待核实=Delivery.uncertain。协作记录不代表审批授权。
+- 数量核对：7 改造单元、5 新建单元、7 复用单元；3 承重边界；1 数据库 JSON 根属性/10 内键；1 种 Markdown 格式/4 项头部元数据；5 工具/6 内部失败分类；0 新 SQL 字段/共享错误码/配置；3 阶段/4 未验证项，与 §1.3/1.4 对齐。
+- 业务词对应：助理=IM assistant invocation；执行者=execution invocation；待处理事项=Item；决策批次=Batch；协作业务记录=coordination.md；执行控制=coordinationControl；送达待核实=Delivery.uncertain。协作记录不代表审批授权。
 
 ### 本轮修订核销（2026-11-03）
 
@@ -439,3 +470,11 @@ A-* 为本方案拟实施测试场景，不表示已有测试通过。
 | “翻译成决策说明”只有目标，没有可执行规格 | 重写沟通模型：以用户不可见内部上下文为前提，覆盖全部用户消息，不只润色问题 | §2.6.1 十条规则、§2.6.2 可纳入 Skill 的提示词 |
 | 缺少具体写法与失败判据 | 增加六类正反例，以及事实核对和仅看当前消息的隔离阅读验收 | §2.6.3、§2.6.4、A-03/04/11/14 |
 | 是否借细化增加底层复杂度 | 规则与自检放在同一助理 Skill，配套离线评测；单元、工具、存储与 Runtime 范围不增加 | §1.4 数量、INV-09 和一致性核对 |
+
+### T-01 决策落定与模型修订（2026-11-03）
+
+| 原问题 | 确认结果与模型变化 | 验证出口 |
+|---|---|---|
+| 业务协作过程为何全部保存成数据库 JSON | 用户确认 Markdown 业务记录＋最小数据库执行控制；撤销原 Task/Item/Reply 全量 JSON 模型 | §0 T-01、§1.4、§2.3 |
+| 文件与控制记录如何避免两份业务真相 | 单写文档、控制白名单、短期报告消费后核销；正文不作为授权或执行证明 | INV-05、§2.2/2.3、A-10/13/14 |
+| 跨文件/数据库和备份是否仍能恢复 | prepared 文件交接、父版本/摘要核对、联合备份，异常停止而非盲重派 | §2.3、§2.7/2.8、A-10 |
