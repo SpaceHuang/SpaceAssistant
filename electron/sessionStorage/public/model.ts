@@ -25,7 +25,7 @@ export type PreparedChatBodyView = Readonly<{
 export type QueuedSessionMessage = Readonly<{ message: Message; sequence: number; requestId?: string }>
 export type ImAcceptedFactScope = Readonly<{ channel: 'feishu' | 'wechat'; accountId: string; conversationId: string }>
 export type ImAcceptedFactFrontier = Readonly<{ through: number; coverageRevision: number }>
-export type ImAcceptedFact = Readonly<{ messageId: string; acceptedSeq: number; channel: ImAcceptedFactScope['channel']; accountId: string; conversationId: string; senderId: string; platformMessageId: string; timestamp: number; contextToken?: string; trackId?: string; trackEventId?: string }>
+export type ImAcceptedFact = Readonly<{ messageId: string; acceptedSeq: number; channel: ImAcceptedFactScope['channel']; accountId: string; conversationId: string; senderId: string; platformMessageId: string; timestamp: number; isGroup?: boolean; contextToken?: string; trackId?: string; trackEventId?: string }>
 export type ImAcceptedFactPage = Readonly<{ items: readonly ImAcceptedFact[]; nextAfter?: number }>
 export type RuntimeTriggerRecord = Readonly<{
   id: string; ownerSessionId: string; receiverSessionId: string; clientKey: string; definition: RuntimeTriggerDefinitionV1
@@ -85,7 +85,7 @@ export type MessageSkeleton = Readonly<{
 export type LatestMessagePreviewCandidate = Readonly<MessageSkeleton & { sessionGeneration: string; messageRevision: number }>
 export type MessageRef = Readonly<{ sessionId: string; messageId: string }>
 export type RemoteSessionIdentityUpdate =
-  | Readonly<{ channel: 'feishu'; messageId: string }>
+  | Readonly<{ channel: 'feishu'; messageId: string; chatType?: string }>
   | Readonly<{ channel: 'wechat'; userId: string; messageId: string; contextToken?: string; workDirProfileId?: string }>
 export type ContinuationSourceRef = Readonly<{
   sessionId: string

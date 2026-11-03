@@ -242,7 +242,8 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
       const current = getSession(db, sessionId)
       if (!current) return undefined
       if (identity.channel === 'feishu') {
-        return updateSession(db, sessionId, { metadata: { ...current.metadata, feishuMessageId: identity.messageId } })
+        return updateSession(db, sessionId, { metadata: { ...current.metadata, feishuMessageId: identity.messageId,
+          ...(identity.chatType ? { feishuChatType: identity.chatType } : {}) } })
       }
       const existingMeta = current.metadata.wechatMeta
       const wechatMeta = existingMeta && typeof existingMeta === 'object' && !Array.isArray(existingMeta)

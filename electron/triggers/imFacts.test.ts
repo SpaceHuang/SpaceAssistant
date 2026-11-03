@@ -8,6 +8,35 @@ import { buildImQueueScope } from '../../src/shared/queueScope'
 import { createSessionQueries } from '../sessionStorage/queries'
 
 describe('accepted IM fact cursor and coverage', () => {
+  it('persists immutable conversation type on accepted facts and keeps legacy unknown values distinguishable', () => {
+    const db = createMemoryAppDb()
+    try {
+      const sessionId = createSession(db, { name: 'im-fact-conversation-type' }).id
+      const scope = { channel: 'feishu' as const, accountId: 'account', conversationId: 'chat' }
+      const queueScope = buildImQueueScope('feishu', sessionId)
+      const direct = appendImInboxMessage(db, { sessionId, channel: 'feishu', queueScope, channelMessageId: 'direct-fact',
+        ...scope, senderId: 'alice', content: 'direct', isGroup: false })
+      const group = appendImInboxMessage(db, { sessionId, channel: 'feishu', queueScope, channelMessageId: 'group-fact',
+        ...scope, senderId: 'alice', content: 'group', isGroup: true })
+      const legacy = appendImInboxMessage(db, { sessionId, channel: 'feishu', queueScope, channelMessageId: 'unknown-fact',
+        ...scope, senderId: 'alice', content: 'legacy' })
+      const frontier = captureImFactFrontier(db, scope)
+      const facts = readImFactPage(db, { scope, after: 0, ...frontier, limit: 10 }).items
+      expect(facts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ messageId: direct.messageId, isGroup: false }),
+        expect.objectContaining({ messageId: group.messageId, isGroup: true })
+      ]))
+      expect(facts.find((fact) => fact.messageId === legacy.messageId)).not.toHaveProperty('isGroup')
+      const wechatScope = { channel: 'wechat' as const, accountId: 'wechat-account', conversationId: 'wechat-peer' }
+      const wechat = appendImInboxMessage(db, { sessionId, channel: 'wechat', queueScope: buildImQueueScope('wechat', sessionId),
+        channelMessageId: 'legacy-wechat-fact', ...wechatScope, senderId: 'alice', content: 'wechat legacy' })
+      expect(readImFactPage(db, { scope: wechatScope, after: 0, ...captureImFactFrontier(db, wechatScope), limit: 10 }).items)
+        .toEqual([expect.objectContaining({ messageId: wechat.messageId, isGroup: false })])
+      expect(() => getDbConnection(db).prepare('UPDATE im_inbox_message_context SET is_group=0 WHERE message_id=?').run(group.messageId))
+        .toThrow('accepted IM fact identity is immutable')
+    } finally { db.close() }
+  })
+
   it('pages beyond 100 in acceptance order regardless of queue status and uses a stable watermark', () => {
     const db = createMemoryAppDb()
     try {

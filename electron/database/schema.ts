@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 121
+export const DB_SCHEMA_VERSION = 122
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -329,6 +329,7 @@ CREATE TABLE IF NOT EXISTS im_inbox_message_context (
   created_at INTEGER NOT NULL,
   track_id TEXT REFERENCES remote_tracks(track_id) ON DELETE SET NULL,
   track_event_id TEXT REFERENCES remote_track_events(event_id) ON DELETE SET NULL,
+  is_group INTEGER CHECK(is_group IN (0,1)),
   clarification_work_id TEXT REFERENCES remote_track_work_queue(work_id) ON DELETE SET NULL
 );
 
@@ -1813,6 +1814,18 @@ BEFORE UPDATE OF channel,platform_message_id,account_id,conversation_id,sender_i
 WHEN OLD.accepted_seq IS NOT NULL AND (
   NEW.channel IS NOT OLD.channel OR NEW.platform_message_id IS NOT OLD.platform_message_id OR NEW.account_id IS NOT OLD.account_id OR
   NEW.conversation_id IS NOT OLD.conversation_id OR NEW.sender_id IS NOT OLD.sender_id OR NEW.accepted_seq IS NOT OLD.accepted_seq
+)
+BEGIN SELECT RAISE(ABORT,'accepted IM fact identity is immutable'); END;
+`;
+
+export const MIGRATION_V122_IM_FACT_CONVERSATION_TYPE_SQL = `
+DROP TRIGGER IF EXISTS guard_im_fact_identity_immutable;
+CREATE TRIGGER guard_im_fact_identity_immutable
+BEFORE UPDATE OF channel,platform_message_id,account_id,conversation_id,sender_id,accepted_seq,is_group ON im_inbox_message_context
+WHEN OLD.accepted_seq IS NOT NULL AND (
+  NEW.channel IS NOT OLD.channel OR NEW.platform_message_id IS NOT OLD.platform_message_id OR NEW.account_id IS NOT OLD.account_id OR
+  NEW.conversation_id IS NOT OLD.conversation_id OR NEW.sender_id IS NOT OLD.sender_id OR NEW.accepted_seq IS NOT OLD.accepted_seq OR
+  NEW.is_group IS NOT OLD.is_group
 )
 BEGIN SELECT RAISE(ABORT,'accepted IM fact identity is immutable'); END;
 `;

@@ -29,7 +29,9 @@ export function scanImTriggerFacts(queries: SessionQueries, condition: Extract<R
       for (const fact of page.items) {
         if (fact.channel !== scope.channel || fact.accountId !== scope.accountId || fact.conversationId !== scope.conversationId ||
           !Number.isSafeInteger(fact.acceptedSeq) || fact.acceptedSeq <= previous || fact.acceptedSeq > frontier.through ||
-          !fact.messageId.trim() || !fact.senderId.trim() || !fact.platformMessageId.trim()) return { ok: false, code: 'TRIGGER_SOURCE_GAP', case: 'im-fact-invalid' }
+          !fact.messageId.trim() || !fact.senderId.trim() || !fact.platformMessageId.trim() || typeof fact.isGroup !== 'boolean') {
+          return { ok: false, code: 'TRIGGER_SOURCE_GAP', case: 'im-fact-invalid' }
+        }
         previous = fact.acceptedSeq
         const body = queries.imAcceptedFacts.readBody({ ...scope, messageId: fact.messageId })
         if (typeof body !== 'string') return { ok: false, code: 'TRIGGER_SOURCE_GAP', case: 'im-body-unavailable' }

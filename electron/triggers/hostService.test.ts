@@ -4,6 +4,9 @@ import { createSession } from '../database/operations'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerHostService } from './hostService'
 import { evaluateImInboundGuard } from '../remote/imInboundGuard'
+import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
+import type { PolicyRule } from '../../src/shared/confirmation/types'
+import { authorizeRuntimeTriggerImSource } from './imSourceAuthorization'
 
 describe('runtime trigger host capability adapter', () => {
   it('captures a settled baseline for each existing invocation at registration', async () => {
@@ -98,7 +101,7 @@ describe('runtime trigger host capability adapter', () => {
             : { allowed: false }
         } })
       const condition = { type: 'im_message' as const, channel: 'wechat' as const, accountId: 'alice', conversationId: 'alice' }
-      const event = { type: 'im_message', channel: 'wechat', accountId: 'alice', conversationId: 'alice', senderId: 'alice', occurredAt: 10 }
+      const event = { type: 'im_message', channel: 'wechat', accountId: 'alice', conversationId: 'alice', senderId: 'alice', isGroup: false, occurredAt: 10 }
       expect(service.authorizeSource(owner.id, owner.id, condition, {}, event)).toMatchObject({ allowed: true, policyTrace: [{ ruleId: 'ingress-default-allow' }] })
       remoteEnabled = false
       expect(service.authorizeSource(owner.id, owner.id, condition, {}, event)).toMatchObject({ allowed: false })
@@ -109,6 +112,49 @@ describe('runtime trigger host capability adapter', () => {
       expect(service.authorizeSource(owner.id, owner.id, condition, {}, { ...event, senderId: 'mallory' })).toMatchObject({ allowed: false })
       through = 2
       expect(service.authorizeSource(owner.id, owner.id, condition, {}, event)).toMatchObject({ allowed: true })
+    } finally { db.close() }
+  })
+
+  it('reauthorizes exact Feishu group facts and honors current direct-other ingress policy', () => {
+    const db = createMemoryAppDb()
+    try {
+      const groupOwner = createSession(db, { name: 'group owner', metadata: { source: 'feishu', feishuChatId: 'group-1',
+        feishuSenderOpenId: 'alice', feishuChatType: 'group' } })
+      const externalOwner = createSession(db, { name: 'external owner', metadata: { source: 'feishu', feishuChatId: 'chat-external',
+        feishuSenderOpenId: 'external', feishuChatType: 'p2p' } })
+      let remoteEnabled = true
+      let allowlist = ['alice']
+      let rules: PolicyRule[] = DEFAULT_POLICY_RULES.map((rule) => ({ ...rule }))
+      const authorizeImSource = (source: Parameters<typeof authorizeRuntimeTriggerImSource>[0]['source']) => authorizeRuntimeTriggerImSource({ source,
+        config: { enabled: true, ready: true, remoteEnabled, loggedIn: true, remoteSenderAllowlist: allowlist },
+        policyRules: rules, policyRevision: 'current-policy', authorizationGeneration: 'current-auth-generation' })
+      const service = createRuntimeTriggerHostService({ commands: createSessionCommands(db),
+        queries: { listSessions: () => [groupOwner, externalOwner], imAcceptedFacts: { captureFrontier: () => ({ through: 1, coverageRevision: 1 }) } } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }) } as never, authorizeImSource })
+      const groupCondition = { type: 'im_message' as const, channel: 'feishu' as const, accountId: 'alice', conversationId: 'group-1' }
+      const groupEvent = { type: 'im_message', channel: 'feishu', accountId: 'alice', conversationId: 'group-1', senderId: 'alice', isGroup: true, occurredAt: 1 }
+      expect(service.authorizeSource(groupOwner.id, groupOwner.id, groupCondition, {}, groupEvent)).toMatchObject({ allowed: false })
+      rules = rules.map((rule) => rule.id === 'ingress-feishu-group-deny' ? { ...rule, action: 'allow' } : rule)
+      expect(service.authorizeSource(groupOwner.id, groupOwner.id, groupCondition, {}, groupEvent))
+        .toMatchObject({ allowed: true, policyTrace: [{ originKind: 'group', ruleId: 'ingress-feishu-group-deny', action: 'allow' }] })
+      rules = rules.map((rule) => rule.id === 'ingress-feishu-group-deny' ? { ...rule, action: 'deny' } : rule)
+      expect(service.authorizeSource(groupOwner.id, groupOwner.id, groupCondition, {}, groupEvent)).toMatchObject({ allowed: false })
+      expect(service.authorizeSource(groupOwner.id, groupOwner.id, groupCondition, {}, { ...groupEvent, isGroup: undefined })).toMatchObject({ allowed: false })
+      expect(service.authorizeSource(groupOwner.id, groupOwner.id, groupCondition, {}, { ...groupEvent, isGroup: false }))
+        .toMatchObject({ allowed: true, policyTrace: [{ originKind: 'direct-owner' }] })
+
+      const externalCondition = { type: 'im_message' as const, channel: 'feishu' as const, accountId: 'external', conversationId: 'chat-external' }
+      const externalEvent = { type: 'im_message', channel: 'feishu', accountId: 'external', conversationId: 'chat-external', senderId: 'external', isGroup: false, occurredAt: 2 }
+      rules = rules.map((rule) => rule.id === 'ingress-direct-other-deny' ? { ...rule, action: 'allow' } : rule)
+      expect(service.authorizeSource(externalOwner.id, externalOwner.id, externalCondition, {}, externalEvent))
+        .toMatchObject({ allowed: true, policyTrace: [{ originKind: 'direct-other', ruleId: 'ingress-direct-other-deny', action: 'allow' }] })
+      rules = rules.map((rule) => rule.id === 'ingress-direct-other-deny' ? { ...rule, action: 'ask' } : rule)
+      expect(service.authorizeSource(externalOwner.id, externalOwner.id, externalCondition, {}, externalEvent)).toMatchObject({ allowed: false })
+      rules = rules.map((rule) => rule.id === 'ingress-direct-other-deny' ? { ...rule, action: 'deny' } : rule)
+      expect(service.authorizeSource(externalOwner.id, externalOwner.id, externalCondition, {}, externalEvent)).toMatchObject({ allowed: false })
+      remoteEnabled = false
+      allowlist = []
+      expect(service.authorizeSource(externalOwner.id, externalOwner.id, externalCondition, {}, externalEvent)).toMatchObject({ allowed: false })
     } finally { db.close() }
   })
 })

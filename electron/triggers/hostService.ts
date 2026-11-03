@@ -13,7 +13,7 @@ export function createRuntimeTriggerHostService(input: {
   execution: Pick<SessionExecutionStore, 'historyFor'>
   listProcesses?: typeof listManagedProcessTargets
   processGeneration?: typeof managedProcessRuntimeGeneration
-  authorizeImSource?: (source: Readonly<{ channel: 'feishu' | 'wechat'; accountId: string; conversationId: string; senderId: string }>) =>
+  authorizeImSource?: (source: Readonly<{ channel: 'feishu' | 'wechat'; accountId: string; conversationId: string; senderId: string; isGroup: boolean }>) =>
     Readonly<{ allowed: boolean; policyTrace?: Readonly<Record<string, unknown>> }>
   accepting?: () => boolean
   cancelSyncWait?: (record: import('../sessionStorage/public/model').RuntimeTriggerRecord) => void
@@ -51,10 +51,15 @@ export function createRuntimeTriggerHostService(input: {
         ? metadata?.source === metadataSource && metadata.feishuChatId === condition.conversationId
         : metadata?.source === metadataSource && boundSenderId === condition.conversationId
       if (!conversationMatches || typeof boundSenderId !== 'string' || !boundSenderId.trim()) return reject()
+      const isGroup = sourceEvent ? sourceEvent.isGroup
+        : condition.channel === 'feishu' ? metadata?.feishuChatType === 'group' ? true : metadata?.feishuChatType === 'p2p' ? false : undefined
+          : false
       if (sourceEvent && (sourceEvent.type !== 'im_message' || sourceEvent.channel !== condition.channel ||
         sourceEvent.accountId !== condition.accountId || sourceEvent.conversationId !== condition.conversationId ||
         typeof sourceEvent.senderId !== 'string' || sourceEvent.senderId !== boundSenderId ||
+        typeof sourceEvent.isGroup !== 'boolean' ||
         (condition.senderIds && !condition.senderIds.includes(sourceEvent.senderId)))) return reject()
+      if (typeof isGroup !== 'boolean') return reject()
       const senderIds = sourceEvent ? [sourceEvent.senderId as string] : condition.senderIds?.length ? [...condition.senderIds] : [boundSenderId]
       if (senderIds.some((senderId) => senderId !== boundSenderId)) return reject()
       try {
@@ -62,7 +67,7 @@ export function createRuntimeTriggerHostService(input: {
           accountId: condition.accountId, conversationId: condition.conversationId })
         if (!Number.isSafeInteger(frontier.through) || frontier.through <= 0) return reject()
         const decisions = senderIds.map((senderId) => input.authorizeImSource!({ channel: condition.channel, accountId: condition.accountId,
-          conversationId: condition.conversationId, senderId }))
+          conversationId: condition.conversationId, senderId, isGroup }))
         if (decisions.some((decision) => !decision.allowed || !decision.policyTrace)) return reject()
         return { allowed: true as const, policyTrace: decisions.map((decision) => decision.policyTrace!) }
       } catch { return reject() }

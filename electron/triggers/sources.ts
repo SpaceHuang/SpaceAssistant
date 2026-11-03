@@ -78,7 +78,8 @@ export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord
   if (match.timestamp > trigger.expiresAt) return { kind: 'expired', case: 'im-message-after-expiry' }
   return { kind: 'candidate', event: { type: 'im_message', occurredAt: match.timestamp, acceptedSeq: match.acceptedSeq,
     channel: match.channel, accountId: match.accountId, conversationId: match.conversationId, senderId: match.senderId,
-    platformMessageId: match.platformMessageId, body: match.body, ...(match.contextToken ? { contextToken: match.contextToken } : {}),
+    ...(match.isGroup !== undefined ? { isGroup: match.isGroup } : {}), platformMessageId: match.platformMessageId, body: match.body,
+    ...(match.contextToken ? { contextToken: match.contextToken } : {}),
     ...(match.trackId ? { trackId: match.trackId } : {}), ...(match.trackEventId ? { trackEventId: match.trackEventId } : {}) } }
 }
 

@@ -43,6 +43,7 @@ import {
   MIGRATION_V121_RUNTIME_TRIGGERS_SQL,
   MIGRATION_V121_IM_FACT_BACKFILL_SQL,
   MIGRATION_V121_IM_FACT_IDENTITY_SQL,
+  MIGRATION_V122_IM_FACT_CONVERSATION_TYPE_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SESSION_TRIGGERS_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_HISTORY_TRIGGERS_SQL,
@@ -2417,6 +2418,15 @@ export function runMigrations(conn: DatabaseSync): void {
       conn.exec(MIGRATION_V121_IM_FACT_IDENTITY_SQL)
     }
     version = 121
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v121 → v122: retain trusted IM conversation type with accepted source identity.
+  if (version === 121) runInTransaction(conn, () => {
+    if (hasTable(conn, 'im_inbox_message_context') && !hasColumn(conn, 'im_inbox_message_context', 'is_group')) {
+      conn.exec('ALTER TABLE im_inbox_message_context ADD COLUMN is_group INTEGER CHECK(is_group IN (0,1))')
+    }
+    if (hasTable(conn, 'im_inbox_message_context')) conn.exec(MIGRATION_V122_IM_FACT_CONVERSATION_TYPE_SQL)
+    version = 122
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

@@ -56,7 +56,7 @@ import { createRuntimeTriggerAuthorizationBinding, runtimeTriggerAuthorizationMa
 import { createSecuritySettingsStorage } from './confirmation/securitySettingsStorage'
 import { readImPolicySnapshot } from './confirmation/imPolicyStore'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
-import { evaluateImInboundGuard, readImPolicyAuthorizationRevision } from './remote/imInboundGuard'
+import { readImPolicyAuthorizationRevision } from './remote/imInboundGuard'
 import { classifyQueueInputSource } from './database/queueInputSource'
 import { createRuntimeTriggerDelivery } from './triggers/delivery'
 import { createRuntimeTriggerRecovery } from './triggers/recovery'
@@ -64,6 +64,7 @@ import { evaluateRuntimeTriggerSource, readPersistedTurnTerminal, readSessionSet
 import { createRuntimeTriggerStartAuthorizer } from './triggers/authorization'
 import { createRuntimeTriggerLifecycleAssembly, createRuntimeTriggerSyncWaitRegistry, failOrphanedRuntimeSyncTriggers } from './triggers/syncCheckpoint'
 import { waitForRuntimeTriggerReceiverTurn } from './triggers/receiverStarter'
+import { authorizeRuntimeTriggerImSource } from './triggers/imSourceAuthorization'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createTurnDisplayPublisher } from './turnDisplayPublisher'
 import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask,
@@ -788,31 +789,20 @@ app.whenReady().then(async () => {
   runtimeTriggerSyncWaitStop = runtimeTriggerSyncWaiters.cancelAll
   const runtimeTriggerService = createRuntimeTriggerHostService({ commands: sessionStorage.commands,
     queries: sessionStorage.queries, execution: sessionStorage.execution,
-    authorizeImSource: ({ channel, accountId, senderId }) => {
+    authorizeImSource: (source) => {
+      const { channel } = source
       const policyRevision = readImPolicyAuthorizationRevision(db)
       const authorizationGeneration = `${channel}:${remoteAuthorizationRegistry.getGeneration(channel)}:${remoteAuthorizationRegistry.getAuthorizationEpoch(channel)}`
       if (channel === 'feishu') {
         const config = readFeishuConfigFromDb(db)
-        if (!config.enabled || !config.appConfigured || !config.userAuthorized || !config.remoteEnabled ||
-          accountId !== senderId || !(config.remoteSenderAllowlist ?? []).includes(accountId)) return { allowed: false }
-        const guard = evaluateImInboundGuard({ channel, senderId,
-          getConfig: () => ({ enabled: config.enabled && config.appConfigured && config.userAuthorized,
-            remoteEnabled: config.remoteEnabled, remoteSenderAllowlist: config.remoteSenderAllowlist }),
-          getPolicyRules: () => loadEffectivePolicyRules(db, 'feishu'), getPolicyRevision: () => readImPolicyAuthorizationRevision(db) })
-        if (!guard.ok || !guard.snapshot.ingressDecision) return { allowed: false }
-        return { allowed: true, policyTrace: { ...guard.snapshot.ingressDecision, authorizationGeneration, accountId,
-          senderIdDigest: createHash('sha256').update(senderId).digest('hex') } }
+        return authorizeRuntimeTriggerImSource({ source, config: { enabled: config.enabled, ready: config.appConfigured && config.userAuthorized,
+          remoteEnabled: config.remoteEnabled, loggedIn: true, remoteSenderAllowlist: config.remoteSenderAllowlist },
+        policyRules: loadEffectivePolicyRules(db, 'feishu'), policyRevision, authorizationGeneration })
       }
       const config = readWeChatConfigFromDb(db)
-      if (!config.enabled || !config.loggedIn || !config.remoteEnabled || accountId !== senderId ||
-        !(config.remoteSenderAllowlist ?? []).includes(accountId)) return { allowed: false }
-      const guard = evaluateImInboundGuard({ channel, senderId,
-        getConfig: () => ({ enabled: config.enabled, remoteEnabled: config.remoteEnabled, loggedIn: config.loggedIn,
-          remoteSenderAllowlist: config.remoteSenderAllowlist }), getPolicyRules: () => loadEffectivePolicyRules(db, 'wechat'),
-        getPolicyRevision: () => readImPolicyAuthorizationRevision(db), isLoggedIn: () => config.loggedIn })
-      if (!guard.ok || !guard.snapshot.ingressDecision) return { allowed: false }
-      return { allowed: true, policyTrace: { ...guard.snapshot.ingressDecision, authorizationGeneration, accountId,
-        senderIdDigest: createHash('sha256').update(senderId).digest('hex') } }
+      return authorizeRuntimeTriggerImSource({ source, config: { enabled: config.enabled, ready: true, remoteEnabled: config.remoteEnabled,
+        loggedIn: config.loggedIn, remoteSenderAllowlist: config.remoteSenderAllowlist }, policyRules: loadEffectivePolicyRules(db, 'wechat'),
+      policyRevision, authorizationGeneration })
     },
     accepting: () => !isQuitting,
     cancelSyncWait: (trigger) => runtimeTriggerSyncWaiters.cancel(trigger.id) })

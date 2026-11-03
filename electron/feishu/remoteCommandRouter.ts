@@ -544,6 +544,7 @@ export class RemoteCommandRouter {
       appendImInboxMessageWithWakeEvent(this.deps.db, {
         sessionId, channel: 'feishu', queueScope, channelMessageId: message.messageId, content,
         accountId: authSnapshot.owner, conversationId: message.chatId, senderId: message.senderOpenId,
+        ...(message.chatType === 'group' ? { isGroup: true } : message.chatType === 'p2p' ? { isGroup: false } : {}),
         attachments: feishuMessageAttachments(message),
         ...(trackContext ? { trackId: trackContext.trackId, trackEventId: trackContext.attributionEventId } : {})
       })
@@ -989,7 +990,7 @@ export class RemoteCommandRouter {
         if (!resolvedSession && quotedReplyContext?.sessionId) {
           const quotedSession = this.deps.sessionStorage!.queries.readSession(quotedReplyContext.sessionId)
           if (quotedSession?.metadata.feishuChatId === msg.chatId) {
-            this.deps.sessionStorage!.commands.recordRemoteSessionIdentity(quotedSession.id, { channel: 'feishu', messageId: msg.messageId })
+            this.deps.sessionStorage!.commands.recordRemoteSessionIdentity(quotedSession.id, { channel: 'feishu', messageId: msg.messageId, chatType: msg.chatType })
             resolvedSession = { sessionId: quotedSession.id, isNew: false }
           }
         }
@@ -1047,7 +1048,8 @@ export class RemoteCommandRouter {
           const trackQueueScope = buildImQueueScope('feishu', context.originSessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
           appendImInboxMessageWithWakeEvent(this.deps.db, { sessionId: context.originSessionId, channel: 'feishu', queueScope: trackQueueScope,
             channelMessageId: msg.messageId, content, attachments: feishuMessageAttachments(msg), accountId: authSnapshot.owner,
-            conversationId: msg.chatId, senderId: msg.senderOpenId, trackId: context.trackId, trackEventId: context.attributionEventId })
+            conversationId: msg.chatId, senderId: msg.senderOpenId, isGroup: msg.chatType === 'group' ? true : msg.chatType === 'p2p' ? false : undefined,
+            trackId: context.trackId, trackEventId: context.attributionEventId })
         } })
         if (attribution.kind === 'unresolved') {
           if (attribution.decision.kind === 'ambiguous' && attribution.decision.candidateTrackIds.length <= 5 && trackGates.clarification) {
@@ -1073,7 +1075,8 @@ export class RemoteCommandRouter {
             const queueScope = buildImQueueScope('feishu', sessionId)
             parkImInboxMessageForClarification(this.deps.db, { sessionId, channel: 'feishu', queueScope,
               channelMessageId: msg.messageId, content, attachments: feishuMessageAttachments(msg), accountId: authSnapshot.owner,
-              conversationId: msg.chatId, senderId: msg.senderOpenId, clarificationId, identityKey: msg.chatId,
+              conversationId: msg.chatId, senderId: msg.senderOpenId, isGroup: msg.chatType === 'group' ? true : msg.chatType === 'p2p' ? false : undefined,
+              clarificationId, identityKey: msg.chatId,
               ownerId: authSnapshot.owner, authorizationEpoch: epoch, handle, candidates, expiresAt, now })
             const sendAttemptId = randomUUID()
             startClarificationSendAttempt(this.deps.db, { sendAttemptId, clarificationId, version: 1, startedAt: Date.now() })

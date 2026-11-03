@@ -16,7 +16,7 @@ import { evaluateRuntimeTriggerSource } from './sources'
 function fixture(channel: ImAcceptedFactScope['channel'], messages: Array<{ senderId: string; body: string }>, limit = 2) {
   const scope: ImAcceptedFactScope = { channel, accountId: 'account', conversationId: 'conversation' }
   const facts: ImAcceptedFact[] = messages.map((message, index) => ({ messageId: `${channel}-${index + 1}`, acceptedSeq: index + 1,
-    ...scope, senderId: message.senderId, platformMessageId: `platform-${index + 1}`, timestamp: 100 + index }))
+    ...scope, senderId: message.senderId, platformMessageId: `platform-${index + 1}`, timestamp: 100 + index, isGroup: false }))
   const frontier: ImAcceptedFactFrontier = { through: facts.length, coverageRevision: 4 }
   const readPage = vi.fn((input: ImAcceptedFactScope & ImAcceptedFactFrontier & { after: number; limit: number }) => {
     const rows = facts.filter((fact) => fact.acceptedSeq > input.after && fact.acceptedSeq <= input.through).slice(0, input.limit)
@@ -35,7 +35,7 @@ describe('IM runtime trigger source', () => {
     const condition: RuntimeTriggerCondition = { type: 'im_message', ...f.scope, senderIds: ['owner'], bodyContains: '[ready]' }
     expect(scanImTriggerFacts(f.queries, condition, { pageSize: f.limit, baseline: fromBeginning })).toEqual({ ok: true, frontier: f.frontier, matches: [{
       messageId: `${channel}-2`, acceptedSeq: 2, channel, ...f.scope, senderId: 'owner', platformMessageId: 'platform-2', timestamp: 101,
-      body: 'prefix [ready].'
+      isGroup: false, body: 'prefix [ready].'
     }] })
     expect(f.readPage).toHaveBeenCalledTimes(2)
   })
@@ -48,6 +48,14 @@ describe('IM runtime trigger source', () => {
     f.readBody.mockImplementation((input) => f.facts.find((fact) => fact.messageId === input.messageId) ? 'hello' : null)
     f.readPage.mockImplementationOnce(() => { throw new Error('coverage changed') })
     expect(scanImTriggerFacts(f.queries, { type: 'im_message', ...f.scope }, { pageSize: 2, baseline: fromBeginning })).toMatchObject({ ok: false, code: 'TRIGGER_SOURCE_GAP' })
+  })
+
+  it('fails closed when a legacy accepted fact has no trusted conversation type', () => {
+    const f = fixture('feishu', [{ senderId: 'owner', body: 'hello' }])
+    const { isGroup: _unknownConversationType, ...legacyFact } = f.facts[0]!
+    f.facts[0] = legacyFact
+    expect(scanImTriggerFacts(f.queries, { type: 'im_message', ...f.scope }, { pageSize: 10, baseline: fromBeginning }))
+      .toMatchObject({ ok: false, code: 'TRIGGER_SOURCE_GAP', case: 'im-fact-invalid' })
   })
 
   it('expires an unmatched IM trigger after scanning its accepted-fact window', async () => {
@@ -93,10 +101,10 @@ describe('IM runtime trigger source', () => {
       const scope = { channel, accountId: 'account', conversationId: 'chat' }
       const queueScope = buildImQueueScope(channel, sessionId)
       // Event accepted before registration is below the captured baseline.
-      appendImInboxMessage(db, { sessionId, channel, queueScope, channelMessageId: 'before', ...scope, senderId: 'sender', content: 'old' })
+      appendImInboxMessage(db, { sessionId, channel, queueScope, channelMessageId: 'before', ...scope, senderId: 'sender', content: 'old', isGroup: false })
       const baseline = captureImTriggerBaseline(queries, condition)
       const accepted = appendImInboxMessage(db, { sessionId, channel, queueScope, channelMessageId: 'after', ...scope, senderId: 'sender', content: 'new [match]',
-        contextToken: 'reply-context' })
+        contextToken: 'reply-context', isGroup: false })
       getDbConnection(db).prepare("UPDATE messages SET status='sent' WHERE id=?").run(accepted.messageId)
       const scan = scanImTriggerFacts(queries, condition, { baseline, pageSize: 10 })
       if (!scan.ok) throw new Error(scan.case)
@@ -121,7 +129,7 @@ describe('IM runtime trigger source', () => {
       const baseline = captureImTriggerBaseline(queries, condition)
       const ids: string[] = []
       for (let index = 0; index < 105; index += 1) ids.push(appendImInboxMessage(db, { sessionId, channel: 'feishu', queueScope,
-        channelMessageId: `page-${index}`, ...scope, senderId: 'sender', content: index === 104 ? 'target last page' : `ordinary-${index}` }).messageId)
+        channelMessageId: `page-${index}`, ...scope, senderId: 'sender', content: index === 104 ? 'target last page' : `ordinary-${index}`, isGroup: false }).messageId)
       getDbConnection(db).prepare("UPDATE messages SET status='sent' WHERE id IN (" + ids.slice(0, 100).map(() => '?').join(',') + ")").run(...ids.slice(0, 100))
       db.close()
       db = openDatabase(temp.dbPath)
@@ -139,7 +147,7 @@ describe('IM runtime trigger source', () => {
       const queueScope = buildImQueueScope('wechat', sessionId)
       const baseline = captureImTriggerBaseline(queries, condition)
       const accepted = appendImInboxMessage(db, { sessionId, channel: 'wechat', queueScope, channelMessageId: 'source-1', ...scope,
-        senderId: 'sender', content: 'please go now' })
+        senderId: 'sender', content: 'please go now', isGroup: false })
       const trigger = { id: 'im-trigger', ownerSessionId: sessionId, receiverSessionId: sessionId, clientKey: 'im',
         definition: { version: 1 as const, condition, sourceBaseline: baseline }, state: 'waiting' as const, createdAt: 1,
         expiresAt: Date.now() + 60_000, attempts: 0, revision: 1, updatedAt: 1 }

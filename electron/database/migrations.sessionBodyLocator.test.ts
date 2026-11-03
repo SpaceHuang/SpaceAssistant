@@ -24,8 +24,8 @@ describe('session body locator schema v117+', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(121)
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '121' })
+    expect(DB_SCHEMA_VERSION).toBe(122)
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '122' })
     expect(conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?').get('pre-migration-event'))
       .toMatchObject({ payload_json: expect.stringContaining('retained canonical history') })
     const initial = conn.prepare('SELECT source_revision,status,checkpoint_json FROM session_body_source_state WHERE session_id=?')
@@ -62,7 +62,7 @@ describe('session body locator schema v117+', () => {
     runMigrations(conn)
 
     expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
-      .toEqual({ value: '121' })
+      .toEqual({ value: '122' })
     expect(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_message_body_locator'").get())
       .toBeDefined()
     expect(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='bump_session_body_source_after_history_insert'").get())
@@ -82,7 +82,7 @@ describe('session body locator schema v117+', () => {
     runMigrations(conn)
 
     expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
-      .toEqual({ value: '121' })
+      .toEqual({ value: '122' })
     const columns = conn.prepare('PRAGMA table_info(session_body_source_state)').all() as Array<{ name: string }>
     expect(columns.map(({ name }) => name)).toContain('terminal_source_revision')
     expect(columns.map(({ name }) => name)).toContain('terminal_reducer_spec_version')
