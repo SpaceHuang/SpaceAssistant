@@ -20,6 +20,8 @@
 
 ## 在途（in-flight）
 
+- [IM 助理与执行 Agent 协同技术方案](./in-flight/im-assistant-execution-coordination-technical-design.md) —— 方案草案：Skill 驱动协调，IM 宿主保障批次、并行交接与恢复；不扩展 SDK 工作流语义。
+
 - [IM标准模式安全审核替代一刀切技术方案.md](./in-flight/IM标准模式安全审核替代一刀切技术方案.md) —— 方向已决策的方案草案：目录外文件、Shell、网页、附件和联网脚本的逐调用审核、标准模式自动迁移与验收边界。
 
 - [IM指令权限预检与集中审批技术方案.md](./in-flight/IM指令权限预检与集中审批技术方案.md) —— 技术方案草稿：IM 先行用请求级预检合并权限申请；漏项仍走现有运行时审批；达到试点门槛后再评估定时任务迁移。
