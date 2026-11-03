@@ -85,6 +85,8 @@ export interface ToolExecutionContext {
   reviewScopeCandidateDigest?: string
   /** 重开后的模型面可读取的、已授权会话事实快照。 */
   historyFacts?: readonly HistoryFact[]
+  /** Desktop Skill name, body, and budget snapshot owned by this active turn. */
+  skillTurnScope?: import('../skills/skillTurnScope').SkillTurnScope
   workDir: string
   userDataDir: string
   requestId: string

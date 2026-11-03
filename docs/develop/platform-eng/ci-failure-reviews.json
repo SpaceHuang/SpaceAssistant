@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "mainRuns": [
+    {
+      "runId": "41318645772",
+      "branch": "main",
+      "conclusion": "failure",
+      "createdAt": "2026-11-01T14:56:20Z",
+      "headSha": "bf980e1e4f2fede5cd78af3cc80479f90214561b",
+      "url": "https://github.com/SpaceHuang/SpaceAssistant/actions/runs/41318645772"
+    },
+    {
+      "runId": "41295815873",
+      "branch": "main",
+      "conclusion": "failure",
+      "createdAt": "2026-11-01T10:04:12Z",
+      "headSha": "a6a5cdb739f470254b78366c77405f3f5f2d2f78",
+      "url": "https://github.com/SpaceHuang/SpaceAssistant/actions/runs/41295815873"
+    },
+    {
+      "runId": "41149634039",
+      "branch": "main",
+      "conclusion": "success",
+      "createdAt": "2026-10-31T00:20:29Z",
+      "headSha": "26a79788711e5402f9f06d7f6f3fc1a126320c52",
+      "url": "https://github.com/SpaceHuang/SpaceAssistant/actions/runs/41149634039"
+    }
+  ],
+  "reviews": [
+    {
+      "incidentId": "412958-session-storage-fixture",
+      "runId": "41295815873",
+      "category": "test-fixture",
+      "rootCauseId": "electron-spawn-in-test-fixture",
+      "rootCause": "The deterministic metadata test launched a child Electron runner from inside a Vitest worker; it only needed the pure fixture definition and inherited runner initialization risk.",
+      "firstFailureAt": "2026-11-01T10:18:51Z",
+      "locatedAt": "2026-11-01T14:37:20Z",
+      "fixedAt": "2026-11-01T14:37:20Z",
+      "fixCommit": "78dc2623451233dab1a38ff0ac84714ebcb49d07",
+      "verificationRunId": "41318645772",
+      "closureEvidence": "Commit 78dc2623 removed the spawnSync call that launched the Electron fixture runner and now calls createFixtureDefinition directly; this test passed in main CI run 41318645772. That run had unrelated failures, so this is test-level verification only.",
+      "rerunOnlyClosure": false,
+      "failedJobs": [
+        "test"
+      ],
+      "failedTests": [
+        "electron/sessionStorage/sessionStorageFullChainFixture.test.ts > generates deterministic, content-free scale metadata for a fixed seed"
+      ]
+    },
+    {
+      "incidentId": "413186-grep-timeout-result",
+      "runId": "41318645772",
+      "category": "code-contract",
+      "rootCauseId": "grep-timeout-early-return",
+      "rootCause": "After the regex worker validation consumed the caller deadline, an early return emitted a clean no-match result before the timeout boundary summary could be added.",
+      "firstFailureAt": "2026-11-01T15:17:04Z",
+      "locatedAt": "2026-11-01T16:38:38Z",
+      "fixedAt": "2026-11-01T17:08:00Z",
+      "fixCommit": "8cb4fecdc1cc8c804bf3973ca40b075ed8f5e34d",
+      "verificationRunId": "41329880381",
+      "closureEvidence": "Commit 7ba29e9a changed the grep fallback so timeout state reaches the boundary summary; deterministic fake-clock regression passed locally, and full Vitest passed in PR run 41329880381. The same run also validated report upload and required aggregation.",
+      "rerunOnlyClosure": false,
+      "failedJobs": [
+        "test"
+      ],
+      "failedTests": [
+        "electron/tools/grepFallback.test.ts > honors the caller total timeout while matching in the worker"
+      ]
+    },
+    {
+      "incidentId": "413186-butler-mock-leak",
+      "runId": "41318645772",
+      "category": "concurrency-resource",
+      "rootCauseId": "butler-one-shot-mock-after-timeout",
+      "rootCause": "A multi-step Butler settings test exceeded its 15-second limit under full-suite load; vi.clearAllMocks cleared calls but retained mockResolvedValueOnce queues, so seven later assertions observed prior tests' review IDs.",
+      "firstFailureAt": "2026-11-01T15:17:04Z",
+      "locatedAt": "2026-11-01T16:38:38Z",
+      "fixedAt": "2026-11-01T17:08:00Z",
+      "fixCommit": "7ba29e9abf4c5e5e59b21c8b698a16e2df3ca47f",
+      "verificationRunId": "41329880381",
+      "closureEvidence": "Commit 7ba29e9a resets test-local Butler API mock implementations before each test and gives the multi-step scenario an evidence-based timeout budget; targeted renderer test passed locally and the full Vitest suite passed in PR run 41329880381.",
+      "rerunOnlyClosure": false,
+      "failedJobs": [
+        "test"
+      ],
+      "failedTests": [
+        "src/renderer/components/Config/ButlerTaskSettings.test.tsx > draft restore after reopening",
+        "src/renderer/components/Config/ButlerTaskSettings.test.tsx > output Git review",
+        "src/renderer/components/Config/ButlerTaskSettings.test.tsx > three-step wizard",
+        "src/renderer/components/Config/ButlerTaskSettings.test.tsx > create enabled task",
+        "src/renderer/components/Config/ButlerTaskSettings.test.tsx > recover after final review block"
+      ]
+    }
+  ]
+}

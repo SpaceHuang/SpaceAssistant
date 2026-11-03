@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection, getDbConnectionEpoch, reopenDatabaseConnection, type AppDatabase } from '../database/sqliteStore'
-import { appendMessagesAtomically, createPersistedTurn, createSession } from '../database/operations'
+import { appendMessagesAtomically, createPersistedTurn, createSession, getMessage, getPersistedTurn } from '../database/operations'
 import { createSessionExecutionStore } from './execution'
 import { createTurnCoordinatorStorage } from './coordinator'
 import { createTurnRuntimeForSessionExecution } from './execution'
@@ -53,6 +53,61 @@ const trustedTodo = {
 }
 
 describe('压缩换入后复用 store 跨 reopen（闭包连接现取化回归）', () => {
+  it('recovers older turns while excluding the newly accepted turn acquiring its first owner', () => {
+    const { db, cleanup } = createTempDatabase('target-recovery-preserves-live-turn-')
+    try {
+      const session = createSession(db, { name: 'live turn recovery fence', model: 'test' })
+      const execution = createSessionExecutionStore(db)
+      const runtime = createTurnRuntimeForSessionExecution(execution, { deps: { now: () => 1, id: (() => { let id = 0; return () => `live-turn-${++id}` })() } })
+      const orphan = runtime.prepare({ mode: 'create-user', requestId: 'old-orphan-request', sessionId: session.id,
+        input: { text: 'interrupted before the new turn' }, config: {} })
+      getDbConnection(db).prepare("UPDATE turns SET state='terminal',outcome='recovered' WHERE turn_id=?").run(orphan.turnId)
+      const started = runtime.prepare({ mode: 'create-user', requestId: 'live-turn-request', sessionId: session.id,
+        input: { text: 'send before first hosted owner claim' }, config: {} })
+      getDbConnection(db).prepare("UPDATE turns SET state='executing',outcome=NULL WHERE turn_id=?").run(orphan.turnId)
+      getDbConnection(db).prepare("UPDATE messages SET status='streaming' WHERE id=?").run(orphan.assistantMessage.id)
+
+      const recovery = execution.recoverExecutionTarget(session.id, started.turnId)
+
+      expect(recovery.status).toBe('ready')
+      expect(runtime.terminal(orphan.turnId)).toMatchObject({ outcome: 'recovered' })
+      expect(runtime.terminal(started.turnId)).toBeUndefined()
+      expect(getDbConnection(db).prepare('SELECT state,outcome FROM turns WHERE turn_id=?').get(orphan.turnId))
+        .toEqual({ state: 'terminal', outcome: 'recovered' })
+      expect(getDbConnection(db).prepare('SELECT state,outcome FROM turns WHERE turn_id=?').get(started.turnId))
+        .toEqual({ state: 'prepared', outcome: null })
+      expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(started.assistantMessage.id))
+        .toEqual({ status: 'streaming' })
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('recovers a persisted executing turn after restart even when its snapshot is restored in memory', () => {
+    const { db, cleanup } = createTempDatabase('target-recovery-stale-restored-turn-')
+    try {
+      const session = createSession(db, { name: 'stale restored turn', model: 'test' })
+      const execution = createSessionExecutionStore(db)
+      const originalRuntime = createTurnRuntimeForSessionExecution(execution, { deps: { now: () => 2, id: (() => { let id = 0; return () => `stale-restored-${++id}` })() } })
+      const started = originalRuntime.prepare({ mode: 'create-user', requestId: 'stale-restored-request', sessionId: session.id,
+        input: { text: 'accepted before process exit' }, config: {} })
+      getDbConnection(db).prepare("UPDATE turns SET state='executing' WHERE turn_id=?").run(started.turnId)
+      const restoredRuntime = createTurnRuntimeForSessionExecution(execution, { deps: { now: () => 3, id: () => 'restored-runtime-id' } })
+      restoredRuntime.coordinator.restoreTurn(getPersistedTurn(db, started.turnId)!, getMessage(db, started.assistantMessage.id)!)
+
+      const recovery = execution.recoverExecutionTarget(session.id)
+
+      expect(recovery.status).toBe('ready')
+      expect(restoredRuntime.terminal(started.turnId)).toMatchObject({ outcome: 'recovered' })
+      expect(getDbConnection(db).prepare('SELECT state,outcome FROM turns WHERE turn_id=?').get(started.turnId))
+        .toEqual({ state: 'terminal', outcome: 'recovered' })
+      expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(started.assistantMessage.id))
+        .toEqual({ status: 'failed' })
+    } finally {
+      cleanup()
+    }
+  })
+
   it('target recovery rebuilds committed tool results from History after a result checkpoint was omitted', async () => {
     const { db, cleanup } = createTempDatabase('target-tool-recovery-history-')
     try {

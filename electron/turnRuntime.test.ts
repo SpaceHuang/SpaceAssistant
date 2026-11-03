@@ -36,6 +36,40 @@ describe('TurnRuntime', () => {
     expect(runtime.getTurn(turn.turnId)?.assistantMessage.status).toBe('cancelled')
   })
 
+  it('持久化受理后立即发布运行态快照，且不伪造一条 assistant fact', () => {
+    const events: Array<{ version: number; type: string; status: string }> = []
+    const runtime = new TurnRuntime({
+      storage: storage(),
+      deps: { now: () => 1, id: () => 'accepted-turn' },
+      onEvent: (turn, event) => events.push({ version: turn.version, type: event.type, status: turn.assistantMessage.status })
+    })
+    const turn = runtime.prepare({ mode: 'create-user', requestId: 'accepted-request', sessionId: 's1', input: { text: 'hi' }, config: {} }, 'configuring')
+
+    runtime.publishStarted(turn)
+
+    expect(events).toEqual([{ version: 0, type: 'turn-started', status: 'streaming' }])
+    expect(runtime.getTurn(turn.turnId)?.version).toBe(0)
+  })
+
+  it('consumes sequence numbers for ignored finishing facts so late tool results remain attachable', async () => {
+    vi.useFakeTimers()
+    const runtime = new TurnRuntime({ storage: storage(), deps: { now: () => 1, id: () => 'turn' } })
+    const turn = runtime.prepare({ mode: 'create-user', requestId: 'req', sessionId: 's1', input: { text: 'hi' }, config: {} })
+    runtime.bindRequest('req', turn.turnId)
+    let done!: (value: { outcome: 'cancelled' }) => void
+    const execution = runtime.executeWithSource(turn.turnId, turn.startToken, () => new Promise((resolve) => { done = resolve }))
+    runtime.cancel(turn.turnId)
+    runtime.consumeForRequest('req', { type: 'tool-use', id: 'tool', toolName: 'read_file', input: {} })
+    runtime.consumeForRequest('req', { type: 'preview-commit' })
+    expect(() => runtime.consumeForRequest('req', { type: 'tool-result', id: 'tool', result: { success: true, data: 'OK' } })).not.toThrow()
+    expect(runtime.getTurn(turn.turnId)?.assistantMessage.toolCalls?.[0]).toMatchObject({
+      id: 'tool', status: 'completed', result: { success: true, data: 'OK' }
+    })
+    done({ outcome: 'cancelled' })
+    await execution
+    vi.useRealTimers()
+  })
+
   it.each([
     ['no-tools', [{ type: 'content-delta', text: 'answer' }, { type: 'source-completed' }]],
     ['tools', [

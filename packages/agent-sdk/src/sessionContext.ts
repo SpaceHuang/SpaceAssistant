@@ -407,8 +407,9 @@ function restoreOwnedSessionContextLinear(
       const payload = event.payload as { toolCallId?: unknown; approved?: unknown; answerer?: unknown }
       if (typeof payload.toolCallId === 'string' && payload.approved === true && payload.answerer === 'user') approvedToolCallIds.add(payload.toolCallId)
     } else if (event.kind === 'invocation-completed' || event.kind === 'invocation-parked' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted') {
-      const target = event.kind === 'invocation-completed' ? 'working' : event.kind === 'invocation-parked' ? 'park-baseline' : 'failure'
-      const payload = event.payload && typeof event.payload === 'object' ? event.payload as { contextSelection?: unknown; status?: unknown } : undefined
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload as { contextSelection?: unknown; status?: unknown; reason?: unknown } : undefined
+      const processRestart = event.kind === 'invocation-interrupted' && payload?.status === 'interrupted' && payload.reason === 'process-restart'
+      const target = event.kind === 'invocation-completed' || processRestart ? 'working' : event.kind === 'invocation-parked' ? 'park-baseline' : 'failure'
       if (payload?.contextSelection && typeof payload.contextSelection === 'object') {
         const terminalSelection = payload.contextSelection as { contextProtocol?: unknown; target?: unknown }
         if (terminalSelection.contextProtocol !== 2 || terminalSelection.target !== target) throw new Error('CONTEXT_TERMINAL_SELECTION_MISMATCH')
@@ -416,6 +417,26 @@ function restoreOwnedSessionContextLinear(
       const selectedSource = target === 'working' ? selection(working, working.length, [], workingFilterStart)
         : target === 'park-baseline' ? parkBaseline : failure
       const selected = materialize(selectedSource)
+      if (processRestart) {
+        const unknownResult = 'The previous run ended before its result was recorded. The operation may have started; inspect the current state, ask the user, or retry if appropriate.'
+        for (const call of pendingTools.values()) {
+          const group = toolGroups.get(call.id)
+          if (!group) continue
+          completedToolResults.set(call.id, deepFreeze({ role: 'tool', toolCallId: call.id, content: unknownResult, isError: true }))
+          while (group.cursor < group.callIds.length) {
+            const nextId = group.callIds[group.cursor]!
+            if (group.emitted.has(nextId)) { group.cursor += 1; continue }
+            const result = completedToolResults.get(nextId)
+            if (!result) break
+            working.push(result)
+            group.emitted.add(nextId)
+            pendingTools.delete(nextId)
+            completedToolResults.delete(nextId)
+            group.cursor += 1
+          }
+        }
+        selected.splice(0, selected.length, ...working.slice(0, selected.length), ...working.slice(selected.length))
+      }
       const selectedFilterStart = target === 'working' ? workingFilterStart
         : (target === 'park-baseline' ? parkBaseline : failure)?.filterStart ?? 0
       removeSystemMessagesFrom(selected, selectedFilterStart)

@@ -1894,12 +1894,14 @@ export async function grepFallbackJs(
   }
 
   try {
-    if (shouldStop()) return 'No matches found'
-    await scanText('', 1, true)
-    if (shouldStop()) return 'No matches found'
-    const st = await (deps.stat ? deps.stat(absSearch) : fs.stat(absSearch)).catch(() => null)
-    if (st?.isFile()) await scanFile(absSearch, false)
-    else await walk(absSearch)
+    if (!shouldStop()) {
+      await scanText('', 1, true)
+      if (!shouldStop()) {
+        const st = await (deps.stat ? deps.stat(absSearch) : fs.stat(absSearch)).catch(() => null)
+        if (st?.isFile()) await scanFile(absSearch, false)
+        else await walk(absSearch)
+      }
+    }
   } catch (error) {
     return `Error: ${toToolUserError(error, { toolName: 'grep' })}`
   } finally {

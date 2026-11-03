@@ -190,6 +190,8 @@ export async function routeSkills(args: {
   sessionId?: string
   signal?: AbortSignal
   wikiConfig?: WikiConfig
+  /** Turn preparation leaves semantic selection to the primary model's skill catalog. */
+  skipLlmRouting?: boolean
 }): Promise<SkillRouteResult> {
   const start = Date.now()
   const routingRequestId = crypto.randomUUID()
@@ -213,6 +215,7 @@ export async function routeSkills(args: {
   const scored = collectHardRuleSkills({ available, config, sessionState, sessionMetadata, userInput, wikiConfig })
 
   const shouldCallLlm =
+    !args.skipLlmRouting &&
     config.autoDetect &&
     routing.mode === 'llm' &&
     routing.enabled !== false &&

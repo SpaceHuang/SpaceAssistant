@@ -30,6 +30,7 @@ import { ensureLegacyLedgerReadiness } from './sessionLedgerReadiness'
 import { runApprovalAgent } from './confirmation/approvalAgent'
 import { PolicyAuthorizationChangeRegistry } from './runtime/policyAuthorizationChangeRegistry'
 import { readPolicyPackages, writePolicyPackages } from './confirmation/policyRulesRuntime'
+import { createAnthropicStreamHarness } from './testSupport/anthropicStreamHarness'
 import { appendCompactionTransaction, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from './sessionEvents'
 import { prepareToolConfirm, waitForToolConfirm } from './toolConfirmRegistry'
 import { MCP_CONFIG_KEYS } from './mcp/mcpConfigStore'
@@ -37,6 +38,8 @@ import { McpConnectionManager } from './mcp/mcpConnectionManager'
 import { registerMcpIpcHandlers } from './mcp/mcpIpc'
 import { capabilityRegistry } from './capabilities/registry'
 import { invalidateSkillsCache } from './skills/skillCache'
+import { scanSkills } from './skills/skillScanner'
+import { createSkillTurnScope } from './skills/skillTurnScope'
 import { isTruncatedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { getUsageStepFactsForTurn, getUsageTurnFact, updateSession } from './database/operations'
@@ -74,10 +77,7 @@ function expectLifecycleTerminal(events: readonly { kind: string; payload: unkno
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
-const summaryStub = vi.hoisted(() => ({ enabled: false, call: vi.fn() }))
-vi.mock('./anthropicClientFactory', () => ({
-  createAnthropicClient: () => ({ messages: { create: (...args: unknown[]) => summaryStub.call(...args) } })
-}))
+const summaryStub = vi.hoisted(() => ({ call: vi.fn() }))
 vi.mock('electron', () => ({
   app: { getLocale: vi.fn(() => 'en-US') },
   safeStorage: { isEncryptionAvailable: vi.fn(() => true), decryptString: vi.fn((value: Buffer) => value.toString()) },
@@ -190,6 +190,10 @@ function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
 }
 
+function createHostedSkillScope(workDir: string) {
+  return createSkillTurnScope({ catalogSkills: scanSkills(hostedTestUserDataDir, workDir), preloadedSkills: [], maxConcurrent: 8 })
+}
+
 function seedTrustedModel(db: AppDatabase, modelId: string): void {
     setConfigValue(db, 'config.models', JSON.stringify([
     { id: modelId, name: modelId, maximumContext: MODEL_BASELINE[modelId]!.maximumContext, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, isDefault: false, isFast: false, isVision: false, enabled: true }
@@ -206,11 +210,20 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
   let runtime: ReturnType<typeof createAgentRuntime>
   let providerCalls: number
   let workDir: string
+  let summaryHarness: ReturnType<typeof createAnthropicStreamHarness>
 
   beforeEach(() => {
     vi.clearAllMocks()
-    summaryStub.enabled = true
     summaryStub.call.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({ task: 'Continue task', completed: 'Reviewed history', decisions: 'Keep constraints', constraints: 'Preserve required messages', pending: 'Continue work', blockers: 'None', nextStep: 'Proceed' }) }] })
+    summaryHarness = createAnthropicStreamHarness()
+    summaryHarness.setFallback({ kind: 'handler', respond: async (request) => {
+      const summary = await summaryStub.call(JSON.parse(request.body ?? '{}'), { signal: request.signal ?? undefined })
+      return new Response(JSON.stringify({
+        id: 'msg_summary', type: 'message', role: 'assistant', model: 'claude-test', content: summary.content,
+        stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    } })
+    vi.stubGlobal('fetch', summaryHarness.fetch)
     vi.mocked(waitForToolConfirm).mockReset().mockResolvedValue('approved' as never)
     vi.mocked(runApprovalAgent).mockReset().mockResolvedValue({
       ok: true,
@@ -235,6 +248,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     db.close()
     if (workDir) await fs.rm(workDir, { recursive: true, force: true })
     resetDefaultAgentRuntimeForTests()
+    vi.unstubAllGlobals()
   })
 
   it('uses a positive Hosted checkpoint at the next real provider request', async () => {
@@ -649,7 +663,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     failNextSessionEventType = 'turn_end'
     const result = await execute(makeSender(), {
       requestId: 'hosted-request', turnId: 'hosted-turn', turnStartToken: 'hosted-start-token', sessionId: session.id
-    })
+    }, createHostedSkillScope(workDir))
 
     expect(result, JSON.stringify(result)).toMatchObject({
       ok: true, eventPersistenceFailed: true, eventPersistenceErrors: [expect.objectContaining({ code: 'EVENT_PERSISTENCE_FAILED' })],
@@ -1676,7 +1690,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     }
   })
 
-  it.each(['skills.read', 'history.read', 'toolkit.find'] as const)('rejects a Desktop Hosted %s result when its snapshot changes before recheck', async (toolName) => {
+  it.each(['skills.read', 'history.read', 'toolkit.find'] as const)('revalidates a Desktop Hosted %s result after its source changes', async (toolName) => {
     workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-hosted-skills-drift-'))
     const skillPath = path.join(workDir, '.space-skills', 'hosted-drift', 'SKILL.md')
     await fs.mkdir(path.dirname(skillPath), { recursive: true })
@@ -1717,16 +1731,18 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
+    const providerRequests: readonly unknown[][] = []
     runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
-      providerId: 'pi-ai-anthropic-messages', stream: async function* () {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* (input) {
         providerCalls += 1
+        providerRequests.push(input.request.messages)
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId, toolName: toolName.replace('.', '_'), input: toolName === 'skills.read' ? { name: 'hosted-drift' } : { query: toolName === 'toolkit.find' ? 'env.agent' : 'Read hosted-drift' } } as const
           yield { type: 'usage', inputTokens: 3, outputTokens: 2 } as const
           yield { type: 'finish', reason: 'tool-calls' } as const
           return
         }
-        yield { type: 'text-delta', text: 'Skill 内容已变化，未读取旧快照。' } as const
+        yield { type: 'text-delta', text: '已完成。' } as const
         yield { type: 'usage', inputTokens: 3, outputTokens: 2 } as const
         yield { type: 'finish', reason: 'stop' } as const
       }
@@ -1750,17 +1766,24 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     try {
-      await expect(execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })).resolves.toMatchObject({ ok: true })
+      await expect(execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id }, createHostedSkillScope(workDir))).resolves.toMatchObject({ ok: true })
       expect(changedAfterInitialPlan).toBe(true)
       expect(providerCalls).toBe(2)
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
-      expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId, reason: toolName === 'history.read' ? 'SNAPSHOT_READ_CONTEXT_CHANGED' : 'SNAPSHOT_READ_RESULT_CHANGED'
-      })
-      expect(history.events.some((event) => event.kind === 'tool-call-started' && event.payload.toolCallId === toolCallId)).toBe(false)
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
+      if (toolName === 'skills.read') {
+        expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId && event.payload.success === true)).toBe(true)
+        expect(JSON.stringify(providerRequests[1])).toContain('Original secret body.')
+        expect(JSON.stringify(providerRequests[1])).not.toContain('Replacement secret body.')
+      } else {
+        expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
+          toolCallId, reason: toolName === 'history.read' ? 'SNAPSHOT_READ_CONTEXT_CHANGED' : 'SNAPSHOT_READ_RESULT_CHANGED'
+        })
+        expect(history.events.some((event) => event.kind === 'tool-call-started' && event.payload.toolCallId === toolCallId)).toBe(false)
+        expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
+      }
       expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-completed' })
-      expect(JSON.stringify(history.events)).not.toContain('Original secret body.')
+      if (toolName === 'skills.read') expect(JSON.stringify(history.events)).toContain('Original secret body.')
+      else expect(JSON.stringify(history.events)).not.toContain('Original secret body.')
       expect(JSON.stringify(history.events)).not.toContain('Replacement secret body.')
       expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolCallId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
     } finally {
@@ -1841,7 +1864,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
     let invalidationSent = false
     try {
-      const runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
+      const runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id }, createHostedSkillScope(workDir))
       const dispatchSignal = await Promise.race([
         executeEntered,
         runningTurn.then((result) => { throw new Error(`Hosted snapshot turn ended before RegisteredTool execute: ${JSON.stringify(result)}`) })

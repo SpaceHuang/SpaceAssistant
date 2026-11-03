@@ -1302,28 +1302,38 @@ app.whenReady().then(async () => {
     })
   })
 
-  const executeTurn = async (sender: Electron.WebContents | null, payload: ClaudeChatCreateWithToolsPayload) => {
+  const executeTurn = async (
+    sender: Electron.WebContents | null,
+    payload: ClaudeChatCreateWithToolsPayload,
+    skillTurnScope?: import('./skills/skillTurnScope').SkillTurnScope
+  ) => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
     const { turnId, turnStartToken, requestId } = payload
     const targetTurn = turnRuntime.getTurn(turnId)
     if (!targetTurn) throw new Error('UNKNOWN_TURN')
     turnRuntime.bindRequest(requestId, turnId)
-    return runWithPersistedTurnTerminalNotification(sessionStorage.execution, targetTurn, () => turnRuntime.executeWithSource(turnId, turnStartToken, async (_turn) => {
-      const result = await executeClaudeRequest(sender, payload) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
-      if (result.ok) {
-        turnRuntime.consumeForRequest(requestId, { type: 'source-completed' }, turnId)
-        return { outcome: 'completed' as const, usage: result.usage }
-      }
-      if (result.outcome === 'commit-uncertain') {
-        turnRuntime.consumeForRequest(requestId, { type: 'source-uncertain', message: result.error }, turnId)
-        return {
-          outcome: 'commit-uncertain' as const,
-          error: { code: 'SESSION_TRANSCRIPT_COMMIT_UNCERTAIN', message: result.error ?? 'Session transcript commit is uncertain' }
+    let executionClaimed = false
+    try {
+      return await runWithPersistedTurnTerminalNotification(sessionStorage.execution, targetTurn, () => turnRuntime.executeWithSource(turnId, turnStartToken, async (_turn) => {
+        executionClaimed = true
+        const result = await executeClaudeRequest(sender, { ...payload, ...(skillTurnScope ? { skillTurnScope } : {}) }) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
+        if (result.ok) {
+          turnRuntime.consumeForRequest(requestId, { type: 'source-completed' }, turnId)
+          return { outcome: 'completed' as const, usage: result.usage }
         }
-      }
-      turnRuntime.consumeForRequest(requestId, { type: 'source-failed', message: result.error }, turnId)
-      return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
-    }))
+        if (result.outcome === 'commit-uncertain') {
+          turnRuntime.consumeForRequest(requestId, { type: 'source-uncertain', message: result.error }, turnId)
+          return {
+            outcome: 'commit-uncertain' as const,
+            error: { code: 'SESSION_TRANSCRIPT_COMMIT_UNCERTAIN', message: result.error ?? 'Session transcript commit is uncertain' }
+          }
+        }
+        turnRuntime.consumeForRequest(requestId, { type: 'source-failed', message: result.error }, turnId)
+        return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
+      }))
+    } finally {
+      if (executionClaimed) skillTurnScope?.close()
+    }
   }
 
   storageProfileCoordinator = registerAppIpcHandlers(ipcMain, {

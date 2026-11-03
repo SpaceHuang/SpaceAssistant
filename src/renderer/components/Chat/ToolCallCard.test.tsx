@@ -462,6 +462,27 @@ describe('ToolCallCard run_shell output display', () => {
     expect(screen.queryByText('命令执行失败（退出码: 1）')).toBeNull()
   })
 
+  it('shows the command for an interrupted run_shell whose result is unknown', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('failed', {
+          input: { command: 'sleep 60' },
+          interrupted: true,
+          result: {
+            success: false,
+            error: 'The tool may have executed, but its result could not be confirmed.',
+            executionOutcome: 'unknown-after-dispatch'
+          }
+        })}
+        {...plainShellCardProps}
+      />
+    )
+    expect(screen.getByText('sleep 60', { selector: '.tool-row__label' })).toBeDefined()
+    expect(screen.getByText('已中止')).toBeDefined()
+    expect(document.querySelector('.tool-row-detail__inner pre')).toBeNull()
+    expect(screen.queryByText(/justification|timeout/)).toBeNull()
+  })
+
   it('keeps read-only shell command collapsed by default when completed', () => {
     render(
       <ToolCallCard

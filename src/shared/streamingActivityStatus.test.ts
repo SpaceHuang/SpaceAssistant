@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Message } from './domainTypes'
+import { assistantMessage } from '../test/factories/message'
 import { formatStreamingElapsed, resolveStreamingActivityStatus } from './streamingActivityStatus'
 
 const t = (key: string, options?: Record<string, unknown>) => {
@@ -10,19 +10,6 @@ const t = (key: string, options?: Record<string, unknown>) => {
     'streaming.awaitingConfirm': `等待确认：${options?.action ?? ''}`
   }
   return map[key] ?? key
-}
-
-function assistantMessage(partial: Partial<Message>): Message {
-  return {
-    id: 'm1',
-    sessionId: 's1',
-    role: 'assistant',
-    content: '',
-    timestamp: 1_000_000,
-    status: 'streaming',
-    schemaVersion: 1,
-    ...partial
-  }
 }
 
 describe('formatStreamingElapsed', () => {

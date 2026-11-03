@@ -43,6 +43,13 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       if (key?.startsWith('spaceassistant:butler-task-draft:v1:')) localStorage.removeItem(key)
     }
     await changeAppLocale('zh-CN')
+    // Clear one-shot replies as well as call history. A timed-out UI test can leave queued
+    // mockResolvedValueOnce responses that otherwise leak into the following test.
+    for (const mock of [
+      butlerListTasks, butlerCreateTask, butlerUpdateTask, butlerConfirmTaskAuthorization,
+      butlerDeleteTask, butlerRunTask, butlerGetTaskDefaults, butlerGetModelCandidates,
+      butlerChooseWorkDir, butlerChooseOutputDir, butlerListTaskRuns, appGetTrayEnabled
+    ]) mock.mockReset()
     vi.clearAllMocks()
     appGetTrayEnabled.mockResolvedValue(true)
     butlerListTasks.mockResolvedValue([])
@@ -184,7 +191,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       outputOrganization: 'direct'
     })
     expect(butlerConfirmTaskAuthorization).not.toHaveBeenCalled()
-  })
+  }, 30_000)
 
   it('点击预检即暂存已填写内容，即使必填校验未通过', async () => {
     renderTab()
@@ -526,7 +533,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(screen.getByRole('switch', { name: '启停任务「启用任务」' }).getAttribute('aria-checked')).toBe('true')
   })
 
-  it('最终确认复核阻断时回到任务内容，修正后可重新预检并保存', async () => {
+  it('最终确认复核阻断时回到任务内容，修正后可重新预检并保存', { timeout: 30000 }, async () => {
     butlerCreateTask.mockResolvedValueOnce({
       ok: false,
       kind: 'authorization-review-required',

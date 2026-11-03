@@ -153,6 +153,95 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
       dirs.cleanup()
     }
   })
+
+  it('默认 turn 准备只快照可用目录和硬规则，不调用路由模型', async () => {
+    const dirs = makeTempDirs()
+    try {
+      createUserSkill(dirs.userDataPath, 'allowed-helper', 'allowed helper')
+      createUserSkill(dirs.userDataPath, 'blocked-helper', 'blocked helper')
+      const config = { ...DEFAULT_SKILLS_CONFIG, disabled: ['blocked-helper'], alwaysLoad: ['allowed-helper'] }
+      const manager = createSkillManager({
+        getUserDataPath: () => dirs.userDataPath,
+        getWorkDir: () => dirs.workDir,
+        getSkillsConfig: () => config,
+        getWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG })
+      })
+
+      const prepared = await manager.prepareTurn({ userInput: 'ordinary question', sessionState: emptyState })
+
+      expect(createClientMock).not.toHaveBeenCalled()
+      expect(prepared.skills.map((skill) => skill.meta.name)).toContain('allowed-helper')
+      expect(prepared.meta.sources['allowed-helper']).toBe('alwaysLoad')
+      expect(prepared.catalogSkills.map((skill) => skill.meta.name)).toContain('allowed-helper')
+      expect(prepared.catalogSkills.map((skill) => skill.meta.name)).not.toContain('blocked-helper')
+      expect(prepared.scope.committedNames).toContain('allowed-helper')
+      prepared.scope.close()
+    } finally {
+      dirs.cleanup()
+    }
+  })
+
+  it('默认自动目录排除恢复专用技能，猜名读取也不授权', async () => {
+    const dirs = makeTempDirs()
+    try {
+      createUserSkill(dirs.userDataPath, 'browser-setup-guide', 'browser recovery')
+      createUserSkill(dirs.userDataPath, 'shell-setup-guide', 'shell recovery')
+      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG })
+
+      const prepared = await manager.prepareTurn({ userInput: '普通问题', sessionState: emptyState })
+
+      expect(prepared.catalogSkills.map((skill) => skill.meta.name)).not.toEqual(expect.arrayContaining([
+        'browser-setup-guide', 'shell-setup-guide'
+      ]))
+      expect(() => prepared.scope.planRead('browser-setup-guide', 1000)).toThrow('SKILL_NOT_AUTHORIZED')
+      expect(() => prepared.scope.planRead('shell-setup-guide', 1000)).toThrow('SKILL_NOT_AUTHORIZED')
+      prepared.scope.close()
+    } finally {
+      dirs.cleanup()
+    }
+  })
+
+  it('禁用自动发现时仍预加载手动 skill，但不给目录或 skills.read 授权', async () => {
+    const dirs = makeTempDirs()
+    try {
+      createUserSkill(dirs.userDataPath, 'manual-helper', 'manual helper')
+      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG }, { autoDetect: false })
+      const prepared = await manager.prepareTurn({
+        userInput: 'ordinary question', sessionState: { manualActivated: ['manual-helper'], manualDisabled: [] }
+      })
+
+      expect(prepared.skills.map((skill) => skill.meta.name)).toEqual(['manual-helper'])
+      expect(prepared.catalogSkills).toEqual([])
+      expect(() => prepared.scope.planRead('manual-helper', 1000)).toThrow('SKILL_NOT_AUTHORIZED')
+      prepared.scope.close()
+    } finally {
+      dirs.cleanup()
+    }
+  })
+
+  it('legacy 模式保留本地匹配，并且不把未匹配 Skill 暴露到目录读取', async () => {
+    const dirs = makeTempDirs()
+    try {
+      createUserSkill(dirs.userDataPath, 'legacy-helper', 'legacy helper')
+      createUserSkill(dirs.userDataPath, 'unmatched-helper', 'unmatched helper')
+      const legacyPath = path.join(getUserSkillsDir(dirs.userDataPath), 'legacy-helper', 'SKILL.md')
+      fs.writeFileSync(legacyPath, `---\nname: legacy-helper\ndescription: legacy helper\nversion: "1.0.0"\nauthor: test\ntriggers:\n  - sorting task\n---\nLegacy body\n`)
+      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG }, {
+        routing: { ...DEFAULT_SKILLS_CONFIG.routing, mode: 'legacy' }
+      })
+
+      const prepared = await manager.prepareTurn({ userInput: 'please handle this sorting task', sessionState: emptyState })
+
+      expect(createClientMock).not.toHaveBeenCalled()
+      expect(prepared.skills.map((skill) => skill.meta.name)).toEqual(['legacy-helper'])
+      expect(prepared.meta.sources['legacy-helper']).toBe('legacy')
+      expect(prepared.catalogSkills).toEqual([])
+      expect(() => prepared.scope.planRead('unmatched-helper', 1000)).toThrow('SKILL_NOT_AUTHORIZED')
+      prepared.scope.close()
+    } finally {
+      dirs.cleanup()
+    }
+  })
 })
 
 describe('skillManager.match wiki 过滤（既有契约）', () => {

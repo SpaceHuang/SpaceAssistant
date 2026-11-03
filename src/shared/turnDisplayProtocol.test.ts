@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildAssistantActivityTimeline } from './assistantActivityTimeline'
-import { toTurnDisplay, turnDisplayToMessage, truncateUtf8, MAX_BOUNDED_DISPLAY_META_BYTES, MAX_PREVIEW_BYTES, toConfirmationSnapshot, measureTurnDisplayBytes } from './turnDisplayProtocol'
+import { toTurnDisplay, turnDisplayToMessage, turnToDisplay, truncateUtf8, MAX_BOUNDED_DISPLAY_META_BYTES, MAX_PREVIEW_BYTES, toConfirmationSnapshot, measureTurnDisplayBytes } from './turnDisplayProtocol'
 
 const baseMessage = {
   id: 'm1', sessionId: 's1', role: 'assistant' as const, timestamp: 1,
@@ -12,6 +12,16 @@ const baseMessage = {
 }
 
 describe('turn display protocol', () => {
+  it('取消终态使用终态 display 生命周期以触发持久化消息接管', () => {
+    const display = turnToDisplay({
+      turnId: 'cancelled-turn', requestId: 'cancelled-request', version: 2, outcome: 'cancelled',
+      assistantMessage: { ...baseMessage, status: 'cancelled' }
+    })
+
+    expect(display.lifecycle).toBe('failed')
+    expect(display.outcome).toBe('cancelled')
+  })
+
   it('保留主进程 activity 排序，并将正文转换为 UTF-16 半开区间', () => {
     const display = toTurnDisplay({ turnId: 't1', requestId: 'r1', version: 3, lifecycle: 'running', message: baseMessage })
     expect(display.message.activity).toEqual(buildAssistantActivityTimeline(baseMessage).map((item) => {

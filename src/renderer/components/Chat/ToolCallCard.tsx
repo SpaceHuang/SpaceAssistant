@@ -441,6 +441,7 @@ export const ToolCallCard = memo(function ToolCallCard({
 
   const paramPreview = useMemo(() => {
     if (!showDetail) return ''
+    if (record.toolName === 'run_shell' && typeof record.input.command === 'string') return record.input.command
     try {
       // toolkit.call 详情展开与确认卡同口径：凭据类入参只出存在性布尔（v2 评审 R1）
       const isToolkit = record.toolName === 'toolkit.call' || record.toolName === 'toolkit_call'
@@ -684,6 +685,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         'tool-row',
         isPending ? 'tool-row--pending' : '',
         isFailed ? 'tool-row--failed' : '',
+        record.interrupted ? 'tool-row--interrupted' : '',
         hasDetail ? 'tool-row--clickable' : '',
         showDetail ? 'tool-row--expanded' : ''
       ]
@@ -713,6 +715,9 @@ export const ToolCallCard = memo(function ToolCallCard({
         >
           {label}
         </span>
+        {!mcp && record.interrupted ? (
+          <span className="tool-row__status tool-row__status--interrupted">{t('tool.interrupted')}</span>
+        ) : null}
         {mcp ? (
           <span className={`tool-row__status tool-row__status--${record.status}`} data-testid="mcp-status">
             {t(getMcpStatusTranslationKey(record.status, record.interrupted))}
@@ -799,7 +804,8 @@ export const ToolCallCard = memo(function ToolCallCard({
             <span className="tool-row-detail__message">
               {record.result?.executionOutcome === 'unknown-after-dispatch'
                 ? <>{t('tool.unknownAfterDispatch')}{record.result.executionErrorCode ? ` (${record.result.executionErrorCode})` : ''}</>
-                : record.result?.userMessage ?? record.result?.error ?? (record.status === 'rejected' ? t('tool.rejected') : t('tool.failed'))}
+                : record.interrupted ? t('tool.interrupted')
+                  : record.result?.userMessage ?? record.result?.error ?? (record.status === 'rejected' ? t('tool.rejected') : t('tool.failed'))}
             </span>
           ) : null}
           {mcp && record.status === 'failed' ? (
@@ -879,12 +885,8 @@ export const ToolCallCard = memo(function ToolCallCard({
             </pre>
           ) : null}
 
-          {!mcp && ((record.status === 'completed' &&
-            !resultStr &&
-            !fileTool &&
-            !showShellCompletedOutput &&
-            record.toolName !== 'run_script' &&
-            Object.keys(record.input).length > 0) ||
+          {!mcp && record.toolName !== 'run_shell' && ((showDetail && Object.keys(record.input).length > 0 &&
+            (record.status !== 'completed' || (!resultStr && !fileTool && !showShellCompletedOutput && record.toolName !== 'run_script'))) ||
           showSearchInput) ? (
             <pre
               className="sa-chat-inset-code sa-command-inset"

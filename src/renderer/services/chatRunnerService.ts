@@ -14,6 +14,7 @@ import {
   routePatchApiContextMessage
 } from './apiContextService'
 import { removeContextSummaryMessage, summarizeContextMessage, upsertContextSummaryOverride } from './contextHistorySummaryService'
+import { turnDisplayStore } from './turnDisplayStore'
 
 /** @deprecated 使用 getMaxParallelChatSessions()；保留常量供测试/默认值引用 */
 export const MAX_PARALLEL_CHAT_SESSIONS = DEFAULT_MAX_PARALLEL_CHAT_SESSIONS
@@ -140,12 +141,36 @@ function findRunningAssistantMessage(sessionId: string): Message | undefined {
   return liveAssistant ?? storedAssistant
 }
 
-function settleAbortedAssistantMessage(sessionId: string, assistant: Message | undefined): void {
+function toolCallsFromTurnDisplay(display: ReturnType<typeof turnDisplayStore.get>): NonNullable<Message['toolCalls']> | undefined {
+  if (!display) return undefined
+  return display.message.toolCalls.map((tool) => {
+    let input: Record<string, unknown> = {}
+    try {
+      const parsed = tool.display.inputPreview ? JSON.parse(tool.display.inputPreview) : undefined
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) input = parsed as Record<string, unknown>
+    } catch { /* summary may be truncated; keep the available preview fallback */ }
+    const active = tool.status === 'calling' || tool.status === 'confirming' || tool.status === 'executing'
+    return {
+      id: tool.id, toolName: tool.toolName, input, riskLevel: tool.display.confirmRisk,
+      status: active ? 'failed' as const : tool.status,
+      ...(active ? { interrupted: true } : {}),
+      ...(tool.display.progressPreview ? { progressOutput: tool.display.progressPreview } : {}),
+      ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}),
+      ...(tool.completedAt !== undefined ? { completedAt: tool.completedAt } : {}),
+      ...(tool.duration !== undefined ? { duration: tool.duration } : {})
+    }
+  })
+}
+
+function settleAbortedAssistantMessage(sessionId: string, assistant: Message | undefined, display?: ReturnType<typeof turnDisplayStore.get>): void {
   if (!assistant) return
+  const displayToolCalls = toolCallsFromTurnDisplay(display)
   routePatchMessage(sessionId, assistant.id, {
     status: 'cancelled',
-    ...(assistant.toolCalls
-      ? { toolCalls: assistant.toolCalls.map((tool) => tool.status === 'confirming' ? { ...tool, status: 'failed' as const } : tool) }
+    ...(assistant.toolCalls?.length || displayToolCalls?.length
+      ? { toolCalls: assistant.toolCalls?.length
+        ? assistant.toolCalls.map((tool) => tool.status === 'confirming' || tool.status === 'executing' || tool.status === 'calling' ? { ...tool, status: 'failed' as const, interrupted: true } : tool)
+        : displayToolCalls }
       : {})
   })
 }
@@ -175,6 +200,20 @@ export function finishSessionRun(sessionId: string, requestId: string, assistant
 export async function abortSessionRun(sessionId: string): Promise<boolean> {
   const meta = store.getState().chat.runningSessions[sessionId]
   const activeAssistant = meta ? findRunningAssistantMessage(sessionId) : undefined
+  const turnDisplay = meta?.turnId ? turnDisplayStore.get(meta.turnId) : undefined
+  const projectedToolCalls = toolCallsFromTurnDisplay(turnDisplay)
+  if (activeAssistant && projectedToolCalls?.length) {
+    const projectedById = new Map(projectedToolCalls.map((tool) => [tool.id, tool]))
+    const merged = (activeAssistant.toolCalls ?? []).map((tool) => {
+      const projected = projectedById.get(tool.id)
+      if (!projected) return tool
+      projectedById.delete(tool.id)
+      return { ...tool, ...projected }
+    })
+    merged.push(...projectedById.values())
+    // Preserve the last activity snapshot in Redux before clearing run ownership/live state.
+    routePatchMessage(sessionId, activeAssistant.id, { toolCalls: merged })
+  }
   const cancelPromise = meta?.turnId
     ? Promise.resolve(window.api.chatCancelTurn(meta.turnId)).catch(() => false)
     : Promise.resolve(false)
@@ -184,6 +223,16 @@ export async function abortSessionRun(sessionId: string): Promise<boolean> {
   clearLiveSession(sessionId)
   store.dispatch(removeRunningSession(sessionId))
   const accepted = meta ? await cancelPromise : false
-  if (accepted) settleAbortedAssistantMessage(sessionId, activeAssistant)
+  if (accepted && activeAssistant) {
+    // The terminal projection may overtake the cancel IPC acknowledgement. Re-read the owned
+    // assistant after the await and let any terminal checkpoint win over this stale snapshot.
+    const currentAssistant = store.getState().chat.messages.find((message) =>
+      message.sessionId === sessionId && message.id === activeAssistant.id
+    )
+    if (currentAssistant?.status === 'streaming') {
+      const currentDisplay = meta?.turnId ? turnDisplayStore.get(meta.turnId) : turnDisplay
+      settleAbortedAssistantMessage(sessionId, currentAssistant, currentDisplay)
+    }
+  }
   return accepted
 }

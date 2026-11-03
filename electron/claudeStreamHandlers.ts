@@ -132,6 +132,8 @@ export type ClaudeChatCreateWithToolsPayload = {
   }
   projectMemoryEnabled?: boolean
   locale?: string
+  /** Per-turn Skill snapshot transferred only in memory by the agent protocol. */
+  skillTurnScope?: import('./skills/skillTurnScope').SkillTurnScope
 }
 
 function assertValidClaudeContentBlocks(
@@ -257,7 +259,8 @@ export function normalizeAndValidateClaudeMessagesWithContentBlocks(
 export type ClaudeTurnExecution = (
   /** 排水器等主进程内部驱动源没有 IPC sender；事实事件全走 emitFactEvent/emitSessionEvent 出口 */
   sender: WebContents | null,
-  payload: ClaudeChatCreateWithToolsPayload
+  payload: ClaudeChatCreateWithToolsPayload,
+  skillTurnScope?: import('./skills/skillTurnScope').SkillTurnScope
 ) => Promise<unknown>
 
 type EventPersistenceFailure = {
@@ -309,7 +312,8 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
   const sessionStorage: SessionStorage = injectedStorage
   const pendingCompactionCards = new Map<string, import('../src/shared/domainTypes').SystemOperationRecord>()
   const pendingCompactionSummaries = new Map<string, { key: string; summary: SessionContextSummary }>()
-  const executeClaudeRequest: ClaudeTurnExecution = async (_sender, payload) => {
+  const executeClaudeRequest: ClaudeTurnExecution = async (_sender, payload, skillTurnScope) => {
+      if (skillTurnScope && !payload.skillTurnScope) payload = { ...payload, skillTurnScope }
       let requestId = ''
       let eventWriter: SessionEventSink | undefined
       let eventTurnId = ''
@@ -583,6 +587,8 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           locale: typeof localeCandidate === 'string' && isAppLocale(localeCandidate) ? localeCandidate : undefined,
           projectMemoryEnabled: frozen.projectMemoryEnabled,
           skillFragments: frozen.skillFragments,
+          ...(payload.skillTurnScope ? { skillTurnScope: payload.skillTurnScope } : {}),
+          skillTurnScope: payload.skillTurnScope,
           options: { maxTokens: frozen.maxTokens, enableThinking: frozen.enableThinking },
           // §7.2：主链路显式传档位（优先于 options.enableThinking 兼容映射；旧 turn 记录无该字段时回退）。
           // 评审 B1：能力降级时传降级前档位，装配层照旧落 reasoning_degraded 审计（冻结档位仍是 off）
@@ -940,6 +946,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             : {})
         }
       } finally {
+        payload.skillTurnScope?.close()
         const refreshSessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
         try {
           // P0-③: turn-terminal checkpoints stay on the cheap fast path; anything else

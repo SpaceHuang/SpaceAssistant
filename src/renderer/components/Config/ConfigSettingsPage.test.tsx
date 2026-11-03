@@ -148,6 +148,24 @@ describe('ConfigSettingsPage 优选默认模型', () => {
     expect(calls[calls.length - 1]![0]).toMatchObject({ contextCompactionTriggerRatio: 0.81 })
   })
 
+  it('在非模型页签保存时保留自动压缩阈值', async () => {
+    store.dispatch(setSettingsActiveTab('general'))
+    renderPage()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+
+    fireEvent.click(screen.getByRole('button', { name: '添加目录' }))
+    fireEvent.change(screen.getByLabelText('工作目录路径'), { target: { value: 'C:\\Second-Work' } })
+    fireEvent.change(screen.getByLabelText('工作目录名称'), { target: { value: '第二工作目录' } })
+    fireEvent.click(screen.getAllByRole('button', { name: '添加目录' })[1]!)
+    const saveBtn = screen.getByRole('button', { name: '保存并返回' })
+    await waitFor(() => expect(saveBtn.disabled).toBe(false))
+    fireEvent.click(saveBtn)
+
+    await waitFor(() => expect(configSet).toHaveBeenCalled())
+    const calls = configSet.mock.calls as unknown as Array<[Record<string, unknown>]>
+    expect(calls[calls.length - 1]![0].contextCompactionTriggerRatio).toBe(0.8)
+  })
+
   it('「语言模型 → 默认」可改选快速模型并保存生效', async () => {
     const { container } = renderPage()
     const saveBtn = screen.getByRole('button', { name: '保存并返回' })

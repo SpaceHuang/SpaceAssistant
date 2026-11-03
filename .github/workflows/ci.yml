@@ -8,6 +8,7 @@ on:
 
 jobs:
   test:
+    name: CI / Full tests (macOS)
     runs-on: macos-latest
     # Full Vitest suite takes about 18 minutes on CI; leave room for macOS runner variance.
     timeout-minutes: 30
@@ -25,6 +26,16 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
+      - name: Initialize Electron binary before test workers
+        run: node scripts/initialize-electron-ci.mjs
+      - name: Check required CI coverage
+        run: npm run check:ci-required-coverage
+      - name: Test required CI coverage checker
+        run: node --test scripts/check-ci-required-coverage.test.mjs scripts/check-ci-required-results.test.mjs scripts/summarize-vitest-report.test.mjs scripts/ci-failure-review.test.mjs
+      - name: Test local pre-push and critical-flow harnesses
+        run: node --test scripts/check-pre-push.test.cjs scripts/pre-push-hook.integration.test.cjs scripts/critical-user-flow-environment.test.cjs scripts/run-critical-user-flows.test.cjs scripts/verify-critical-user-flow-faults.test.cjs scripts/wait-for-critical-flow-assistant.test.cjs scripts/wait-for-critical-flow-confirmation.test.cjs
+      - name: Summarize recorded CI failure reviews
+        run: npm run check:ci-failure-review
       - run: npm run i18n:generate-types
       - run: npm run i18n:check
       - run: npm run typecheck:shared
@@ -35,12 +46,87 @@ jobs:
       - run: npm run typecheck:agent-sdk
       # SDK 包边界和生产依赖闭包护栏。
       - run: npm run check:agent-sdk
-      - run: npm run build:electron
+      - name: Build app and verify six critical user flows
+        run: npm run verify:critical-user-flows
       # SDK turn 与 Hosted Host 生命周期回归，不启动 Electron UI。
       - run: npm exec vitest run packages/agent-sdk/test/agentCore.test.ts packages/agent-sdk/test/turn.test.ts electron/runtime/hostedAgentTurnHost.test.ts
-      - run: npm test
-  golden-windows:
-    name: Script/Shell golden baselines (windows)
+      - name: Prepare Vitest report directory
+        run: mkdir -p .ci
+      - name: Run full Vitest suite
+        run: npm test -- --reporter=dot --reporter=json --outputFile=.ci/vitest-report.json
+      - name: Summarize Vitest failures
+        if: always()
+        env:
+          CI_PLATFORM: macOS ${{ runner.arch }}
+          ACTIONS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/summarize-vitest-report.mjs
+      - name: Upload sanitized Vitest report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: vitest-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci/vitest-summary.json
+          retention-days: 14
+          if-no-files-found: error
+  storage-perf:
+    name: CI / Storage performance (observation)
+    runs-on: macos-latest
+    # Keep this observational while collecting five runs for R-03; review results before changing ci-required.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Test sanitized storage performance summarizer
+        run: node --test scripts/summarize-storage-perf-report.test.mjs
+      - run: npm run build:agent-provider-pi-ai
+      - name: Prepare storage performance report directory
+        run: mkdir -p .ci
+      - name: Measure storage performance budgets
+        # Keep budget violations visible in the report without marking the observation job as failed.
+        continue-on-error: true
+        run: npm run test:storage-perf -- --reporter=json --outputFile=.ci/storage-perf-report.json
+      - name: Summarize selected storage performance results
+        if: always()
+        run: node scripts/summarize-storage-perf-report.mjs
+      - name: Upload sanitized storage performance summary
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: storage-perf-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci/storage-perf-summary.json
+          retention-days: 14
+          if-no-files-found: error
+  chat_business_probe:
+    name: CI / Chat business IPC probe (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS
+            runner: macos-latest
+          - label: Windows
+            runner: windows-latest
+    env:
+      SPACEASSISTANT_IPC_SAMPLES: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build:electron
+      - name: Initialize Electron binary before probe
+        run: node scripts/initialize-electron-ci.mjs
+      - name: Probe chat IPC business lifecycle
+        run: npm run probe:chat-business-ipc
+  golden_windows:
+    name: CI / Shell golden (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -53,19 +139,9 @@ jobs:
       # Shell/Python Golden 基线在 win32 录制：路径判定语义与宿主平台耦合（P1-8），固定 windows 运行
       - run: npm exec vitest run electron/shell/shellGolden.test.ts electron/shell/scriptGolden.test.ts
 
-  sqlite-electron-probe:
-    name: SQLite Electron probe (${{ matrix.label }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            label: windows-x64
-          - os: macos-15-intel
-            label: macos-x64
-          - os: macos-latest
-            label: macos-arm64
+  sqlite_windows_x64:
+    name: CI / SQLite probe (Windows x64)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -78,19 +154,9 @@ jobs:
       - name: Probe node:sqlite under Electron
         run: npm run probe:sqlite
 
-  shell-contract:
-    name: Shell lifecycle contract (${{ matrix.label }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            label: windows-x64
-          - os: macos-15-intel
-            label: macos-x64
-          - os: macos-latest
-            label: macos-arm64
+  sqlite_macos_x64:
+    name: CI / SQLite probe (macOS x64)
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -98,9 +164,100 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      # 在 macOS Vitest threads 启动前串行解析 Electron 路径，避免多个 worker 同时触发首次解压。
-      - run: node -e "require('electron')"
+      - name: Probe node:sqlite under Electron
+        run: npm run probe:sqlite
+
+  sqlite_macos_arm64:
+    name: CI / SQLite probe (macOS arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Probe node:sqlite under Electron
+        run: npm run probe:sqlite
+
+  shell_windows_x64:
+    name: CI / Shell contract (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Initialize Electron binary before test workers
+        run: node scripts/initialize-electron-ci.mjs
       - run: npm run i18n:generate-types
+      - run: npm run build:agent-provider-pi-ai
+      - run: npm exec -- vitest run --project electron electron/confirmation/recursionGuard.test.ts electron/confirmation/toolCallGate.test.ts
       - run: npm run test:shell-lifecycle
       - run: npm run typecheck:shared
       - run: npm run typecheck:renderer
+
+  shell_macos_x64:
+    name: CI / Shell contract (macOS x64)
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Initialize Electron binary before test workers
+        run: node scripts/initialize-electron-ci.mjs
+      - run: npm run i18n:generate-types
+      - run: npm run build:agent-provider-pi-ai
+      - run: npm exec -- vitest run --project electron electron/confirmation/recursionGuard.test.ts electron/confirmation/toolCallGate.test.ts
+      - run: npm run test:shell-lifecycle
+      - run: npm run typecheck:shared
+      - run: npm run typecheck:renderer
+
+  shell_macos_arm64:
+    name: CI / Shell contract (macOS arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      # Electron 必须先由串行步骤解析、检查并启动，再运行任何 Vitest worker。
+      - name: Initialize Electron binary before test workers
+        run: node scripts/initialize-electron-ci.mjs
+      - run: npm run i18n:generate-types
+      - run: npm run build:agent-provider-pi-ai
+      - run: npm exec -- vitest run --project electron electron/confirmation/recursionGuard.test.ts electron/confirmation/toolCallGate.test.ts
+      - run: npm run test:shell-lifecycle
+      - run: npm run typecheck:shared
+      - run: npm run typecheck:renderer
+
+  ci-required:
+    name: required
+    if: always()
+    runs-on: ubuntu-latest
+    needs:
+      - test
+      - golden_windows
+      - sqlite_windows_x64
+      - sqlite_macos_x64
+      - sqlite_macos_arm64
+      - shell_windows_x64
+      - shell_macos_x64
+      - shell_macos_arm64
+    steps:
+      - uses: actions/checkout@v5
+      - name: Summarize required CI results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          ACTIONS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/check-ci-required-results.mjs

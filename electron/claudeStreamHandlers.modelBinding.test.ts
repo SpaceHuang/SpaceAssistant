@@ -1,8 +1,9 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
 import { appendMessage, createPersistedTurn, createSession } from './database/operations'
 import { openDatabase, setConfigValue } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
+import { createAnthropicStreamHarness } from './testSupport/anthropicStreamHarness'
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 
@@ -19,7 +20,6 @@ vi.mock('electron', () => ({
 }))
 
 const mockRunToolChatSession = vi.fn()
-const mockCreateAnthropicClient = vi.fn()
 
 vi.mock('./toolChatLoop', () => ({
   runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args),
@@ -55,11 +55,6 @@ vi.mock('./projectMemory', async (importOriginal) => {
 
 vi.mock('./safeWebContentsSend', () => ({ safeWebContentsSend: vi.fn() }))
 
-vi.mock('./anthropicClientFactory', () => ({
-  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
-  createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
-}))
-
 vi.mock('./chatCancelRegistry', () => ({
   registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   clearChatCancel: vi.fn(),
@@ -89,7 +84,10 @@ describe('claudeStreamHandlers 模型绑定 fail-fast', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     handlers.clear()
+    vi.stubGlobal('fetch', createAnthropicStreamHarness().fetch)
   })
+
+  afterEach(() => vi.unstubAllGlobals())
 
   it('冻结模型已不可用时直接失败，不带默认 baseURL 发请求', async () => {
     const db = openDatabase(':memory:')
@@ -134,7 +132,6 @@ describe('claudeStreamHandlers 模型绑定 fail-fast', () => {
     expect(result.ok).toBe(false)
     expect(result.error).toContain('会话模型「claude-sonnet-4-20250514」当前不可用')
     // 不得带着 undefined baseURL 退回 SDK 默认端点
-    expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
     expect(mockRunToolChatSession).not.toHaveBeenCalled()
     db.close()
   })

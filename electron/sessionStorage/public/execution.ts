@@ -86,7 +86,7 @@ export interface SessionExecutionStore {
   }>>
   commitHostedContext(input: Readonly<{ sessionId: string; generation: string; scopeKey: string; context: SessionContextState }>): boolean
   invalidateHostedContext(sessionId: string): void
-  recoverExecutionTarget(sessionId: string): { status: 'ready' | 'blocked' | 'active-owner'; releasedUnstarted: number; markedUncertain: number; reconciled: number }
+  recoverExecutionTarget(sessionId: string, excludeTurnId?: string): { status: 'ready' | 'blocked' | 'active-owner'; releasedUnstarted: number; markedUncertain: number; reconciled: number }
   loadAcceptedContinuationTranscript(ref: Readonly<{ sessionId: string; turnId: string }>): ClaudeChatMessageWithBlocks[] | undefined
   claimExecution(input: Readonly<{ sessionId: string; turnId: string; ownerId: string }>): ExecutionClaimResult
   markExecutionStarted(input: ExecutionLease): boolean

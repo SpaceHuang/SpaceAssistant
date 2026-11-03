@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { Message, ToolCallRecord } from '../../../shared/domainTypes'
+import { assistantMessage } from '../../../test/factories/message'
 import { extractReferencedFiles } from './useReferencedFiles'
 
 function makeToolCall(overrides: Partial<ToolCallRecord> & Pick<ToolCallRecord, 'id' | 'toolName'>): ToolCallRecord {
@@ -12,16 +13,7 @@ function makeToolCall(overrides: Partial<ToolCallRecord> & Pick<ToolCallRecord, 
 }
 
 function makeMessage(toolCalls: ToolCallRecord[]): Message {
-  return {
-    id: `msg-${Math.random()}`,
-    sessionId: 'sess-1',
-    role: 'assistant',
-    content: '',
-    timestamp: Date.now(),
-    toolCalls,
-    status: 'completed',
-    schemaVersion: 1,
-  }
+  return assistantMessage({ id: 'msg-1', sessionId: 'sess-1', content: '', timestamp: 1, toolCalls, status: 'completed' })
 }
 
 describe('extractReferencedFiles', () => {
