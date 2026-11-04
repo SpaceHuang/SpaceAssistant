@@ -182,7 +182,7 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：仅在 F34/F35 替代映射、规则及 policy trace 已验证后，同一变更单元切换到 findings/categories 并移除旧 verdict/三档 signal 与旧动作消费者；切换完成后 12 类生产输入均有对应规则消费，认证结论继续由原独立所有者提供。旧→新三链路动作对拍通过，唯一差异按 AC-4 单列；旧字段 `rg` 清单中无未解释生产/消费点。该任务关闭 AC-9。
   - 验证：规则/信号适配和旧模型退役回归、三链路 golden 对拍；`rg -n 'verdict|signal\\.(signal|patterns)|networkVerdict' electron src/shared`；`npm run typecheck:shared`。关联 AC-3、4、9。证据：`F36.md`。
 
-- [ ] **F37 验证真实提取到引擎的组合矩阵**（本机）
+- [x] **F37 验证真实提取到引擎的组合矩阵**（本机）
   - 范围：`electron/confirmation/toolCallGate.ts`、提取器、策略装配/引擎集成测试及必要 butler 调用测试。
   - 产物/判据：只承担接通和断言，不新增业务逻辑；真实链路覆盖 AC-4、12、13、17 逐格矩阵；路径未知写入仅桌面 standard 在快通道未裁决时交审核 agent；读取/删除/搬运/绑定断裂/不可用、eval/进程/动态导入维持人工确认；strict/custom、微信/飞书、定时任务维持方案结果；批准不写长期记忆；拒绝优先，批准前 executor 不调用。
   - 验证：真实 extractor→rule assembly→engine 集成测试，并合并运行 F30～F36 覆盖的相关测试。关联 AC-4、12、13、17。证据：`F37.md`。
