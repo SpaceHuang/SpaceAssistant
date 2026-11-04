@@ -167,7 +167,7 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：新增 `dynamicKinds` 多值并保留 `unknownReason`；覆盖 open mode 读写、Path 读写、删除、搬运、代码执行、绑定链断裂、不可用及旧形状缺省保守归类；只有纯未知写入能构成获批域，读取/删除/搬运不被标成 write。
   - 验证：`npm exec vitest run electron/confirmation/extractors/scriptPathFacts.test.ts electron/confirmation/extractors/scriptParseCount.test.ts`；按 AC-17 分类矩阵逐格断言。关联 AC-17。证据：`F33.md`。
 
-- [ ] **F34 将类别映射与聚合 token 放在策略域**（本机）
+- [x] **F34 将类别映射与聚合 token 放在策略域**（本机）
   - 范围：`src/shared/policy/scriptClassDisposition.ts`（新建）、`src/shared/policy/policyEngine.ts`、策略 token 派生所在模块及测试。
   - 产物/判据：类别到动作的唯一映射位于共享策略域；派生每个 kind token、兼容聚合 token、仅纯写入时的 write-target-only token；旧字段/未知类别采用保守路径；事实生产器不依赖策略作决定。
   - 验证：映射单测、缺字段/未知类别保守测试、删除映射规则的反向测试；`npm run typecheck:shared`。关联 AC-3～5、9、17。证据：`F34.md`。
