@@ -3,7 +3,7 @@
 > 文档类型：技术方案（方向已确认）  
 > 核验日期：2026-11-04  
 > 代码基线：`90a0f7bd3af7d7530a0028c71923e7c6a15e21bd`  
-> 状态：方向已由用户确认；P1 实施已完成并通过定向自动化、Electron 类型检查、增量 / 完整构建及全量测试；P2 已核验 macOS 通知系统投递与通知点击处理，门禁剩余项为手动点击横幅、Dock 图标徽标视觉确认及通知权限开启时的前台焦点保持。Windows 实机回归为非阻断补充项（用户已确认）。
+> 状态：方向已由用户确认；P1 实施已完成并通过定向自动化、Electron 类型检查、增量 / 完整构建及全量测试；P2 已核验 macOS 通知系统投递、通知权限开启时的前台焦点保持与通知点击处理逻辑。门禁剩余项为手动点击横幅和 Dock 图标徽标视觉确认。Windows 实机回归为非阻断补充项（用户已确认）。
 
 ## 第 0 层：决策摘要【人必读】
 
@@ -136,9 +136,9 @@ confirm-request
 当前环境可验证：管理器状态转换、系统通知创建 / 点击 / 关闭、Dock 角标计数与清理、macOS 自动提醒不创建浮窗，以及 Windows 旧行为未变的定向测试。
 macOS 门禁验收：在实际 Electron 窗口确认前台应用名、键盘第一响应者、正在输入时焦点保持、系统通知权限 / 勿扰状态、真实通知点击返回路径、Dock 角标出现与清除。Windows 旧行为由自动化回归证明；Windows 实机回归可记录，但不阻断本方案验收。
 
-P2 本机观察（2026-11-04）：用户授权后，在“系统设置 → 通知”开启 SpaceAssistant 通知；桌面、通知中心、锁定屏幕均已勾选，提醒样式为临时，应用图标标记开启。完整构建后，以隔离 userData 启动 arm64 worktree `.app`（`com.spaceassistant.app`），确认 `Notification.isSupported()` 为 true。通过当前 `FloatingNotificationManager` 实例创建真实 Electron 系统通知；macOS `usernoted` 日志记录其已投递至 alert / lock screen / notification center，并以 banner 呈现（14:05、14:12、14:14）。在主窗口隐藏时再次触发通知后，Electron 主窗口仍保持隐藏、未聚焦；系统设置中的勿扰自动化显示为“09:00–17:00，关闭 - 每天”。
+P2 本机观察（2026-11-04）：用户授权后，在“系统设置 → 通知”开启 SpaceAssistant 通知；桌面、通知中心、锁定屏幕均已勾选，提醒样式为临时，应用图标标记开启。完整构建后，以隔离 userData 启动 arm64 worktree `.app`（`com.spaceassistant.app`），确认 `Notification.isSupported()` 为 true。通过当前 `FloatingNotificationManager` 实例创建真实 Electron 系统通知；macOS `usernoted` 日志记录其已投递至 alert / lock screen / notification center，并以 banner 呈现（14:05、14:12、14:14、14:39）。14:39 焦点实测时，系统设置搜索框处于键盘焦点；待确认到达前后 SpaceAssistant 主窗口均未聚焦，搜索框焦点仍保持。勿扰自动化显示为“09:00–17:00，关闭 - 每天”。
 
-同一隔离运行中，Dock `setBadge` 由管理器按 1、2 项待确认状态调用，清空时置空；使用真实 Electron Notification 实例触发 `click` 事件后，管理器恢复 / 聚焦主窗口并发送 `notification:navigate-session` 到最新待确认项，随后清空状态并关闭通知。该事件由测试控制台触发，**不是对系统横幅的手动点击**；尝试通过屏幕坐标点击时未观察到点击回调，因此仍以未完成计。Dock 图标标记已在系统设置启用，但由于本次 UI 观察未能显示 Dock 区域，没有取得徽标的视觉证据。早先 TextEdit 前台 / 键盘焦点保持观察是在权限关闭时完成；权限开启后的背景应用焦点保持有主窗口隐藏状态与系统 banner 日志佐证，但尚无前台应用键盘焦点的手动观察。Windows 实机回归未执行（当前主机为 macOS），Windows 自动化测试仍覆盖原自绘浮窗路径。
+同一隔离运行中，Dock `setBadge` 由管理器按 1、2 项待确认状态调用，清空时置空；对真实 Electron Notification 实例触发 `click` 事件后，管理器在实际 Electron 主窗口上发送 `notification:navigate-session` 到最新待确认项。该事件由调试控制台触发，**不是对系统横幅的手动点击**；屏幕坐标点击没有触发回调，因此真实横幅点击回跳仍未验收。Dock 图标标记已在系统设置启用，但 UI 观察未能显示 Dock 区域，徽标出现 / 清除的视觉验收仍未完成。隔离实例与临时测试项已退出 / 清理通知及角标；Windows 实机回归未执行（当前主机为 macOS），Windows 自动化测试仍覆盖原自绘浮窗路径且不作门禁。
 
 本轮执行了：
 
