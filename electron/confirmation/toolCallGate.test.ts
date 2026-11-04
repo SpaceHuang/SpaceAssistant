@@ -1904,6 +1904,64 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
+  it('真实 extractor→gate 矩阵：纯未知写入只在 desktop standard 进入 Agent ask', async () => {
+    const root = await fs.realpath(await makeTempDir('script-write-matrix-'))
+    const db = openDb()
+    const code = "open(target, 'w')"
+    const desktopStandard = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'),
+      toolName: 'run_script', toolInput: { code } }))
+    expect(desktopStandard.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction',
+      completeness: 'unknown', dynamicKinds: ['unresolved-write-target'] }))
+    expect(desktopStandard.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unresolved-write-review',
+      answerer: 'agent', disposition: 'auto-eligible', memoryTiers: [] })
+    const invokeApproval = vi.fn(async () => ({ ok: true as const,
+      verdict: { kind: 'approve' as const, reason: { summary: 'reviewed write intent' } } }))
+    const approvalChannel = new AgentChannel({ lane: 'desktop', requestId: 'script-write-review', sessionId: 's',
+      toolName: 'run_script', policy: { kind: 'agent' }, invokeApproval })
+    expect(await approvalChannel.request({ facts: desktopStandard.facts, riskLevel: desktopStandard.decision.type === 'require-confirm'
+      ? desktopStandard.decision.riskLevel : 'high', memoryTiers: desktopStandard.decision.type === 'require-confirm'
+        ? desktopStandard.decision.memoryTiers : [], timeoutMs: 5_000 }))
+      .toMatchObject({ kind: 'approved', answererKind: 'agent' })
+    expect(invokeApproval).toHaveBeenCalledOnce()
+
+    for (const tier of ['strict', 'custom'] as const) {
+      writePolicyPackages(db, { desktop: tier, wechat: 'standard', feishu: 'standard', automation: 'standard' })
+      const result = await evaluateToolCallGate(base({ appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'),
+        toolName: 'run_script', toolInput: { code } }))
+      expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unresolved-write-review',
+        answerer: 'user', memoryTiers: [] })
+    }
+
+    for (const lane of ['wechat', 'feishu'] as const) {
+      const result = await evaluateToolCallGate(base({ lane, remoteContext: remoteContext({ source: lane }), workDir: root,
+        userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput: { code } }))
+      expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unresolved-write-review',
+        answerer: 'user', memoryTiers: [] })
+    }
+
+    const unattended = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'),
+      toolName: 'run_script', toolInput: { code }, taskAccessPermissions: automationToolPermission('run_script', root) }))
+    expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
+  })
+
+  it.each([
+    ['unresolved read', 'open(target)', 'unresolved-read-target'],
+    ['delete', 'import os\nos.remove(target)', 'unresolved-destructive-target'],
+    ['transfer', 'import shutil\nshutil.move(source, target)', 'unresolved-transfer-target'],
+    ['binding-chain break', 'import os\nos = fake\nopen("/tmp/out.txt", "r")', 'binding-chain-broken'],
+    ['analysis unavailable', 'def broken(:\n pass', 'path-analysis-unavailable'],
+    ['eval', 'eval(source)', 'dynamic-code-execution'],
+    ['process creation', 'import subprocess\nsubprocess.run(command)', 'dynamic-code-execution'],
+    ['dynamic import', 'import importlib\nimportlib.import_module(module_name)', 'dynamic-code-execution']
+  ] as const)('真实 extractor→gate：%s 继续真人确认且不提供记忆', async (_case, code, dynamicKind) => {
+    const root = await fs.realpath(await makeTempDir('script-human-matrix-'))
+    const result = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'),
+      toolName: 'run_script', toolInput: { code } }))
+    expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction',
+      completeness: 'unknown', dynamicKinds: expect.arrayContaining([dynamicKind]) }))
+    expect(result.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+  })
+
   it('路径分析不可用的脚本不提供记忆档位且每次都需真人确认', async () => {
     const code = 'custom_accessor(target)'
     for (const options of [
