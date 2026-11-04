@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { fileURLToPath } from 'node:url'
 
 const { setBadge, notificationInstances } = vi.hoisted(() => ({ setBadge: vi.fn(), notificationInstances: [] as any[] }))
 
@@ -43,6 +44,7 @@ vi.mock('./database', () => ({
 }))
 
 import { FloatingNotificationManager } from './floatingNotificationManager'
+import { createHostTranslator } from './i18n/hostTranslate'
 import {
   createFloatingNotificationWindow,
   destroyFloatingNotificationWindow,
@@ -84,6 +86,8 @@ const TEST_ENTRY = {
   createdAt: Date.now()
 }
 
+const notificationResourcesDir = fileURLToPath(new URL('../src/renderer/i18n/resources', import.meta.url))
+
 describe('FloatingNotificationManager', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -96,6 +100,33 @@ describe('FloatingNotificationManager', () => {
   })
 
   describe('macOS notification behavior', () => {
+    it.each([
+      ['zh-CN', 'SpaceAssistant 管家', '共 1 项待确认', '共 2 项待确认'],
+      ['en-US', 'SpaceAssistant Butler', '1 items pending confirmation', '2 items pending confirmation']
+    ])('uses real %s host translations for test and pending notification bodies', async (locale, title, testBody, pendingBody) => {
+      const { Notification } = await import('electron')
+      const state = { isVisible: true, isFocused: true }
+      const mainWin = createMockMainWindow(state)
+      const manager = new FloatingNotificationManager(
+        () => mainWin,
+        '/fake/mainDirname',
+        { readSession: vi.fn(() => null) } as any,
+        'darwin',
+        createHostTranslator({ locale, resourcesDir: notificationResourcesDir })
+      )
+
+      manager.showTestNotification()
+      expect((Notification as any).mock.calls[0][0]).toEqual({ title, body: testBody })
+
+      manager.onConfirmRequest(TEST_ENTRY)
+      manager.onConfirmRequest({ ...TEST_ENTRY, toolUseId: 'tool-2', createdAt: TEST_ENTRY.createdAt + 1 })
+      state.isFocused = false
+      manager.onMainWindowBlur()
+      vi.advanceTimersByTime(2000)
+      expect((Notification as any).mock.calls[1][0]).toEqual({ title, body: pendingBody })
+      manager.destroy()
+    })
+
     it('waits until the app goes to background when a request arrived while focused', async () => {
       const { Notification } = await import('electron')
       const state = { isVisible: true, isFocused: true }

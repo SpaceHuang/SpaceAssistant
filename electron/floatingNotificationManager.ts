@@ -146,7 +146,7 @@ export class FloatingNotificationManager {
         NotificationApi: Notification,
         entry: { ...item, requestId: 'test-notification', input: {} },
         title: this.translate?.({ key: 'notification.desktopButlerTitle' }) ?? 'SpaceAssistant',
-        body: this.translate?.({ key: 'notification.aria.notification', params: { count: 1 } }) ?? '1 pending confirmation',
+        body: this.translate?.({ key: 'notification.morePendingLine', params: { count: 1 } }) ?? '1 pending confirmation',
         onClick: () => this.focusMainWindow().then(() => undefined)
       })
       return
@@ -266,7 +266,7 @@ export class FloatingNotificationManager {
           NotificationApi: Notification,
           entry: latest,
           title: this.translate?.({ key: 'notification.desktopButlerTitle' }) ?? 'SpaceAssistant',
-          body: this.translate?.({ key: 'notification.aria.notification', params: { count } }) ?? `${count} pending confirmation(s)`,
+          body: this.translate?.({ key: 'notification.morePendingLine', params: { count } }) ?? `${count} pending confirmation(s)`,
           onClick: () => this.focusAndNavigateToLatestPending()
         })
         this.notificationSentForBatch = this.pendingNotification !== null
