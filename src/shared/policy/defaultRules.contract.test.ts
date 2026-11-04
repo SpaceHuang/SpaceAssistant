@@ -65,6 +65,7 @@ const EXPECTED_RULE_IDS = [
   'script-path-unknown-confirm',
   'script-path-unclassified-confirm',
   'script-dynamic-execution-confirm',
+  'script-unresolved-write-review',
   'script-suspicious-path-unknown-confirm',
   'script-declared-path-scope-allow-desktop',
   'script-unmodeled-path-ask',
@@ -125,6 +126,19 @@ describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {
       expect(rule.match && typeof rule.match).toBe('object')
       expect(typeof rule.action).toBe('string')
     }
+  })
+
+  it('D-5 两条既有锁定规则排除纯未知写入，新规则只选中该域', () => {
+    const pathFloor = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'script-path-unknown-confirm')!
+    const executionFloor = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'script-dynamic-execution-confirm')!
+    const writeReview = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'script-unresolved-write-review')!
+    expect(pathFloor.locked).toBe(true)
+    expect(pathFloor.match?.excludeSignals).toContain('script-path-extraction:write-target-only')
+    expect(executionFloor.locked).toBe(true)
+    expect(executionFloor.match?.excludeSignals).toContain('script-path-extraction:write-target-only')
+    expect(writeReview.match?.signals).toEqual(['script-path-extraction:write-target-only'])
+    expect(writeReview.action).toBe('ask')
+    expect(writeReview.reason).toBeTruthy()
   })
 
   it('wiki/远程/automation/敏感读 六条关键 locked 规则的 action 与匹配信号保持基线', () => {

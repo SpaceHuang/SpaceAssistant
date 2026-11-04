@@ -351,7 +351,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-path-unknown-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-dynamic-access'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-dynamic-access'], excludeSignals: ['script-path-extraction:write-target-only'] },
     action: 'confirm-every-time', locked: true, reason: '脚本路径提取不完整，需真人确认'
   },
   {
@@ -363,8 +363,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-dynamic-execution-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:dynamic-execution'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:dynamic-execution'], excludeSignals: ['script-path-extraction:write-target-only'] },
     action: 'confirm-every-time', locked: true, reason: '脚本存在动态执行，需逐次真人确认'
+  },
+  {
+    id: 'script-unresolved-write-review',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:write-target-only'] },
+    action: 'ask', denyClass: 'insufficient-info', reason: '脚本写入目标无法静态确定，需要审查代码意图'
   },
   {
     id: 'script-suspicious-path-unknown-confirm',

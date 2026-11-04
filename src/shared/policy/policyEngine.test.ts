@@ -1514,6 +1514,58 @@ describe('script finding and path classification tokens', () => {
   })
 })
 
+describe('D-5 unresolved write review policy', () => {
+  const unresolvedWriteFacts = () => mkFacts('run_script', 'execute', [
+    { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', dynamicKinds: ['unresolved-write-target'] }
+  ], 'high')
+
+  it('desktop standard routes pure unresolved write to auto-evaluator', () => {
+    const evaluator = vi.fn(() => ({ approve: false as const, reason: 'uncertain' }))
+    const decision = decide(unresolvedWriteFacts(), { ...mkContext('desktop'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('desktop', 'standard', rule), autoEvaluator: evaluator }))
+    expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unresolved-write-review', answerer: 'agent', disposition: 'auto-eligible', reason: '脚本写入目标无法静态确定，需要审查代码意图' })
+    expect(evaluator).toHaveBeenCalledOnce()
+  })
+
+  it.each(['strict', 'custom'] as const)('desktop %s keeps the review with a human', (tier) => {
+    const decision = decide(unresolvedWriteFacts(), { ...mkContext('desktop'), policyTier: tier }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('desktop', tier, rule) }))
+    expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unresolved-write-review', answerer: 'user' })
+  })
+
+  it.each(['wechat', 'feishu'] as const)('%s keeps the review with a human', (lane) => {
+    const decision = decide(unresolvedWriteFacts(), { ...mkContext(lane), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor(lane, 'standard', rule) }))
+    expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unresolved-write-review', answerer: 'user' })
+  })
+
+  it('automation denies pure unresolved write', () => {
+    expect(decide(unresolvedWriteFacts(), mkContext('automation'), DEFAULT_POLICY_RULES, deps()))
+      .toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
+  })
+
+  it.each([
+    ['unresolved-read-target'], ['unresolved-destructive-target'], ['unresolved-transfer-target'],
+    ['binding-chain-broken'], ['path-analysis-unavailable'], ['dynamic-code-execution']
+  ] as const)('non-write category %s retains locked human confirmation', (kind) => {
+    const facts = mkFacts('run_script', 'execute', [{
+      kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', dynamicKinds: [kind]
+    }], 'high')
+    expect(decide(facts, { ...mkContext('desktop'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('desktop', 'standard', rule) })))
+      .toMatchObject({ type: 'require-confirm', answerer: 'user' })
+  })
+
+  it('mixed write and execution does not enter the write-only review domain', () => {
+    const facts = mkFacts('run_script', 'execute', [{
+      kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', dynamicKinds: ['unresolved-write-target', 'dynamic-code-execution']
+    }], 'high')
+    expect(decide(facts, { ...mkContext('desktop'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('desktop', 'standard', rule) })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'script-dynamic-execution-confirm', answerer: 'user' })
+  })
+})
+
 describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () => {
   it('desktop 第 5 步 ask → answerer=user（mcp-tool 默认确认）', () => {
     const d = decide(
