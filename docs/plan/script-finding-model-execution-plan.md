@@ -177,7 +177,7 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：逐条核对方案受影响规则并把三档条件换为类别条件；两条旧锁定规则排除纯写入 token；新 `script-unresolved-write-review` 只覆盖纯写入；桌面标准档走 auto-evaluator，strict/custom、远程询问，定时任务拒绝；其他分类保留人工 floor；稳定 rule ID/reason trace 完整。
   - 验证：default rules contract/lint 与 policy engine 测试；`npm run check:system-invariant-registry`、`npm run typecheck:shared`。关联 AC-4、5、9、13、17。证据：`F35.md`。
 
-- [ ] **F36 原子切换并退役旧结论模型**（本机）
+- [x] **F36 原子切换并退役旧结论模型**（本机）
   - 范围：`electron/shell/scriptContentSecurity.ts`、`electron/confirmation/extractors/scriptAnalysisExtractor.ts`、`src/shared/confirmation/types.ts`、策略信号派生/规则装配、`src/shared/policy/memoryEligibility.ts` 与旧模型兼容测试。
   - 产物/判据：仅在 F34/F35 替代映射、规则及 policy trace 已验证后，同一变更单元切换到 findings/categories 并移除旧 verdict/三档 signal 与旧动作消费者；切换完成后 12 类生产输入均有对应规则消费，认证结论继续由原独立所有者提供。旧→新三链路动作对拍通过，唯一差异按 AC-4 单列；旧字段 `rg` 清单中无未解释生产/消费点。该任务关闭 AC-9。
   - 验证：规则/信号适配和旧模型退役回归、三链路 golden 对拍；`rg -n 'verdict|signal\\.(signal|patterns)|networkVerdict' electron src/shared`；`npm run typecheck:shared`。关联 AC-3、4、9。证据：`F36.md`。
