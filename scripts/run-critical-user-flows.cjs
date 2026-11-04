@@ -255,7 +255,7 @@ function inspectProfileDatabase(profileDir) {
   } catch (error) { return { error: error.message } }
 }
 
-function runElectronFlow({ flow, profileDir, rendererUrl, modelUrl, phase, onActualModelRequest }) {
+function runElectronFlow({ flow, profileDir, rendererUrl, modelUrl, phase, onActualModelRequest, sessionId }) {
   return new Promise((resolve, reject) => {
     const electronPath = require('electron')
     if (typeof electronPath !== 'string') return reject(new Error('electron executable path unavailable'))
@@ -271,6 +271,7 @@ function runElectronFlow({ flow, profileDir, rendererUrl, modelUrl, phase, onAct
         CRITICAL_MODEL_URL: modelUrl,
         NODE_EXTRA_CA_CERTS: require('node:path').join(profileDir, '..', 'critical-flow.crt'),
         ...(phase ? { CRITICAL_USER_FLOW_PHASE: phase } : {}),
+        ...(phase === 'resume' && sessionId ? { CRITICAL_FLOW_SESSION_ID: sessionId } : {}),
         ELECTRON_DISABLE_SECURITY_WARNINGS: 'true'
       },
       stdio: ['ignore', 'pipe', 'pipe']
@@ -342,7 +343,7 @@ async function run() {
       if (flow === 'restart-recovery') {
         const setup = await runElectronFlow({ flow, profileDir, rendererUrl: renderer.url, modelUrl: model.url })
         if (!setup.restartReady || !setup.sessionId) throw new Error('restart setup did not reach an in-flight persisted session')
-        result = await runElectronFlow({ flow, profileDir, rendererUrl: renderer.url, modelUrl: model.url, phase: 'resume' })
+        result = await runElectronFlow({ flow, profileDir, rendererUrl: renderer.url, modelUrl: model.url, phase: 'resume', sessionId: setup.sessionId })
       } else {
         result = await runElectronFlow({ flow, profileDir, rendererUrl: renderer.url, modelUrl: model.url })
       }

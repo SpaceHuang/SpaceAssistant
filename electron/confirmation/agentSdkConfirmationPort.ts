@@ -188,7 +188,8 @@ export function createAgentSdkConfirmationPort(input: {
         if (deferred) return deferred
       }
       if (outcome.kind === 'approved') input.onApproved?.(confirmation.call, outcome, confirmation, confirmation.context as GateConfirmationContext, outcome.selectedMemory)
-      if (!confirmation.signal?.aborted && 'outcome' in result && result.outcome.kind === 'approved') {
+      if (!confirmation.signal?.aborted && outcome.kind === 'approved' && outcome.answerer === 'agent' &&
+        'outcome' in result && result.outcome.kind === 'approved' && result.outcome.answererKind === 'agent') {
         input.onScopeApproved?.(confirmation.call, confirmation.context as GateConfirmationContext, result.outcome)
       }
       if (outcome.kind === 'denied' && outcome.answerer === 'user' && normalizedTarget) {

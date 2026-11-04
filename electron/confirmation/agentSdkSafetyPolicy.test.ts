@@ -82,6 +82,21 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask', context: { factsProvenance: { factId: snapshot.factId, extractorVersion: snapshot.extractorVersion, completeness: snapshot.completeness, factsRevision: snapshot.factsRevision, policyVersion: snapshot.policyVersion } } })
   })
 
+  it('把原始宿主候选范围只传给 confirmation context，不依赖 Agent 回传摘要', async () => {
+    const scope = { lane: 'desktop' as const, sessionId: 'scope-session', subjectId: '/profile',
+      authorizationDomain: { id: 'desktop' as const, revision: 0, epoch: 0 }, toolName: 'edit_file' as const,
+      operation: 'edit' as const, objects: [{ role: 'target', value: '/workspace/note.txt' }], environment: '/workspace',
+      policyVersion: 'desktop-policy-v1', exactParameters: { replaceAll: false }, taskConstraint: 'task' }
+    const candidate = { scopeCandidateDigest: 'a'.repeat(64), toolName: 'edit_file' as const, operation: 'edit' as const,
+      objects: [{ role: 'target', target: '/workspace/note.txt' }] }
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs,
+      evaluateGate: async () => ({ ...result({ type: 'require-confirm', ruleId: 'write-review', answerer: 'agent', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }),
+        reviewScopeCandidate: candidate, reviewScopeCandidateScope: scope, reviewScopeCandidateDigest: candidate.scopeCandidateDigest }) })
+    await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask', context: {
+      reviewScopeCandidate: candidate, reviewScopeCandidateScope: scope, reviewScopeCandidateDigest: candidate.scopeCandidateDigest
+    } })
+  })
+
   it.each([
     ['new allow', { type: 'auto-allow', ruleId: 'new-policy-allow', reason: 'newly allowed' } as Decision, 'allow'],
     ['new ask', { type: 'require-confirm', ruleId: 'new-policy-ask', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 } as Decision, 'ask']

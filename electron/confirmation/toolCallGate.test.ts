@@ -123,12 +123,17 @@ describe('review scope cache gate integration', () => {
       const target = path.join(dir, 'note.txt')
       await fs.writeFile(target, 'before')
       const cache = new ReviewScopeCache()
+      const auditEvents: SecurityAuditEvent[] = []
       const taskConstraint = 'Update note.txt for the requested release.'
       const args = base({ toolName: 'edit_file', toolInput: { path: 'note.txt', old_string: 'before', new_string: 'after' }, workDir: dir,
-        sessionId: 'review-session', userDataDir: '/profile', taskDigest: taskConstraint, reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note.txt for the requested release.', context: [] }), reviewScopeEvidenceComplete: true, reviewScopeCache: cache,
+        sessionId: 'review-session', requestId: 'review-scope-request', invocationId: 'review-scope-invocation', toolUseId: 'review-scope-tool',
+        userDataDir: '/profile', taskDigest: taskConstraint, reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note.txt for the requested release.', context: [] }), reviewScopeEvidenceComplete: true, reviewScopeCache: cache,
+        audit: { record: (event) => auditEvents.push(event) },
         policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-policy-v1', revision: 0, epoch: 0 } })
       const result = await evaluateToolCallGate(args)
       expect(result.reviewScopeCandidate).toMatchObject({ toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target }] })
+      expect(auditEvents).toContainEqual(expect.objectContaining({ event: 'confirm.review-scope', reviewScopeOutcome: 'miss',
+        reviewScopeReasonCode: 'grant_lookup_miss', toolName: 'edit_file', invocationId: 'review-scope-invocation', toolUseId: 'review-scope-tool' }))
       const differentReplacement = await evaluateToolCallGate({ ...args, toolInput: { path: 'note.txt', old_string: 'before', new_string: 'rephrased' } })
       expect(differentReplacement.reviewScopeCandidateDigest).toBe(result.reviewScopeCandidateDigest)
       expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'default-write-execute-ask', answerer: 'agent' })

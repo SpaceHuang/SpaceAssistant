@@ -975,10 +975,12 @@ describe('parseApprovalVerdict（Skill v2：双维裁决 + 非对称容错，对
     })
   })
 
-  it('只有 approve 明确复用并回显合法候选摘要时才携带范围批准', () => {
+  it('忽略旧 Agent 回传的缓存字段，仍按三态合同解析 approve', () => {
     const digest = 'a'.repeat(64)
-    expect(parseApprovalVerdict(`{"kind":"approve","riskLevel":"low","reuseApproved":true,"scopeCandidateDigest":"${digest}","reason":{"summary":"范围明确"}}`))
-      .toMatchObject({ kind: 'approve', reuseApproved: true, scopeCandidateDigest: digest })
+    const legacy = parseApprovalVerdict(`{"kind":"approve","riskLevel":"low","reuseApproved":true,"scopeCandidateDigest":"${digest}","reason":{"summary":"范围明确"}}`)
+    expect(legacy).toMatchObject({ kind: 'approve' })
+    expect(legacy).not.toHaveProperty('reuseApproved')
+    expect(legacy).not.toHaveProperty('scopeCandidateDigest')
     expect(parseApprovalVerdict('{"kind":"approve","riskLevel":"low","reuseApproved":true,"scopeCandidateDigest":"bad","reason":{"summary":"ok"}}'))
       .toMatchObject({ kind: 'approve' })
     expect(parseApprovalVerdict('{"kind":"deny","reuseApproved":true,"scopeCandidateDigest":"' + digest + '"}'))
@@ -1252,7 +1254,7 @@ describe('R5 护栏：审批提示词与 Skill 三态合同一致性（防漂移
     expect(skill.content).toContain('"kind":"undetermined"')
   })
 
-  it('范围候选只以宿主事实展示，且复用字段必须回显同一摘要', async () => {
+  it('范围候选只以宿主事实展示，审批提示不要求模型回传缓存元数据', async () => {
     const { renderCluePackForTest } = await import('./approvalAgent')
     const { getBundledSecurityApprovalSkill } = await import('../skills/bundled/securityApprovalSkill')
     const digest = 'e'.repeat(64)
@@ -1260,9 +1262,10 @@ describe('R5 护栏：审批提示词与 Skill 三态合同一致性（防漂移
       scopeCandidateDigest: digest, toolName: 'edit_file', operation: 'edit',
       objects: [{ role: 'target', target: '/work/a.txt' }]
     } }))
-    expect(rendered).toContain('reuseApproved=true')
+    expect(rendered).not.toContain('reuseApproved')
+    expect(rendered).not.toContain('scopeCandidateDigest=')
     expect(rendered).toContain(digest)
     expect(rendered).toContain('/work/a.txt')
-    expect(getBundledSecurityApprovalSkill('high').content).toContain('当前会话继续执行同一范围')
+    expect(getBundledSecurityApprovalSkill('high').content).toContain('不得输出缓存开关、候选摘要')
   })
 })

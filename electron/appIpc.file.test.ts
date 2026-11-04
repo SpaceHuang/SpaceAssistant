@@ -29,6 +29,8 @@ import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch,
 import { runHostedAgentTurn, type AgentTurnHost } from '../packages/agent-sdk/src/turn'
 import { ModelProviderRegistry } from '../packages/agent-sdk/src/model'
 import { RecordingModelProvider } from '../packages/agent-provider-testing/src'
+import { createSkillTurnScope } from './skills/skillTurnScope'
+import { registerAgentIpc } from './ipc/agentProtocolIpc'
 
 const database = {
   listSessions: vi.fn(() => []),
@@ -107,6 +109,7 @@ vi.mock('./anthropicClientFactory', () => ({
 
 const mockSkillManager = vi.hoisted(() => ({
   route: vi.fn().mockResolvedValue({ skills: [] }),
+  prepareTurn: vi.fn(),
   buildSystemPrompt: vi.fn(() => '')
 }))
 
@@ -340,6 +343,12 @@ describe('file IPC handlers', () => {
       destroy = vi.fn()
     } as never)
     mockSkillManager.route.mockResolvedValue({ skills: [] })
+    mockSkillManager.prepareTurn.mockImplementation(async (args: { signal?: AbortSignal }) => {
+      const route = await mockSkillManager.route(args)
+      const skills = Array.isArray(route?.skills) ? route.skills : []
+      const scope = createSkillTurnScope({ catalogSkills: skills, preloadedSkills: skills, maxConcurrent: 5 })
+      return { ...route, meta: route?.meta ?? { sources: {}, durationMs: 0 }, catalogSkills: scope.catalogSkills, scope }
+    })
     vi.mocked(sessionContentWriteAuthority.writeCanonicalBackedMessageContent).mockResolvedValue(true)
     mockSkillManager.buildSystemPrompt.mockReturnValue('')
     vi.mocked(getMainWindow).mockReturnValue(undefined)
@@ -585,7 +594,92 @@ describe('file IPC handlers', () => {
     await expect(handler({ sender }, payload)).resolves.toEqual({ ok: true, accepted: true, turnId: 'turn-1' })
     expect(executeTurn).toHaveBeenCalledWith(sender, {
       requestId: 'request-1', turnId: 'turn-1', turnStartToken: 'token-1', sessionId: 'session-1'
+    }, undefined)
+  })
+
+  it('错误 start token 请求不关闭合法 turn 的共享 Skill scope', async () => {
+    let releaseSource!: () => void
+    const sourceGate = new Promise<void>((resolve) => { releaseSource = resolve })
+    let signalSourceStarted!: () => void
+    const sourceStarted = new Promise<void>((resolve) => { signalSourceStarted = resolve })
+    let sourceCalls = 0
+    const skill = { meta: { name: 'authorized-skill', description: '', version: '1', author: '', triggers: [] }, content: 'safe content', scope: 'user' as const, directoryPath: '/skill', filePath: '/skill/SKILL.md', lastModified: 1 }
+    const session = databaseOperations.createSession(ctx.db, { name: 'credential scope', model: 'deepseek-chat', workDirProfileId: 'default' })
+    const originalImplementations = {
+      getSession: vi.mocked(database.getSession).getMockImplementation(),
+      getPersistedTurn: vi.mocked(database.getPersistedTurn).getMockImplementation(),
+      getSessionMessageRevisionSnapshot: vi.mocked(database.getSessionMessageRevisionSnapshot).getMockImplementation(),
+      getMessage: vi.mocked(database.getMessage).getMockImplementation(),
+      appendMessage: vi.mocked(database.appendMessage).getMockImplementation(),
+      setPersistedTurnExecutionConfig: vi.mocked(database.setPersistedTurnExecutionConfig).getMockImplementation(),
+      failConfiguringTurn: vi.mocked(database.failConfiguringTurn).getMockImplementation()
+    }
+    const executeTurn = async (_sender: unknown, payload: { requestId: string; turnId: string; turnStartToken: string }, receivedScope?: ReturnType<typeof createSkillTurnScope>) => {
+      let sourceClaimed = false
+      await ctx.turnRuntime!.bindRequest?.(payload.requestId, payload.turnId)
+      try {
+        return await ctx.turnRuntime!.executeWithSource!(payload.turnId, payload.turnStartToken, async () => {
+          sourceClaimed = true
+          sourceCalls += 1
+          signalSourceStarted()
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          await sourceGate
+          return { outcome: 'completed' as const }
+        })
+      } finally {
+        // 与生产 adapter 相同：只有 source 通过凭证检查并真正进入后才关闭 scope。
+        if (sourceClaimed) receivedScope?.close()
+      }
+    }
+    ctx.executeTurn = executeTurn as never
+    const prepareSkillTurn = vi.fn(async () => {
+      const scope = createSkillTurnScope({ catalogSkills: [skill], preloadedSkills: [], maxConcurrent: 1 })
+      return { skills: [], catalogSkills: scope.catalogSkills, scope, meta: { sources: {}, durationMs: 0 } }
     })
+    mockSkillManager.prepareTurn.mockImplementation(prepareSkillTurn)
+    mockSkillManager.route.mockResolvedValue({ skills: [] })
+    mockReadTurnByRequest.mockReturnValue(undefined)
+    vi.mocked(database.getSession).mockImplementation((_db, sessionId) => databaseOperations.getSession(ctx.db, sessionId))
+    vi.mocked(database.getPersistedTurn).mockImplementation((_db, turnId) => databaseOperations.getPersistedTurn(ctx.db, turnId))
+    vi.mocked(database.getSessionMessageRevisionSnapshot).mockImplementation((_db, sessionId) => databaseOperations.getSessionMessageRevisionSnapshot(ctx.db, sessionId))
+    vi.mocked(database.getMessage).mockImplementation((_db, messageId) => databaseOperations.getMessage(ctx.db, messageId))
+    vi.mocked(database.appendMessage).mockImplementation((_db, input) => databaseOperations.appendMessage(ctx.db, input))
+    vi.mocked(database.setPersistedTurnExecutionConfig).mockImplementation((_db, turnId, config, fingerprint, fence) => databaseOperations.setPersistedTurnExecutionConfig(ctx.db, turnId, config, fingerprint, fence))
+    vi.mocked(database.failConfiguringTurn).mockImplementation((_db, turnId, version, error) => databaseOperations.failConfiguringTurn(ctx.db, turnId, version, error))
+    vi.mocked(database.getRecentTurnRoutingMessages).mockReturnValue([])
+    vi.mocked(database.hasVisionInTurnRoutingContext).mockReturnValue(false)
+    ipc = mockIpcMain()
+    routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
+    registerAgentIpc(ipc as unknown as import('electron').IpcMain, ctx)
+    const execute = ipc.getHandler('chat:execute-turn')!
+    const intent = { mode: 'create-user' as const, requestId: 'credential-scope-request', sessionId: session.id, input: { text: 'hello' }, config: {} }
+    const prepared = await ipc.getHandler('chat:prepare-turn')!({}, intent) as { turnId: string; startToken: string; requestId: string; sessionId: string }
+    const scope = await vi.waitFor(() => {
+      const value = prepareSkillTurn.mock.results[0]?.value
+      if (!value) throw new Error('skill scope not prepared')
+      return value
+    })
+    const skillScope = scope.scope as ReturnType<typeof createSkillTurnScope>
+    const finish = vi.spyOn(skillScope, 'close')
+    const validPayload = { requestId: prepared.requestId, turnId: prepared.turnId, turnStartToken: prepared.startToken, sessionId: prepared.sessionId }
+    await expect(execute({ sender: {} }, { ...validPayload, turnStartToken: 'wrong-token' })).resolves.toMatchObject({ accepted: true })
+    await vi.waitFor(() => expect(finish).not.toHaveBeenCalled())
+    // 错误凭证先到后，准备记录仍可被合法凭证认领，且共享目录读取仍有效。
+    await expect(execute({ sender: {} }, validPayload)).resolves.toMatchObject({ accepted: true })
+    await sourceStarted
+    await expect(execute({ sender: {} }, { ...validPayload, turnStartToken: 'wrong-token-during-source' })).resolves.toMatchObject({ accepted: true })
+    expect(finish).not.toHaveBeenCalled()
+    expect(skillScope.planRead('authorized-skill', 1000).content).toContain('safe content')
+    expect(sourceCalls).toBe(1)
+    releaseSource()
+    await vi.waitFor(() => expect(finish).toHaveBeenCalledTimes(2))
+    vi.mocked(database.getSession).mockImplementation(originalImplementations.getSession!)
+    vi.mocked(database.getPersistedTurn).mockImplementation(originalImplementations.getPersistedTurn!)
+    vi.mocked(database.getSessionMessageRevisionSnapshot).mockImplementation(originalImplementations.getSessionMessageRevisionSnapshot!)
+    vi.mocked(database.getMessage).mockImplementation(originalImplementations.getMessage!)
+    vi.mocked(database.appendMessage).mockImplementation(originalImplementations.appendMessage!)
+    vi.mocked(database.setPersistedTurnExecutionConfig).mockImplementation(originalImplementations.setPersistedTurnExecutionConfig!)
+    vi.mocked(database.failConfiguringTurn).mockImplementation(originalImplementations.failConfiguringTurn!)
   })
 
   it('相同 requestId 重放优先返回冻结 turn，不读取漂移后的当前配置', async () => {
@@ -700,9 +794,9 @@ describe('file IPC handlers', () => {
       recentMessages: canonicalRecentMessages,
       sessionId: 'session-1'
     }))
+    expect(mockSkillManager.route).not.toHaveBeenCalledWith(expect.objectContaining({ model: expect.any(String), baseUrl: expect.any(String) }))
     expect(shadowRouteInput).toMatchObject({
-      userInput: 'original queued text', recentMessages, sessionState: {}, sessionMetadata: {},
-      model: 'deepseek-chat', baseUrl: 'https://example.test', sessionId: 'session-1'
+      userInput: 'original queued text', recentMessages, sessionState: {}, sessionMetadata: {}, sessionId: 'session-1'
     })
     expect(database.setPersistedTurnExecutionConfig).toHaveBeenCalledWith(ctx.db, started.turnId, expect.any(Object), expect.any(String), {
       sessionId: 'session-1', generation: 'generation-1', messageRevision: 1
@@ -783,6 +877,8 @@ describe('file IPC handlers', () => {
     await expect(retry).resolves.toMatchObject({ turnId: started.turnId, startToken: started.startToken })
     await vi.waitFor(() => expect(executeTurn).toHaveBeenCalledTimes(1))
     expect(database.setPersistedTurnExecutionConfig).toHaveBeenCalledTimes(1)
+    expect(executeTurn.mock.calls[0]?.[2]).toMatchObject({ catalogSkills: [], isActive: false })
+    expect(database.setPersistedTurnExecutionConfig.mock.calls[0]?.[2]).not.toHaveProperty('skillTurnScope')
   })
 
   it('技能路由等待期间 session revision 改变时拒绝冻结旧配置并终结 configuring turn', async () => {
@@ -853,7 +949,7 @@ describe('file IPC handlers', () => {
     expect(provider.calls).toHaveLength(0)
   })
 
-  it('配置阶段失败时把 source-failed 事实（含真实原因）交给 projection，渲染层才能标失败并显示原因', async () => {
+  it('Skill 快照准备失败时把 source-failed 事实交给 projection，渲染层才能标失败并显示原因', async () => {
     const started = {
       turnId: 'failed-configuring-turn', requestId: 'failed-configuring-request', sessionId: 'session-1',
       userMessage: { id: 'user-1', sessionId: 'session-1', role: 'user' as const, content: 'hello', timestamp: 1, status: 'sent' as const, schemaVersion: 1 },
@@ -887,7 +983,7 @@ describe('file IPC handlers', () => {
       contextBoundarySequence: 0, state: 'configuring', version: 0, startToken: started.startToken
     })
     vi.mocked(database.getSession).mockReturnValue({ id: 'session-1', model: 'deepseek-chat', skillsState: {}, metadata: {} } as never)
-    mockSkillManager.route.mockRejectedValueOnce(new Error('会话模型「claude-sonnet-4-20250514」当前不可用'))
+    mockSkillManager.prepareTurn.mockRejectedValueOnce(new Error('SKILL_SNAPSHOT_PREPARATION_FAILED'))
 
     ipc = mockIpcMain()
     routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
@@ -904,7 +1000,7 @@ describe('file IPC handlers', () => {
     await vi.waitFor(() => expect(runtimeConsume).toHaveBeenCalled())
     expect(runtimeConsume).toHaveBeenCalledWith('failed-configuring-turn', {
       type: 'source-failed',
-      message: '会话模型「claude-sonnet-4-20250514」当前不可用'
+      message: 'SKILL_SNAPSHOT_PREPARATION_FAILED'
     })
     expect(database.failConfiguringTurn).toHaveBeenCalledWith(
       expect.anything(),
