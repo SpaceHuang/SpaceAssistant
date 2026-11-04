@@ -1,7 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+const { setBadge, notificationInstances } = vi.hoisted(() => ({ setBadge: vi.fn(), notificationInstances: [] as any[] }))
+
 vi.mock('electron', () => ({
   BrowserWindow: vi.fn(),
+  app: { dock: { setBadge } },
+  Notification: Object.assign(vi.fn(function (this: unknown) {
+    const instance = { on: vi.fn(), show: vi.fn(), close: vi.fn() }
+    notificationInstances.push(instance)
+    return instance
+  }), { isSupported: vi.fn(() => true) }),
   screen: {
     getPrimaryDisplay: vi.fn(() => ({
       workArea: { x: 0, y: 0, width: 1920, height: 1040 }
@@ -52,7 +60,8 @@ function createMockMainWindow(overrides: Partial<{
     isDestroyed: () => overrides.isDestroyed ?? false,
     isVisible: () => overrides.isVisible ?? true,
     isMinimized: () => overrides.isMinimized ?? false,
-    isFocused: () => overrides.isFocused ?? true
+    isFocused: () => overrides.isFocused ?? true,
+    restore: vi.fn(), show: vi.fn(), focus: vi.fn(), webContents: { send: vi.fn() }
   } as any
 }
 
@@ -60,7 +69,8 @@ function createManager(mainWin: any = createMockMainWindow(), sessionQueries: { 
   return new FloatingNotificationManager(
     () => mainWin,
     '/fake/mainDirname',
-    sessionQueries as any
+    sessionQueries as any,
+    'win32'
   )
 }
 
@@ -77,11 +87,71 @@ const TEST_ENTRY = {
 describe('FloatingNotificationManager', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    notificationInstances.length = 0
     vi.useFakeTimers()
   })
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  describe('macOS notification behavior', () => {
+    it('waits until the app goes to background when a request arrived while focused', async () => {
+      const { Notification } = await import('electron')
+      const state = { isVisible: true, isFocused: true }
+      const mainWin = createMockMainWindow(state)
+      const manager = new FloatingNotificationManager(() => mainWin, '/fake/mainDirname', { readSession: vi.fn(() => null) } as any, 'darwin')
+
+      manager.onConfirmRequest(TEST_ENTRY)
+      expect(Notification).not.toHaveBeenCalled()
+      state.isFocused = false
+      manager.onMainWindowBlur()
+      vi.advanceTimersByTime(2000)
+
+      expect(Notification).toHaveBeenCalledOnce()
+      expect(mainWin.focus).not.toHaveBeenCalled()
+      expect(createFloatingNotificationWindow).not.toHaveBeenCalled()
+      manager.destroy()
+    })
+
+    it('uses a system notification for the explicit test action without creating a floating window', () => {
+      const mainWin = createMockMainWindow({ isVisible: true, isFocused: true })
+      const manager = new FloatingNotificationManager(() => mainWin, '/fake/mainDirname', { readSession: vi.fn(() => null) } as any, 'darwin')
+
+      manager.showTestNotification()
+
+      expect(notificationInstances).toHaveLength(1)
+      expect(createFloatingNotificationWindow).not.toHaveBeenCalled()
+      expect(mainWin.focus).not.toHaveBeenCalled()
+      manager.destroy()
+      expect(notificationInstances[0].close).toHaveBeenCalledOnce()
+    })
+
+    it('updates Dock count, emits one parameter-free notification per pending batch, and navigates only on click', async () => {
+      const { Notification } = await import('electron')
+      const mainWin = createMockMainWindow({ isVisible: false })
+      const manager = new FloatingNotificationManager(() => mainWin, '/fake/mainDirname', { readSession: vi.fn(() => null) } as any, 'darwin')
+
+      manager.onConfirmRequest(TEST_ENTRY)
+      manager.onConfirmRequest({ ...TEST_ENTRY, toolUseId: 'tool-2', createdAt: TEST_ENTRY.createdAt + 1 })
+
+      expect(setBadge).toHaveBeenLastCalledWith('2')
+      expect(Notification).toHaveBeenCalledTimes(1)
+      expect(JSON.stringify((Notification as any).mock.calls[0])).not.toContain('npm install')
+      expect(mainWin.focus).not.toHaveBeenCalled()
+      const callback = notificationInstances[0].on.mock.calls.find((call: unknown[]) => call[0] === 'click')?.[1]
+      callback()
+      expect(mainWin.restore).not.toHaveBeenCalled()
+      expect(mainWin.show).toHaveBeenCalledOnce()
+      expect(mainWin.focus).toHaveBeenCalledOnce()
+      expect(mainWin.webContents.send).toHaveBeenCalledWith('notification:navigate-session', { sessionId: 'session-1', toolUseId: 'tool-2' })
+
+      manager.onToolResult('req-1', 'tool-1')
+      manager.onToolResult('req-1', 'tool-2')
+      expect(setBadge).toHaveBeenLastCalledWith('')
+      expect(notificationInstances[0].close).toHaveBeenCalledOnce()
+      manager.destroy()
+    })
   })
 
   describe('evaluate - show notification', () => {

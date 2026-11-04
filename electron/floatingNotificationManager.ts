@@ -1,4 +1,4 @@
-import type { BrowserWindow } from 'electron'
+import { app, Notification, type BrowserWindow } from 'electron'
 import type { FloatingNotificationData } from '../src/shared/api'
 import {
   createFloatingNotificationWindow,
@@ -8,6 +8,8 @@ import {
 } from './floatingNotification'
 import type { SessionQueries } from './sessionStorage/public/ports'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
+import { createPendingConfirmNotification } from './pendingConfirmNotification'
+import type { TranslateFn } from '../src/shared/localization'
 
 export type PendingConfirmEntry = {
   sessionId: string
@@ -51,15 +53,24 @@ export class FloatingNotificationManager {
   private mainWindowGetter: () => BrowserWindow | null
   private mainDirname: string
   private sessionQueries: SessionQueries
+  private platform: NodeJS.Platform
+  private translate?: TranslateFn
+  private pendingNotification: { close(): void } | null = null
+  private testNotification: { close(): void } | null = null
+  private notificationSentForBatch = false
 
   constructor(
     mainWindowGetter: () => BrowserWindow | null,
     mainDirname: string,
-    sessionQueries: SessionQueries
+    sessionQueries: SessionQueries,
+    platform: NodeJS.Platform = process.platform,
+    translate?: TranslateFn
   ) {
     this.mainWindowGetter = mainWindowGetter
     this.mainDirname = mainDirname
     this.sessionQueries = sessionQueries
+    this.platform = platform
+    this.translate = translate
   }
 
   onConfirmRequest(entry: PendingConfirmEntry): void {
@@ -125,6 +136,24 @@ export class FloatingNotificationManager {
   }
 
   showTestNotification(): void {
+    if (this.platform === 'darwin') {
+      const item = TEST_DATA.latestItem!
+      this.testNotification?.close()
+      this.testNotification = createPendingConfirmNotification({
+        NotificationApi: Notification,
+        entry: { ...item, requestId: 'test-notification', input: {} },
+        title: this.translate?.({ key: 'notification.desktopButlerTitle' }) ?? 'SpaceAssistant',
+        body: this.translate?.({ key: 'notification.aria.notification', params: { count: 1 } }) ?? '1 pending confirmation',
+        onClick: () => {
+          const win = this.mainWindowGetter()
+          if (!win || win.isDestroyed()) return
+          if (win.isMinimized()) win.restore()
+          if (!win.isVisible()) win.show()
+          win.focus()
+        }
+      })
+      return
+    }
     this.testMode = true
     this.dismissed = false
     this.clearCloseTimer()
@@ -151,6 +180,11 @@ export class FloatingNotificationManager {
     this.clearCloseTimer()
     destroyFloatingNotificationWindow(this.floatingWin)
     this.floatingWin = null
+    this.pendingNotification?.close()
+    this.pendingNotification = null
+    this.testNotification?.close()
+    this.testNotification = null
+    if (this.platform === 'darwin') app.dock?.setBadge('')
   }
 
   // --- private ---
@@ -186,6 +220,10 @@ export class FloatingNotificationManager {
   }
 
   private evaluate(): void {
+    if (this.platform === 'darwin') {
+      this.evaluateMacNotification()
+      return
+    }
     const mainWin = this.mainWindowGetter()
     const hasPending = this.pendingItems.size > 0
     const mainVisible = mainWin && !mainWin.isDestroyed() && mainWin.isVisible() && !mainWin.isMinimized()
@@ -210,6 +248,42 @@ export class FloatingNotificationManager {
     this.ensureFloatingWindow()
     const data = this.buildCurrentData()
     pushDataToFloatingWindow(this.floatingWin, data)
+  }
+
+  private evaluateMacNotification(): void {
+    const count = this.pendingItems.size
+    app.dock?.setBadge(count > 0 ? String(count) : '')
+    if (count === 0) {
+      this.notificationSentForBatch = false
+      this.pendingNotification?.close()
+      this.pendingNotification = null
+      return
+    }
+
+    const mainWin = this.mainWindowGetter()
+    const isForeground = Boolean(mainWin && !mainWin.isDestroyed() && mainWin.isVisible() && !mainWin.isMinimized() && mainWin.isFocused())
+    if (!this.notificationSentForBatch && !isForeground) {
+      const latest = [...this.pendingItems.values()].sort((a, b) => b.createdAt - a.createdAt)[0]
+      if (latest) {
+        this.pendingNotification = createPendingConfirmNotification({
+          NotificationApi: Notification,
+          entry: latest,
+          title: this.translate?.({ key: 'notification.desktopButlerTitle' }) ?? 'SpaceAssistant',
+          body: this.translate?.({ key: 'notification.aria.notification', params: { count } }) ?? `${count} pending confirmation(s)`,
+          onClick: () => {
+            const win = this.mainWindowGetter()
+            if (!win || win.isDestroyed()) return
+            const currentLatest = [...this.pendingItems.values()].sort((a, b) => b.createdAt - a.createdAt)[0]
+            if (!currentLatest) return
+            if (win.isMinimized()) win.restore()
+            if (!win.isVisible()) win.show()
+            win.focus()
+            win.webContents.send('notification:navigate-session', { sessionId: currentLatest.sessionId, toolUseId: currentLatest.toolUseId })
+          }
+        })
+        this.notificationSentForBatch = this.pendingNotification !== null
+      }
+    }
   }
 
   private ensureFloatingWindow(): void {

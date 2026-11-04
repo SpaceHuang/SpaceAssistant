@@ -3,23 +3,23 @@
 > 文档类型：技术方案（方向已确认）  
 > 核验日期：2026-11-04  
 > 代码基线：`90a0f7bd3af7d7530a0028c71923e7c6a15e21bd`  
-> 状态：方向已由用户确认（macOS 改用系统通知与 Dock 提示）；待实施；macOS 原生焦点验收未完成。
+> 状态：方向已由用户确认；P1 实施已完成并通过定向自动化与 Electron 类型检查；增量构建被既有运行时闭包门禁阻断；P2 macOS / Windows 原生平台验收未完成。
 
 ## 第 0 层：决策摘要【人必读】
 
-**一句话：** 后台待确认时，macOS 改用系统通知与 Dock 待确认角标；Windows 保持现有系统托盘泡泡通知行为，确认操作仍由主界面完成。
+**一句话：** 后台待确认时，macOS 改用系统通知与 Dock 待确认角标；Windows 保留当前自绘浮窗，确认操作仍由主界面完成。
 
 **只有 3 分钟的话：** 看已定决策 D-1 和 macOS 验收标准 AC-1～AC-4。
 
 ### D-1：macOS 后台待确认提醒方式（已决定）
 
-SpaceAssistant 在后台运行时仍须提醒用户有操作等待确认。当前自绘浮窗会覆盖其他应用，并存在焦点干扰路径。用户已决定：**macOS 使用系统通知，并在 Dock 图标显示待确认数量；Windows 保持现有系统托盘泡泡通知；本次不改 Windows 行为。**
+SpaceAssistant 在后台运行时仍须提醒用户有操作等待确认。当前自绘浮窗会覆盖其他应用，并存在焦点干扰路径。用户已决定：**macOS 使用系统通知，并在 Dock 图标显示待确认数量；Windows 保留当前自绘浮窗；本次不改 Windows 行为。** 仓库核验未找到待确认系统托盘泡泡入口，Windows 当前与其他平台共用 `FloatingNotificationManager` 自绘浮窗链路。
 
 - macOS 系统通知只用于提醒，不展示工具参数，不提供批准 / 拒绝操作。
 - 用户点击系统通知后，应用返回前台并定位到最新的待确认会话与确认卡片。
 - Dock 角标显示当前待确认项总数；待确认项清空时清除角标。点击 Dock 图标仍走应用既有激活流程。
 - 系统通知不可用或被系统设置屏蔽时，不弹自绘浮窗、不自动激活应用；Dock 角标与应用内待确认状态仍反映待处理项。
-- Windows 现有系统托盘泡泡通知保持不变；不得将 macOS 改动扩展到 Windows 通知链路。该 Windows 路径由用户确认；本轮代码检索尚未定位其待确认提醒实现入口，实施前必须先补齐来源与回归覆盖。
+- Windows 当前自绘浮窗行为保持不变；不得将 macOS 改动扩展到 Windows 通知链路。用户已明确选择保留该行为；仓库检索确认待确认提醒由 `FloatingNotificationManager` 调用 `createFloatingNotificationWindow` 实现，并无独立托盘泡泡入口。
 
 下钻：事实证据见 F-1～F-5；规格与验收见 INV-1～INV-3、AC-1～AC-4。
 
@@ -33,7 +33,7 @@ SpaceAssistant 在后台运行时仍须提醒用户有操作等待确认。当�
 
 ### RP-1 一句话变更
 
-macOS 后台待确认时，从“自绘置顶浮窗自动出现”改为系统通知与 Dock 角标；Windows 保持原有系统托盘泡泡通知；确认操作仍回到主界面完成。
+macOS 后台待确认时，从“自绘置顶浮窗自动出现”改为系统通知与 Dock 角标；Windows 保持原有自绘浮窗；确认操作仍回到主界面完成。
 
 ### RP-2 链路图
 
@@ -57,12 +57,12 @@ confirm-request
 
 | 单元 | 作用简述 | 改动类型 | 对应 `D/INV` | 跨边界 |
 |---|---|---|---|---|
-| `electron/floatingNotification.ts` | 创建桌面确认提示窗口 | 移除 macOS 自动浮窗路径；保留 / 替换其他平台路径须按调用链核验 | D-1、INV-1 | 否 |
-| `electron/floatingNotificationManager.ts` | 汇总待确认项并决定提醒生命周期 | 改造为 macOS 通知与角标协调器 | D-1、INV-2 | 否 |
-| `electron/main.ts` | 创建主窗口并连接窗口事件 | 改造 macOS Dock 角标与激活导航 | D-1、AC-3 | 否 |
-| `electron/ipc/desktopIpc.ts` | 处理通知点击后的主界面导航 | 移除仅供浮窗使用的 handler；复用导航事件 | AC-3 | IPC 删除旧浮窗通道 |
-| `electron/floatingNotification.test.ts` | 校验浮窗原生窗口选项 | 移除 | AC-1 | 否 |
-| `electron/floatingNotificationManager.test.ts` | 校验提醒状态转换 | 改造为通知 / 角标状态测试 | AC-1、AC-2、AC-4 | 否 |
+| `electron/floatingNotification.ts` | 创建桌面确认提示窗口 | 保留 Windows 浮窗；macOS 不再调用 | D-1、INV-1 | 否 |
+| `electron/floatingNotificationManager.ts` | 汇总待确认项并决定提醒生命周期 | 增加 macOS 通知与角标分支 | D-1、INV-2 | 否 |
+| `electron/main.ts` | 创建主窗口并连接窗口事件 | 注入平台与通知文案 | D-1、AC-3 | 否 |
+| `electron/ipc/desktopIpc.ts` | 注册桌面进程 IPC 处理器 | 复用现有主窗口导航事件，不改 | AC-3 | 否 |
+| `electron/floatingNotification.test.ts` | 校验浮窗原生窗口选项 | 保留 Windows 回归 | AC-1、AC-2 | 否 |
+| `electron/floatingNotificationManager.test.ts` | 校验提醒状态转换 | 增加 macOS 通知 / 角标状态测试 | AC-1、AC-2、AC-4 | 否 |
 | `electron/pendingConfirmNotification.ts` | 创建 macOS 待确认系统通知 | 新建 | D-1、INV-1、INV-3 | 否 |
 
 ### RP-4 契约面六面
@@ -71,22 +71,22 @@ confirm-request
 |---|---|---|
 | ① agent-sdk 接口契约 | 不改 | 提醒发生在宿主窗口层，不改变工具确认端口或审批记录。 |
 | ② 会话存储接口契约 | 不改 | 待确认集合继续由内存管理器维护，不新增数据库字段或写入。 |
-| ③ IPC / 预加载 | 删除旧浮窗专用通道 | 删除浮窗 ready / get-data / show-main / dismiss 与调试入口；保留主窗口已有 `onNotificationNavigateSession` 导航事件。新增 IPC 如确有必要，另行评审。 |
-| ④ `src/shared/` 类型 | 删除旧浮窗专用类型与调试命令类型 | 移除 `FloatingNotificationData`、`FloatingNotificationWindowApi` 与 `/test-pop` 类型；不增加新的领域类型。 |
+| ③ IPC / 预加载 | 保持现状 | 浮窗通道继续服务 Windows；macOS 提醒复用现有主窗口导航事件，不新增 IPC。 |
+| ④ `src/shared/` 类型 | 保持现状 | 浮窗类型继续服务 Windows；本次不新增共享领域类型。 |
 | ⑤ 持久化格式与迁移 | 不改 | 本方案不落盘。 |
 | ⑥ 领域数据格式 | 不改 | 不变更确认策略、授权结果或错误码。 |
 
 ### RP-5 量级与拆分判断
 
-本次只实施 macOS 分支：预计改造 3 个既有单元、新建 1 个通知单元、移除旧浮窗入口与资源；复用现有主界面导航。Windows 通知行为保持不变。用户指出 Windows 已有系统托盘泡泡提醒，但本轮仓库检索未定位到待确认泡泡的实现入口；实施前先追到其调用链，确保不误删或改变该行为。无持久化字段、agent-sdk 或会话存储变化；移除旧浮窗 IPC / preload 暴露属于契约删除，需同步清理调用方与类型。
+本次只实施 macOS 分支：在待确认管理器增加系统通知与 Dock 角标协调，新增通知创建单元；Windows 继续使用现有自绘浮窗。仓库未发现待确认系统托盘泡泡实现，因此本方案按用户确认保留实际存在的 Windows 行为。复用现有主界面导航；不增加持久化字段、agent-sdk 或会话存储契约。浮窗 IPC / preload 仍供 Windows 浮窗使用，macOS 自动提醒路径不再调用。
 
 ### RP-6 待批准项与弱点
 
-- 已批准：D-1，macOS 使用系统通知与 Dock 角标；Windows 行为保持不变。
+- 已批准：D-1，macOS 使用系统通知与 Dock 角标；Windows 保留当前自绘浮窗。
 - 不新增通知开关或持久化设置；通知权限与勿扰行为由 macOS 系统控制。
 - 最可能被推翻的假设：macOS 系统通知可能被系统设置屏蔽或延迟；若用户因此漏掉待确认项，需要基于实际反馈评估后续补救，不在本次偷偷恢复置顶浮窗。
 - 第二处弱点：系统通知点击与 Dock 激活后定位最新待确认项，须验证应用处于隐藏、最小化、已退出窗口但进程存活等路径。
-- 第三处弱点：Dock 角标只适用于 macOS；必须确保 Windows 旧泡泡通知和其他平台路径不受影响。
+- 第三处弱点：Dock 角标只适用于 macOS；必须确保 Windows 自绘浮窗和其他平台路径不受影响。
 
 ## 第 2 层：规格【机｜人工可跳过】
 
@@ -127,14 +127,14 @@ confirm-request
 | 验收 | 可执行断言 | 证据类型 |
 |---|---|---|
 | AC-1 自动提醒不抢焦点 | macOS 通知创建路径不调用 `BrowserWindow.show/focus` 或 `app.focus`；确认请求到达时前台应用与键盘目标保持不变。 | 单测 + macOS 原生验收 |
-| AC-2 提醒状态正确 | macOS 待确认数变化时 Dock 角标等于待确认项数量，清空后角标为空；同一批待确认只创建一条系统通知。Windows 既有托盘泡泡行为保持不变。 | 单测 + macOS / Windows 验收 |
+| AC-2 提醒状态正确 | macOS 待确认数变化时 Dock 角标等于待确认项数量，清空后角标为空；同一批待确认只创建一条系统通知。Windows 现有自绘浮窗行为保持不变。 | 单测 + macOS / Windows 验收 |
 | AC-3 用户主动返回后可处理 | 点击系统通知后主窗口恢复 / 聚焦并导航到最新待确认会话；点击 Dock 图标按既有激活行为打开应用；确认卡仍由现有确认 IPC 完成。 | 现有导航测试 + 手动验收 |
 | AC-4 不影响授权与清理 | 通知不支持、创建失败、重复提醒、并发待确认、确认完成、取消、超时和退出均不产生自动批准；待确认清空时通知与角标清理。 | 管理器边界测试 |
 
 ### 验收边界
 
-当前环境可验证：管理器状态转换、系统通知创建 / 点击 / 关闭、Dock 角标计数与清理、旧浮窗调用点清除，以及 Windows 旧行为未变的定向测试。  
-必须在实际 Electron macOS 窗口验证：前台应用名、键盘第一响应者、正在输入时焦点保持、系统通知权限 / 勿扰状态、通知点击返回路径、Dock 角标出现与清除。Windows 只做回归确认泡泡通知保持现状。
+当前环境可验证：管理器状态转换、系统通知创建 / 点击 / 关闭、Dock 角标计数与清理、macOS 自动提醒不创建浮窗，以及 Windows 旧行为未变的定向测试。
+必须在实际 Electron macOS 窗口验证：前台应用名、键盘第一响应者、正在输入时焦点保持、系统通知权限 / 勿扰状态、通知点击返回路径、Dock 角标出现与清除。Windows 回归确认当前自绘浮窗保持现状。
 
 本轮执行了：
 
@@ -144,23 +144,25 @@ node_modules/.bin/vitest run --project=electron electron/floatingNotification.te
 
 结果：2 个测试文件、25 项测试通过（方案核验时）。该测试集 mock 了 Electron `BrowserWindow`，不证明系统级激活行为。隔离 Electron 探测当时未得到有效进程输出，记为未验证；实施后仍须完成 macOS 原生验收。
 
+P1 实施验证：`npm exec vitest run --project=electron electron/pendingConfirmNotification.test.ts electron/floatingNotificationManager.test.ts electron/floatingNotification.test.ts` 通过（3 个测试文件、31 项测试）；`npx tsc -p tsconfig.electron.json --noEmit` 通过。`npm run build:electron:incremental` 在 `check:pi-ai-runtime-closure` 失败，提示缺少 `api/anthropic-messages.js`、`utils/transcript.js` 且运行时闭包清单漂移；门禁在本次 TypeScript 编译前退出。
+
 ### 阶段建议
 
 | 阶段 | 内容 | 出口证据 | 可回退实体 |
 |---|---|---|---|
-| P1 实施 | 移除 macOS 自动浮窗路径，接入系统通知、Dock 角标和点击导航；清理旧浮窗 API / 资源；保留 Windows 通知实现。 | AC-1～AC-4 自动化测试通过，类型检查通过。 | 回退本阶段代码改动 |
-| P2 平台验收 | macOS 原生确认焦点与通知 / Dock 体验；Windows 回归泡泡通知。 | 按 AC 完成手动记录，覆盖正在输入、权限关闭 / 勿扰、点击返回、角标清零及 Windows 原行为。 | 回退 P1 代码改动 |
+| P1 实施 | 为 macOS 自动提醒接入系统通知、Dock 角标和点击导航；保留 Windows 浮窗及其 IPC / 资源。 | AC-1～AC-4 自动化测试通过，类型检查通过。 | 回退本阶段代码改动 |
+| P2 平台验收 | macOS 原生确认焦点与通知 / Dock 体验；Windows 回归自绘浮窗。 | 按 AC 完成手动记录，覆盖正在输入、权限关闭 / 勿扰、点击返回、角标清零及 Windows 原行为。 | 回退 P1 代码改动 |
 
 ### 变更外扩与风险
 
-- 新增 macOS 系统通知呈现行为；删除旧浮窗专用 IPC、预加载接口、共享数据类型和浮窗页面资源。无新增持久化字段、错误码、设置项或 agent-sdk / 会话存储接口。
+- 新增 macOS 系统通知呈现行为；浮窗 IPC、预加载接口、共享数据类型和页面资源继续服务 Windows。无新增持久化字段、错误码、设置项或 agent-sdk / 会话存储接口。
 - 不主动请求系统通知权限；通知不可用或被系统屏蔽时不自动激活窗口、不回退到置顶浮窗，Dock 角标和应用内待确认状态继续有效。
-- Windows 托盘泡泡通知与其他平台行为不在本次改动范围，必须通过回归测试证明未变。
+- Windows 自绘浮窗与其他平台行为不在本次改动范围，必须通过回归测试证明未变。
 
 ## 附录：术语
 
 | 业务词 | 内部对应 |
 |---|---|
-| 待确认提醒 | macOS 操作系统通知；Windows 保留系统托盘泡泡通知，不具备授权能力 |
+| 待确认提醒 | macOS 操作系统通知；Windows 保留自绘浮窗，不具备授权能力 |
 | 主动返回主界面 | 用户点击提醒后执行窗口恢复、聚焦和会话定位 |
 | 激活应用 | macOS 前台应用切换；与 Electron BrowserWindow 是否可聚焦是不同层面的观察量 |

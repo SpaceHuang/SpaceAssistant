@@ -9,6 +9,8 @@ describe('pending confirm system notification', () => {
     const created = createPendingConfirmNotification({
       NotificationApi: NotificationApi as never,
       entry: { sessionId: 'session-1', sessionName: '会话一', toolUseId: 'tool-1', toolName: 'run_shell', input: { command: 'secret' }, requestId: 'request-1', createdAt: 1 },
+      title: 'SpaceAssistant',
+      body: '有操作等待确认',
       onClick: navigate
     })
 
@@ -25,7 +27,16 @@ describe('pending confirm system notification', () => {
     const NotificationApi = Object.assign(vi.fn(), { isSupported: vi.fn(() => false) })
     expect(createPendingConfirmNotification({ NotificationApi: NotificationApi as never, entry: {
       sessionId: 's', sessionName: '会话', toolUseId: 't', toolName: 'tool', input: {}, requestId: 'r', createdAt: 1
-    }, onClick: vi.fn() })).toBeNull()
+    }, title: 'title', body: 'body', onClick: vi.fn() })).toBeNull()
     expect(NotificationApi).not.toHaveBeenCalled()
+  })
+
+  it('swallows a native presentation failure without invoking the click action', () => {
+    const NotificationApi = Object.assign(vi.fn(function () { throw new Error('permission denied') }), { isSupported: vi.fn(() => true) })
+    const onClick = vi.fn()
+    expect(createPendingConfirmNotification({ NotificationApi: NotificationApi as never, entry: {
+      sessionId: 's', sessionName: '会话', toolUseId: 't', toolName: 'tool', input: {}, requestId: 'r', createdAt: 1
+    }, title: 'title', body: 'body', onClick })).toBeNull()
+    expect(onClick).not.toHaveBeenCalled()
   })
 })
