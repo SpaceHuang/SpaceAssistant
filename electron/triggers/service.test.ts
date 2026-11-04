@@ -61,7 +61,7 @@ describe('runtime trigger registration service', () => {
       let timestamp = 10_000
       let baselineGeneration = 0
       const service = createRuntimeTriggerService(createSessionCommands(db), { now: () => timestamp, authorize: () => true, authorizeTarget: () => true,
-        resolveBaseline: () => ({ baselineGeneration: ++baselineGeneration }) })
+        resolveBaseline: () => ({ baselineGeneration: ++baselineGeneration }), validateRegistrationAtCommit: () => true })
       const params = { clientKey: 'stable-key', receiverSessionId: receiver, expiresAt: 20_000,
         condition: { type: 'turn_completed', targetSessionId: owner, turnId: 'turn-1' } }
       const created = await service.register({ ownerSessionId: owner, params })

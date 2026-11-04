@@ -83,7 +83,7 @@ export interface SessionCommands {
     listWaitingForManagedProcessExit(input: { managedProcessId: string; runtimeGeneration: string; ownerSessionId: string }): readonly RuntimeTriggerRecord[]
     countActive(input?: { ownerSessionId?: string; now?: number }): number
     findActiveSyncTarget(targetSessionId: string): RuntimeTriggerRecord | null
-    insert(record: RuntimeTriggerRecord): RuntimeTriggerRecord
+    insert(record: RuntimeTriggerRecord, validateAtCommit?: () => boolean): RuntimeTriggerRecord
     update(triggerId: string, expectedRevision: number, patch: RuntimeTriggerPatch): RuntimeTriggerRecord | null
   }>
   appendNonTurnMessage(message: Message): MessageEntry

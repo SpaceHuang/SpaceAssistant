@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { createSession } from '../database/operations'
+import { appendMessage, createPersistedTurn, createSession, getPersistedTurn, updatePersistedTurnState } from '../database/operations'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerHostService } from './hostService'
 import { evaluateImInboundGuard } from '../remote/imInboundGuard'
@@ -9,6 +9,63 @@ import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { authorizeRuntimeTriggerImSource } from './imSourceAuthorization'
 
 describe('runtime trigger host capability adapter', () => {
+  it('rejects stale or foreign Turn registrations but preserves a prior idempotent registration', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'turn owner', workDirProfileId: 'turn-profile' })
+      const receiver = createSession(db, { name: 'turn receiver', workDirProfileId: 'turn-profile' })
+      const foreign = createSession(db, { name: 'foreign turn', workDirProfileId: 'turn-profile' })
+      const assistant = appendMessage(db, { id: 'turn-registration-assistant', sessionId: owner.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+      createPersistedTurn(db, { turnId: 'registered-turn', requestId: 'registered-turn-request', sessionId: owner.id,
+        assistantMessageId: assistant.message.id, state: 'executing' })
+      const commands = createSessionCommands(db)
+      const sessions = [owner, receiver, foreign]
+      const service = createRuntimeTriggerHostService({ commands,
+        queries: { listSessions: () => sessions, imAcceptedFacts: {} } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }),
+          readTurn: ({ sessionId, turnId }: { sessionId: string; turnId: string }) => {
+            const turn = getPersistedTurn(db, turnId)
+            return turn?.sessionId === sessionId ? turn : undefined
+          } } as never })
+      const params = { clientKey: 'active-turn', receiverSessionId: receiver.id, expiresAt: Date.now() + 60_000,
+        condition: { type: 'turn_completed', targetSessionId: owner.id, turnId: 'registered-turn' } }
+      await expect(service.register({ ownerSessionId: owner.id, params })).resolves.toMatchObject({ trigger: { state: 'waiting' } })
+      updatePersistedTurnState(db, 'registered-turn', 'terminal', { outcome: 'completed' })
+      await expect(service.register({ ownerSessionId: owner.id, params })).resolves.toMatchObject({ replayed: true })
+      await expect(service.register({ ownerSessionId: owner.id, params: { ...params, clientKey: 'after-terminal' } }))
+        .rejects.toThrow('TRIGGER_CONFLICT:target-turn-not-active')
+      await expect(service.register({ ownerSessionId: owner.id, params: { ...params, clientKey: 'missing-turn',
+        condition: { ...params.condition, turnId: 'missing-turn' } } })).rejects.toThrow('TRIGGER_CONFLICT:target-turn-not-active')
+      const foreignAssistant = appendMessage(db, { id: 'foreign-turn-assistant', sessionId: foreign.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+      createPersistedTurn(db, { turnId: 'foreign-turn', requestId: 'foreign-turn-request', sessionId: foreign.id,
+        assistantMessageId: foreignAssistant.message.id, state: 'executing' })
+      await expect(service.register({ ownerSessionId: owner.id, params: { ...params, clientKey: 'foreign-turn',
+        condition: { ...params.condition, turnId: 'foreign-turn' } } })).rejects.toThrow('TRIGGER_CONFLICT:target-turn-not-active')
+    } finally { db.close() }
+  })
+
+  it('rejects a Turn that terminates while registration waits for its baseline', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'racing turn owner', workDirProfileId: 'race-profile' })
+      const receiver = createSession(db, { name: 'racing turn receiver', workDirProfileId: 'race-profile' })
+      const assistant = appendMessage(db, { id: 'racing-turn-assistant', sessionId: owner.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+      createPersistedTurn(db, { turnId: 'racing-turn', requestId: 'racing-turn-request', sessionId: owner.id,
+        assistantMessageId: assistant.message.id, state: 'executing' })
+      let reads = 0
+      const execution = { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: ({ sessionId, turnId }: { sessionId: string; turnId: string }) => {
+        reads += 1
+        if (reads === 2) updatePersistedTurnState(db, 'racing-turn', 'terminal', { outcome: 'completed' })
+        const turn = getPersistedTurn(db, turnId)
+        return turn?.sessionId === sessionId ? turn : undefined
+      } }
+      const service = createRuntimeTriggerHostService({ commands: createSessionCommands(db), queries: { listSessions: () => [owner, receiver], imAcceptedFacts: {} } as never,
+        execution: execution as never })
+      await expect(service.register({ ownerSessionId: owner.id, params: { clientKey: 'turn-race', receiverSessionId: receiver.id, expiresAt: Date.now() + 60_000,
+        condition: { type: 'turn_completed', targetSessionId: owner.id, turnId: 'racing-turn' } } })).rejects.toThrow('TRIGGER_CONFLICT:target-turn-not-active')
+    } finally { db.close() }
+  })
+
   it('captures a settled baseline for each existing invocation at registration', async () => {
     const db = createMemoryAppDb()
     try {

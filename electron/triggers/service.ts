@@ -25,6 +25,7 @@ export type RuntimeTriggerServiceOptions = Readonly<{
   listTargets?: (ownerSessionId: string) => readonly RuntimeTriggerTargetDto[]
   cancelSyncWait?: (record: RuntimeTriggerRecord) => void
   resolveBaseline?: (input: { ownerSessionId: string; condition: RuntimeTriggerCondition }) => Readonly<Record<string, unknown>> | Promise<Readonly<Record<string, unknown>>>
+  validateRegistrationAtCommit?: (input: { ownerSessionId: string; receiverSessionId: string; condition: RuntimeTriggerCondition }) => boolean
 }>
 
 function fail(code: RuntimeTriggerFailure['code'], caseId: string): never { throw new RuntimeTriggerServiceError(runtimeTriggerFailure(code, caseId)) }
@@ -81,6 +82,9 @@ export function createRuntimeTriggerService(commands: SessionCommands, options: 
       try { baseline = await options.resolveBaseline?.({ ownerSessionId, condition }) ?? {} }
       catch { fail('TRIGGER_SOURCE_GAP', 'source-baseline-unavailable') }
       const definition = { version: 1 as const, condition, sourceBaseline: structuredClone(baseline) }
+      if (condition.type === 'turn_completed' && (!options.validateRegistrationAtCommit || !options.validateRegistrationAtCommit({ ownerSessionId, receiverSessionId: params.receiverSessionId, condition }))) {
+        fail('TRIGGER_CONFLICT', 'target-turn-not-active')
+      }
       if (condition.type === 'session_steps' && condition.mode === 'sync') {
         const activeSync = commands.runtimeTriggers.findActiveSyncTarget(condition.targetSessionId)
         if (activeSync && activeSync.expiresAt <= timestamp) updateRuntimeTrigger(commands, activeSync.id, activeSync.revision, { state: 'expired', updatedAt: timestamp })
@@ -90,10 +94,16 @@ export function createRuntimeTriggerService(commands: SessionCommands, options: 
       if (commands.runtimeTriggers.countActive({ now: timestamp }) >= globalLimit) fail('TRIGGER_CAPACITY', 'application-active-limit')
       const record: RuntimeTriggerRecord = { id: randomUUID(), ownerSessionId, receiverSessionId: params.receiverSessionId, clientKey: params.clientKey,
         definition, state: 'waiting', createdAt: timestamp, expiresAt: params.expiresAt, attempts: 0, revision: 1, updatedAt: timestamp }
-      try { return { trigger: toDto(insertRuntimeTrigger(commands, record)) } }
+      try {
+        const validateAtCommit = condition.type === 'turn_completed'
+          ? () => options.validateRegistrationAtCommit?.({ ownerSessionId, receiverSessionId: params.receiverSessionId, condition }) === true
+          : undefined
+        return { trigger: toDto(insertRuntimeTrigger(commands, record, validateAtCommit)) }
+      }
       catch (error) {
         const raced = findRuntimeTriggerByClientKey(commands, ownerSessionId, params.clientKey)
         if (raced && sameRegistration(raced, params)) return { trigger: toDto(raced), replayed: true }
+        if (error instanceof Error && error.message === 'RUNTIME_TRIGGER_INSERT_GUARD_REJECTED') fail('TRIGGER_CONFLICT', 'target-turn-not-active')
         if (condition.type === 'session_steps' && condition.mode === 'sync') fail('TRIGGER_CONFLICT', 'sync-target-already-registered')
         throw error
       }

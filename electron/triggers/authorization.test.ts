@@ -113,7 +113,11 @@ describe('runtime trigger authorization final-check', () => {
       await firstHistory.appendBatch([initial], 0)
       const stored = conn.prepare("SELECT payload_json FROM agent_history_events WHERE event_id=?").get(binding.contextEventId) as { payload_json: string }
       expect(stored.payload_json).toContain('__spaceassistant_spill_v1')
+      await expect(firstHistory.appendBatch([initial], 0)).resolves.toMatchObject({ duplicate: true })
       const reopenedHistory = new SqliteAgentHistory(conn, 1, Date.now, session.id, spillStore, binding)
+      await expect(reopenedHistory.appendBatch([initial], 0)).resolves.toMatchObject({ duplicate: true })
+      const changed = { ...initial, payload: { ...(initial.payload as Record<string, unknown>), messages: [{ role: 'user', content: 'y'.repeat(70_000) }] } }
+      await expect(reopenedHistory.appendBatch([changed], 0)).rejects.toThrow(/admission inconsistent/i)
       await expect(reopenedHistory.appendBatch([{ ...initial, sequence: 2, eventId: 'inv-1:continued', idempotencyKey: 'inv-1:continued',
         kind: 'model-request-started', payload: { requestId: binding.requestId } }], 1)).resolves.toMatchObject({ version: 2 })
     } finally { temp.cleanup() }

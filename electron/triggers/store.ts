@@ -10,5 +10,5 @@ function validateRecord(record: RuntimeTriggerStoredRecord | null): RuntimeTrigg
 }
 export const readRuntimeTrigger = (commands: SessionCommands, triggerId: string) => validateRecord(commands.runtimeTriggers.read(triggerId))
 export const findRuntimeTriggerByClientKey = (commands: SessionCommands, ownerSessionId: string, clientKey: string) => validateRecord(commands.runtimeTriggers.findByClientKey(ownerSessionId, clientKey))
-export const insertRuntimeTrigger = (commands: SessionCommands, input: RuntimeTriggerStoredRecord) => validateRecord(commands.runtimeTriggers.insert({ ...input, definition: parseRuntimeTriggerDefinition(input.definition) }))!
+export const insertRuntimeTrigger = (commands: SessionCommands, input: RuntimeTriggerStoredRecord, validateAtCommit?: () => boolean) => validateRecord(commands.runtimeTriggers.insert({ ...input, definition: parseRuntimeTriggerDefinition(input.definition) }, validateAtCommit))!
 export const updateRuntimeTrigger = (commands: SessionCommands, triggerId: string, expectedRevision: number, patch: RuntimeTriggerStorePatch) => validateRecord(commands.runtimeTriggers.update(triggerId, expectedRevision, patch))

@@ -9,6 +9,7 @@ import {
   createHistoryTransitionState,
   validateHistoryTransition,
   validateHistoryBatch,
+  historyEventsEqual,
   type HistoryAppendResult,
   type HistoryEvent,
   type HistoryPort,
@@ -608,13 +609,22 @@ export class SqliteAgentHistory implements HistoryPort {
       ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
       : undefined
     const storedEvents: HistoryEvent[] = []
+    const findExactStoredReplay = (event: HistoryEvent): HistoryEvent | undefined => {
+      const row = this.conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json FROM agent_history_events
+        WHERE invocation_id=? AND (idempotency_key=? OR event_id=?) LIMIT 1`)
+        .get(event.invocationId, event.idempotencyKey, event.eventId) as EventRow | undefined
+      if (!row) return undefined
+      const stored = fromRow(row)
+      const hydrated = this.spillStore ? this.hydrateLargeToolResultSync(stored) : stored
+      return historyEventsEqual(hydrated, event) ? stored : undefined
+    }
     if (this.spillStore) {
       // Bound concurrent large-result encoding and yield between groups so a batch of
       // tool completions cannot monopolize the main process while preparing spill files.
       const spillBatchSize = 1
       for (let offset = 0; offset < events.length; offset += spillBatchSize) {
         const batch = events.slice(offset, offset + spillBatchSize)
-        storedEvents.push(...await Promise.all(batch.map((event) => this.spillLargeCanonicalPayload(event))))
+        storedEvents.push(...await Promise.all(batch.map(async (event) => findExactStoredReplay(event) ?? this.spillLargeCanonicalPayload(event))))
         if (offset + spillBatchSize < events.length) await new Promise<void>((resolve) => setImmediate(resolve))
       }
     } else {
@@ -633,12 +643,15 @@ export class SqliteAgentHistory implements HistoryPort {
       }
     }
     return runInTransaction(this.conn, () => {
+      // A concurrent append may have completed while spill files were being prepared.
+      // Reuse its persisted descriptors so exact idempotent replay remains byte stable.
+      const committedEvents = storedEvents.map((event, index) => findExactStoredReplay(events[index]!) ?? event)
       const triggerBinding = this.runtimeTriggerAdmission
       const triggerAdmissionEvent = triggerBinding
         ? events.find((event) => event.kind === 'invocation-context-committed' && event.eventId === triggerBinding.contextEventId)
         : undefined
       const storedTriggerAdmissionEvent = triggerBinding
-        ? storedEvents.find((event) => event.kind === 'invocation-context-committed' && event.eventId === triggerBinding.contextEventId)
+        ? committedEvents.find((event) => event.kind === 'invocation-context-committed' && event.eventId === triggerBinding.contextEventId)
         : undefined
       let admissionToCommit: Record<string, unknown> | undefined
       let triggerRevision = -1
@@ -764,7 +777,7 @@ export class SqliteAgentHistory implements HistoryPort {
       const projectionTargets = this.sessionId && expectedSessionGeneration
         ? buildCanonicalToolResultProjectionTargets(this.conn, events, this.sessionId, expectedSessionGeneration, this.now())
         : []
-      const appended = appendSqliteAgentHistoryBatchInTransaction(this.conn, storedEvents, expectedVersion, {
+      const appended = appendSqliteAgentHistoryBatchInTransaction(this.conn, committedEvents, expectedVersion, {
         schemaVersion: this.schemaVersion, now: this.now, processGeneration: this.processGeneration,
         ...(projectionTargets.length ? { projectionTargets } : {}),
         ...(this.sessionId ? { sessionId: this.sessionId } : {})

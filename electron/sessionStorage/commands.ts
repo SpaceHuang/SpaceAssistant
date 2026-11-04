@@ -70,9 +70,10 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
       const row = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE state IN ('waiting','matched') AND json_extract(definition_json,'$.condition.type')='session_steps' AND json_extract(definition_json,'$.condition.mode')='sync' AND json_extract(definition_json,'$.condition.targetSessionId')=?`).get(targetSessionId) as TriggerRow | undefined
       return row ? decodeRuntimeTriggerRow(row) : null
     },
-    insert: (input) => {
+    insert: (input, validateAtCommit) => {
       const conn = getDbConnection(db)
       return runInTransaction(conn, () => {
+        if (validateAtCommit && !validateAtCommit()) throw new Error('RUNTIME_TRIGGER_INSERT_GUARD_REJECTED')
         conn.prepare(`INSERT INTO runtime_triggers(id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
           .run(input.id,input.ownerSessionId,input.receiverSessionId,input.clientKey,JSON.stringify(input.definition),input.state,input.createdAt,input.expiresAt,input.matchedAt ?? null,input.event ? JSON.stringify(input.event) : null,input.messageId ?? null,input.attempts,input.nextAttemptAt ?? null,input.result ? JSON.stringify(input.result) : null,input.revision,input.updatedAt)
         const inserted = readRuntimeTrigger(input.id)

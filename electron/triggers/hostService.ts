@@ -5,12 +5,13 @@ import { buildImQueueScope, type QueueScope } from '../../src/shared/queueScope'
 import { createRuntimeTriggerService } from './service'
 import { listManagedProcessTargets, managedProcessRuntimeGeneration, readManagedProcessExit } from './processSource'
 import { readSessionSettledStepFacts } from './sources'
+import { isActiveTurnState } from '../sessionStorage/domain/turnState'
 
 /** Host facts used by capability registration. Authorization is derived from current session and source records. */
 export function createRuntimeTriggerHostService(input: {
   commands: SessionCommands
   queries: SessionQueries
-  execution: Pick<SessionExecutionStore, 'historyFor'>
+  execution: Pick<SessionExecutionStore, 'historyFor' | 'readTurn'>
   listProcesses?: typeof listManagedProcessTargets
   processGeneration?: typeof managedProcessRuntimeGeneration
   authorizeImSource?: (source: Readonly<{ channel: 'feishu' | 'wechat'; accountId: string; conversationId: string; senderId: string; isGroup: boolean }>) =>
@@ -35,9 +36,21 @@ export function createRuntimeTriggerHostService(input: {
     if (!owner) return reject()
     if (condition.type === 'time') return { allowed: true as const }
     if (condition.type === 'process_exit') {
-      if (listProcesses(ownerSessionId).some((target) => target.id === condition.managedProcessId)) return { allowed: true as const }
+      if (!sourceEvent && listProcesses(ownerSessionId).some((target) => target.id === condition.managedProcessId)) return { allowed: true as const }
       const generation = sourceBaseline?.runtimeGeneration
       if (typeof generation !== 'string') return reject()
+      if (sourceEvent) {
+        const outputRef = sourceEvent.outputRef
+        const validOutputRef = outputRef === undefined || (typeof outputRef === 'object' && outputRef !== null &&
+          Number.isSafeInteger((outputRef as Record<string, unknown>).bytes) && Number((outputRef as Record<string, unknown>).bytes) >= 0 &&
+          typeof (outputRef as Record<string, unknown>).truncated === 'boolean')
+        return sourceEvent.type === 'process_exit' && sourceEvent.managedProcessId === condition.managedProcessId &&
+          sourceEvent.runtimeGeneration === generation && sourceEvent.sessionId === ownerSessionId &&
+          Number.isSafeInteger(sourceEvent.occurredAt) && typeof sourceEvent.toolName === 'string' && !!sourceEvent.toolName.trim() &&
+          (sourceEvent.exitCode === null || Number.isSafeInteger(sourceEvent.exitCode)) &&
+          (sourceEvent.signal === null || typeof sourceEvent.signal === 'string') && typeof sourceEvent.reason === 'string' && !!sourceEvent.reason.trim() && validOutputRef
+          ? { allowed: true as const } : reject()
+      }
       const exit = readManagedProcessExit(condition.managedProcessId, generation)
       return exit.kind === 'terminal' && exit.sessionId === ownerSessionId ? { allowed: true as const } : reject()
     }
@@ -113,6 +126,11 @@ export function createRuntimeTriggerHostService(input: {
         channel: condition.channel, accountId: condition.accountId, conversationId: condition.conversationId
       })
       return {}
+    },
+    validateRegistrationAtCommit: ({ condition }) => {
+      if (condition.type !== 'turn_completed') return true
+      const turn = input.execution.readTurn({ sessionId: condition.targetSessionId, turnId: condition.turnId })
+      return Boolean(turn && turn.sessionId === condition.targetSessionId && turn.turnId === condition.turnId && isActiveTurnState(turn.state))
     }
   })
   const register = service.register.bind(service)

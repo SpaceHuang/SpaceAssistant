@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { beginManagedProcess, finishManagedProcess, listManagedProcessTargets, managedProcessRuntimeGeneration, readManagedProcessExit, resetManagedProcessSourceForTests } from './processSource'
 import { createTempDatabase } from '../database/testHelpers'
-import { createSession } from '../database/operations'
+import { createSession, getSession } from '../database/operations'
 import { createSessionCommands } from '../sessionStorage/commands'
-import { createRuntimeTriggerService } from './service'
 import { subscribeRuntimeTriggerProcessExitHandoff } from './processExitHandoff'
 import { openDatabase } from '../database'
+import { createRuntimeTriggerHostService } from './hostService'
+import { createRuntimeTriggerDelivery } from './delivery'
+import { createRuntimeTriggerAuthorizationBinding } from './hostAuthorization'
 
 describe('managed process trigger facts', () => {
   it('tracks opaque IDs and emits one settled exit with code, signal and bounded output reference', () => {
@@ -47,12 +49,16 @@ describe('managed process trigger facts', () => {
     let db = temp.db
     let unsubscribe = () => undefined
     try {
-      const owner = createSession(db, { name: 'process owner' }).id
-      const receiver = createSession(db, { name: 'process receiver' }).id
+      const ownerSession = createSession(db, { name: 'process owner', workDirProfileId: 'process-profile' })
+      const receiverSession = createSession(db, { name: 'process receiver', workDirProfileId: 'process-profile' })
+      const owner = ownerSession.id
+      const receiver = receiverSession.id
       const commands = createSessionCommands(db)
       const process = beginManagedProcess({ sessionId: owner, toolName: 'run_script' })
-      const service = createRuntimeTriggerService(commands, { authorize: () => true, authorizeTarget: () => true,
-        resolveBaseline: () => ({ runtimeGeneration: process.runtimeGeneration }) })
+      let visibleSessions = [ownerSession, receiverSession]
+      const service = createRuntimeTriggerHostService({ commands,
+        queries: { listSessions: () => visibleSessions, readSession: (sessionId: string) => getSession(db, sessionId), imAcceptedFacts: {} } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: () => undefined } as never })
       const registered = await service.register({ ownerSessionId: owner, params: { clientKey: 'process-handoff', receiverSessionId: receiver,
         expiresAt: Date.now() + 60_000, condition: { type: 'process_exit', managedProcessId: process.managedProcessId } } })
       unsubscribe = subscribeRuntimeTriggerProcessExitHandoff(commands)
@@ -63,7 +69,36 @@ describe('managed process trigger facts', () => {
       db.close()
       resetManagedProcessSourceForTests()
       db = openDatabase(temp.dbPath)
-      expect(createSessionCommands(db).runtimeTriggers.read(registered.trigger.triggerId)).toMatchObject({ state: 'matched', event: { exitCode: 0 } })
+      const reopenedCommands = createSessionCommands(db)
+      const reopenedService = createRuntimeTriggerHostService({ commands: reopenedCommands,
+        queries: { listSessions: () => visibleSessions, readSession: (sessionId: string) => getSession(db, sessionId), imAcceptedFacts: {} } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: () => undefined } as never })
+      const recovered = reopenedCommands.runtimeTriggers.read(registered.trigger.triggerId)!
+      expect(recovered).toMatchObject({ state: 'matched', event: { exitCode: 0 } })
+      expect(reopenedService.authorizeSource(owner, receiver, recovered.definition.condition, recovered.definition.sourceBaseline,
+        { ...recovered.event, managedProcessId: 'tampered-process-id' })).toMatchObject({ allowed: false })
+      const scopeForReceiver = reopenedService.resolveQueueScope(receiver)!
+      const deliver = createRuntimeTriggerDelivery({
+        read: (id) => reopenedCommands.runtimeTriggers.read(id),
+        update: (id, revision, patch) => reopenedCommands.runtimeTriggers.update(id, revision, patch),
+        expire: (id, revision) => reopenedCommands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: Date.now() }),
+        authorize: (trigger, queueScope) => {
+          const decision = reopenedService.authorizeSource(trigger.ownerSessionId, trigger.receiverSessionId,
+            trigger.definition.condition, trigger.definition.sourceBaseline, trigger.event)
+          return decision.allowed ? createRuntimeTriggerAuthorizationBinding({ trigger, queueScope,
+            authority: { policyRevision: 'policy-current', authorizationGeneration: 'auth-current', runtimeGeneration: 'runtime-current' },
+            isAuthorized: () => true }) : null
+        },
+        queueScope: () => scopeForReceiver,
+        enqueue: (request) => reopenedCommands.scopedQueue.enqueue(request),
+        readReceipt: (request) => reopenedCommands.scopedQueue.readReceipt(request)
+      })
+      visibleSessions = [receiverSession]
+      expect(deliver(registered.trigger.triggerId)).toMatchObject({ kind: 'failed', case: 'delivery-write-conflict' })
+      expect(reopenedCommands.scopedQueue.readReceipt({ sessionId: receiver, requestId: `runtime-trigger:${registered.trigger.triggerId}`,
+        queueScope: scopeForReceiver })).toBeUndefined()
+      visibleSessions = [ownerSession, receiverSession]
+      expect(deliver(registered.trigger.triggerId)).toMatchObject({ kind: 'enqueued', messageId: expect.any(String) })
     } finally { unsubscribe(); temp.cleanup(db) }
   })
 

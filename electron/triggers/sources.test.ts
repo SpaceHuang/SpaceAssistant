@@ -65,6 +65,12 @@ describe('runtime trigger History source facts', () => {
     await expect(evaluateRuntimeTriggerSource(record, { now: 800, readTurnCompletion })).resolves.toMatchObject({ kind: 'candidate', event: { turnId: 'active-turn' } })
   })
 
+  it('does not match a terminal fact whose occurrence predates trigger registration', async () => {
+    const record = { ...trigger({ type: 'turn_completed', targetSessionId: 'target', turnId: 'already-terminal' }), createdAt: 600 }
+    await expect(evaluateRuntimeTriggerSource(record, { now: 700, readTurnCompletion: async () => ({ kind: 'terminal', sessionId: 'target',
+      turnId: 'already-terminal', outcome: 'completed', occurredAt: 500 }) })).resolves.toEqual({ kind: 'source-gap', case: 'turn-completed-before-registration' })
+  })
+
   it('expires a still-pending Turn at its deadline but keeps a pre-deadline terminal fact eligible offline', async () => {
     const record = { ...trigger({ type: 'turn_completed', targetSessionId: 'target', turnId: 'active-turn' }, 500), expiresAt: 500 }
     await expect(evaluateRuntimeTriggerSource(record, { now: 500, readTurnCompletion: async () => ({ kind: 'pending' }) }))

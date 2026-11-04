@@ -50,6 +50,7 @@ export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord
     if (fact.sessionId !== condition.targetSessionId || fact.turnId !== condition.turnId || !Number.isSafeInteger(fact.occurredAt)) {
       return { kind: 'source-gap', case: 'turn-fact-identity-invalid' }
     }
+    if (fact.occurredAt < trigger.createdAt) return { kind: 'source-gap', case: 'turn-completed-before-registration' }
     return fact.occurredAt > trigger.expiresAt ? { kind: 'expired', case: 'turn-completed-after-expiry' }
       : { kind: 'candidate', event: { type: 'turn_completed', occurredAt: fact.occurredAt, targetSessionId: fact.sessionId, turnId: fact.turnId, outcome: fact.outcome } }
   }
