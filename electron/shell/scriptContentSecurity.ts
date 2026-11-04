@@ -1095,8 +1095,6 @@ const FINDING_CLASS_BY_PATTERN: Record<string, ScriptFinding['class'] | undefine
   B11: 'decode-then-exec'
 }
 
-const MAX_SCRIPT_FINDING_SNIPPET_CHARS = 2000
-
 function sourceSnippet(code: string, range: SourceRange): string {
   const lines = code.split('\n')
   const first = range.startLine - 1
@@ -1104,15 +1102,11 @@ function sourceSnippet(code: string, range: SourceRange): string {
   if (first < 0 || last < first || last >= lines.length) throw new Error('finding source range is outside script')
   const sliceBytes = (line: string, start: number, end: number) =>
     Buffer.from(line, 'utf8').subarray(start, end).toString('utf8')
-  if (first === last) return limitSnippet(sliceBytes(lines[first]!, range.startCol - 1, range.endCol - 1))
+  if (first === last) return sliceBytes(lines[first]!, range.startCol - 1, range.endCol - 1)
   const selected = [sliceBytes(lines[first]!, range.startCol - 1, Buffer.byteLength(lines[first]!, 'utf8'))]
   for (let index = first + 1; index < last; index += 1) selected.push(lines[index]!)
   selected.push(sliceBytes(lines[last]!, 0, range.endCol - 1))
-  return limitSnippet(selected.join('\n'))
-}
-
-function limitSnippet(snippet: string): string {
-  return Array.from(snippet).slice(0, MAX_SCRIPT_FINDING_SNIPPET_CHARS).join('')
+  return selected.join('\n')
 }
 
 function buildScriptFindings(code: string, hits: PatternHit[]): ScriptFinding[] | null {

@@ -60,7 +60,7 @@ describe('scriptGolden（Python findings 基线）', () => {
           ? sliceBytes(lines[first]!, range.startCol - 1, range.endCol - 1)
           : [sliceBytes(lines[first]!, range.startCol - 1, Buffer.byteLength(lines[first]!, 'utf8')),
             ...lines.slice(first + 1, last), sliceBytes(lines[last]!, 0, range.endCol - 1)].join('\n')
-        expect(finding.snippet).toBe(Array.from(expected).slice(0, 2000).join(''))
+        expect(finding.snippet).toBe(expected)
       }
     }
   })

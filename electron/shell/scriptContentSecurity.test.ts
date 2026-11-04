@@ -71,10 +71,10 @@ describe('scriptContentSecurity — List A (baseline)', () => {
     ]))
   })
 
-  it('bounds an unusually long finding snippet without changing its source range', () => {
+  it('keeps the full unusually long finding snippet and its source range', () => {
     const code = `open('/tmp/${'x'.repeat(2500)}', 'w')`
     const finding = analyzeScriptContent(code).findings?.[0]
-    expect(finding?.snippet.length).toBeLessThanOrEqual(2000)
+    expect(finding?.snippet).toBe(code)
     expect(finding?.range.endCol).toBe(code.length + 1)
   })
 

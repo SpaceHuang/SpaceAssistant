@@ -63,6 +63,15 @@ describe('ScriptConfirmCard', () => {
     expect(screen.getByText('进程调用')).toBeDefined()
   })
 
+  it('bounds long finding snippets only in the confirmation display', () => {
+    const item = { ...findings(1)[0]!, snippet: `subprocess.run(${ 'x'.repeat(2_100) })` }
+    renderCard(<ScriptConfirmCard record={record({ scriptFindings: [item] })} onConfirm={vi.fn()} />)
+    const snippet = document.querySelector('.script-confirm-card__finding-snippet')
+    expect(item.snippet.length).toBeGreaterThan(2_000)
+    expect(snippet?.textContent).toHaveLength(2_001)
+    expect(snippet?.textContent?.endsWith('…')).toBe(true)
+  })
+
   it('highlights python code via shiki', async () => {
     const { highlightCode } = await import('../../utils/shikiHighlighter')
     render(

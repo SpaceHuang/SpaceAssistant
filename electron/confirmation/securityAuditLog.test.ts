@@ -6,6 +6,8 @@ import path from 'path'
 import { SecurityAuditLog, auditLine, sanitizeAuditField } from './securityAuditLog'
 import { querySecurityAuditLog } from './securityAuditReader'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
+import { analyzeScriptContent } from '../shell/scriptContentSecurity'
+import { deriveClueExtras } from './agentChannel'
 
 const tmpDirs: string[] = []
 
@@ -80,6 +82,75 @@ describe('安全审计日志：脱敏', () => {
 })
 
 describe('脚本发现审计：结构投影与片段摘要', () => {
+  it.each([
+    ['同引号嵌套', 'eval(f"{dict(secret="same-private-value")}")', 'same-private-value'],
+    ['多层插值', 'eval(f"{dict(secret=f"{dict(token=\'nested-private-value\')}")}")', 'nested-private-value'],
+    ['不同引号组合', 'eval(f\'{dict(secret="mixed-private-value")}\')', 'mixed-private-value']
+  ])('真实分析器到最终 JSONL 不泄露%s中的字符串字面量', async (label, code, secret) => {
+    const analysis = analyzeScriptContent(code)
+    expect(analysis.coverage, label).toBe('complete')
+    expect(analysis.findings.length, label).toBeGreaterThan(0)
+    const dir = await tmpDir()
+    const log = new SecurityAuditLog({ logDir: dir })
+    log.record({
+      ...baseEvent(),
+      toolName: 'run_script',
+      scriptAuditInput: {
+        turnId: 'turn-fstring',
+        contentDigest: createHash('sha256').update(code).digest('hex'),
+        totalCount: analysis.totalCount,
+        findings: analysis.findings
+      }
+    } as SecurityAuditEvent)
+    await log.flush()
+    const files = await fs.readdir(dir)
+    const content = await fs.readFile(path.join(dir, files.find((file) => file.endsWith('.log'))!), 'utf8')
+    const persisted = JSON.parse(content.trim()) as { scriptAudit?: { findings: Array<{ skeleton: string }> } }
+    expect(content).not.toContain(secret)
+    expect(persisted.scriptAudit?.findings[0]?.skeleton).toBe('[unavailable]')
+  })
+
+  it('真实分析器的长片段在审批侧降级，审计摘要覆盖尾部变化', () => {
+    const prefix = `import subprocess\nsubprocess.run(["echo"],${' '.repeat(2100)}`
+    const firstCode = `${prefix}shell=True)`
+    const secondCode = `${prefix}shell=None)`
+    const first = analyzeScriptContent(firstCode)
+    const second = analyzeScriptContent(secondCode)
+    expect(first.coverage).toBe('complete')
+    expect(second.coverage).toBe('complete')
+    expect(first.findings[0]?.snippet).toContain('shell=True)')
+    expect(second.findings[0]?.snippet).toContain('shell=None)')
+    expect(first.findings[0]?.range).toEqual(second.findings[0]?.range)
+
+    const approval = (code: string, analysis: typeof first) => deriveClueExtras({
+      toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+      summary: { text: 'review script' },
+      signals: [
+        { kind: 'script-analysis', ...analysis },
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true,
+          contentDigest: createHash('sha256').update(code).digest('hex'), parametersDigest: 'b'.repeat(64), environmentDigest: 'c'.repeat(64) }
+      ]
+    }).scriptEvidence
+    expect(approval(firstCode, first)).toMatchObject({ sufficiency: 'undetermined', truncated: true })
+    expect(approval(secondCode, second)).toMatchObject({ sufficiency: 'undetermined', truncated: true })
+
+    const auditHash = (code: string, analysis: typeof first) => {
+      const line = auditLine({
+        ...baseEvent(), toolName: 'run_script',
+        scriptAuditInput: {
+          turnId: 'turn-long-snippet', contentDigest: createHash('sha256').update(code).digest('hex'),
+          totalCount: analysis.totalCount, findings: analysis.findings
+        }
+      } as SecurityAuditEvent)
+      return (JSON.parse(line) as { scriptAudit: { findings: Array<{ snippetSha256: string; skeleton: string }>; truncated: boolean } }).scriptAudit
+    }
+    const firstAudit = auditHash(firstCode, first)
+    const secondAudit = auditHash(secondCode, second)
+    expect(firstAudit.findings[0]?.snippetSha256).not.toBe(secondAudit.findings[0]?.snippetSha256)
+    expect(firstAudit.truncated).toBe(true)
+    expect(secondAudit.truncated).toBe(true)
+  })
+
   it('从完整事件写入 JSONL：只保留投影骨架、摘要、引用与截断状态', async () => {
     const dir = await tmpDir()
     const source = [

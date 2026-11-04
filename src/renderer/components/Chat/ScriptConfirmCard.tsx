@@ -10,6 +10,8 @@ type Props = {
   reasonLabel?: string
 }
 
+const MAX_FINDING_SNIPPET_DISPLAY_CHARS = 2_000
+
 const FINDING_CLASS_KEYS = {
   'process-creation': 'confirm.script.findings.classes.processCreation',
   'destructive-fs': 'confirm.script.findings.classes.destructiveFs',
@@ -69,14 +71,19 @@ export function ScriptConfirmCard({ record, onConfirm, reasonLabel }: Props) {
                 {t('confirm.script.findings.title')}
               </h3>
               <ol className="script-confirm-card__findings-list" id={findingsListId}>
-                {visibleFindings.map((finding, index) => (
-                  <li className="script-confirm-card__finding" key={`${finding.pattern}:${finding.range.startLine}:${finding.range.startCol}:${index}`}>
-                    <span className="script-confirm-card__finding-location">{t('confirm.script.findings.location', { line: finding.range.startLine })}</span>
-                    <code className="script-confirm-card__finding-snippet">{finding.snippet}</code>
-                    <span className="script-confirm-card__finding-class">{t(FINDING_CLASS_KEYS[finding.class])}</span>
-                    <span className="script-confirm-card__finding-evidence">{t(FINDING_EVIDENCE_KEYS[finding.evidence.kind])}</span>
-                  </li>
-                ))}
+                {visibleFindings.map((finding, index) => {
+                  const snippetCharacters = Array.from(finding.snippet)
+                  const snippetTruncated = snippetCharacters.length > MAX_FINDING_SNIPPET_DISPLAY_CHARS
+                  const snippet = snippetCharacters.slice(0, MAX_FINDING_SNIPPET_DISPLAY_CHARS).join('')
+                  return (
+                    <li className="script-confirm-card__finding" key={`${finding.pattern}:${finding.range.startLine}:${finding.range.startCol}:${index}`}>
+                      <span className="script-confirm-card__finding-location">{t('confirm.script.findings.location', { line: finding.range.startLine })}</span>
+                      <code className="script-confirm-card__finding-snippet">{snippet}{snippetTruncated ? '…' : null}</code>
+                      <span className="script-confirm-card__finding-class">{t(FINDING_CLASS_KEYS[finding.class])}</span>
+                      <span className="script-confirm-card__finding-evidence">{t(FINDING_EVIDENCE_KEYS[finding.evidence.kind])}</span>
+                    </li>
+                  )
+                })}
               </ol>
               {hiddenFindingCount > 0 ? (
                 <button

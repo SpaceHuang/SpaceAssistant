@@ -14,6 +14,10 @@ const NUMBER_LITERAL = /^(?:0[xX][\da-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|(?:\d[\d_
 const STRING_PREFIX = /^[rRuUbBfF]{1,3}(?=['"])/
 
 function consumeString(source: string, quoteStart: number, prefixStart: number): { end: number; skeleton: string } | null {
+  // f-string replacement fields contain Python expressions with their own strings and
+  // nested f-strings. Until this projector can parse those lexical boundaries, fail closed
+  // instead of treating a quote inside an expression as the outer string terminator.
+  if (source.slice(prefixStart, quoteStart).toLowerCase().includes('f')) return null
   const quote = source[quoteStart]!
   const delimiter = source.slice(quoteStart, quoteStart + 3) === quote.repeat(3) ? quote.repeat(3) : quote
   let cursor = quoteStart + delimiter.length
