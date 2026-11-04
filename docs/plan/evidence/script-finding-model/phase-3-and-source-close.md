@@ -53,3 +53,23 @@
 - **policy**：`scriptClassDisposition` 与共享 Policy Engine 派生 finding/path token；稳定规则包括 `script-unresolved-write-review`、`script-non-write-path-confirm`、`script-analysis-incomplete-confirm` 与 `automation-script-path-unknown-deny`。策略决策和 trace 继续由 Policy Engine 管理，F34～F37 覆盖矩阵及反向行为。
 - **final-check**：既有 `scriptApprovalBinding.sha256` 与审核材料 `contentDigest` 在 agentChannel 做一致性核验；缺失、不充分或不匹配时，在审批模型调用前确定性降级为 `agent-undetermined`/真人 fallback。F20～F22 覆盖该边界；本计划未另建 final-check 规则。
 - **invariant**：没有新增不可配置系统 invariant；`npm run check:system-invariant-registry` 验证 12 registrations / 42 test references 及正反 fixture。
+
+## 评审后 P1 修复复验（2026-11-04）
+
+评审报告在原始 checkout 的 `docs/review/script-finding-model-execution-review-2026-11-04.md` 提出两项阻断。本节更新此前关闭结果；实现提交为 `f900dfdd86e21a6b582d02c2dd2977a4159af353`。
+
+### RED / GREEN
+
+- RED：先新增真实 `analyzeScriptContent → SecurityAuditLog.record/flush → 最终 JSONL` f-string 用例，以及 analyzer→审批/审计长片段用例。执行 `npm exec -- vitest run electron/shell/scriptContentSecurity.test.ts electron/shell/scriptGolden.test.ts electron/confirmation/securityAuditLog.test.ts`，5 项新增断言失败：嵌套 f-string 泄露/未 fail-closed；分析器片段尾部缺失；审批与审计无法观察尾部。
+- GREEN：审计投影暂不尝试解析 f-string replacement-field 的 Python 词法边界；遇到任何 f-string 即 fail-closed 为 `[unavailable]`。同引号嵌套、多层插值和单双引号组合经真实 analyzer 到最终 JSONL 测试，测试秘密均不落盘。
+- 移除 facts 侧 `sourceSnippet` 的 2000 码点静默截断，并将 golden 片段校验改为完整源片段相等。真实 analyzer 对 `shell=True)` 与 `shell=None)` 两个同长度尾部输入保留不同完整片段；`deriveClueExtras` 将超预算材料标为 `truncated: true`、`sufficiency: undetermined`，finding 为 insufficient。两个片段范围相同但最终审计 `snippetSha256` 不同，审计投影仍先 hash 完整规范化片段，再在存储侧截断骨架。
+- facts 完整片段的三个消费者各自设限：Agent 审批保持既有 2000 码点预算及确定性降级；审计保持结构投影预算；确认卡新增 2000 码点展示上限并以省略号标记。确认卡 RED：`npm exec -- vitest run src/renderer/components/Chat/ScriptConfirmCard.test.tsx -t 'bounds long finding snippets'` 1 项失败，证明 UI 原先无界渲染；GREEN 后该用例通过。
+
+### 修复后验证
+
+- `npm exec -- vitest run electron/shell/scriptContentSecurity.test.ts electron/shell/scriptGolden.test.ts electron/confirmation/securityAuditLog.test.ts electron/confirmation/agentChannel.test.ts src/shared/policy/scriptClassDisposition.test.ts src/shared/policy/policyEngine.test.ts electron/confirmation/scriptAnalysisFailureGate.test.ts`：7 files / 362 tests passed。
+- `npm exec -- vitest run src/renderer/components/Chat/ScriptConfirmCard.test.tsx`：1 file / 13 tests passed。
+- `npm test`：1259 files passed / 1 skipped；12284 tests passed / 140 skipped；退出码 0。
+- `npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`、`npm run check:system-invariant-registry`、`npm run build`、`git diff --check`：全部通过。系统不变量仍为 12 registrations / 42 references，无新增 invariant。Vite 输出 dynamic-import 与 chunk-size 非致命警告。
+
+此前源码关闭部分记录的 12279 全量通过数是修复前基线；本节 12284 项为评审修复后的最终结果。当前 worktree 为 `codex/script-finding-model-execution`，评审修复提交后工作树干净。
