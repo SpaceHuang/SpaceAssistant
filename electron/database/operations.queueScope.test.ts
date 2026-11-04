@@ -3,6 +3,12 @@ import { appendMessage, createSession, enqueueQueuedUserMessage, enqueueQueuedUs
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { serializeQueueScope } from '../../src/shared/queueScope'
+import { appendImInboxMessage } from './imInbox'
+import { createQueueInputReceiptInScope } from './operations'
+
+function addDesktopQueueReceipt(db: ReturnType<typeof createMemoryAppDb>, sessionId: string, messageId: string, requestId: string): void {
+  createQueueInputReceiptInScope(db, { sessionId, requestId, fingerprint: `fixture:${requestId}`, queuedMessageId: messageId, state: 'queued' }, { kind: 'desktop' })
+}
 
 describe('queue scope queries', () => {
   it('desktop list and get-next return only desktop queued messages', () => {
@@ -11,9 +17,10 @@ describe('queue scope queries', () => {
     const imMessage = appendMessage(db, {
       id: 'scope-im-message', sessionId: session.id, role: 'user', content: 'im payload', timestamp: 1, status: 'queued'
     })
-    appendMessage(db, {
+    const desktop = appendMessage(db, {
       id: 'scope-desktop-message', sessionId: session.id, role: 'user', content: 'desktop payload', timestamp: 2, status: 'queued'
     })
+    addDesktopQueueReceipt(db, session.id, desktop.message.id, 'scope-desktop-request')
     getDbConnection(db).prepare('UPDATE messages SET queue_scope=? WHERE id=?')
       .run(serializeQueueScope({ kind: 'im', channel: 'feishu', sessionId: 'session-x' } as never), imMessage.message.id)
 
@@ -62,12 +69,17 @@ it('isolates desktop, feishu, and wechat scopes within one session and separates
     { id: 'scope-wechat-a', scope: { kind: 'im', channel: 'wechat', sessionId: 'remote-a' } as const }
   ]
   for (const [index, entry] of entries.entries()) {
-    appendMessage(db, { id: entry.id, sessionId: session.id, role: 'user', content: entry.id, timestamp: index + 1, status: 'queued' })
-    getDbConnection(db).prepare('UPDATE messages SET queue_scope=? WHERE id=?')
-      .run(serializeQueueScope(entry.scope as never), entry.id)
+    if (entry.scope.kind === 'desktop') {
+      const saved = appendMessage(db, { id: entry.id, sessionId: session.id, role: 'user', content: entry.id, timestamp: index + 1, status: 'queued' })
+      addDesktopQueueReceipt(db, session.id, saved.message.id, `${entry.id}-request`)
+    } else {
+      appendImInboxMessage(db, { sessionId: session.id, channel: entry.scope.channel, queueScope: entry.scope, channelMessageId: `${entry.id}-platform`,
+        accountId: 'fixture-account', conversationId: entry.scope.sessionId, senderId: 'fixture-sender', content: entry.id })
+    }
   }
 
   for (const entry of entries) {
+    if (entry.scope.kind === 'im') continue
     expect(listQueuedUserMessages(db, { sessionId: session.id, queueScope: entry.scope as never }).map(({ message }) => message.id))
       .toEqual([entry.id])
     expect(getNextQueuedMessageInScope(db, session.id, entry.scope as never)?.message.id).toBe(entry.id)

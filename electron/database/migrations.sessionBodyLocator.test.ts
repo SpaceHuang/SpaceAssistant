@@ -24,8 +24,8 @@ describe('session body locator schema v117+', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(120)
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '120' })
+    expect(DB_SCHEMA_VERSION).toBe(123)
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '123' })
     expect(conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?').get('pre-migration-event'))
       .toMatchObject({ payload_json: expect.stringContaining('retained canonical history') })
     const initial = conn.prepare('SELECT source_revision,status,checkpoint_json FROM session_body_source_state WHERE session_id=?')
@@ -62,7 +62,7 @@ describe('session body locator schema v117+', () => {
     runMigrations(conn)
 
     expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
-      .toEqual({ value: '120' })
+      .toEqual({ value: '123' })
     expect(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_message_body_locator'").get())
       .toBeDefined()
     expect(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='bump_session_body_source_after_history_insert'").get())
@@ -82,10 +82,41 @@ describe('session body locator schema v117+', () => {
     runMigrations(conn)
 
     expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
-      .toEqual({ value: '120' })
+      .toEqual({ value: '123' })
     const columns = conn.prepare('PRAGMA table_info(session_body_source_state)').all() as Array<{ name: string }>
     expect(columns.map(({ name }) => name)).toContain('terminal_source_revision')
     expect(columns.map(({ name }) => name)).toContain('terminal_reducer_spec_version')
     conn.close()
+  })
+
+  it('repairs duplicate active sync targets and installs uniqueness on target rather than receiver', () => {
+    const database = createTempDatabase('runtime-trigger-sync-target-migration-')
+    databases.push(database)
+    const conn = getDbConnection(database.db)
+    conn.exec(`DROP INDEX idx_runtime_triggers_active_sync_target;
+      DROP INDEX idx_runtime_triggers_waiting_process_source;
+      CREATE UNIQUE INDEX idx_runtime_triggers_active_sync_target ON runtime_triggers(receiver_session_id)
+        WHERE state IN ('waiting','matched') AND json_extract(definition_json,'$.condition.type')='session_steps'
+          AND json_extract(definition_json,'$.condition.mode')='sync';`)
+    const insert = conn.prepare(`INSERT INTO runtime_triggers(id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,attempts,revision,updated_at)
+      VALUES(?,?,?,?,?,'waiting',1,100000,0,1,1)`)
+    const definition = (target: string) => JSON.stringify({ version: 1, condition: { type: 'session_steps', targetSessionId: target,
+      origin: 'registration', threshold: 1, mode: 'sync', pauseTimeoutMs: 1000, onPauseTimeout: 'continue' }, sourceBaseline: {} })
+    insert.run('sync-a-keep', 'owner', 'receiver-a', 'key-a', definition('target-shared'))
+    insert.run('sync-z-duplicate', 'owner', 'receiver-b', 'key-b', definition('target-shared'))
+    conn.prepare('UPDATE schema_meta SET value=? WHERE key=?').run('122', SCHEMA_META_KEYS.schemaVersion)
+
+    runMigrations(conn)
+
+    expect(conn.prepare('SELECT state,result_json FROM runtime_triggers WHERE id=?').get('sync-a-keep')).toMatchObject({ state: 'waiting' })
+    expect(conn.prepare('SELECT state,result_json FROM runtime_triggers WHERE id=?').get('sync-z-duplicate')).toMatchObject({
+      state: 'failed', result_json: expect.stringContaining('sync-target-duplicate-migration')
+    })
+    expect(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_runtime_triggers_waiting_process_source'").get()).toBeDefined()
+    const insertActive = (id: string, receiver: string, target: string) => conn.prepare(`INSERT INTO runtime_triggers(
+      id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,attempts,revision,updated_at
+      ) VALUES(?,?,?,? ,?,'waiting',2,100000,0,1,2)`).run(id, 'owner', receiver, id, definition(target))
+    expect(() => insertActive('sync-target-collision', 'receiver-c', 'target-shared')).toThrow()
+    expect(() => insertActive('sync-different-target-same-receiver', 'receiver-a', 'target-other')).not.toThrow()
   })
 })

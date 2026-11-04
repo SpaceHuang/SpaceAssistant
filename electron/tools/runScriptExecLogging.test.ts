@@ -18,6 +18,7 @@ vi.mock('../agentLogger/agentLogger', () => ({
 
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { projectAgentLogFields } from '../agentLogger/agentLogProjection'
+import { managedProcessRuntimeGeneration, readManagedProcessExit } from '../triggers/processSource'
 
 // ===== P0-D3 组 1：为 run_script 补执行期事件（§7.1 #2c）=====
 // 此前 run_script 只有策略/确认期事件（script.ask 等），执行期只走 IPC 进度不落盘，
@@ -78,6 +79,9 @@ describe.skipIf(!pythonInterpreter)('run_script 执行期事件（P0-D3 组 1）
     vi.mocked(logAgentEvent).mockClear()
     const result = await executeRunScriptViaCoordinator({ code: 'print("ok")' })
     expect(result.success).toBe(true)
+    const processId = (result as { data?: { managedProcessId?: string } }).data?.managedProcessId
+    expect(processId).toMatch(/^mp_/)
+    expect(readManagedProcessExit(String(processId), managedProcessRuntimeGeneration())).toMatchObject({ ok: true, exitCode: 0, toolName: 'run_script' })
 
     const events = vi.mocked(logAgentEvent).mock.calls.map(([, event]) => event)
     expect(events).toContain('script.exec.start')

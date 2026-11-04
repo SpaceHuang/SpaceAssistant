@@ -21,6 +21,10 @@ export function createTrackScopedHistoryPort(
       if (snapshot.invocationId !== invocationId) throw new Error('TRACK_HISTORY_INVOCATION_MISMATCH')
       return snapshot
     },
+    readEventsAfter: async (invocationId, afterSequence, limit) => {
+      requireInvocation(invocationId)
+      return history.readEventsAfter(invocationId, afterSequence, limit)
+    },
     appendBatch: async (events, expectedVersion, transcriptCommit) => {
       if (transcriptCommit && transcriptCommit.sessionId !== scope.sessionId) throw new Error('TRACK_HISTORY_SESSION_MISMATCH')
       if (!events.length) throw new Error('TRACK_HISTORY_EMPTY_APPEND')
@@ -64,6 +68,7 @@ export function createCrossSessionTrackScopedHistoryPort(
       if (snapshot.invocationId !== invocationId && !allowed.has(snapshot.invocationId)) throw new Error('TRACK_HISTORY_INVOCATION_MISMATCH')
       return snapshot
     },
+    readEventsAfter: async (invocationId, afterSequence, limit) => portForInvocation(invocationId).readEventsAfter(invocationId, afterSequence, limit),
     appendBatch: async (events, expectedVersion, transcriptCommit) => {
       if (!events.length) throw new Error('TRACK_HISTORY_EMPTY_APPEND')
       const sessionIds = new Set(events.map(({ invocationId }) => {

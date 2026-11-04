@@ -27,7 +27,7 @@ import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { createWakeEventRetryClock } from '../remote/wakeEventRetryPolicy'
 import { listWakeEvents } from '../database/wakeEvents'
 import { claimImInboxMessage } from '../database/imInbox'
-import { appendImInboxMessageWithWakeEvent } from '../database/imInbox'
+import { appendImInboxMessageWithWakeEvent } from '../database/imInboxTestFixtures'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { DEFAULT_FEISHU_CONFIG } from '../../src/shared/feishuTypes'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
@@ -154,7 +154,8 @@ describe('Feishu prepared wake to real provider integration', () => {
     db = openDatabase(dbPath)
 
     expect(appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'feishu', queueScope: scope,
-      channelMessageId: 'feishu-prepared-platform-message', content: inputText }))
+      channelMessageId: 'feishu-prepared-platform-message', content: inputText, accountId: 'feishu-wake-user',
+      conversationId: 'feishu-wake-chat', senderId: 'feishu-wake-user' }))
       .toEqual({ messageId: userMessageId, eventId: inbox.eventId, duplicate: true })
 
     let sequence = 0
@@ -218,7 +219,8 @@ describe('Feishu prepared wake to real provider integration', () => {
         launchLoop: replayAfterReopen })
       try {
         expect(appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'feishu', queueScope: scope,
-          channelMessageId: 'feishu-prepared-platform-message', content: inputText }))
+          channelMessageId: 'feishu-prepared-platform-message', content: inputText, accountId: 'feishu-wake-user',
+          conversationId: 'feishu-wake-chat', senderId: 'feishu-wake-user' }))
           .toEqual({ messageId: userMessageId, eventId: inbox.eventId, duplicate: true })
         await reopenedDispatcher.dispatchSession(session.id)
         expect(replayAfterReopen).not.toHaveBeenCalled()

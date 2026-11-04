@@ -27,7 +27,7 @@ import { listQueuedUserMessages } from '../database/operations'
 import { listWakeEvents } from '../database/wakeEvents'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { getDbConnection } from '../database/sqliteStore'
-import { appendImInboxMessageWithWakeEvent, listImInboxMessages, parkImInboxMessageForClarification } from '../database/imInbox'
+import { appendImInboxMessageWithWakeEvent, listImInboxMessages, parkImInboxMessageForClarification } from '../database/imInboxTestFixtures'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
@@ -643,6 +643,15 @@ describe('WeChatCommandRouter', () => {
     expect(persisted).toMatchObject({
       requestId: agentArgs.requestId, sessionId, state: 'terminal', outcome: 'completed'
     })
+  })
+
+  it('persisted WeChat wake binds accepted fact identity to authenticated account and chat', async () => {
+    router = makeRouter({ dispatchSession: vi.fn(async () => undefined) })
+    await router.handleSdkInbound(makeIncomingMessage({ text: 'strict identity wake' }))
+    const wake = listWakeEvents(db, sessionId)[0]
+    expect(wake).toBeDefined()
+    expect(getDbConnection(db).prepare('SELECT account_id,conversation_id,sender_id FROM im_inbox_message_context WHERE message_id=?').get(wake?.payloadRef.messageId))
+      .toEqual({ account_id: 'wx-user@test', conversation_id: 'wx-user@test', sender_id: 'wx-user@test' })
   })
 
   it('Track 路由将新消息归属、accepted turn 与模型输入视图绑定后再调用 Agent', async () => {

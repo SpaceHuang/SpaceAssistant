@@ -98,6 +98,12 @@ describe('SessionListPane rename', () => {
     expect(takeRendererSessionSelectionDuration('s2')).toEqual(expect.any(Number))
   })
 
+  it('exposes the stable session id on the selection button', () => {
+    renderPane([stubSession('session-id', '会话 A')])
+
+    expect(document.querySelector('[data-session-id="session-id"]')).toBe(screen.getByText('会话 A').closest('button'))
+  })
+
   it('keeps only the latest session in edit mode', async () => {
     renderPane([stubSession('s1', '会话 A'), stubSession('s2', '会话 B')])
     fireEvent.contextMenu(screen.getByText('会话 A'))

@@ -381,21 +381,21 @@ async function runRestartResume(win) {
   const sessionId = process.env.CRITICAL_FLOW_SESSION_ID
   const session = sessions.find((item) => item.id === sessionId)
   assert(session, `session from pre-restart profile is missing: ${sessionId || 'session id unavailable'}`)
-  const expectedName = session.name || ''
-  const selected = await waitFor('pre-restart conversation rendered and selectable in the session list', () => execute(win, `(() => { const row=[...document.querySelectorAll('.session-item-select')].find((button)=>button.querySelector('.session-item-name')?.innerText.replace(/\\s+/g,' ').trim()===${JSON.stringify(expectedName)}); if(!row || row.disabled) return false; row.click(); return true })()`), 15_000).catch(async (error) => {
+  const selected = await waitFor('pre-restart conversation rendered and selectable in the session list', () => execute(win, `(() => { const row=[...document.querySelectorAll('.session-item-select')].find((button)=>button.getAttribute('data-session-id')===${JSON.stringify(session.id)}); if(!row || row.disabled) return false; row.click(); return true })()`), 15_000).catch(async (error) => {
     stage('restart-session-list-diagnostics', {
       expectedSessionId: sessionId,
-      expectedSessionName: expectedName,
+      expectedSessionName: session.name || '',
+      renderedSessionIds: await execute(win, `[...document.querySelectorAll('.session-item-select')].map((node)=>node.getAttribute('data-session-id'))`),
       renderedSessionNames: await execute(win, `[...document.querySelectorAll('.session-item-name')].map((node)=>node.innerText.replace(/\\s+/g,' ').trim())`),
       sessionListCount: sessions.length
     })
     throw error
   })
   assert(selected, 'pre-restart conversation could not be reopened from the real session list')
-  await waitFor('restarted session list selection committed in the renderer', () => execute(win, `Boolean([...document.querySelectorAll('.session-item-select[aria-current="true"]')].find((button)=>button.querySelector('.session-item-name')?.innerText.trim()===${JSON.stringify(session.name)}))`))
+  await waitFor('restarted session list selection committed in the renderer', () => execute(win, `Boolean([...document.querySelectorAll('.session-item-select[aria-current="true"]')].find((button)=>button.getAttribute('data-session-id')===${JSON.stringify(session.id)}))`))
   await execute(win, 'new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   await waitFor('reopened conversation composer ready', () => execute(win, `Boolean([...document.querySelectorAll('textarea')].find((node) => node.placeholder === '输入消息…' && !node.disabled))`))
-  stage('restart-session-reopened-through-ui', { sessionName: session.name })
+  stage('restart-session-reopened-through-ui', { sessionId: session.id })
   const readActiveTurns = () => execute(win, `window.api.chatListActiveTurns({sessionId:${JSON.stringify(session.id)}})`)
   await waitFor('restarted application has settled orphan turn', async () => (await readActiveTurns()).length === 0, 25_000).catch(async (error) => {
     const diagnostics = { active: await readActiveTurns(), messages: (await messages(win, session.id)).map((item) => ({ role: item.role, status: item.status, content: item.content?.slice(0, 120) })) }
@@ -453,4 +453,3 @@ app.whenReady().then(() => run()).catch((error) => {
   console.error(`CRITICAL_FLOW_FAILURE ${FLOW}: ${error.stack || error}`)
   try { app.exit(1) } catch { process.exitCode = 1 }
 })
-

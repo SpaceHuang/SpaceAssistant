@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto'
 import type { Message } from '../../src/shared/domainTypes'
-import { buildImQueueScope, serializeQueueScope, type QueueScope } from '../../src/shared/queueScope'
+import { buildImQueueScope, parseQueueScope, serializeQueueScope, type QueueScope } from '../../src/shared/queueScope'
 import { createQueueInputReceiptInScope, enqueueQueuedUserMessageInScope } from './operations'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { changesToNumber, runInTransaction } from './transaction'
 import { appendWakeEvent } from './wakeEvents'
+import { SCHEMA_META_KEYS } from './schema'
+import { classifyQueueInputSource } from './queueInputSource'
 
 export type ImInboxChannel = 'feishu' | 'wechat'
 
@@ -14,6 +16,10 @@ export type AppendImInboxMessageInput = {
   channel: ImInboxChannel
   queueScope: Extract<QueueScope, { kind: 'im' }>
   channelMessageId: string
+  accountId: string
+  conversationId: string
+  senderId: string
+  isGroup?: boolean
   content: string
   attachments?: Message['attachments']
   contextToken?: string
@@ -64,6 +70,58 @@ export type ImInboxMessage = {
 
 export type ImInboxMessageContext = { messageId: string; channel: ImInboxChannel; platformMessageId: string; contextToken?: string; trackId?: string; trackEventId?: string; clarificationWorkId?: string }
 
+export type ImFactScope = Readonly<{ channel: ImInboxChannel; accountId: string; conversationId: string }>
+export type ImFactFrontier = Readonly<{ through: number; coverageRevision: number }>
+export type ImFactPageItem = Readonly<{ messageId: string; acceptedSeq: number; channel: ImInboxChannel; accountId: string; conversationId: string; senderId: string; platformMessageId: string; timestamp: number; isGroup?: boolean; contextToken?: string; trackId?: string; trackEventId?: string }>
+
+function imFactCoverageKey(scope: ImFactScope): string {
+  return `${SCHEMA_META_KEYS.imFactCoverageRevisionPrefix}${scope.channel.length}:${scope.channel}${scope.accountId.length}:${scope.accountId}${scope.conversationId.length}:${scope.conversationId}`
+}
+
+/** Capture a registration-time watermark and deletion coverage under one short database transaction. */
+export function captureImFactFrontier(db: AppDatabase, scope: ImFactScope): ImFactFrontier {
+  for (const [field, value] of Object.entries(scope)) if (typeof value !== 'string' || !value.trim()) throw new TypeError(`IM fact ${field} must not be empty`)
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const nextRow = conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.imFactNextSeq) as { value: string } | undefined
+    if (!nextRow || !/^\d+$/.test(nextRow.value) || !Number.isSafeInteger(Number(nextRow.value))) throw new Error('IM_FACT_SEQUENCE_UNAVAILABLE')
+    const coverageKey = imFactCoverageKey(scope)
+    conn.prepare(`INSERT OR IGNORE INTO schema_meta(key,value) VALUES(?, '0')`).run(coverageKey)
+    const coverageRow = conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(coverageKey) as { value: string } | undefined
+    if (!coverageRow || !/^\d+$/.test(coverageRow.value) || !Number.isSafeInteger(Number(coverageRow.value))) throw new Error('IM_FACT_COVERAGE_UNAVAILABLE')
+    return { through: Number(nextRow.value), coverageRevision: Number(coverageRow.value) }
+  })
+}
+
+/** Read immutable accepted facts independent of queued/claimed/sent/ack state. */
+export function readImFactPage(db: AppDatabase, input: { scope: ImFactScope; after: number; through: number; coverageRevision: number; limit: number }): { items: ImFactPageItem[]; nextAfter?: number } {
+  if (![input.after, input.through, input.coverageRevision].every(Number.isSafeInteger) || input.after < 0 || input.through < input.after || input.coverageRevision < 0 ||
+    !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100) throw new TypeError('invalid IM fact page boundary')
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const revision = conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(imFactCoverageKey(input.scope)) as { value: string } | undefined
+    if (!revision || Number(revision.value) !== input.coverageRevision) throw new Error('TRIGGER_SOURCE_GAP:im-coverage-changed')
+    const rows = conn.prepare(`SELECT context.message_id,context.channel,context.platform_message_id,context.account_id,context.conversation_id,context.sender_id,context.accepted_seq,messages.timestamp,context.is_group,context.context_token,context.track_id,context.track_event_id
+      FROM im_inbox_message_context AS context JOIN messages ON messages.id=context.message_id
+      WHERE context.channel=? AND context.account_id=? AND context.conversation_id=? AND context.accepted_seq>? AND context.accepted_seq<=?
+      ORDER BY context.accepted_seq ASC LIMIT ?`).all(input.scope.channel, input.scope.accountId, input.scope.conversationId, input.after, input.through, input.limit + 1) as Array<{
+        message_id: string; channel: ImInboxChannel; platform_message_id: string; account_id: string; conversation_id: string; sender_id: string; accepted_seq: number; timestamp: number; is_group: number | null; context_token: string | null; track_id: string | null; track_event_id: string | null
+      }>
+    const hasMore = rows.length > input.limit
+    const page = hasMore ? rows.slice(0, input.limit) : rows
+    return { items: page.map((row) => {
+      // The WeChat inbound contract is peer-user scoped; legacy Feishu facts lack enough evidence to assume p2p.
+      const isGroup = row.is_group !== null ? row.is_group === 1 : row.channel === 'wechat' ? false : undefined
+      return { messageId: row.message_id, channel: row.channel, platformMessageId: row.platform_message_id,
+      accountId: row.account_id, conversationId: row.conversation_id, senderId: row.sender_id, acceptedSeq: row.accepted_seq, timestamp: row.timestamp,
+      ...(isGroup !== undefined ? { isGroup } : {}),
+      ...(row.context_token !== null ? { contextToken: row.context_token } : {}), ...(row.track_id !== null ? { trackId: row.track_id } : {}),
+      ...(row.track_event_id !== null ? { trackEventId: row.track_event_id } : {}) }
+    }),
+      ...(hasMore && page.length ? { nextAfter: page[page.length - 1]!.accepted_seq } : {}) }
+  })
+}
+
 export function getImInboxMessageContext(db: AppDatabase, messageId: string): ImInboxMessageContext | null {
   const row = getDbConnection(db).prepare(`SELECT message_id,channel,platform_message_id,context_token,track_id,track_event_id,clarification_work_id FROM im_inbox_message_context WHERE message_id=?`)
     .get(messageId) as { message_id: string; channel: ImInboxChannel; platform_message_id: string; context_token: string | null; track_id: string | null; track_event_id: string | null; clarification_work_id: string | null } | undefined
@@ -97,7 +155,7 @@ export function listImInboxMessages(
     .all(serializeQueueScope(input.queueScope), limit) as Array<{
       id: string; session_id: string; role: 'user'; content: string; status: string; sequence: number; timestamp: number
     }>
-  return rows.map((row) => ({
+  return rows.filter((row) => classifyQueueInputSource(db, { sessionId: row.session_id, queueScope: input.queueScope, queuedMessageId: row.id }) === 'platform-im').map((row) => ({
     messageId: row.id, sessionId: row.session_id, role: row.role, content: row.content,
     status: row.status, sequence: row.sequence, timestamp: row.timestamp
   }))
@@ -113,25 +171,48 @@ export function appendImInboxMessage(
   if (input.channelMessageId.trim().length === 0) {
     throw new TypeError('IM channelMessageId must not be empty')
   }
-  let result: ReturnType<typeof enqueueQueuedUserMessageInScope>
+  if (input.isGroup !== undefined && typeof input.isGroup !== 'boolean') throw new TypeError('IM isGroup must be boolean')
+  for (const [field, value] of [['accountId', input.accountId], ['conversationId', input.conversationId], ['senderId', input.senderId]] as const) {
+    if (typeof value !== 'string' || value.trim().length === 0) throw new TypeError(`IM ${field} must not be empty`)
+  }
   try {
-    result = enqueueQueuedUserMessageInScope(db, {
+    const conn = getDbConnection(db)
+    return runInTransaction(conn, () => {
+      const result = enqueueQueuedUserMessageInScope(db, {
       sessionId: input.sessionId,
       requestId: input.channelMessageId,
       content: input.content,
       attachments: input.attachments,
       queueScope: input.queueScope
+      })
+      const existing = conn.prepare(`SELECT channel,platform_message_id,account_id,conversation_id,sender_id,accepted_seq,context_token,is_group
+        FROM im_inbox_message_context WHERE message_id=?`).get(result.persisted.message.id) as
+        { channel: string; platform_message_id: string; account_id: string | null; conversation_id: string | null; sender_id: string | null; accepted_seq: number | null; context_token: string | null; is_group: number | null } | undefined
+      const contextToken = input.contextToken?.trim() || null
+      if (existing && (existing.channel !== input.channel || existing.platform_message_id !== input.channelMessageId ||
+        existing.account_id !== input.accountId || existing.conversation_id !== input.conversationId || existing.sender_id !== input.senderId || existing.context_token !== contextToken ||
+        (existing.is_group !== null && input.isGroup !== undefined && existing.is_group !== Number(input.isGroup)))) {
+        throw new Error('IM_INBOX_PLATFORM_CONTEXT_CONFLICT')
+      }
+      if (!existing) {
+        const row = conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.imFactNextSeq) as { value: string } | undefined
+        const next = row ? Number(row.value) + 1 : 1
+        if (!Number.isSafeInteger(next) || next <= 0) throw new Error('IM_FACT_SEQUENCE_INVALID')
+        conn.prepare(`INSERT INTO schema_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
+          .run(SCHEMA_META_KEYS.imFactNextSeq, String(next))
+        const coverageKey = imFactCoverageKey({ channel: input.channel, accountId: input.accountId, conversationId: input.conversationId })
+        conn.prepare(`INSERT OR IGNORE INTO schema_meta(key,value) VALUES(?, '0')`).run(coverageKey)
+        conn.prepare(`INSERT INTO im_inbox_message_context(message_id,channel,platform_message_id,context_token,created_at,track_id,track_event_id,account_id,conversation_id,sender_id,accepted_seq,is_group)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(result.persisted.message.id, input.channel, input.channelMessageId, contextToken, Date.now(), input.trackId ?? null, input.trackEventId ?? null,
+          input.accountId, input.conversationId, input.senderId, next, input.isGroup === undefined ? null : Number(input.isGroup))
+      }
+      return { messageId: result.persisted.message.id, sequence: result.persisted.sequence, duplicate: result.duplicate }
     })
   } catch (error) {
     if (error instanceof Error && error.message === 'QUEUE_REQUEST_FINGERPRINT_MISMATCH') {
       throw new Error('IM_INBOX_PAYLOAD_CONFLICT', { cause: error })
     }
     throw error
-  }
-  return {
-    messageId: result.persisted.message.id,
-    sequence: result.persisted.sequence,
-    duplicate: result.duplicate
   }
 }
 
@@ -266,6 +347,9 @@ export function resumeClarificationInboxMessage(db: AppDatabase, input: {
         context_channel: string; platform_message_id: string; identity_key: string; owner_id: string
       } | undefined
     if (!row || row.state !== 'resolved' || !row.session_id || row.context_channel !== row.channel || row.status === 'sent') throw new Error('IM_INBOX_CLARIFICATION_RESUME_SCOPE_INVALID')
+    if (classifyQueueInputSource(db, { sessionId: row.message_session_id, queueScope: parseQueueScope(row.message_queue_scope), queuedMessageId: row.parked_input_ref }) !== 'platform-im') {
+      throw new Error('IM_INBOX_CLARIFICATION_SOURCE_INVALID')
+    }
     const trackEvent = conn.prepare('SELECT track_id FROM remote_track_events WHERE event_id=?').get(input.trackEventId) as { track_id: string } | undefined
     if (!trackEvent || trackEvent.track_id !== input.trackId) throw new Error('IM_INBOX_TRACK_ATTRIBUTION_INVALID')
     if (row.work_track_id !== input.trackId) throw new Error('IM_INBOX_CLARIFICATION_WORK_TRACK_MISMATCH')
@@ -321,9 +405,10 @@ export function claimImInboxMessage(
   return withClaimTransitionFallback(() => runInTransaction(conn, () => {
     const claimedAt = Date.now()
     const leaseExpiresAt = claimedAt + leaseDurationMs
-    const message = conn.prepare(`SELECT status FROM messages WHERE id=? AND queue_scope=? AND role='user'`)
-      .get(input.messageId, serializedScope) as { status: string } | undefined
+    const message = conn.prepare(`SELECT status,session_id FROM messages WHERE id=? AND queue_scope=? AND role='user'`)
+      .get(input.messageId, serializedScope) as { status: string; session_id: string } | undefined
     if (!message) return null
+    if (classifyQueueInputSource(db, { sessionId: message.session_id, queueScope: input.queueScope, queuedMessageId: input.messageId }) !== 'platform-im') return null
 
     if (message.status === 'queued') {
       const prior = conn.prepare('SELECT state FROM im_inbox_claims WHERE message_id=? AND queue_scope=?')
@@ -371,6 +456,8 @@ export function ackImInboxMessage(
   const serializedScope = serializeQueueScope(input.queueScope)
   const conn = getDbConnection(db)
   return withClaimTransitionFallback(() => runInTransaction(conn, () => {
+    const messageSession = conn.prepare('SELECT session_id FROM messages WHERE id=? AND queue_scope=?').get(input.messageId, serializedScope) as { session_id: string } | undefined
+    if (!messageSession || classifyQueueInputSource(db, { sessionId: messageSession.session_id, queueScope: input.queueScope, queuedMessageId: input.messageId }) !== 'platform-im') return false
     const claim = conn.prepare(`SELECT owner_id,state,lease_expires_at FROM im_inbox_claims
       WHERE message_id=? AND queue_scope=?`).get(input.messageId, serializedScope) as
       { owner_id: string; state: string; lease_expires_at: number | null } | undefined
@@ -397,6 +484,8 @@ export function releaseImInboxMessage(
   const serializedScope = serializeQueueScope(input.queueScope)
   const conn = getDbConnection(db)
   return withClaimTransitionFallback(() => runInTransaction(conn, () => {
+    const messageSession = conn.prepare('SELECT session_id FROM messages WHERE id=? AND queue_scope=?').get(input.messageId, serializedScope) as { session_id: string } | undefined
+    if (!messageSession || classifyQueueInputSource(db, { sessionId: messageSession.session_id, queueScope: input.queueScope, queuedMessageId: input.messageId }) !== 'platform-im') return false
     const now = Date.now()
     const message = conn.prepare(`UPDATE messages SET status='queued'
       WHERE id=? AND queue_scope=? AND status='im-inbox-claimed'
@@ -420,10 +509,14 @@ export function renewImInboxClaim(
   const serializedScope = serializeQueueScope(input.queueScope)
   const conn = getDbConnection(db)
   const now = Date.now()
-  const result = conn.prepare(`UPDATE im_inbox_claims SET lease_expires_at=?,updated_at=?
-    WHERE message_id=? AND queue_scope=? AND owner_id=? AND state='claimed' AND lease_expires_at>?`)
-    .run(now + input.leaseDurationMs, now, input.messageId, serializedScope, input.ownerId, now)
-  const renewed = changesToNumber(result.changes) === 1
-  if (renewed) db.save()
-  return renewed
+  return runInTransaction(conn, () => {
+    const messageSession = conn.prepare('SELECT session_id FROM messages WHERE id=? AND queue_scope=?').get(input.messageId, serializedScope) as { session_id: string } | undefined
+    if (!messageSession || classifyQueueInputSource(db, { sessionId: messageSession.session_id, queueScope: input.queueScope, queuedMessageId: input.messageId }) !== 'platform-im') return false
+    const result = conn.prepare(`UPDATE im_inbox_claims SET lease_expires_at=?,updated_at=?
+      WHERE message_id=? AND queue_scope=? AND owner_id=? AND state='claimed' AND lease_expires_at>?`)
+      .run(now + input.leaseDurationMs, now, input.messageId, serializedScope, input.ownerId, now)
+    const renewed = changesToNumber(result.changes) === 1
+    if (renewed) db.save()
+    return renewed
+  })
 }

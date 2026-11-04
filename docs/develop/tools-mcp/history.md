@@ -15,6 +15,8 @@
 | 2026-10-11 | `7d3d9e82` | 评审二轮残留：升级提示文案与夹具对齐 cmd-operator 口径 | 同上 | 文案与测试一致 |
 | 2026-10-14 | `a01a6d49` | 超时 turn 的执行隔离：超时不再连累同批其它工具调用（跨主题：SDK/MCP） | `mcp-timeout-turn-failure-isolation-plan.md`（已归档） | 计划文档状态滞后，实现先落地 |
 | 2026-10-14 | `a7f9e72f` | 方言计数清除用例去端到端化（5 次真实拉起降到更少） | — | 测试稳定性提升 |
+| 2026-11-02 | `4da4c382` | Agent Runtime 通用触发器接入五源、准确 receiver Turn、共同授权屏障及有限同步监督 | [执行计划](../../plan/agent-runtime-trigger-execution-plan.md)、[T21 最终验收](../../plan/evidence/agent-runtime-trigger/T21.md) | P1～P3 源码与本机证据完成；真实 IM/远端/休眠/其他平台仍未实测 |
+| 2026-11-02 | `3668a8f0` | 修复进程/Turn pending、同步跨 invocation 基线、同步到期屏障及 IM 到期回收 | [T23 评审修复证据](../../plan/evidence/agent-runtime-trigger/T23-review-remediation.md) | 五项评审阻断经 TDD 修复；定向与全量测试、构建通过 |
 
 ## 存疑（文档与记录不一致）
 
@@ -27,5 +29,6 @@
 
 ```text
 git log --date=short --format='%ad %h %s' -- electron/shell electron/mcp electron/browser electron/tools
+git log --date=short --format='%ad %h %s' -- electron/triggers electron/main.ts electron/runtime/sqliteAgentHistory.ts electron/database/queueInputSource.ts
 git log --date=short --format='%ad %h %s' --grep='shell' -25
 ```

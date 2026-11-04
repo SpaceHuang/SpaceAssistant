@@ -29,6 +29,7 @@ export type ImAuthSnapshot = {
   capturedAt: number
   messageId?: string
   policyRevision?: string
+  ingressDecision?: Readonly<{ lane: 'feishu' | 'wechat'; originKind: string; ruleId: string; action: 'allow' | 'ask' | 'deny'; reason: string; policyRevision: string }>
   isGroup?: boolean
   /** Re-resolve current user policy at every post-await authorization check. */
   getPolicyRules?: () => PolicyRule[]
@@ -114,6 +115,8 @@ export function evaluateImInboundGuard(args: {
       capturedAt: Date.now(),
       ...(args.messageId ? { messageId: args.messageId } : {}),
       policyRevision,
+      ...(ingress ? { ingressDecision: { lane: args.channel, originKind: originInfo.kind, ruleId: ingress.ruleId,
+        action: ingress.action, reason: ingress.reason, policyRevision } } : {}),
       ...(args.isGroup ? { isGroup: true } : {}),
       ...(args.getPolicyRules ? { getPolicyRules: args.getPolicyRules } : {}),
       ...(args.getPolicyRevision ? { getPolicyRevision: args.getPolicyRevision } : {}),

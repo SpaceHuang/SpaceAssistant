@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
 import { appendMessage, createPersistedTurn, createSession } from './database/operations'
-import { openDatabase, setConfigValue, type AppDatabase } from './database'
+import { getDbConnection, openDatabase, setConfigValue, type AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
@@ -209,6 +209,36 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
     // 偏差 11/3c:文件树失效归一为统一出口(scope:invalidated),不再直发 file:tree-changed
     expect(() => invocation.events.onFileTreeChanged?.({ kind: 'paths', relPaths: ['a.txt'] })).not.toThrow()
     expect(notifyMainWindow).not.toHaveBeenCalledWith('file:tree-changed', expect.anything())
+    db.close()
+  })
+
+  it('runtime-trigger source material loss never degrades to ordinary provider execution', async () => {
+    const db = makeDb()
+    seedTrustedModel(db)
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const session = createSession(db, { name: 'runtime-trigger-material-loss', model: modelId, maxTokens: 2048 })
+    const user = appendMessage(db, { id: 'trigger-material-user', sessionId: session.id, role: 'user', content: 'trigger marker', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'trigger-material-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'trigger-material-turn', requestId: 'runtime-trigger:trigger-material-loss', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id, contextBoundarySequence: user.sequence,
+      state: 'prepared', startToken: 'trigger-material-token', executionConfig: {
+        lane: 'desktop', model: modelId, baseUrl: 'https://trusted.example.com', system: 'sys', maxTokens: 2048, enableThinking: false, locale: 'zh-CN'
+      } })
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
+      getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }), getWikiConfig: () => ({}),
+      getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }), turnRuntime: { bindRequest: vi.fn() } as never,
+      runtimeTriggerSourceContext: () => undefined, runtimeTriggerAdmission: () => undefined
+    })
+
+    const result = await execute(makeSender(), { requestId: 'runtime-trigger:trigger-material-loss', turnId: 'trigger-material-turn',
+      turnStartToken: 'trigger-material-token', sessionId: session.id })
+
+    expect(result).toMatchObject({ ok: false, error: 'RUNTIME_TRIGGER_SOURCE_MATERIALS_REQUIRED' })
+    expect(mockRunToolChatSession).not.toHaveBeenCalled()
+    expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM agent_history_events WHERE turn_id=? AND kind='invocation-context-committed'")
+      .get('trigger-material-turn')).toEqual({ count: 0 })
     db.close()
   })
 

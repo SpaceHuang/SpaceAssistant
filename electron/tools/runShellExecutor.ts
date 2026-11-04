@@ -33,6 +33,7 @@ import { type PreparedShellExecution } from '../shell/preparedShellExecution'
 import { planRunShellExecution, revalidatePreparedShellExecution, RunShellPlanError } from './runShellPlan'
 import { runShellWithHostFallback } from './runShellHostDegrade'
 import { shouldAttemptHostDegrade } from '../shell/shellHostFallback'
+import { beginManagedProcess, finishManagedProcess, type ManagedProcessHandle } from '../triggers/processSource'
 
 const PROGRESS_TAIL = 4000
 /** 进度用滚动文本窗口：只需覆盖 PROGRESS_TAIL，避免为进度保留全量文本。 */
@@ -340,6 +341,7 @@ export async function executePreparedShellExecution(
 
   return await new Promise((resolve) => {
     const lifecycle = new ExecutionLifecycle<ToolExecutorResult>()
+    let managedProcess: ManagedProcessHandle | undefined
     const settle = (reason: Parameters<ExecutionLifecycle<ToolExecutorResult>['finalize']>[0], result: ToolExecutorResult): void => {
       if (lifecycle.finalize(reason, result)) resolve(result)
     }
@@ -352,6 +354,7 @@ export async function executePreparedShellExecution(
       shell: false,
       detached: process.platform === 'darwin'
     })
+    managedProcess = beginManagedProcess({ sessionId: ctx.sessionId, toolName: 'run_shell' })
     if (proc.pid) sendProgressSafely({ message: '进程已启动', processPid: proc.pid, processGroupId: process.platform === 'darwin' ? proc.pid : undefined, processOwnerToken: `${ctx.requestId}:${ctx.toolUseId}` })
     const supervisor = new ProcessSupervisor(proc, processTreeKiller)
     terminateForOutputLimit = () => {
@@ -416,6 +419,7 @@ export async function executePreparedShellExecution(
     proc.on('error', (err) => {
       if (terminalHandled) return
       terminalHandled = true
+      if (managedProcess) finishManagedProcess(managedProcess, { exitCode: null, signal: null, reason: 'spawn_error', occurredAt: Date.now() })
       cleanupProcessResources()
       flushPendingRawDelta()
       logShellAgentEvent('error', 'shell.exec.error', {
@@ -435,6 +439,7 @@ export async function executePreparedShellExecution(
           data: {
             code: 'SHELL_SPAWN_ERROR',
             status: 'spawn_failed',
+            managedProcessId: managedProcess?.managedProcessId,
             processResult: null,
             caseId: SHELL_CASE_IDS.spawnError,
             convergenceCaseId: SHELL_CASE_IDS.promiseConvergence
@@ -460,6 +465,8 @@ export async function executePreparedShellExecution(
       const rawOut = stdoutRaw.snapshotBytes()
       const rawErr = stderrRaw.snapshotBytes()
       const truncated = rawOut.truncated || rawErr.truncated
+      if (managedProcess) finishManagedProcess(managedProcess, { exitCode: code, signal, reason: ctx.signal.aborted ? 'cancelled' : timedOut ? 'timeout' : outputLimited ? 'output_limit' : signal ? 'signal' : 'process_exit', occurredAt: Date.now(),
+        outputRef: { bytes: rawOut.totalBytes + rawErr.totalBytes, truncated } })
       const exitCode = code ?? (signal ? null : interrupted ? null : 1)
       const externalSignal = signal ?? undefined
       const cancelled = ctx.signal.aborted || (interrupted && !timedOut)
@@ -615,6 +622,7 @@ export async function executePreparedShellExecution(
           stdoutRedaction: stdoutSafe.redacted ? { redacted: true, redactionReason: stdoutSafe.redactionReason, originalBytes: stdoutSafe.originalBytes, visibleBytes: stdoutSafe.visibleBytes } : undefined,
           stderrRedaction: stderrSafe.redacted ? { redacted: true, redactionReason: stderrSafe.redactionReason, originalBytes: stderrSafe.originalBytes, visibleBytes: stderrSafe.visibleBytes } : undefined,
           exitCode,
+          managedProcessId: managedProcess?.managedProcessId,
           exitCodeHint,
           exitCodeFamily: exitDetails?.family,
           exitCodeSemantics: exitDetails?.semantics,

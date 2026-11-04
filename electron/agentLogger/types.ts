@@ -174,6 +174,7 @@ export type AgentLogEventName =
   | 'automation.task.completed'
   | 'automation.task.failed'
   | 'automation.task.skipped'
+  | 'runtime-trigger.delivery.failed'
   | 'automation.scheduler.disabled-no-tray'
   | 'automation.scheduler.tick-failed'
   | 'usageStats.write.failed'

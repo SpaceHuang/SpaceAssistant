@@ -1355,6 +1355,8 @@ describe('queued and retry queries', () => {
       timestamp: 2,
       status: 'queued'
     })
+    createQueueInputReceipt(db, { sessionId, requestId: 'q1-request', fingerprint: 'q1-fingerprint', queuedMessageId: 'q1', state: 'queued' })
+    createQueueInputReceipt(db, { sessionId, requestId: 'q2-request', fingerprint: 'q2-fingerprint', queuedMessageId: 'q2', state: 'queued' })
     const next = getNextQueuedMessage(db, sessionId)
     expect(next?.message.id).toBe('q1')
     expect(next?.sequence).toBe(0)
