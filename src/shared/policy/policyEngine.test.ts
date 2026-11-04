@@ -330,7 +330,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
   it('unmodeled-call 只提供同会话 exact-content 记忆；动态执行仍逐次真人确认', () => {
     const digest = 'a'.repeat(64)
     const unknownScript = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-analysis', signal: 'clean', patterns: [], findings: [], coverage: 'complete', totalCount: 0 },
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
     ], 'high')
     const decision = decide(unknownScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
@@ -340,7 +340,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
     ])
 
     const dynamicScript = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-analysis', signal: 'clean', patterns: [], findings: [], coverage: 'complete', totalCount: 0 },
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
     ], 'high')
     const dynamic = decide(dynamicScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
@@ -350,7 +350,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
   it('脚本内容记忆只在当前会话按完全相同的 SHA-256 键查找', () => {
     const digest = 'b'.repeat(64)
     const facts = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-analysis', signal: 'clean', patterns: [], findings: [], coverage: 'complete', totalCount: 0 },
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'e'.repeat(64) }
     ], 'high')
     const lookups: Array<{ kind: string; digest?: string; sessionId?: string }> = []
