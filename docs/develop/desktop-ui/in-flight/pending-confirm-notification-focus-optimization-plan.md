@@ -3,7 +3,7 @@
 > 文档类型：技术方案（方向已确认）  
 > 核验日期：2026-11-04  
 > 代码基线：`90a0f7bd3af7d7530a0028c71923e7c6a15e21bd`  
-> 状态：方向已由用户确认；P1 实施已完成并通过定向自动化、Electron 类型检查、增量 / 完整构建及全量测试；P2 已核验 macOS 通知系统投递、通知权限开启时的前台焦点保持，并由用户实测点击系统通知后主窗口置前、Dock 图标显示数字徽标。门禁剩余项为真实待确认通知点击后的最新会话定位，以及 Dock 徽标清除后的目视确认。Windows 实机回归为非阻断补充项（用户已确认）。
+> 状态：方向已由用户确认；P1 实施已完成并通过定向自动化、Electron 类型检查、增量 / 完整构建及全量测试；P2 已核验 macOS 通知系统投递、通知权限开启时的前台焦点保持、用户点击系统通知后主窗口置前、真实待确认通知点击后的最新项导航事件，以及 Dock 图标数字徽标显示。仅剩 Dock 徽标清除后的目视确认。Windows 实机回归为非阻断补充项（用户已确认）。
 
 ## 第 0 层：决策摘要【人必读】
 
@@ -138,7 +138,7 @@ macOS 门禁验收：在实际 Electron 窗口确认前台应用名、键盘第�
 
 P2 本机观察（2026-11-04）：用户授权后，在“系统设置 → 通知”开启 SpaceAssistant 通知；桌面、通知中心、锁定屏幕均已勾选，提醒样式为临时，应用图标标记开启。完整构建后，以隔离 userData 启动 arm64 worktree `.app`（`com.spaceassistant.app`），确认 `Notification.isSupported()` 为 true。通过当前 `FloatingNotificationManager` 实例创建真实 Electron 系统通知；macOS `usernoted` 日志记录其已投递至 alert / lock screen / notification center，并以 banner 呈现（14:05、14:12、14:14、14:39；21:05、21:06、21:09）。14:39 焦点实测时，系统设置搜索框处于键盘焦点；待确认到达前后 SpaceAssistant 主窗口均未聚焦，搜索框焦点仍保持。勿扰自动化显示为“09:00–17:00，关闭 - 每天”。
 
-同一隔离运行中，Dock `setBadge` 由管理器按 1、2 项待确认状态调用，清空时置空；对真实 Electron Notification 实例触发 `click` 事件后，管理器在实际 Electron 主窗口上发送 `notification:navigate-session` 到最新待确认项。该事件由调试控制台触发。21:09 另由用户手动点击系统测试通知，用户确认主窗口已置前；此测试通知的点击回调只负责恢复 / 聚焦主窗口，不携带真实待确认项，因此最新会话定位仍只有事件处理级验证，未通过真实待确认横幅点击验收。随后在隔离实例中调用 Electron `app.dock.setBadge("2")`，用户目视确认 Dock 图标右上角显示红色数字 2；再调用 `setBadge("")` 已成功返回，等待用户确认数字已消失。Dock 图标标记已在系统设置启用。隔离实例目前仍运行，以便继续原生验收；Windows 实机回归未执行（当前主机为 macOS），Windows 自动化测试仍覆盖原自绘浮窗路径且不作门禁。
+同一隔离运行中，Dock `setBadge` 由管理器按 1、2 项待确认状态调用，清空时置空；对真实 Electron Notification 实例触发 `click` 事件后，管理器在实际 Electron 主窗口上发送 `notification:navigate-session` 到最新待确认项。21:09 由用户手动点击系统测试通知，用户确认主窗口已置前。21:27 通过实际 `FloatingNotificationManager`（独立于应用正式实例、使用隔离合成 session/tool ID）创建待确认项，用户在通知中心手动点击该系统通知；主进程观察到真实点击回调，并捕获到 `notification:navigate-session`，payload 与该最新合成待确认项一致。该次运行使用独立测试管理器和无对应持久会话的合成 ID，仅验证原生点击至导航事件的链路，不验证目标确认卡片渲染。随后管理器的 `onToolResult` 清除项并将 Dock badge 置空。用户此前目视确认 Dock 图标显示红色数字 2；当前等待用户确认数字已消失。Dock 图标标记已在系统设置启用。隔离实例目前仍运行，以便继续原生验收；Windows 实机回归未执行（当前主机为 macOS），Windows 自动化测试仍覆盖原自绘浮窗路径且不作门禁。
 
 本轮执行了：
 
