@@ -3,7 +3,7 @@
 > 文档类型：技术方案（方向已确认）  
 > 核验日期：2026-11-04  
 > 代码基线：`90a0f7bd3af7d7530a0028c71923e7c6a15e21bd`  
-> 状态：方向已由用户确认；P1 实施已完成并通过定向自动化、Electron 类型检查、增量构建及全量测试；P2 macOS 通知可见性 / 点击 / Dock 原生验收和 Windows 实机回归未完成。
+> 状态：方向已由用户确认；P1 实施已完成并通过定向自动化、Electron 类型检查、增量 / 完整构建及全量测试；P2 已核验 macOS 通知系统投递与通知点击处理，仍缺手动点击横幅、Dock 图标徽标视觉确认及 Windows 实机回归。
 
 ## 第 0 层：决策摘要【人必读】
 
@@ -136,7 +136,9 @@ confirm-request
 当前环境可验证：管理器状态转换、系统通知创建 / 点击 / 关闭、Dock 角标计数与清理、macOS 自动提醒不创建浮窗，以及 Windows 旧行为未变的定向测试。
 必须在实际 Electron macOS 窗口验证：前台应用名、键盘第一响应者、正在输入时焦点保持、系统通知权限 / 勿扰状态、通知点击返回路径、Dock 角标出现与清除。Windows 回归确认当前自绘浮窗保持现状。
 
-P2 本机观察（2026-11-04）：以临时用户目录启动 worktree Electron，在 TextEdit 输入区聚焦后由开发控制台延时触发测试通知；触发后 TextEdit 仍为前台，AX 仍报告原文本输入区为键盘焦点，符合 AC-1 的“不因提醒切焦点”观察。通知横幅未出现；只读查看“系统设置 → 通知”发现已安装版 SpaceAssistant 的通知状态为“关闭”，未更改系统设置。因此本次没有验证系统通知可见性、通知点击返回或 Dock 角标的原生呈现。当前主机为 macOS，Windows 浮窗实机回归未执行；Windows 自动化回归仍覆盖原浮窗路径。
+P2 本机观察（2026-11-04）：用户授权后，在“系统设置 → 通知”开启 SpaceAssistant 通知；桌面、通知中心、锁定屏幕均已勾选，提醒样式为临时，应用图标标记开启。完整构建后，以隔离 userData 启动 arm64 worktree `.app`（`com.spaceassistant.app`），确认 `Notification.isSupported()` 为 true。通过当前 `FloatingNotificationManager` 实例创建真实 Electron 系统通知；macOS `usernoted` 日志记录其已投递至 alert / lock screen / notification center，并以 banner 呈现（14:05、14:12、14:14）。在主窗口隐藏时再次触发通知后，Electron 主窗口仍保持隐藏、未聚焦；系统设置中的勿扰自动化显示为“09:00–17:00，关闭 - 每天”。
+
+同一隔离运行中，Dock `setBadge` 由管理器按 1、2 项待确认状态调用，清空时置空；使用真实 Electron Notification 实例触发 `click` 事件后，管理器恢复 / 聚焦主窗口并发送 `notification:navigate-session` 到最新待确认项，随后清空状态并关闭通知。该事件由测试控制台触发，**不是对系统横幅的手动点击**；尝试通过屏幕坐标点击时未观察到点击回调，因此仍以未完成计。Dock 图标标记已在系统设置启用，但由于本次 UI 观察未能显示 Dock 区域，没有取得徽标的视觉证据。早先 TextEdit 前台 / 键盘焦点保持观察是在权限关闭时完成；权限开启后的背景应用焦点保持有主窗口隐藏状态与系统 banner 日志佐证，但尚无前台应用键盘焦点的手动观察。Windows 实机回归未执行（当前主机为 macOS），Windows 自动化测试仍覆盖原自绘浮窗路径。
 
 本轮执行了：
 
@@ -146,7 +148,7 @@ node_modules/.bin/vitest run --project=electron electron/floatingNotification.te
 
 结果：2 个测试文件、25 项测试通过（方案核验时）。该测试集 mock 了 Electron `BrowserWindow`，不证明系统级激活行为。隔离 Electron 探测当时未得到有效进程输出，记为未验证；实施后仍须完成 macOS 原生验收。
 
-P1 实施验证：`npm exec vitest run --project=electron electron/pendingConfirmNotification.test.ts electron/floatingNotificationManager.test.ts electron/floatingNotification.test.ts` 通过（3 个测试文件、31 项测试）；`npx tsc -p tsconfig.electron.json --noEmit` 通过；`npm run build:electron:incremental` 通过运行时闭包、session storage 边界 / 模块图、agent provider 构建及 TypeScript 编译门禁。
+P1 实施验证：`npm exec vitest run --project=electron electron/pendingConfirmNotification.test.ts electron/floatingNotificationManager.test.ts electron/floatingNotification.test.ts` 通过（3 个测试文件、31 项测试）；`npx tsc -p tsconfig.electron.json --noEmit` 通过；`npm run build:electron:incremental` 与 `npm run build` 通过运行时闭包、session storage 边界 / 模块图、agent provider 构建及 TypeScript 编译门禁。macOS arm64 目录打包通过：`npm exec electron-builder -- --mac dir --arm64`（先运行 `npm run prepare:rg -- --target=darwin-arm64` 补齐该 worktree 缺失的 ripgrep staging）。
 
 全量验收：`npm test` 通过，1,257 个测试文件通过、1 个跳过；12,171 项测试通过、140 项跳过（总计 12,311 项）。
 
