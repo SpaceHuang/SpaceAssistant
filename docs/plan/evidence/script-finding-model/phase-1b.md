@@ -39,4 +39,10 @@ src/shared/domainTypes.ts
 
 ## 隔离回退 smoke
 
-在 detached worktree revert 本阶段实现提交，运行 `ScriptConfirmCard.test.tsx` 与脚本分析相关 smoke，并补记结果及临时 worktree 清理状态。
+在 detached worktree `/Users/space/Documents/Develop/SpaceAssistant/.worktrees/script-finding-model-revert-1b` 对阶段实现提交 `90a04eeebd963bd1fcbc5635abc91fdde3c74092` 执行 `git revert --no-edit`，隔离回退提交为 `089b87cb0f75ca6ea47bfb787f0b0d99de13f26a`。回退后运行：
+
+```text
+npm exec -- vitest run src/renderer/components/Chat/ScriptConfirmCard.test.tsx electron/shell/scriptIr/pythonAdapter.test.ts electron/shell/scriptContentSecurity.test.ts electron/shell/scriptGolden.test.ts src/shared/policy/lockedFloorClassification.test.ts
+```
+
+结果：5 files / 205 tests passed。旧请求缺失 findings 字段时确认卡原有渲染测试通过；1a 的 IR、发现与 locked-floor 行为仍可用。临时 worktree 已验证干净并移除。
