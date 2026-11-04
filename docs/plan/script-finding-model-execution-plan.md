@@ -152,10 +152,10 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：方案 12 类每类均有生产样本及逐条发现证据；类别证据字段严格按方案契约；无法分类的构造产生方案规定的 partial/failed 覆盖信息，不静默当干净；旧 verdict/signal 与既有动作逻辑暂留作兼容，不在本任务切换决策。需先按方案类别表逐项确认三类首批与九类剩余的边界，避免类别重复或遗漏。
   - 验证：`npm exec -- vitest run electron/shell/scriptContentSecurity.test.ts electron/shell/scriptGolden.test.ts electron/shell/scriptParserService.test.ts electron/shell/scriptIr/pythonAdapter.test.ts electron/confirmation/scriptAnalysisFailureGate.test.ts`（5 files / 230 tests passed）；新增 12 类类别样本、动态边界与 parse-failed 覆盖断言，golden 检查所有产物 range/snippet 且旧 verdict/patterns/signal 基线通过。关联 AC-1～3、6～8。证据：`docs/plan/evidence/script-finding-model/F30.md`。
 
-- [ ] **F31 将记忆资格迁移到发现集合与覆盖度**（本机）
+- [x] **F31 将记忆资格迁移到发现集合与覆盖度**（本机）
   - 范围：`src/shared/policy/memoryEligibility.ts`、调用方/类型及其测试。
   - 产物/判据：资格从旧 `signal` 三档迁到方案规定的发现集合与 coverage；明确 clean、partial、failed 与各类别的资格结果；可选记忆档位不因字段缺省意外放宽，记忆写入仍遵守方案边界；保留旧字段时不得继续让新路径资格判定依赖旧 verdict。
-  - 验证：记忆资格单测覆盖空发现+complete、每类发现、partial/failed、字段缺失和旧形状；调用方测试断言写入/不写入结果。关联 INV-5、AC-6、13。证据：`F31.md`。
+  - 验证：`npm exec -- vitest run src/shared/policy/memoryEligibility.test.ts src/shared/policy/policyEngine.test.ts src/shared/policy/policyPackages.scope.test.ts electron/confirmation/agentSdkSafetyPolicy.test.ts electron/confirmation/toolCallGate.test.ts`（5 files / 406 tests passed）；覆盖 12 类发现、complete 空发现、partial/failed、缺字段、旧形状、缓存 lookup 与审批档位。`npm run typecheck:shared` 通过。关联 INV-5、AC-6、13。证据：`docs/plan/evidence/script-finding-model/F31.md`。
 
 - [ ] **F32 准备旧模型切换清单与兼容适配**（本机）
   - 范围：`electron/shell/scriptContentSecurity.ts`、`electron/confirmation/extractors/scriptAnalysisExtractor.ts`、受影响类型/消费者、内容分析 golden 与规则对拍测试。
