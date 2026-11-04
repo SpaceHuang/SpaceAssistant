@@ -204,7 +204,7 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：仅在确认无消费者后删除原始回传字段；summary.sections 由展示层按方案派生；类别与证据短语的 zh-CN/en-US key 对齐；展示上限仍只在消费方，事实侧无截断。
   - 验证：`rg` 检查字段读写点并记录；受影响定向测试；`npm run i18n:check`，必要时 `npm run i18n:check:strict`。关联 AC-8、10 及方案阶段 3 的 i18n 收口范围。证据：`F41.md`。
 
-- [ ] **F42 完成源码关闭与回退审查**（本机）
+- [x] **F42 完成源码关闭与回退审查**（本机）
   - 范围：全方案变更与相应测试；只更新本计划证据，不改技术方案验收定义。
   - 产物/判据：AC-1～AC-17 各有可追溯用例/证据映射；1a/1b/1c/2/3 的实现与检查点无循环依赖；全量测试、类型检查、i18n 与必要构建通过；回退实体与方案阶段表一致，审计数据不通过删历史实现回退。将 AC 证据分为本机源码证据与方案要求的外部/平台证据；仅后者缺失时标注“待外部验收”，不声称完整 AC 关闭，也不阻塞源码关闭。涉及安全逻辑时记录 facts/policy/final-check/invariant 阶段、rule/invariant ID 与门禁结果。
   - 验证：`npm test`、`npm run typecheck:shared`、`npm run typecheck:renderer`（若有渲染变化）、`npm run i18n:check`、`npm run check:system-invariant-registry`、`npm run build`、`git diff --check`。在隔离 checkout 按阶段依赖逆序回退本计划各阶段提交，验证代码/类型可构建且旧兼容路径恢复；审计 JSONL 历史不删除，只确认回退版本停止新增 finding 字段。若当前主机无法执行其他平台打包或真实渠道检查，将其记入外部验收记录，不作为源码关闭门禁。证据：`phase-3-and-source-close.md`。
