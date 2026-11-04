@@ -1895,7 +1895,12 @@ export async function grepFallbackJs(
 
   try {
     if (!shouldStop()) {
-      await scanText('', 1, true)
+      try {
+        await scanText('', 1, true)
+      } catch (error) {
+        if (pastDeadline() || (error instanceof Error && /超时/.test(error.message))) timedOut = true
+        else throw error
+      }
       if (!shouldStop()) {
         const st = await (deps.stat ? deps.stat(absSearch) : fs.stat(absSearch)).catch(() => null)
         if (st?.isFile()) await scanFile(absSearch, false)
