@@ -162,7 +162,7 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：形成旧字段/动作逻辑生产与消费点清单，逐点标注 F36 将删除、迁移或保留；建立短期兼容适配，使新旧事实可并行供旧规则消费，但尚不关闭 AC-9、不删除旧 verdict/signal。认证结论仍按方案状态所有权保持其独立责任，不混入发现事实。所有适配只承载兼容，不提前实现 F34/F35 的策略映射。
   - 验证：旧字段/生产/消费者清单见 `docs/plan/evidence/script-finding-model/F32.md`；`npm exec -- vitest run electron/confirmation/extractors/extractors.test.ts electron/shell/scriptGolden.test.ts`（2 files / 142 tests passed），断言 findings 与旧 signal/patterns/network token 并行；golden 旧规则基线通过。未新增类别策略映射。关联 AC-3/4 的准备证据；AC-9 留待 F36。证据：`docs/plan/evidence/script-finding-model/F32.md`。
 
-- [ ] **F33 按 D-5 分类路径动态原因**（本机）
+- [x] **F33 按 D-5 分类路径动态原因**（本机）
   - 范围：`electron/confirmation/extractors/scriptPathFacts.ts`、其测试与共享路径事实类型。
   - 产物/判据：新增 `dynamicKinds` 多值并保留 `unknownReason`；覆盖 open mode 读写、Path 读写、删除、搬运、代码执行、绑定链断裂、不可用及旧形状缺省保守归类；只有纯未知写入能构成获批域，读取/删除/搬运不被标成 write。
   - 验证：`npm exec vitest run electron/confirmation/extractors/scriptPathFacts.test.ts electron/confirmation/extractors/scriptParseCount.test.ts`；按 AC-17 分类矩阵逐格断言。关联 AC-17。证据：`F33.md`。
