@@ -187,7 +187,7 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：只承担接通和断言，不新增业务逻辑；真实链路覆盖 AC-4、12、13、17 逐格矩阵；路径未知写入仅桌面 standard 在快通道未裁决时交审核 agent；读取/删除/搬运/绑定断裂/不可用、eval/进程/动态导入维持人工确认；strict/custom、微信/飞书、定时任务维持方案结果；批准不写长期记忆；拒绝优先，批准前 executor 不调用。
   - 验证：真实 extractor→rule assembly→engine 集成测试，并合并运行 F30～F36 覆盖的相关测试。关联 AC-4、12、13、17。证据：`F37.md`。
 
-- [ ] **F38 关闭阶段 2**（本机）
+- [x] **F38 关闭阶段 2**（本机）
   - 范围：F30～F37 变更、快照与测试。
   - 产物/判据：12 类均有生产样本；旧字段生产/消费者清单关闭；记忆资格迁移证据齐备；全部矩阵和反向测试通过；回退单元与依赖闭包登记，提交仅含阶段文件。
   - 验证：合并运行阶段定向测试、`npm run typecheck:shared`、`npm run build:electron:incremental`、`npm run check:system-invariant-registry`、`npm test`。记录阶段提交 SHA、精确文件、回退顺序；在隔离 checkout revert 本阶段提交并运行 F36/F37 策略 smoke 测试。证据：`phase-2.md`。
