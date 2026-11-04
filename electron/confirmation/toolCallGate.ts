@@ -730,8 +730,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
     if (pythonLanguage && scriptPaths.declaration) {
       const consistent = scriptPaths.dynamicAccess === false
-        && !signals.some((signal) => signal.kind === 'script-network')
-        && !signals.some((signal) => signal.kind === 'script-analysis' && signal.signal !== 'clean')
+        && scriptPaths.completeness === 'complete'
+        && !signals.some((signal) => signal.kind === 'script-analysis' && signal.findings.length > 0)
         && !signals.some((signal) => signal.kind === 'path-target' && signal.zone !== 'workdir-normal')
         && !signals.some((signal) => signal.kind === 'extraction-failed')
       signals.push({ kind: 'script-path-declaration', scope: scriptPaths.declaration, consistent })
@@ -745,8 +745,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
     result.scriptPathHint = scriptPathHint
     result.rawScriptAnalysis = pythonLanguage
-      ? analyzeScriptContent(code, { remote: lane !== 'desktop' }, preParsedIr)
-      : { verdict: 'ask', patterns: ['script-language-analysis-unverified'], reason: '该脚本语言尚未接入完整内容安全分析' }
+      ? analyzeScriptContent(code, preParsedIr)
+      : { findings: [], coverage: 'failed', totalCount: 0, reason: '该脚本语言尚未接入完整内容安全分析' }
   } else if (args.toolName === 'write_file' || args.toolName === 'edit_file') {
     const descriptor = getBuiltinToolMetadata(args.toolName)
     const rawPath = extractPathField(args.toolInput)

@@ -31,14 +31,14 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
   for (const signal of facts.signals) {
     switch (signal.kind) {
       case 'script-analysis':
-        // 把 script-analysis 的子档位（clean/suspicious/dangerous）作为独立 token 暴露，
-        // 使规则能用 `signals:['clean']` / `['dangerous']` 匹配。
-        tokens.add(signal.signal)
+        tokens.add(`script-analysis:${signal.coverage}`)
         for (const finding of signal.findings ?? []) {
           tokens.add(`script-finding:${finding.class}`)
           const pathClass = 'pathClass' in finding.evidence ? finding.evidence.pathClass : undefined
           if (pathClass) tokens.add(`script-finding:${finding.class}:${pathClass}`)
-          if (getScriptClassDisposition(finding.class, pathClass).action !== 'allow') tokens.add('script-finding:non-allow')
+          const action = getScriptClassDisposition(finding.class, pathClass).action
+          if (action !== 'allow') tokens.add('script-finding:non-allow')
+          if (action === 'deny') tokens.add('script-finding:deny')
         }
         break
       case 'path-target':
@@ -312,9 +312,8 @@ export function deriveCacheKeys(
 
 /**
  * 依据候选缓存键生成确认界面的记忆档位（默认最窄可用档）。
- * run_script 记忆封顶（§5.3）：携带 script-network / script-uncertified 信号的调用
- * 强制"仅此一次"、不开放任何记忆档位——这两条规则非 locked 且位于缓存检查之后，
- * 开放记忆会让"记住"绕过网络命中确认与未认证降级，属安全松动。
+ * run_script 记忆封顶（§5.3）：含 network-api finding 或 script-uncertified 的调用
+ * 强制"仅此一次"、不开放任何记忆档位，防止记忆绕过网络复核与未认证降级。
  */
 export function buildMemoryTiers(
   facts: ContentFacts,

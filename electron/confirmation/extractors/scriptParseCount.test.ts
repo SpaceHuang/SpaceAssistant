@@ -51,7 +51,7 @@ describe('P1-T3 解析次数 spy 断言（发现 B：热路径重复解析消除
     const ir = parsePythonModule(OK_CODE)
     const before = spy.mock.calls.length
     extractScriptSignals(OK_CODE, ENV, ir)
-    analyzeScriptContent(OK_CODE, { remote: false }, ir)
+    analyzeScriptContent(OK_CODE, ir)
     extractScriptPathFacts(OK_CODE, 'python', ir)
     expect(spy.mock.calls.length).toBe(before)
   })
@@ -73,54 +73,48 @@ describe('P1-T2/T3 未知构造与包裹式反向用例（IrCoverageError → ex
     expect(() => parsePythonModule(UNCOVERED)).toThrow(/IR adapter uncovered/)
   })
 
-  it('analyzeScriptContent 对未覆盖构造返回 A-fail → ask（不抛出到调用方）', () => {
-    const r = analyzeScriptContent(UNCOVERED, {})
-    expect(r.verdict).toBe('ask')
-    expect(r.patterns).toContain('A-fail')
+  it('analyzeScriptContent 对未覆盖构造返回 failed coverage（不抛出到调用方）', () => {
+    const r = analyzeScriptContent(UNCOVERED)
+    expect(r).toMatchObject({ coverage: 'failed', findings: [], totalCount: 0 })
   })
 
-  it('extractScriptSignals 产出 extraction-failed 而非 script-analysis: clean', () => {
+  it('extractScriptSignals 产出 failed coverage 与 extraction-failed', () => {
     const { signals } = extractScriptSignals(UNCOVERED, ENV)
     expect(signals.some((s) => s.kind === 'extraction-failed')).toBe(true)
     const scriptAnalysis = signals.find((s) => s.kind === 'script-analysis')
-    expect(scriptAnalysis?.signal).not.toBe('clean')
+    expect(scriptAnalysis?.kind === 'script-analysis' && scriptAnalysis.coverage).toBe('failed')
   })
 
-  it('包裹式反向：未建模构造内藏 os.system 不得 allow / clean（评审 v4 B1‴-d）', () => {
+  it('包裹式反向：未建模构造内藏 os.system 仍报告 coverage failure（评审 v4 B1‴-d）', () => {
     const wrapped = 'def run(cmd):\n    match cmd:\n        case _:\n            pass\n    return cmd\n\nimport os\nrun(os.environ)\n'
     // 该样本含 os.environ（未命中危险 attr 表）但整体未建模 → 必须 A-fail ask，绝不 allow
-    const r = analyzeScriptContent(wrapped, {})
-    expect(r.verdict).not.toBe('allow')
+    const r = analyzeScriptContent(wrapped)
+    expect(r.coverage).toBe('failed')
     const { signals } = extractScriptSignals(wrapped, ENV)
     const scriptAnalysis = signals.find((s) => s.kind === 'script-analysis')
-    expect(scriptAnalysis?.signal).not.toBe('clean')
+    expect(scriptAnalysis?.kind === 'script-analysis' && scriptAnalysis.coverage).toBe('failed')
     expect(signals.some((s) => s.kind === 'extraction-failed')).toBe(true)
   })
 
-  it('P0-3/P1-1 回归：for...else / while...else 的 else 体不得 allow（desktop + remote）', () => {
+  it('P0-3/P1-1 回归：for...else / while...else 仍产出危险类别事实', () => {
     const forElse = 'for i in [1]:\n    pass\nelse:\n    eval("1")'
-    const r = analyzeScriptContent(forElse, {})
-    expect(r.verdict).not.toBe('allow')
+    const r = analyzeScriptContent(forElse)
+    expect(r.findings.map((finding) => finding.class)).toContain('dynamic-execution')
     const whileElse = 'while x:\n    pass\nelse:\n    import os\n    os.system("id")'
-    const r2 = analyzeScriptContent(whileElse, {})
-    expect(r2.verdict).not.toBe('allow')
-    // remote：certify 必须 fail（else 体藏 eval/危险调用不得通过认证）
-    const rRemote = analyzeScriptContent(forElse, { remote: true })
-    expect(rRemote.verdict).not.toBe('allow')
+    const r2 = analyzeScriptContent(whileElse)
+    expect(r2.findings.map((finding) => finding.class)).toContain('process-creation')
   })
 
-  it('P0-3 Certifier 回归锁：Analyzer 无命中、else 体藏 certifier 未建模构造（with）时 remote 不得 allow', () => {
-    // 该样本 Analyzer 零命中（with open 无危险 attr）→ verdict=allow 的前提是 certifier 通过；
-    // certifier 若回退 orelse 遍历，with（未建模）会被跳过 → certify=true → remote allow。
-    // 断言 remote verdict !== 'allow' 即锁死 certifier 的 orelse 遍历路径。
+  it('P0-3 Certifier 独立事实：else 体中的未建模 with 产 script-uncertified', () => {
+    // facts analyzer 不拥有 verdict；对未建模 with 的独立认证事实由 extractor contract 测试覆盖。
     const code = 'for i in [1]:\n    pass\nelse:\n    with open("f") as fh:\n        pass'
-    const r = analyzeScriptContent(code, { remote: true })
-    expect(r.verdict).not.toBe('allow')
+    const r = analyzeScriptContent(code)
+    expect(r.coverage).toBe('complete')
   })
 
-  it('包裹式反向（危险调用真藏在未建模体内）：不得 allow', () => {
+  it('包裹式反向（危险调用藏在未建模体内）：覆盖度失败而非空 findings', () => {
     const wrapped = 'import os\n\ndef dispatch(x):\n    match x:\n        case "go":\n            os.system("ls")\n'
-    const r = analyzeScriptContent(wrapped, {})
-    expect(r.verdict).not.toBe('allow')
+    const r = analyzeScriptContent(wrapped)
+    expect(r.coverage).toBe('failed')
   })
 })

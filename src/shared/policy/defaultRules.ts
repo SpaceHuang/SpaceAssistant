@@ -191,7 +191,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-network-deny-remote',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-network'] },
+    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-finding:network-api'] },
     denyClass: 'forbidden',
     action: 'deny',
     locked: true,
@@ -200,7 +200,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-dangerous-deny',
     when: 'invocation',
-    match: { toolName: 'run_script', signals: ['dangerous'] },
+    match: { toolName: 'run_script', signals: ['script-finding:deny'] },
     denyClass: 'forbidden',
     action: 'deny',
     reason: '脚本事实包含明确危险行为'
@@ -351,7 +351,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-path-unknown-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-dynamic-access'], excludeSignals: ['script-path-extraction:write-target-only'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-dynamic-access'], excludeSignals: ['script-path-extraction:write-target-only', 'im-script-network-review-candidate:complete'] },
     action: 'confirm-every-time', locked: true, reason: '脚本路径提取不完整，需真人确认'
   },
   {
@@ -363,7 +363,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-dynamic-execution-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:dynamic-execution'], excludeSignals: ['script-path-extraction:write-target-only'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:dynamic-execution'], excludeSignals: ['script-path-extraction:write-target-only', 'im-script-network-review-candidate:complete'] },
     action: 'confirm-every-time', locked: true, reason: '脚本存在动态执行，需逐次真人确认'
   },
   {
@@ -375,7 +375,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-suspicious-path-unknown-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:suspicious', 'script-path-extraction:unmodeled-call'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-finding:non-allow', 'script-path-extraction:unmodeled-call'], excludeSignals: ['im-script-network-review-candidate:complete'] },
     action: 'confirm-every-time', locked: true, reason: '可疑脚本不允许记忆放行'
   },
   {
@@ -453,14 +453,26 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'allow',
     reason: '工作目录外的只读访问免确认'
   },
-  // 脚本网络命中（脚本专属信号 + toolName 双重限定，避免卷进 browser / run_shell 的通用 network-egress）
+  // Policy stage: findings facts map to these stable rules; network-api and native-code-load
+  // have explicit rules, while other non-allow classes use the generic review rule below.
+  // Keep toolName scoped so script findings cannot affect browser / run_shell network policy.
   {
     id: 'script-network-ask-desktop',
     when: 'invocation',
-    match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-network'] },
+    match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-finding:network-api'] },
     denyClass: 'insufficient-info',
     action: 'ask',
     reason: '桌面执行含网络访问的脚本需确认'
+  },
+  {
+    id: 'script-finding-review',
+    when: 'invocation',
+    match: {
+      lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script',
+      signals: ['script-finding:non-allow'], excludeSignals: ['script-path-extraction:write-target-only', 'script-finding:network-api']
+    },
+    denyClass: 'insufficient-info',
+    action: 'ask', reason: '脚本发现类别需要策略审查'
   },
   // 远程 clean 但未认证脚本降级为确认（script-uncertified 信号在未认证时产出）；fail-closed 兜底，locked
   {
@@ -476,19 +488,19 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-clean-certified-remote',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['clean'] },
+    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:complete'], excludeSignals: ['script-finding:non-allow', 'script-uncertified'] },
     denyClass: 'insufficient-info',
     action: 'ask',
     askUnless: { config: 'remoteScriptRequiresConfirm', equals: false, andMigrationComplete: true },
-    reason: '远程 clean 已认证脚本按 remoteScriptRequiresConfirm 配置决定是否确认（默认确认）'
+    reason: '远程已认证且无需策略处置的脚本按 remoteScriptRequiresConfirm 配置决定是否确认（默认确认）'
   },
   // 桌面 clean 脚本免确认
   {
     id: 'script-clean-allow-desktop',
     when: 'invocation',
-    match: { lane: ['desktop'], toolName: 'run_script', signals: ['clean'] },
+    match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-analysis:complete'], excludeSignals: ['script-finding:non-allow'] },
     action: 'allow',
-    reason: '桌面 clean 脚本按现状免确认直接执行'
+    reason: '桌面无需策略处置的完整脚本免确认直接执行'
   },
   // ===== 规范条目结束 =====
 

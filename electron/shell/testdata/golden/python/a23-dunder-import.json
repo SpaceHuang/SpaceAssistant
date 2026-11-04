@@ -1,29 +1,9 @@
 {
   "id": "a23-dunder-import",
   "group": "legacy-parseable",
-  "legacyParsed": true,
-  "verdict": "ask",
-  "patterns": [
+  "patternIds": [
     "A4",
     "B10"
   ],
-  "signals": [
-    {
-      "kind": "script-analysis",
-      "signal": "suspicious",
-      "patterns": [
-        "A4",
-        "B10"
-      ]
-    },
-    {
-      "kind": "script-network",
-      "patterns": [
-        "B10"
-      ]
-    },
-    {
-      "kind": "script-uncertified"
-    }
-  ]
+  "coverage": "complete"
 }

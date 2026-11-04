@@ -202,14 +202,10 @@ export type FactSignal =
   | { kind: 'outbound-target'; channel: string; recipient?: string; domains?: string[] }
   | {
       kind: 'script-analysis'
-      signal: 'clean' | 'suspicious' | 'dangerous'
-      patterns: string[]
-      findings?: ScriptFinding[]
-      coverage?: 'complete' | 'partial' | 'failed'
-      totalCount?: number
+      findings: ScriptFinding[]
+      coverage: 'complete' | 'partial' | 'failed'
+      totalCount: number
     }
-  /** 脚本专属的网络命中信号（与通用 network-egress 区分，见 §5.2 规则）。 */
-  | { kind: 'script-network'; patterns: string[] }
   /** Complete, static HTTP target facts for the isolated standard IM script review candidate. */
   | { kind: 'im-script-network-review-candidate'; status: 'complete'; host: string; method: 'GET' | 'HEAD'; url: string }
   | { kind: 'approval-review-materials'; status: 'complete' | 'incomplete' }

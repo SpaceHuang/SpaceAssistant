@@ -9,24 +9,15 @@ import { adaptPythonModule, foldStringIr } from './scriptIr/pythonAdapter'
 import { type IrExpr, type IrModule, type IrStmt, type SourceRange } from './scriptIr/types'
 import type { ScriptFinding, ScriptFindingEvidence } from '../../src/shared/confirmation/types'
 
-export type ScriptVerdict = 'allow' | 'ask' | 'deny'
-
-export interface ScriptAnalysisContext {
-  remote?: boolean
-}
-
 export interface ScriptAnalysisResult {
-  verdict: ScriptVerdict
-  patterns: string[]
+  findings: ScriptFinding[]
+  coverage: 'complete' | 'partial' | 'failed'
+  totalCount: number
   reason?: string
-  findings?: ScriptFinding[]
-  coverage?: 'complete' | 'partial' | 'failed'
-  totalCount?: number
 }
 
 export interface PatternHit {
   pattern: string
-  verdict: ScriptVerdict
   range?: SourceRange
   evidence?: ScriptFindingEvidence
 }
@@ -59,9 +50,6 @@ export const NETWORK_MODULES = new Set([
   'requests',
   'httpx'
 ])
-
-/** 网络命中相关的模式 ID（供脚本提取器识别 `script-network` 信号）。 */
-export const NETWORK_PATTERN_IDS = new Set(['A6', 'B10'])
 
 export const DANGEROUS_ATTRS = new Set([
   'system',
@@ -137,12 +125,6 @@ const A1_OS_ATTRS = new Set(['system', 'popen'])
 const EXEC_NAMES = new Set(['eval', 'exec', 'compile'])
 const DECODE_FUNCS = new Set(['b64decode', 'decode', 'fromhex'])
 const EXEC_IMPORT_NAMES = new Set(['eval', 'exec', 'compile', '__import__'])
-
-const VERDICT_RANK: Record<ScriptVerdict, number> = {
-  allow: 0,
-  ask: 1,
-  deny: 2
-}
 
 /** 解析失败 / 服务未就绪（等价 parse 失败，§3 不变量 1(a)(b)）。 */
 export class ScriptParseUnavailableError extends Error {
@@ -267,14 +249,6 @@ function sameRange(a?: SourceRange, b?: SourceRange): boolean {
   return a === b || (!!a && !!b && a.startLine === b.startLine && a.startCol === b.startCol && a.endLine === b.endLine && a.endCol === b.endCol)
 }
 
-function mergeVerdict(a: ScriptVerdict, b: ScriptVerdict): ScriptVerdict {
-  return VERDICT_RANK[a] >= VERDICT_RANK[b] ? a : b
-}
-
-function networkVerdict(ctx?: ScriptAnalysisContext): ScriptVerdict {
-  return ctx?.remote ? 'deny' : 'ask'
-}
-
 function applyImportStmt(stmt: Extract<IrStmt, { kind: 'import' }>, scope: Scope): void {
   for (const { module, alias } of stmt.names) {
     const root = module.split('.')[0]!
@@ -379,30 +353,24 @@ function isExecImportCallee(callee: IrExpr): boolean {
 
 class Analyzer {
   private readonly hits: PatternHit[] = []
-  private readonly ctx?: ScriptAnalysisContext
   private activeRange?: SourceRange
   private activeExpr?: IrExpr
   private activeScope?: Scope
-
-  constructor(ctx?: ScriptAnalysisContext) {
-    this.ctx = ctx
-  }
 
   analyze(ast: IrModule): PatternHit[] {
     this.walkStmts(ast.body, createScope(), 0)
     return this.hits
   }
 
-  private addHit(pattern: string, verdict: ScriptVerdict, evidenceOverride?: ScriptFindingEvidence): void {
+  private addHit(pattern: string, evidenceOverride?: ScriptFindingEvidence): void {
     const range = this.activeExpr?.range ?? this.activeRange
     const evidence = evidenceOverride ?? this.findingEvidence(pattern)
     const existing = this.hits.find((hit) => hit.pattern === pattern && sameRange(hit.range, range))
     if (existing) {
-      existing.verdict = mergeVerdict(existing.verdict, verdict)
       if (!existing.evidence && evidence) existing.evidence = evidence
       return
     }
-    this.hits.push({ pattern, verdict, range, evidence })
+    this.hits.push({ pattern, range, evidence })
   }
 
   private findingEvidence(pattern: string): ScriptFindingEvidence | undefined {
@@ -502,7 +470,7 @@ class Analyzer {
         if (isDangerousModule(mod)) {
           for (const { name, alias } of stmt.names) {
             if (name !== '*' && isDangerousAttr(name)) {
-              this.addHit(alias ? 'B7' : 'B6', 'ask', {
+              this.addHit(alias ? 'B7' : 'B6', {
                 kind: 'alias', alias: alias ?? name, resolved: `${mod}.${name}`
               })
             }
@@ -516,10 +484,9 @@ class Analyzer {
         if (modName && stmt.targets.length === 1) {
           scope.modules.set(stmt.targets[0]!, modName)
           if (isDangerousModule(modName)) {
-            const v = isNetworkModule(modName) ? networkVerdict(this.ctx) : 'ask'
             const importEvidence: ScriptFindingEvidence = { kind: 'dynamic-import', moduleName: modName, boundName: stmt.targets[0]! }
-            this.addHit('B4', v, importEvidence)
-            this.addHit('B10', v, importEvidence)
+            this.addHit('B4', importEvidence)
+            this.addHit('B10', importEvidence)
           }
         }
         // Same-scope rebind: x = os / y = os.system / z = o (alias) / w = y (callable alias)
@@ -770,7 +737,7 @@ class Analyzer {
     // 旧实现下该构造因 dict/下标解析失败而 A-fail → ask；本规则是切换后的等价保守投影
     // （复用 B9「动态查找成员」语义，模式 ID 集合不变）。
     if (callee.kind === 'subscript') {
-      this.addHit('B9', 'ask')
+      this.addHit('B9')
       return
     }
 
@@ -791,9 +758,8 @@ class Analyzer {
       const mod = foldStringExpr(call.args[0] ?? { kind: 'none' })
       if (mod && isDangerousModule(mod.split('.')[0]!)) {
         const root = mod.split('.')[0]!
-        const v = isNetworkModule(root) ? networkVerdict(this.ctx) : 'ask'
-        this.addHit('A4', 'ask')
-        this.addHit('B10', v)
+        this.addHit('A4')
+        this.addHit('B10')
       }
       this.checkB11(call.args[0], scope, decodeBindings, stmtIndex, true)
       return
@@ -804,14 +770,14 @@ class Analyzer {
       if (attr === '__import__') {
         const mod = foldStringExpr(call.args[0] ?? { kind: 'none' })
         if (mod && isDangerousModule(mod.split('.')[0]!)) {
-          this.addHit('B8', 'ask')
-          this.addHit('A4', 'ask')
-          this.addHit('B10', 'ask')
+          this.addHit('B8')
+          this.addHit('A4')
+          this.addHit('B10')
         }
       }
       if (attr && EXEC_NAMES.has(attr)) {
-        this.addHit('B8', 'ask')
-        this.addHit('A3', 'ask')
+        this.addHit('B8')
+        this.addHit('A3')
         const arg = call.args[0]
         if (arg) this.checkB11(arg, scope, decodeBindings, stmtIndex, true)
       }
@@ -825,17 +791,16 @@ class Analyzer {
       const mod = foldStringExpr(call.args[0] ?? { kind: 'none' })
       if (mod && isDangerousModule(mod.split('.')[0]!)) {
         const root = mod.split('.')[0]!
-        const v = isNetworkModule(root) ? networkVerdict(this.ctx) : 'ask'
-        this.addHit('A4', 'ask')
-        this.addHit('B4', 'ask')
-        this.addHit('B10', v)
+        this.addHit('A4')
+        this.addHit('B4')
+        this.addHit('B10')
       }
       return
     }
 
     // eval / exec / compile — always A3 when callee is the builtin (dynamic args included)
     if (callee.kind === 'name' && EXEC_NAMES.has(callee.id)) {
-      this.addHit('A3', 'ask')
+      this.addHit('A3')
       const arg = call.args[0]
       if (arg) this.checkB11(arg, scope, decodeBindings, stmtIndex, true)
       return
@@ -843,8 +808,8 @@ class Analyzer {
     if (callee.kind === 'name') {
       const binding = scope.attrs.get(callee.id)
       if (binding?.attr && EXEC_NAMES.has(binding.attr)) {
-        this.addHit(binding.attr === callee.id ? 'B6' : 'B7', 'ask')
-        this.addHit('A3', 'ask')
+        this.addHit(binding.attr === callee.id ? 'B6' : 'B7')
+        this.addHit('A3')
         const arg = call.args[0]
         if (arg) this.checkB11(arg, scope, decodeBindings, stmtIndex, true)
         return
@@ -863,11 +828,11 @@ class Analyzer {
       if (lastAttr === 'write_text' || lastAttr === 'write_bytes' || lastAttr === 'unlink') {
         const pathFolded = extractPathLiteral(callee.base, scope)
         if (lastAttr === 'unlink') {
-          this.addHit('A2', 'ask')
+          this.addHit('A2')
         } else if (pathFolded) {
           this.checkWritePath(pathFolded)
         } else {
-          this.addHit('A7', 'deny')
+          this.addHit('A7')
         }
       }
     }
@@ -877,70 +842,70 @@ class Analyzer {
 
     // os.chdir
     if (chain.fullName === 'os.chdir' || (chain.module === 'os' && lastAttr === 'chdir')) {
-      this.addHit('A9', 'allow')
+      this.addHit('A9')
       return
     }
 
     // ctypes / cffi
     if (chain.module === 'ctypes' || chain.module === 'cffi') {
       if (lastAttr === 'CDLL' || lastAttr === 'WinDLL' || chain.module === 'cffi') {
-        this.addHit('A5', 'deny')
+        this.addHit('A5')
       }
     }
 
     // subprocess.* / pty.* (any attr, including aliased imports)
     if (chain.module === 'subprocess' || chain.module === 'pty') {
       if (chain.root && scope.modules.has(chain.root) && chain.root !== chain.module) {
-        this.addHit('B5', 'ask')
+        this.addHit('B5')
       }
-      this.addHit('A1', 'ask')
+      this.addHit('A1')
       return
     }
 
     // asyncio.create_subprocess_exec / create_subprocess_shell (and aliases)
     if (chain.module === 'asyncio' && lastAttr && ASYNCIO_PROCESS_ATTRS.has(lastAttr)) {
       if (chain.root && scope.modules.has(chain.root) && chain.root !== 'asyncio') {
-        this.addHit('B5', 'ask')
+        this.addHit('B5')
       }
-      this.addHit('A1', 'ask')
+      this.addHit('A1')
       return
     }
 
     // shutil / os dangerous
     if (chain.module === 'shutil' && (lastAttr === 'rmtree' || lastAttr === 'move')) {
-      this.addHit('A2', 'ask')
+      this.addHit('A2')
       return
     }
     if (chain.module === 'os') {
       // os.system/popen and os.spawn*/posix_spawn* (process-creation table, WP3 item 2)
       if (lastAttr && (A1_OS_ATTRS.has(lastAttr) || OS_SPAWN_ATTRS.has(lastAttr))) {
         if (chain.root && scope.modules.has(chain.root) && chain.root !== 'os') {
-          this.addHit('B5', 'ask')
+          this.addHit('B5')
         }
-        this.addHit('A1', 'ask')
+        this.addHit('A1')
         return
       }
       if (lastAttr && ['remove', 'unlink', 'rmdir'].includes(lastAttr)) {
-        this.addHit('A2', 'ask')
+        this.addHit('A2')
         return
       }
       if (lastAttr && lastAttr.startsWith('exec')) {
-        this.addHit('A3', 'ask')
+        this.addHit('A3')
         return
       }
     }
 
     // Network modules
     if (chain.module && isNetworkModule(chain.module)) {
-      this.addHit('A6', networkVerdict(this.ctx))
+      this.addHit('A6')
       return
     }
     if (chain.module === 'urllib' || chain.fullName?.startsWith('urllib.')) {
-      this.addHit('A6', networkVerdict(this.ctx))
+      this.addHit('A6')
       return
     }
     if (chain.module === 'http' || chain.fullName?.startsWith('http.client')) {
-      this.addHit('A6', networkVerdict(this.ctx))
+      this.addHit('A6')
       return
     }
 
@@ -949,13 +914,13 @@ class Analyzer {
       const binding = scope.attrs.get(callee.id)
       if (binding?.attr && isDangerousAttr(binding.attr)) {
         const viaAlias = callee.id !== binding.attr
-        this.addHit(viaAlias ? 'B7' : 'B6', 'ask')
+        this.addHit(viaAlias ? 'B7' : 'B6')
         if (binding.module === 'os' && A1_OS_ATTRS.has(binding.attr)) {
-          this.addHit('A1', 'ask')
+          this.addHit('A1')
         } else if (binding.module === 'subprocess') {
-          this.addHit('A1', 'ask')
+          this.addHit('A1')
         } else if (['remove', 'unlink', 'rmdir', 'rmtree'].includes(binding.attr)) {
-          this.addHit('A2', 'ask')
+          this.addHit('A2')
         }
         return
       }
@@ -972,30 +937,30 @@ class Analyzer {
         !!mod &&
         isDangerousModule(mod)
       if (mod === 'os' && attr && (A1_OS_ATTRS.has(attr) || OS_SPAWN_ATTRS.has(attr))) {
-        if (viaModuleAlias) this.addHit('B5', 'ask')
-        this.addHit('A1', 'ask')
+        if (viaModuleAlias) this.addHit('B5')
+        this.addHit('A1')
         return
       }
       if ((mod === 'subprocess' || mod === 'pty') && attr) {
-        if (viaModuleAlias) this.addHit('B5', 'ask')
-        this.addHit('A1', 'ask')
+        if (viaModuleAlias) this.addHit('B5')
+        this.addHit('A1')
         return
       }
       if (mod === 'asyncio' && attr && ASYNCIO_PROCESS_ATTRS.has(attr)) {
-        if (viaModuleAlias) this.addHit('B5', 'ask')
-        this.addHit('A1', 'ask')
+        if (viaModuleAlias) this.addHit('B5')
+        this.addHit('A1')
         return
       }
       if (viaModuleAlias && attr && isDangerousAttr(attr)) {
-        this.addHit('B5', 'ask')
-        if (mod === 'os' && ['remove', 'unlink', 'rmdir'].includes(attr)) this.addHit('A2', 'ask')
+        this.addHit('B5')
+        if (mod === 'os' && ['remove', 'unlink', 'rmdir'].includes(attr)) this.addHit('A2')
       }
       // B4: import_module result chain
       if (resolved.root && scope.modules.has(resolved.root) && attr && isDangerousAttr(attr)) {
         const boundMod = scope.modules.get(resolved.root)
         if (boundMod && isDangerousModule(boundMod)) {
-          this.addHit('B4', 'ask')
-          if (A1_OS_ATTRS.has(attr) || OS_SPAWN_ATTRS.has(attr)) this.addHit('A1', 'ask')
+          this.addHit('B4')
+          if (A1_OS_ATTRS.has(attr) || OS_SPAWN_ATTRS.has(attr)) this.addHit('A1')
         }
       }
     }
@@ -1020,7 +985,7 @@ class Analyzer {
     const attrFolded = attrExpr ? foldStringExpr(attrExpr) : null
 
     if (!attrFolded || !isDangerousAttr(attrFolded)) {
-      if (fromBuiltins) this.addHit('B8', 'ask')
+      if (fromBuiltins) this.addHit('B8')
       return
     }
 
@@ -1029,28 +994,28 @@ class Analyzer {
       if (base.kind === 'call' && base.callee.kind === 'name' && base.callee.id === '__import__') {
         const importMod = foldStringExpr(base.args[0] ?? { kind: 'none' })
         if (importMod && isDangerousModule(importMod.split('.')[0]!)) {
-          this.addHit('B2', 'ask')
+          this.addHit('B2')
           const hasFold = base.args[0]?.kind === 'binop' || attrExpr?.kind === 'binop'
-          if (hasFold) this.addHit('B3', 'ask')
+          if (hasFold) this.addHit('B3')
         }
         baseResolved = true
       } else {
         const chain = resolveExprChain(base, scope)
         if (chain.module === 'os' || scope.modules.get(chain.root ?? '') === 'os') {
-          this.addHit('B1', 'ask')
+          this.addHit('B1')
           baseResolved = true
         } else if (chain.module && isDangerousModule(chain.module)) {
-          this.addHit('B1', 'ask')
+          this.addHit('B1')
           baseResolved = true
         }
       }
     }
 
     if (!baseResolved) {
-      this.addHit('B9', 'ask')
+      this.addHit('B9')
     }
 
-    if (fromBuiltins) this.addHit('B8', 'ask')
+    if (fromBuiltins) this.addHit('B8')
   }
 
   private checkB11(
@@ -1064,13 +1029,13 @@ class Analyzer {
     if (sameExpr && arg.kind === 'call' && isDecodeCall(arg)) {
       const decodeChain = resolveExprChain(arg.callee, scope)
       const decodeFn = decodeChain.attrs.at(-1) ?? decodeChain.module ?? 'unknown'
-      this.addHit('B11', 'ask', { kind: 'decode-exec', decodeFn, boundName: '<inline>', stmtDistance: 0 })
+      this.addHit('B11', { kind: 'decode-exec', decodeFn, boundName: '<inline>', stmtDistance: 0 })
       return
     }
     if (arg.kind === 'name') {
       for (const b of decodeBindings) {
         if (b.name === arg.id && stmtIndex - b.stmtOffset <= 3) {
-          this.addHit('B11', 'ask', {
+          this.addHit('B11', {
             kind: 'decode-exec', decodeFn: b.decodeFn, boundName: b.name,
             stmtDistance: stmtIndex - b.stmtOffset
           })
@@ -1091,7 +1056,7 @@ class Analyzer {
 
     const folded = pathExpr ? foldStringExpr(pathExpr) : null
     if (!folded) {
-      this.addHit('A7', 'deny')
+      this.addHit('A7')
       return
     }
     this.checkWritePath(folded)
@@ -1100,15 +1065,15 @@ class Analyzer {
   private checkWritePath(path: string): void {
     const kind = classifyPath(path)
     if (kind === 'absolute' || kind === 'dotdot') {
-      this.addHit('A7', 'deny')
+      this.addHit('A7')
     } else {
-      this.addHit('A8', 'allow')
+      this.addHit('A8')
     }
   }
 }
 
-export function collectPatternHits(ast: IrModule, ctx?: ScriptAnalysisContext): PatternHit[] {
-  return new Analyzer(ctx).analyze(ast)
+export function collectPatternHits(ast: IrModule): PatternHit[] {
+  return new Analyzer().analyze(ast)
 }
 
 /** Facts-stage projection only: this table classifies detected syntax and never chooses an action. */
@@ -1171,18 +1136,15 @@ function buildScriptFindings(code: string, hits: PatternHit[]): ScriptFinding[] 
 
 // --- Remote positive-allowlist certification (WP3) ---
 //
-// The hit-based Analyzer above is a blacklist: it stays silent (no hit → `allow`) for any
-// construct it doesn't explicitly recognize as dangerous. That is acceptable for desktop
-// (where the user is always in the confirm loop for anything flagged) but not for remote
-// auto-allow, where an unrecognized construct must never slip through as `allow`.
+// The hit-based Analyzer above reports recognized syntax facts. Remote certification remains
+// a separate positive allowlist check; policy decides how either result affects execution.
 //
 // RemoteCertifier is a positive allowlist walker: it requires every statement/expression it
 // sees to be one of a small set of explicitly-modeled, safe shapes. Any call whose target
 // cannot be statically resolved to a name/attribute chain, any reflection or dynamic-import
 // or eval/exec call, and any call that resolves into a dangerous module without matching an
 // explicit safe-capability entry, marks the whole script as *not* remote-certified. A script
-// that fails certification can still get `ask`/`deny` from the hit-based verdict above; it
-// simply can never be upgraded to remote `allow`.
+// A script that fails certification remains independently marked uncertified for policy.
 function isForcedAskName(name: string | null): boolean {
   return !!name && (REFLECTION_NAMES.has(name) || EXEC_IMPORT_NAMES.has(name))
 }
@@ -1339,39 +1301,23 @@ class RemoteCertifier {
 }
 
 /**
- * Positive allowlist certification for remote `allow`. Returns true only when every call in
- * the script is statically resolvable and either untouched by DANGEROUS_MODULES or explicitly
- * whitelisted (os.chdir / Path write with static relative path). Used only to *downgrade* an
- * otherwise-`allow` verdict to `ask` on remote; never used to escalate to `deny`.
+ * Independent positive allowlist certification used to produce the `script-uncertified` fact.
+ * The policy layer owns the resulting action; certification itself emits no verdict.
  */
 export function isScriptCertifiedRemoteSafe(ast: IrModule): boolean {
   return new RemoteCertifier().certify(ast)
 }
 
-export function aggregateVerdict(hits: PatternHit[]): ScriptVerdict {
-  let verdict: ScriptVerdict = 'allow'
-  for (const h of hits) {
-    verdict = mergeVerdict(verdict, h.verdict)
-  }
-  return verdict
-}
-
 export function analyzeScriptContent(
   code: string,
-  ctx?: ScriptAnalysisContext,
   preParsedIr?: IrModule
 ): ScriptAnalysisResult {
   try {
     const ast = preParsedIr ?? parsePythonModule(code)
-    const hits = collectPatternHits(ast, ctx)
-    const patterns = hits.map((h) => h.pattern)
-    const dedupedPatterns = patterns.length === 0 ? ['A0'] : [...new Set(patterns)]
-    const hitVerdict = patterns.length === 0 ? 'allow' : aggregateVerdict(hits)
+    const hits = collectPatternHits(ast)
     const findings = buildScriptFindings(code, hits)
     if (!findings) {
       return {
-        verdict: hitVerdict,
-        patterns: dedupedPatterns,
         reason: 'script-analysis-location-unavailable',
         findings: [],
         coverage: 'failed',
@@ -1379,26 +1325,9 @@ export function analyzeScriptContent(
       }
     }
 
-    // Desktop keeps the existing blacklist-style verdict unchanged. Remote additionally
-    // requires positive certification before an `allow` verdict may be returned: any
-    // unresolvable/dynamic/reflective construct downgrades `allow` to `ask` (never `deny` —
-    // existing deny rules above are untouched and still dominate via aggregateVerdict).
-    if (ctx?.remote && hitVerdict === 'allow' && !isScriptCertifiedRemoteSafe(ast)) {
-      return {
-        verdict: 'ask',
-        patterns: dedupedPatterns,
-        reason: 'remote_not_certified',
-        findings,
-        coverage: 'complete',
-        totalCount: findings.length
-      }
-    }
-
-    return { verdict: hitVerdict, patterns: dedupedPatterns, findings, coverage: 'complete', totalCount: findings.length }
+    return { findings, coverage: 'complete', totalCount: findings.length }
   } catch {
     return {
-      verdict: 'ask',
-      patterns: ['A-fail'],
       reason: 'parse_error',
       findings: [],
       coverage: 'failed',

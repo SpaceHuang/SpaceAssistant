@@ -330,7 +330,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
   it('unmodeled-call 只提供同会话 exact-content 记忆；动态执行仍逐次真人确认', () => {
     const digest = 'a'.repeat(64)
     const unknownScript = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', signal: 'clean', patterns: [], findings: [], coverage: 'complete', totalCount: 0 },
+      { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
     ], 'high')
     const decision = decide(unknownScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
@@ -340,7 +340,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
     ])
 
     const dynamicScript = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', signal: 'clean', patterns: [], findings: [], coverage: 'complete', totalCount: 0 },
+      { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
     ], 'high')
     const dynamic = decide(dynamicScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
@@ -350,7 +350,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
   it('脚本内容记忆只在当前会话按完全相同的 SHA-256 键查找', () => {
     const digest = 'b'.repeat(64)
     const facts = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', signal: 'clean', patterns: [], findings: [], coverage: 'complete', totalCount: 0 },
+      { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'e'.repeat(64) }
     ], 'high')
     const lookups: Array<{ kind: string; digest?: string; sessionId?: string }> = []
@@ -373,22 +373,22 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
     const digest = 'c'.repeat(64)
     const cases: ContentFacts[] = [
       mkFacts('run_script', 'execute', [
-        { kind: 'script-analysis', signal: 'suspicious', patterns: ['network'] },
+        { kind: 'script-analysis', findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'network', evidence: { kind: 'network', module: 'requests', attr: 'get' } }], coverage: 'complete', totalCount: 1 },
         { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
       ], 'high'),
       mkFacts('run_script', 'execute', [
-        { kind: 'script-analysis', signal: 'clean', patterns: [] },
+        { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
         { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: digest }
       ], 'high'),
       mkFacts('run_script', 'execute', [
-        { kind: 'script-analysis', signal: 'clean', patterns: [] },
+        { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
         { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false }
       ], 'high'),
       mkFacts('run_script', 'execute', [
         { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest }
       ], 'high'),
       mkFacts('run_script', 'execute', [
-        { kind: 'script-analysis', signal: 'clean', patterns: [] },
+        { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
         { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: 'not-a-sha256' }
       ], 'high')
     ]
@@ -416,7 +416,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
 
   it('桌面 run_script clean 免确认（script-clean-allow-desktop）', () => {
     const d = decide(
-      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', signal: 'clean', patterns: [] }], 'high'),
+      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }], 'high'),
       mkContext('desktop'),
       DEFAULT_POLICY_RULES,
       deps()
@@ -427,8 +427,8 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
   it('桌面 clean+script-network 走确认（不被 clean 放行抢先命中）', () => {
     const d = decide(
       mkFacts('run_script', 'execute', [
-        { kind: 'script-analysis', signal: 'clean', patterns: [] },
-        { kind: 'script-network', patterns: ['socket'] }
+        { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
+        { kind: 'script-analysis', findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'socket', evidence: { kind: 'network', module: 'socket', attr: 'socket' } }], coverage: 'complete', totalCount: 1 }
       ], 'high'),
       mkContext('desktop'),
       DEFAULT_POLICY_RULES,
@@ -441,8 +441,8 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
   it('远程 clean+script-network 直接拒绝（不升级为问）', () => {
     const d = decide(
       mkFacts('run_script', 'execute', [
-        { kind: 'script-analysis', signal: 'clean', patterns: [] },
-        { kind: 'script-network', patterns: ['socket'] }
+        { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
+        { kind: 'script-analysis', findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'socket', evidence: { kind: 'network', module: 'socket', attr: 'socket' } }], coverage: 'complete', totalCount: 1 }
       ], 'high'),
       mkContext('wechat'),
       DEFAULT_POLICY_RULES,
@@ -455,7 +455,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
   it('远程 clean+script-uncertified 必确认（即使 remoteScriptRequiresConfirm=false）', () => {
     const d = decide(
       mkFacts('run_script', 'execute', [
-        { kind: 'script-analysis', signal: 'clean', patterns: [] },
+        { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
         { kind: 'script-uncertified' }
       ], 'high'),
       mkContext('wechat'),
@@ -468,7 +468,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
 
   it('远程 clean 已认证 + remoteScriptRequiresConfirm=false + 迁移完成 → 免确认', () => {
     const d = decide(
-      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', signal: 'clean', patterns: [] }], 'high'),
+      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }], 'high'),
       mkContext('wechat'),
       DEFAULT_POLICY_RULES,
       deps({ config: { remoteScriptRequiresConfirm: false }, migrationComplete: true })
@@ -479,7 +479,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
 
   it('远程 clean 已认证 + remoteScriptRequiresConfirm=true（默认）→ 确认', () => {
     const d = decide(
-      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', signal: 'clean', patterns: [] }], 'high'),
+      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }], 'high'),
       mkContext('feishu'),
       DEFAULT_POLICY_RULES,
       deps({ config: {}, migrationComplete: true })
@@ -961,7 +961,7 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
 
   it('桌面 clean 脚本仍免确认（评估器不拦截 run_script）', () => {
     const d = decide(
-      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', signal: 'clean', patterns: [] }], 'high'),
+      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }], 'high'),
       mkContext('desktop'),
       desktopStandard(),
       deps({
@@ -1104,7 +1104,7 @@ describe('decide：安全不变量（硬约束先于缓存）+ 默认兜底', ()
   it('危险脚本信号由显式规则在缓存查询前拒绝', () => {
     const d = decide(
       mkFacts('run_script', 'execute', [
-        { kind: 'script-analysis', signal: 'dangerous', patterns: ['rm -rf'] }
+        { kind: 'script-analysis', findings: [{ pattern: 'A5', class: 'native-code-load', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'native', evidence: { kind: 'native-code', module: 'ctypes' } }], coverage: 'complete', totalCount: 1 }
       ], 'high'),
       mkContext('desktop'),
       DEFAULT_POLICY_RULES,
@@ -1117,11 +1117,11 @@ describe('decide：安全不变量（硬约束先于缓存）+ 默认兜底', ()
     const rules = DEFAULT_POLICY_RULES.filter((rule) => rule.id !== 'script-dangerous-deny')
     const d = decide(
       mkFacts('run_script', 'execute', [
-        { kind: 'script-analysis', signal: 'dangerous', patterns: ['rm -rf'] }
+        { kind: 'script-analysis', findings: [{ pattern: 'A5', class: 'native-code-load', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'native', evidence: { kind: 'native-code', module: 'ctypes' } }], coverage: 'complete', totalCount: 1 }
       ], 'high'),
       mkContext('desktop'), rules, deps({ cache: cacheWith('allow') })
     )
-    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'default-write-execute-ask' })
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'script-finding-review' })
   })
 
   it('未受信来源的 declared capability 不绕过正常策略规则', () => {
@@ -1155,8 +1155,8 @@ describe('decide：extraction-failed 一律问用户', () => {
 
 describe('脚本分析位置/扫描失败的锁定裁决', () => {
   const incomplete = mkFacts('run_script', 'execute', [
-    { kind: 'script-analysis', signal: 'suspicious', patterns: ['A1'], findings: [], coverage: 'failed', totalCount: 0 },
-    { kind: 'script-network', patterns: ['A6'] },
+    { kind: 'script-analysis', findings: [], coverage: 'failed', totalCount: 0 },
+    { kind: 'script-analysis', findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'network', evidence: { kind: 'network', module: 'requests', attr: 'get' } }], coverage: 'complete', totalCount: 1 },
     { kind: 'script-uncertified' },
     { kind: 'script-language-analysis', language: 'unknown', status: 'unverified' },
     { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false },
@@ -1181,12 +1181,12 @@ describe('脚本分析位置/扫描失败的锁定裁决', () => {
     expect(evaluator).not.toHaveBeenCalled()
   })
 
-  it('明确危险拒绝优先于失败确认', () => {
+  it('只有失败覆盖时使用锁定确认；不会从旧 verdict 合成拒绝', () => {
     const facts = mkFacts('run_script', 'execute', [
       ...incomplete.signals,
-      { kind: 'script-analysis', signal: 'dangerous', patterns: ['A7'], coverage: 'failed', findings: [], totalCount: 0 }
+      { kind: 'script-analysis', coverage: 'failed', findings: [], totalCount: 0 }
     ] as ContentFacts['signals'], 'high')
-    expect(decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())).toMatchObject({ type: 'deny', ruleId: 'script-dangerous-deny' })
+    expect(decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm' })
   })
 
   it('路径事实 unknown 时失败锁仍压过动态路径真人条目', () => {
@@ -1234,8 +1234,8 @@ describe('decideIngress：消息入口准入', () => {
 describe('buildMemoryTiers：run_script 记忆封顶（§5.3）', () => {
   it('携带 script-network 信号的调用强制"仅此一次"，不开放记忆档位', () => {
     const facts = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', signal: 'clean', patterns: [] },
-      { kind: 'script-network', patterns: ['https://example.com'] },
+      { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
+      { kind: 'script-analysis', findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'network', evidence: { kind: 'network', module: 'requests', attr: 'get', host: 'example.com' } }], coverage: 'complete', totalCount: 1 },
       // 同时携带可派生缓存键的 path-target 信号：封顶必须压过它，"记住路径"不得绕过网络确认
       { kind: 'path-target', path: 'out/report.txt', zone: 'workdir-normal' }
     ], 'high')
@@ -1244,7 +1244,7 @@ describe('buildMemoryTiers：run_script 记忆封顶（§5.3）', () => {
 
   it('携带 script-uncertified 信号的调用强制"仅此一次"，不开放记忆档位', () => {
     const facts = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
       { kind: 'script-uncertified' },
       { kind: 'path-target', path: 'out/report.txt', zone: 'workdir-normal' }
     ], 'high')
@@ -1480,9 +1480,55 @@ describe('shell signal tokens', () => {
 })
 
 describe('script finding and path classification tokens', () => {
+  it('旧 Golden 结论到新 findings 的三链动作对拍保持一致', () => {
+    const legacyGoldenCases = [
+      { id: 'a01-print-literal', oldVerdict: 'allow', oldPattern: 'A0', finding: undefined,
+        expected: { desktop: 'auto-allow', wechat: 'require-confirm', feishu: 'require-confirm' } },
+      { id: 'a13-subprocess-run', oldVerdict: 'ask', oldPattern: 'A1', finding: { pattern: 'A1', class: 'process-creation' as const }, uncertified: true,
+        expected: { desktop: 'require-confirm', wechat: 'require-confirm', feishu: 'require-confirm' } },
+      { id: 'a25-ctypes-cdll', oldVerdict: 'deny', oldPattern: 'A5', finding: { pattern: 'A5', class: 'native-code-load' as const }, uncertified: true,
+        expected: { desktop: 'deny', wechat: 'deny', feishu: 'deny' } },
+      { id: 'a28-requests-get', oldVerdict: 'ask', oldPattern: 'A6', finding: { pattern: 'A6', class: 'network-api' as const }, uncertified: true,
+        expected: { desktop: 'require-confirm', wechat: 'deny', feishu: 'deny' } }
+    ] as const
+    for (const sample of legacyGoldenCases) {
+      const signals: ContentFacts['signals'] = [{
+        kind: 'script-analysis', coverage: 'complete', totalCount: sample.finding ? 1 : 0,
+        findings: sample.finding ? [{ ...sample.finding, range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'x',
+          evidence: sample.finding.class === 'process-creation' ? { kind: 'process-create', module: 'subprocess', attr: 'run' }
+            : sample.finding.class === 'native-code-load' ? { kind: 'native-code', module: 'ctypes' }
+              : { kind: 'network', module: 'requests', attr: 'get' } }] : []
+      }]
+      if ('uncertified' in sample && sample.uncertified) signals.push({ kind: 'script-uncertified' })
+      for (const lane of ['desktop', 'wechat', 'feishu'] as const) {
+        const result = decide(mkFacts('run_script', 'execute', signals, 'high'), mkContext(lane), DEFAULT_POLICY_RULES, deps())
+        expect(result.type, `${sample.id} legacy ${sample.oldVerdict}/${sample.oldPattern} on ${lane}`).toBe(sample.expected[lane])
+      }
+    }
+  })
+
+  it('12 finding 类均由策略规则消费且类别动作与路径动作分层', () => {
+    const classes = [
+      'process-creation', 'destructive-fs', 'dynamic-execution', 'dynamic-import', 'native-code-load', 'network-api',
+      'file-write', 'cwd-change', 'reflection', 'alias-resolution', 'decode-then-exec', 'dynamic-dispatch'
+    ] as const
+    for (const findingClass of classes) {
+      const facts = mkFacts('run_script', 'execute', [{
+        kind: 'script-analysis', coverage: 'complete', totalCount: 1,
+        findings: [{ pattern: 'golden', class: findingClass, range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 },
+          snippet: 'x', evidence: { kind: 'dynamic-dispatch', unresolvableReason: 'test' } }]
+      }])
+      const decision = decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
+      if (findingClass === 'native-code-load') expect(decision).toMatchObject({ type: 'deny', ruleId: 'script-dangerous-deny' })
+      else if (findingClass === 'cwd-change') expect(decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
+      else if (findingClass === 'network-api') expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-network-ask-desktop' })
+      else expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-finding-review' })
+    }
+  })
+
   it('derives class/path tokens and non-allow aggregate from the strategy disposition table', () => {
     const tokens = signalTokenSet(mkFacts('run_script', 'execute', [{
-      kind: 'script-analysis', signal: 'suspicious', patterns: [], coverage: 'complete', totalCount: 2,
+      kind: 'script-analysis', coverage: 'complete', totalCount: 2,
       findings: [
         { pattern: 'A5', class: 'native-code-load', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'x', evidence: { kind: 'native-code', module: 'ctypes' } },
         { pattern: 'A7', class: 'file-write', range: { startLine: 2, startCol: 1, endLine: 2, endCol: 2 }, snippet: 'x', evidence: { kind: 'write-path', call: 'open', mode: 'w', rawPath: '../x', pathClass: 'dotdot' } }

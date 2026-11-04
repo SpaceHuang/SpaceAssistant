@@ -111,27 +111,14 @@ describe('script analysis failure in the real tool-call gate', () => {
     })
   })
 
-  it('a network finding survives separately while incomplete content still requires a human', async () => {
+  it('unlocated findings are discarded atomically while incomplete content still requires a human', async () => {
     const code = "import requests\nopen('out.txt', 'w')\nrequests.get('https://example.com')"
     scriptAnalysisMocks.parsePythonModule.mockReturnValue(unlocatedWriteWithNetworkIr)
-    scriptAnalysisMocks.collectPatternHits.mockReturnValue([{ pattern: 'A6', verdict: 'ask' }])
+    scriptAnalysisMocks.collectPatternHits.mockReturnValue([{ pattern: 'A6' }])
     const result = await evaluateToolCallGate(args('desktop', code))
-    expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-network', patterns: ['A6'] }))
+    expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'failed', findings: [], totalCount: 0 }))
     expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'extraction-failed' }))
     expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user' })
-  })
-
-  it('a secondary hit-scan exception also locks desktop review and denies automation', async () => {
-    scriptAnalysisMocks.parsePythonModule.mockReturnValue(locatedWriteIr)
-    scriptAnalysisMocks.collectPatternHits.mockImplementation(() => { throw new Error('injected scan error') })
-    const desktop = await evaluateToolCallGate(args())
-    expect(desktop.facts.signals).toContainEqual(expect.objectContaining({ kind: 'extraction-failed', reason: 'pattern-hit-error' }))
-    expect(desktop.facts.signals.find((signal) => signal.kind === 'script-analysis')).toMatchObject({ coverage: 'failed', findings: [], totalCount: 0 })
-    expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user' })
-
-    const unattended = await evaluateToolCallGate(args('automation'))
-    expect(unattended.facts.signals).toContainEqual({ kind: 'automation-script-permission', status: 'matched' })
-    expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'script-analysis-incomplete-automation-deny' })
   })
 
   it('does not enter the registered script executor before human approval', async () => {

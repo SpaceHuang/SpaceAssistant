@@ -48,17 +48,13 @@ describe('run_script 记忆资格按 findings 与 coverage 判定', () => {
     signals: signal ? [signal] : []
   })
 
-  it('拒绝只含旧 clean signal 或缺少 script-analysis 的兼容形状', () => {
-    expect(deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', signal: 'clean', patterns: [] }), 'desktop'))
-      .toEqual({ eligibility: 'none', reasons: ['script-analysis-incomplete'] })
+  it('拒绝缺少 script-analysis 的事实', () => {
     expect(deriveMemoryEligibility(scriptFacts(), 'desktop'))
       .toEqual({ eligibility: 'none', reasons: ['script-analysis-incomplete'] })
   })
 
   it('只有 complete 且空 findings/totalCount=0 才能获得桌面持久记忆', () => {
-    expect(deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', signal: 'clean', patterns: [], findings: [], coverage: 'complete', totalCount: 0 }), 'desktop'))
-      .toEqual({ eligibility: 'persistent', reasons: [] })
-    expect(deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', signal: 'suspicious', patterns: ['legacy'], findings: [], coverage: 'complete', totalCount: 0 }), 'desktop'))
+    expect(deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }), 'desktop'))
       .toEqual({ eligibility: 'persistent', reasons: [] })
   })
 
@@ -73,16 +69,16 @@ describe('run_script 记忆资格按 findings 与 coverage 判定', () => {
         range: { startLine: 1, startCol: 1, endLine: 1, endCol: 4 }, snippet: 'x',
         evidence: { kind: 'process-create' as const, module: 'os', attr: 'system' }
       }
-      expect(deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', signal: 'suspicious', patterns: [], findings: [finding], coverage: 'complete', totalCount: 1 }), 'desktop'))
-        .toEqual({ eligibility: 'none', reasons: ['script-not-clean'] })
+      expect(deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', findings: [finding], coverage: 'complete', totalCount: 1 }), 'desktop'))
+        .toEqual({ eligibility: 'none', reasons: [findingClass === 'network-api' ? 'script-network-or-uncertified' : 'script-not-clean'] })
     }
   })
 
   it.each([
-    ['findings present', { signal: 'suspicious', patterns: ['A6'], findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 4 }, snippet: 'x', evidence: { kind: 'network', module: 'requests', attr: 'get' } }], coverage: 'complete', totalCount: 1 }, 'script-not-clean'],
-    ['partial coverage', { signal: 'clean', patterns: [], findings: [], coverage: 'partial', totalCount: 0 }, 'script-analysis-incomplete'],
-    ['failed coverage', { signal: 'clean', patterns: [], findings: [], coverage: 'failed', totalCount: 0 }, 'script-analysis-incomplete'],
-    ['total mismatch', { signal: 'clean', patterns: [], findings: [], coverage: 'complete', totalCount: 1 }, 'script-analysis-incomplete']
+    ['findings present', { findings: [{ pattern: 'A1', class: 'process-creation', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 4 }, snippet: 'x', evidence: { kind: 'process-create', module: 'os', attr: 'system' } }], coverage: 'complete', totalCount: 1 }, 'script-not-clean'],
+    ['partial coverage', { findings: [], coverage: 'partial', totalCount: 0 }, 'script-analysis-incomplete'],
+    ['failed coverage', { findings: [], coverage: 'failed', totalCount: 0 }, 'script-analysis-incomplete'],
+    ['total mismatch', { findings: [], coverage: 'complete', totalCount: 1 }, 'script-analysis-incomplete']
   ] as const)('%s cannot gain reusable memory', (_name, payload, reason) => {
     const result = deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', ...payload }), 'desktop')
     expect(result.eligibility).toBe('none')

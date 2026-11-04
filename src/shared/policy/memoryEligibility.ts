@@ -26,7 +26,8 @@ export function deriveMemoryEligibility(
     reasons.push('outbound-never-remembered')
     return { eligibility: 'none', reasons }
   }
-  if (facts.signals.some((signal) => signal.kind === 'script-network' || signal.kind === 'script-uncertified')) {
+  if (facts.signals.some((signal) => signal.kind === 'script-uncertified' ||
+      signal.kind === 'script-analysis' && signal.findings.some((finding) => finding.class === 'network-api'))) {
     reasons.push('script-network-or-uncertified')
     return { eligibility: 'none', reasons }
   }
@@ -57,13 +58,12 @@ export function deriveMemoryEligibility(
     reasons.push('script-analysis-incomplete')
     return { eligibility: 'none', reasons }
   }
-  // Policy-stage memory qualification for scripts reads only the finding collection and its
-  // coverage contract; legacy signal/verdict fields remain display compatibility data.
+  // Policy-stage memory qualification reads only the finding collection and its coverage contract.
   if (facts.toolName === 'run_script') {
     const analysis = facts.signals.find((signal): signal is Extract<FactSignal, { kind: 'script-analysis' }> =>
       signal.kind === 'script-analysis'
     )
-    if (!analysis || analysis.coverage !== 'complete' || analysis.findings === undefined ||
+    if (!analysis || analysis.coverage !== 'complete' ||
       analysis.totalCount !== analysis.findings.length) {
       reasons.push('script-analysis-incomplete')
       return { eligibility: 'none', reasons }
@@ -72,9 +72,6 @@ export function deriveMemoryEligibility(
       reasons.push('script-not-clean')
       return { eligibility: 'none', reasons }
     }
-  } else if (facts.signals.some((signal) => signal.kind === 'script-analysis' && signal.signal !== 'clean')) {
-    reasons.push('script-not-clean')
-    return { eligibility: 'none', reasons }
   }
   if (incompleteScript) {
     reasons.push('script-content-session-only')

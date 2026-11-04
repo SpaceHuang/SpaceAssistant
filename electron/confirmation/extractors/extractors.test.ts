@@ -153,10 +153,10 @@ describe('pathClassifier', () => {
 })
 
 describe('scriptAnalysisExtractor', () => {
-  it('clean 脚本产 script-analysis=clean', () => {
+  it('clean 脚本产完整且无发现的 script-analysis facts', () => {
     const r = extractScriptSignals('x = 1', env)
     const sa = r.signals.find((s) => s.kind === 'script-analysis')
-    expect(sa && sa.kind === 'script-analysis' && sa.signal).toBe('clean')
+    expect(sa).toMatchObject({ kind: 'script-analysis', coverage: 'complete', findings: [], totalCount: 0 })
   })
 
   it('将全量逐条发现、覆盖度和总数透传到可选事实字段', () => {
@@ -168,15 +168,18 @@ describe('scriptAnalysisExtractor', () => {
     expect(analysis.findings?.map((finding) => finding.range.startLine)).toEqual([2, 3])
   })
 
-  it('新 findings 与旧 signal/patterns 在同一事实中并行，兼容旧规则消费', () => {
+  it('脚本分析只输出 findings 与 coverage，不输出旧三档结论或脚本网络 token', () => {
     const result = extractScriptSignals("import requests\nrequests.get('https://example.test')", env)
     const analysis = result.signals.find((signal) => signal.kind === 'script-analysis')
     expect(analysis).toMatchObject({
-      kind: 'script-analysis', signal: 'suspicious', patterns: ['A6'],
+      kind: 'script-analysis',
       coverage: 'complete', totalCount: 1,
       findings: [expect.objectContaining({ class: 'network-api', pattern: 'A6', evidence: expect.objectContaining({ kind: 'network', host: 'example.test' }) })]
     })
-    expect(result.signals).toContainEqual({ kind: 'script-network', patterns: ['A6'] })
+    expect(analysis).not.toHaveProperty('signal')
+    expect(analysis).not.toHaveProperty('patterns')
+    expect(result.signals.map((signal) => signal.kind)).not.toContain('script-network')
+    expect(signalKinds(result.signals)).toContain('script-uncertified')
   })
 
   it('命中缺失 IR 位置时作废整组 findings 并产生 extraction-failed', () => {
@@ -192,9 +195,11 @@ describe('scriptAnalysisExtractor', () => {
     expect(result.signals.find((signal) => signal.kind === 'script-analysis')).toMatchObject({ coverage: 'failed', findings: [], totalCount: 0 })
   })
 
-  it('网络脚本额外产 script-network 信号', () => {
+  it('网络命中只由 network-api finding 表达', () => {
     const r = extractScriptSignals("import requests\nrequests.get('http://x')", env)
-    expect(signalKinds(r.signals)).toContain('script-network')
+    const analysis = r.signals.find((signal) => signal.kind === 'script-analysis')
+    expect(analysis?.kind === 'script-analysis' && analysis.findings.some((finding) => finding.class === 'network-api')).toBe(true)
+    expect(signalKinds(r.signals)).not.toContain('script-network')
   })
 
   it('仅将无副作用、单一静态 HTTPS GET/HEAD 目标标为 IM 网络审核候选', () => {
@@ -216,10 +221,11 @@ describe('scriptAnalysisExtractor', () => {
     }
   })
 
-  it('危险脚本产 script-analysis=dangerous', () => {
+  it('native-code-load 通过 findings 表达，由策略层决定动作', () => {
     const r = extractScriptSignals("import ctypes\nctypes.CDLL('libc.so')", env)
     const sa = r.signals.find((s) => s.kind === 'script-analysis')
-    expect(sa && sa.kind === 'script-analysis' && sa.signal).toBe('dangerous')
+    expect(sa?.kind === 'script-analysis' && sa.findings.some((finding) => finding.class === 'native-code-load')).toBe(true)
+    expect(sa).not.toHaveProperty('signal')
   })
 
   it('allow 但无法通过远程正白名单认证的脚本产 script-uncertified', () => {

@@ -1494,7 +1494,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       call, confirmationId: call.toolCallId, answerer: 'user', reasonCode: 'script-risk',
       context: {
         facts: { toolName: 'run_script', actionClass: 'write', baseRiskLevel: 'high',
-          signals: [{ kind: 'script-analysis', signal: 'suspicious', patterns: findings.map(({ pattern }) => pattern), findings, coverage: 'complete', totalCount: 4 }],
+          signals: [{ kind: 'script-analysis', findings, coverage: 'complete', totalCount: 4 }],
           summary: { text: 'script review' } },
         decision: { riskLevel: 'high', memoryTiers: [], timeoutMs: 1000, answerer: 'user' }
       }

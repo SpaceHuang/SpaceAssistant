@@ -77,6 +77,7 @@ const EXPECTED_RULE_IDS = [
   'read-target-workdir-allow',
   'path-outside-readonly-allow',
   'script-network-ask-desktop',
+  'script-finding-review',
   'script-uncertified-ask-remote',
   'script-clean-certified-remote',
   'script-clean-allow-desktop',

@@ -488,7 +488,7 @@ describe('AgentChannel 任务声明透传（D：可信证据）', () => {
     await ch.request(req({ facts: {
       toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
       signals: [
-        { kind: 'script-analysis', signal: 'suspicious', patterns: ['A6'], findings: [finding], coverage: 'complete', totalCount: 1 },
+        { kind: 'script-analysis', findings: [finding], coverage: 'complete', totalCount: 1 },
         { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
           contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'c'.repeat(64), authenticationVersion: 'script-certifier-v1' }
       ], summary: { text: 'review script' }
@@ -511,7 +511,7 @@ describe('AgentChannel 任务声明透传（D：可信证据）', () => {
     const facts: ConfirmRequest['facts'] = {
       toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
       signals: [
-        { kind: 'script-analysis', signal: 'suspicious', patterns: findings.map((f) => f.pattern), findings, coverage: 'complete', totalCount: 47 },
+        { kind: 'script-analysis', findings, coverage: 'complete', totalCount: 47 },
         { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
           contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'c'.repeat(64), authenticationVersion: 'script-certifier-v1' }
       ], summary: { text: 'review script' }
@@ -530,7 +530,7 @@ describe('AgentChannel 任务声明透传（D：可信证据）', () => {
     const { ch, invokeApproval } = channel({ lane: 'desktop', toolName: 'run_script' })
     const outcome = await ch.request(req({ facts: {
       toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
-      signals: [{ kind: 'script-analysis', signal: 'suspicious', patterns: ['A6'], findings: [], coverage: 'complete', totalCount: 0 }],
+      signals: [{ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }],
       summary: { text: 'review script' }
     } }))
     expect(outcome).toMatchObject({ kind: 'rejected', answererKind: 'agent', cause: 'agent-undetermined' })
@@ -547,7 +547,7 @@ describe('AgentChannel 任务声明透传（D：可信证据）', () => {
     const extras = deriveClueExtras({
       toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
       signals: [
-        { kind: 'script-analysis', signal: 'suspicious', patterns: ['A6'], findings: [finding], coverage: 'partial', totalCount: 1 },
+        { kind: 'script-analysis', findings: [finding], coverage: 'partial', totalCount: 1 },
         { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
           contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'c'.repeat(64) }
       ], summary: { text: 'review script' }
