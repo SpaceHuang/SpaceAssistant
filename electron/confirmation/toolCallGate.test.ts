@@ -2020,15 +2020,46 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each([
-    ['absolute path inside join', "import os\nopen(os.path.join('base', '/tmp/script-finding-review-absolute.txt'), 'w')"],
-    ['path constructor', "from pathlib import Path\nPath('/tmp/script-finding-review-absolute.txt').write_text('x')"]
-  ])('写目标表达式 %s 不可被纯写入快通道免确认', async (_case, code) => {
+    ['absolute path inside join', "import os\nopen(os.path.join('base', '/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', 'script-finding-review', 'agent'],
+    ['arbitrary call result', "open(custom_path('/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', 'script-non-write-path-confirm', 'user'],
+    ['multi-argument Path', "from pathlib import Path\nPath('base', '/tmp/script-finding-review-absolute.txt').write_text('x')", 'unresolved', 'require-confirm', 'script-unresolved-write-review', 'agent']
+  ] as const)('写目标表达式 %s 不被误折叠为相对路径', async (_case, code, pathClass, decisionType, ruleId, answerer) => {
     const root = await fs.realpath(await makeTempDir('script-absolute-write-'))
     try {
       const result = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'),
         toolName: 'run_script', toolInput: { code } }))
-      expect(result.decision.type).not.toBe('allow')
-      expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'path-target', zone: 'outside-workdir' }))
+      expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', findings: expect.arrayContaining([
+        expect.objectContaining({ evidence: expect.objectContaining({ kind: 'write-path', rawPath: null, pathClass }) })
+      ]) }))
+      expect(result.decision).toMatchObject({ type: decisionType, ruleId, answerer })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('已知相对 Path 写入保留桌面 clean allow 策略', async () => {
+    const result = await evaluateToolCallGate(base({ toolName: 'run_script',
+      toolInput: { code: 'from pathlib import Path\nPath("out.txt").write_text("x")' } }))
+    expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', findings: expect.arrayContaining([
+      expect.objectContaining({ pattern: 'A8', evidence: expect.objectContaining({ rawPath: 'out.txt', pathClass: 'relative' }) })
+    ]) }))
+    expect(result.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
+  })
+
+  it.each([
+    ['Path.write_text absolute', 'from pathlib import Path\nPath("/tmp/script-review-no-execute.txt").write_text("x")', '/tmp/script-review-no-execute.txt', 'absolute'],
+    ['Path.write_bytes absolute', 'from pathlib import Path\nPath("/tmp/script-review-no-execute.txt").write_bytes(b"x")', '/tmp/script-review-no-execute.txt', 'absolute'],
+    ['Path alias absolute', 'from pathlib import Path as P\nP("/tmp/script-review-no-execute.txt").write_text("x")', '/tmp/script-review-no-execute.txt', 'absolute'],
+    ['module Path parent traversal', 'import pathlib as pl\npl.Path("../script-review-no-execute.txt").write_text("x")', '../script-review-no-execute.txt', 'dotdot']
+  ] as const)('%s retains known forbidden path evidence and default deny', async (_case, code, rawPath, pathClass) => {
+    const root = await fs.realpath(await makeTempDir('script-known-forbidden-write-'))
+    try {
+      const result = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'),
+        toolName: 'run_script', toolInput: { code } }))
+      expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', findings: expect.arrayContaining([
+        expect.objectContaining({ evidence: expect.objectContaining({ kind: 'write-path', rawPath, pathClass }) })
+      ]) }))
+      expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'script-dangerous-deny' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

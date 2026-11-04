@@ -84,6 +84,28 @@ describe('scriptContentSecurity — List A (baseline)', () => {
   })
 
   it.each([
+    ['Path', 'from pathlib import Path\nPath("/tmp/out").write_text("x")', '/tmp/out', 'absolute'],
+    ['Path alias', 'from pathlib import Path as P\nP("/tmp/out").write_bytes(b"x")', '/tmp/out', 'absolute'],
+    ['module Path', 'import pathlib as pl\npl.Path("../out").write_text("x")', '../out', 'dotdot'],
+    ['relative Path', 'from pathlib import Path\nPath("out").write_text("x")', 'out', 'relative'],
+    ['multi-argument Path', 'from pathlib import Path\nPath("base", "/tmp/out").write_text("x")', null, 'unresolved']
+  ])('retains verified %s constructor path in write evidence', (_name, code, rawPath, pathClass) => {
+    expect(analyzeScriptContent(code).findings?.[0]?.evidence).toMatchObject({ kind: 'write-path', rawPath, pathClass })
+  })
+
+  it('does not treat a shadowed Path name or arbitrary call as a pathlib constructor', () => {
+    for (const code of [
+      'Path = custom\nPath("/tmp/out").write_text("x")',
+      'custom("/tmp/out").write_text("x")',
+      'from pathlib import Path\nPath = custom\nPath("/tmp/out").write_text("x")',
+      'import pathlib as pl\npl = custom\npl.Path("/tmp/out").write_text("x")',
+      'import pathlib as pl\npl = custom.module\npl.Path("/tmp/out").write_text("x")'
+    ]) {
+      expect(analyzeScriptContent(code).findings?.[0]?.evidence).toMatchObject({ kind: 'write-path', rawPath: null, pathClass: 'unresolved' })
+    }
+  })
+
+  it.each([
     ['Chinese before', "注释\nopen('x', 'w')", "open('x', 'w')"],
     ['emoji before', "# 😀\nopen('x', 'w')", "open('x', 'w')"],
     ['Unicode inside', "open('目录😀/x', 'w')", "open('目录😀/x', 'w')"],

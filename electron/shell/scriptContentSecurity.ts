@@ -278,27 +278,49 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
  * `g = getattr`) which are never registered via import/from-import scope tracking.
  */
 function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): void {
+  const currentAttrBinding = scope.attrs.get(target)
+  const pathAlias = (currentAttrBinding?.module === 'pathlib' && currentAttrBinding.attr === 'Path') || scope.modules.get(target) === 'pathlib'
+  const sourceModuleBinding = value.kind === 'name' ? scope.modules.get(value.id) : undefined
+  const sourceAttrBinding = value.kind === 'name' ? scope.attrs.get(value.id) : undefined
+  const sourceAttrChain = value.kind === 'attr' ? resolveExprChain(value, scope) : undefined
+  if (pathAlias) {
+    scope.modules.delete(target)
+    scope.attrs.delete(target)
+  }
   if (value.kind === 'name') {
-    if (scope.modules.has(value.id)) {
-      scope.modules.set(target, scope.modules.get(value.id)!)
+    if (sourceModuleBinding) {
+      scope.modules.set(target, sourceModuleBinding)
       return
     }
-    const attrBinding = scope.attrs.get(value.id)
-    if (attrBinding) {
-      scope.attrs.set(target, { module: attrBinding.module, attr: attrBinding.attr })
+    if (sourceAttrBinding) {
+      scope.attrs.set(target, { module: sourceAttrBinding.module, attr: sourceAttrBinding.attr })
       return
     }
     if (DANGEROUS_BUILTIN_NAMES.has(value.id)) {
       scope.attrs.set(target, { module: 'builtins', attr: value.id })
+      return
+    }
+    if (pathAlias) {
+      scope.modules.delete(target)
+      scope.attrs.delete(target)
     }
     return
   }
   if (value.kind === 'attr') {
-    const chain = resolveExprChain(value, scope)
-    const lastAttr = chain.attrs[chain.attrs.length - 1]
-    if (chain.module && lastAttr) {
-      scope.attrs.set(target, { module: chain.module, attr: lastAttr })
+    const lastAttr = sourceAttrChain?.attrs.at(-1)
+    if (sourceAttrChain?.module && lastAttr) {
+      scope.attrs.set(target, { module: sourceAttrChain.module, attr: lastAttr })
+      return
     }
+    if (pathAlias) {
+      scope.modules.delete(target)
+      scope.attrs.delete(target)
+    }
+    return
+  }
+  if (pathAlias) {
+    scope.modules.delete(target)
+    scope.attrs.delete(target)
   }
 }
 
@@ -307,12 +329,9 @@ function extractPathLiteral(base: IrExpr, scope: Scope): string | null {
   if (base.kind === 'call') {
     const ctor = resolveExprChain(base.callee, scope)
     const pathBinding = ctor.root ? scope.attrs.get(ctor.root) : undefined
-    const isPath =
-      ctor.root === 'Path' ||
-      ctor.module === 'pathlib' ||
-      pathBinding?.module === 'pathlib' ||
-      (base.callee.kind === 'name' && base.callee.id === 'Path')
-    if (isPath) {
+    const isPath = (ctor.module === 'pathlib' && ctor.attrs.at(-1) === 'Path') ||
+      (pathBinding?.module === 'pathlib' && pathBinding.attr === 'Path')
+    if (isPath && base.args.length === 1 && base.kwargs.length === 0) {
       const arg = base.args[0]
       return arg ? foldStringExpr(arg) : null
     }
@@ -394,7 +413,7 @@ class Analyzer {
       const modeExpr = expr.kwargs.find((kw) => kw.name === 'mode')?.value ?? expr.args[1]
       const mode = isOpen && modeExpr ? foldStringIr(modeExpr) : null
       // A call's first argument is not necessarily its resulting path (for example os.path.join).
-      const rawPath = pathExpr ? foldStringIr(pathExpr) : null
+      const rawPath = pathExpr ? foldStringIr(pathExpr) ?? extractPathLiteral(pathExpr, scope) : null
       return {
         kind: 'write-path',
         call: isOpen ? 'open' : attr || 'unknown',
