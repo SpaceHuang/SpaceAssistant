@@ -125,20 +125,20 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
 
 ### 阶段 1c：审批材料
 
-- [ ] **F20 定义审核证据契约**（本机）
+- [x] **F20 定义审核证据契约**（本机）
   - 范围：`src/shared/confirmation/types.ts` 与新增/扩展共享类型测试。
   - 产物/判据：审核证据类型包含方案契约要求的来源、位置、原文片段/结构化证据、coverage、totalCount、truncated、sufficiency/status；字段可选性、缺省行为和审核材料预算语义与方案一致。该类型不依赖审计投影格式；不在此任务实现审计投影器。
-  - 验证：共享契约用例覆盖缺省与完整形状；`npm run typecheck:shared`。关联 AC-16 契约部分。证据：`F20.md`。
+  - 验证：`npm exec tsc -- --noEmit --target ES2022 --module ESNext --moduleResolution bundler --skipLibCheck src/shared/confirmation/scriptApprovalEvidence.test.ts`、`npm exec -- vitest run src/shared/confirmation/scriptApprovalEvidence.test.ts`（1 file / 1 test passed）、`npm run typecheck:shared` 均通过。类型测试覆盖旧线索包缺省、完整证据和 partial/undetermined 形状。关联 AC-16 契约部分。证据：`docs/plan/evidence/script-finding-model/F20.md`。
 
-- [ ] **F21 把脚本证据送达审批材料**（本机）
+- [x] **F21 把脚本证据送达审批材料**（本机）
   - 范围：`electron/confirmation/agentChannel.ts`、`electron/confirmation/approvalAgent.ts`、相关 clue extras/审批测试及 `src/shared/confirmation/types.ts`。
   - 产物/判据：线索包含 `scriptEvidence`，审核材料实际呈现原文片段与结构化证据（非仅 kind 或审计骨架）；骨架相同而 host/path/argv 不同的样本在最终材料中可区分；材料摘要与执行对象绑定；超预算保留总数及截断标记，必要的受控回读仅读取本次调用脚本。
-  - 验证：`npm exec vitest run electron/confirmation/agentChannel.test.ts electron/confirmation/agentChannel.clueExtras.test.ts electron/confirmation/approvalAgent.test.ts`；断言最终材料内容而非仅条数。关联 AC-16。证据：`F21.md`。
+  - 验证：`npm exec -- vitest run electron/confirmation/agentChannel.test.ts electron/confirmation/approvalAgent.test.ts src/shared/confirmation/scriptApprovalEvidence.test.ts`（3 files / 86 tests passed）；最终材料断言比较不同 host/path/argv 内容。`npm run typecheck:shared` 通过。关联 AC-16。证据：`docs/plan/evidence/script-finding-model/F21.md`。
 
-- [ ] **F22 对不充分或截断材料确定性转人工**（本机）
+- [x] **F22 对不充分或截断材料确定性转人工**（本机）
   - 范围：`electron/confirmation/agentChannel.ts`、`electron/confirmation/approvalAgent.ts` 与相关审批链路测试。
   - 产物/判据：不可核验来源标记 insufficient；材料不足、超预算或必要内容缺失时整体 undetermined，审批链路确定性要求人工，不交由模型自行裁量；正常充足材料仍保留可区分证据。
-  - 验证：审批边界测试覆盖充分、不可核验、截断/超预算和缺材料分支，实际断言最终回答者与发送给模型的材料。关联 AC-16。证据：`F22.md`。
+  - 验证：`npm exec -- vitest run electron/confirmation/agentChannel.test.ts electron/confirmation/agentChannel.clueExtras.test.ts electron/confirmation/approvalAgent.test.ts electron/confirmation/agentSdkConfirmationPort.test.ts src/shared/confirmation/scriptApprovalEvidence.test.ts`（5 files / 119 tests passed）；覆盖充分材料、超预算、片段过长、partial coverage、缺绑定/缺发现，并断言不足材料不调用 Agent、返回 `agent-undetermined`；既有桌面人工 fallback 集成测试通过。`npm run typecheck:shared` 通过。关联 AC-16。证据：`docs/plan/evidence/script-finding-model/F22.md`。
 
 - [ ] **F23 关闭 1c 阶段**（本机）
   - 范围：F20～F22 与阶段证据。
