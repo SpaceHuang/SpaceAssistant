@@ -1062,6 +1062,37 @@ describe('runApprovalAgent（Skill v2 链内矩阵生效）', () => {
 })
 
 describe('线索包任务声明（D：可信证据分区）', () => {
+  it('最终模型材料保留原文片段及 host/path/argv 结构化证据', async () => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const scriptEvidence = {
+      coverage: 'complete' as const, totalCount: 3, truncated: false, contentDigest: 'a'.repeat(64), sufficiency: 'sufficient' as const,
+      findings: [
+        { pattern: 'A6', class: 'network-api' as const, range: { startLine: 2, startCol: 1, endLine: 2, endCol: 38 },
+          snippet: "requests.get('https://approved.example')", evidence: { kind: 'network' as const, module: 'requests', attr: 'get', host: 'approved.example' }, status: 'complete' as const },
+        { pattern: 'A7', class: 'file-write' as const, range: { startLine: 3, startCol: 1, endLine: 3, endCol: 26 },
+          snippet: "open('/tmp/approved.txt', 'w')", evidence: { kind: 'write-path' as const, call: 'open', mode: 'w', rawPath: '/tmp/approved.txt', pathClass: 'absolute' as const }, status: 'complete' as const },
+        { pattern: 'A1', class: 'process-creation' as const, range: { startLine: 4, startCol: 1, endLine: 4, endCol: 29 },
+          snippet: "subprocess.Popen(['approved'])", evidence: { kind: 'process-create' as const, module: 'subprocess', attr: 'Popen', argvLiteral: "['approved']" }, status: 'complete' as const }
+      ]
+    }
+    const first = renderCluePackForTest(clue({ scriptEvidence }))
+    const second = renderCluePackForTest(clue({ scriptEvidence: {
+      ...scriptEvidence,
+      findings: scriptEvidence.findings.map((finding, index) => index === 0
+        ? { ...finding, snippet: "requests.get('https://other.example')", evidence: { ...finding.evidence, host: 'other.example' } }
+        : index === 1
+          ? { ...finding, snippet: "open('/tmp/other.txt', 'w')", evidence: { ...finding.evidence, rawPath: '/tmp/other.txt' } }
+          : { ...finding, snippet: "subprocess.Popen(['other'])", evidence: { ...finding.evidence, argvLiteral: "['other']" } })
+    } }))
+
+    for (const value of ['approved.example', '/tmp/approved.txt', "['approved']", '"totalCount":3', '"truncated":false', '"sufficiency":"sufficient"']) {
+      expect(first).toContain(value)
+    }
+    for (const value of ['other.example', '/tmp/other.txt', "['other']"]) expect(second).toContain(value)
+    expect(first).not.toContain('other.example')
+    expect(second).not.toContain('approved.example')
+  })
+
   it('桌面有人值守档位的系统提示允许按明确用户指令评估授权至 high', async () => {
     mockRunToolChatSession.mockResolvedValue({
       ok: true,

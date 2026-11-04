@@ -18,6 +18,10 @@ export const DEFAULT_AGENT_APPROVAL_TIMEOUT_MS = 30_000
 
 /** P1-E(c)：线索包 [命令] 字段最多列出的子命令条数（超出以总数标注，保持有界）。 */
 export const CLUE_COMMAND_MAX = 5
+/** Script evidence is bounded; any loss of evidence requires a human decision. */
+const SCRIPT_EVIDENCE_MAX_FINDINGS = 16
+const SCRIPT_EVIDENCE_MAX_BYTES = 24 * 1024
+const SCRIPT_EVIDENCE_MAX_SNIPPET_CHARS = 2_000
 
 /**
  * P1-4 修复：递归兜底以「审批会话」为作用域（同调用树语义），不再是全局计数——
@@ -105,6 +109,42 @@ export function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<Approv
       if (!extras.url && s.targetUrl) extras.url = s.targetUrl
       if (!extras.targetPath && !extras.url && s.targetPath) extras.targetPath = s.targetPath
       if (!extras.argsDigest && s.argsDigest) extras.argsDigest = s.argsDigest
+    }
+  }
+  const scriptAnalysis = facts.signals.find((signal) => signal.kind === 'script-analysis')
+  const scriptDigest = extras.scriptApprovalBinding?.sha256
+  if (scriptAnalysis?.findings !== undefined && scriptDigest) {
+    const coverage = scriptAnalysis.coverage ?? 'failed'
+    let truncated = scriptAnalysis.totalCount !== undefined && scriptAnalysis.totalCount > scriptAnalysis.findings.length
+    const findings: NonNullable<ApprovalCluePack['scriptEvidence']>['findings'] = []
+    for (const finding of scriptAnalysis.findings) {
+      const boundedSnippet = Array.from(finding.snippet).slice(0, SCRIPT_EVIDENCE_MAX_SNIPPET_CHARS).join('')
+      const complete = boundedSnippet.trim().length > 0 && boundedSnippet.length === finding.snippet.length
+      const projected = {
+        pattern: finding.pattern,
+        class: finding.class,
+        range: { ...finding.range },
+        snippet: complete ? boundedSnippet : null,
+        evidence: structuredClone(finding.evidence),
+        status: complete ? 'complete' as const : 'insufficient' as const
+      }
+      if (findings.length >= SCRIPT_EVIDENCE_MAX_FINDINGS || Buffer.byteLength(JSON.stringify([...findings, projected]), 'utf8') > SCRIPT_EVIDENCE_MAX_BYTES) {
+        truncated = true
+        break
+      }
+      findings.push(projected)
+      if (!complete) truncated = true
+    }
+    if (findings.length < scriptAnalysis.findings.length) truncated = true
+    extras.scriptEvidence = {
+      coverage,
+      totalCount: scriptAnalysis.totalCount ?? scriptAnalysis.findings.length,
+      truncated,
+      contentDigest: scriptDigest,
+      sufficiency: coverage === 'complete' && !truncated && findings.length === scriptAnalysis.findings.length && findings.every((finding) => finding.status === 'complete')
+        ? 'sufficient'
+        : 'undetermined',
+      findings
     }
   }
   return extras
@@ -219,6 +259,23 @@ export class AgentChannel implements ConfirmationChannel {
       actor: 'agent',
       actorRef: { profileId, invocationId }
     })
+    const scriptReviewUndetermined = req.facts.toolName === 'run_script' && (
+      clue.scriptEvidence?.sufficiency !== 'sufficient' ||
+      clue.scriptApprovalBinding?.sha256 !== clue.scriptEvidence.contentDigest
+    )
+    if (scriptReviewUndetermined) {
+      this.deps.audit?.record({
+        ts: Date.now(), event: 'confirm.outcome', lane: this.deps.lane,
+        sessionId: this.deps.sessionId, requestId: this.deps.requestId, toolName: this.deps.toolName,
+        outcome: 'rejected', cause: 'agent-undetermined',
+        reasonSummary: '脚本审核证据缺失、不完整或超出预算。', actor: 'agent',
+        actorRef: { profileId, invocationId }, latencyMs: 0
+      })
+      return {
+        kind: 'rejected', answererKind: 'agent', cause: 'agent-undetermined',
+        reason: { summary: '脚本审核证据缺失、不完整或超出预算，需由人工确认。' }
+      }
+    }
     const parentRemainingMs = this.deps.deadlineAt === undefined ? Number.POSITIVE_INFINITY : Math.max(0, this.deps.deadlineAt - Date.now())
     const effectiveTimeoutMs = Math.min(req.timeoutMs ?? this.deps.policy.timeoutMs ?? DEFAULT_AGENT_APPROVAL_TIMEOUT_MS, parentRemainingMs)
     if (effectiveTimeoutMs <= 0) {

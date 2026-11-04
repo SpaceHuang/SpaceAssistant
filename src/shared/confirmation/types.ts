@@ -344,6 +344,28 @@ export interface ConfirmRequest {
   reviewScopeCandidate?: ReviewScopeApprovalCandidate
 }
 
+/** Bounded, in-memory script evidence shown to the approval model for this invocation. */
+export interface ApprovalScriptEvidenceFinding {
+  pattern: string
+  class: ScriptFindingClass
+  range: ScriptSourceRange
+  /** Original script text, or null when the bounded material is insufficient; never an audit projection. */
+  snippet: string | null
+  evidence: ScriptFindingEvidence
+  status: 'complete' | 'insufficient'
+}
+
+/** Evidence contract for independent script review; it carries facts and never a policy action. */
+export interface ApprovalScriptEvidence {
+  coverage: 'complete' | 'partial' | 'failed'
+  totalCount: number
+  truncated: boolean
+  /** SHA-256 of the exact script under review, identical to scriptApprovalBinding.sha256. */
+  contentDigest: string
+  sufficiency: 'sufficient' | 'undetermined'
+  findings: ApprovalScriptEvidenceFinding[]
+}
+
 export interface ReviewScopeApprovalCandidate {
   readonly scopeCandidateDigest: string
   readonly toolName: 'edit_file' | 'write_file' | 'grep'
@@ -435,6 +457,8 @@ export interface ApprovalCluePack {
   grepQuery?: string
   /** Host-computed digests binding the exact script and parameters reviewed for this invocation. */
   scriptApprovalBinding?: { sha256: string; parametersSha256: string; environmentSha256: string; certifier: string }
+  /** Optional, bounded raw script findings for independent review during this invocation. */
+  scriptEvidence?: ApprovalScriptEvidence
   /** Provenance of the exact facts reviewed by policy and approval; contains no raw input. */
   factsProvenance?: { factId: string; extractorVersion: string; completeness: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale'; factsRevision: number; policyVersion: string }
   /** Untrusted model-provided explanation attached to this invocation. */
