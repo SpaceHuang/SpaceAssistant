@@ -194,7 +194,7 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
 
 ### 阶段 3：清理与收口
 
-- [ ] **F40 写入结构投影审计与内容摘要**（本机）
+- [x] **F40 写入结构投影审计与内容摘要**（本机）
   - 范围：`electron/confirmation/securityAuditLog.ts`、`src/shared/confirmation/scriptSnippetProjection.ts`（新建，审计阶段唯一实现）、审计类型及 `electron/confirmation/securityAuditLog.test.ts`。
   - 产物/判据：定位键与 `snippetSha256` 分离；摘要基于原始片段、统一换行、不 trim/截断/投影，之后才截断与投影；落盘只含骨架、无字面量，包含方案要求的会话/轮次/总数/截断标记；既有脱敏作为第二道防线；不写整份脚本，不新增持久化迁移。
   - 验证：从完整审计事件经写入函数到最终 JSONL 的用例覆盖嵌套、凭证形态、长行、普通代码；同键不同内容摘要不同、同片段复算一致；确认测试凭证不在落盘文本。关联 AC-11、14、15。证据：`F40.md`。
