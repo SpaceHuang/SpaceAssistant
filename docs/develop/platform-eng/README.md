@@ -18,6 +18,7 @@
 | 文档 | 类型 | 状态 | 说明 |
 | --- | --- | --- | --- |
 | [ci-reliability-improvement-technical-plan.md](./in-flight/ci-reliability-improvement-technical-plan.md) | 技术方案 | 已实施 | CI 门禁与跨平台可靠性；PR #3 head 全部 CI 通过，main 规则已启用 |
+| [test-system-optimization-technical-plan.md](./in-flight/test-system-optimization-technical-plan.md) | 技术方案 | 草稿（未实施） | 测试体系近期+中期优化：覆盖率测量与基线、共享测试基建、流式故障注入、渲染快照、storage-perf 与 probe 进 CI、testing-guide 修订；与 CI 可靠性方案划界不重复 |
 
 ## 归档（10 件）
 

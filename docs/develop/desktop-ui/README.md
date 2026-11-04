@@ -17,7 +17,9 @@
 
 ## 在途（in-flight）
 
-**（本次核验后为空）** —— 全部移入 `../archive/desktop-ui/`（共 21 件）。
+| 文档 | 类型 | 说明 |
+| --- | --- | --- |
+| [pending-confirm-notification-focus-optimization-plan.md](./in-flight/pending-confirm-notification-focus-optimization-plan.md) | 核验及优化方案（方向已定，待实施） | 核验浮窗焦点路径；macOS 改用系统通知与 Dock 角标，Windows 提醒保持不变 |
 
 > **2026-10-14 两轮核验更正（原判 C 有误）**：
 > `chat-markdown-math-delimiter-misfire-diagnosis-and-improvement-plan.md`（`src/shared/markdownMathNormalize.ts`）、`scheduled-task-workdir-model-development-plan.md`（`automation-write-deny` 策略 + butler `modelOverride`/`workDirProfileId`）、`streaming-ui-performance-analysis.md`（2026-05-24 `feat: …流式 UI 性能优化…`）。

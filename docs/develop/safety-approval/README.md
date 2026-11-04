@@ -41,6 +41,8 @@
 - [automation-task-document-output-improvement-plan.md](./in-flight/automation-task-document-output-improvement-plan.md) —— **草稿（未实施、待裁决）**：定时任务在绑定工作目录内创建新文档，并在显式要求文件时校验产物；D-1 决定是否开放受限写入，D-2 决定是否增加显式文件交付要求。
 - [scheduled-task-multi-workdir-and-preflight-development-plan.md](./in-flight/scheduled-task-multi-workdir-and-preflight-development-plan.md) —— **草稿（未实施；按 2026-10-17 第四轮开发方案评审 R4-01 修订，待复审）**：多授权目录、exact/collection/output 目标解析、v0/v1 旧任务兼容、预检门禁，以及区分 task revision 与调度代次、保留运行快照的跳过/补跑状态机。
 - [scheduled-task-multi-workdir-and-preflight-execution-plan.md](./in-flight/scheduled-task-multi-workdir-and-preflight-execution-plan.md) —— **未开始（计划草稿；已按第四轮评审修订）**：以无环 DAG 拆分 schema/store、兼容调用迁移、目标解析与门禁、类型收紧、运行安全链和原子恢复验收。
+- [script-certifier-shape-expansion-and-capability-declaration-improvement-plan.md](./in-flight/script-certifier-shape-expansion-and-capability-declaration-improvement-plan.md) —— **草稿（决策未定，未实施）**：扩展脚本远程认证可识别的安全形状、增加能力声明类型，并补齐脚本内容检测盲区。
+- [script-finding-model-technical-design.md](./in-flight/script-finding-model-technical-design.md) —— **技术方案（待复审，未实施）**：把脚本分析结果整理为带位置、类别、证据与覆盖度的逐条发现；操作决策仍由策略层作出。
 
 > 当前 `in-flight/` 含以上在途方案；归档件见 `../archive/safety-approval/`。
 
