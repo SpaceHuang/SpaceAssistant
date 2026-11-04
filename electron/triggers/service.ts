@@ -72,15 +72,24 @@ export function createRuntimeTriggerService(commands: SessionCommands, options: 
       authorize(ownerSessionId, params.receiverSessionId, params.condition)
       const condition = params.condition
       if (condition.type === 'session_steps' && condition.mode === 'sync' && condition.targetSessionId === params.receiverSessionId) fail('TRIGGER_CONFLICT', 'sync-self-wait')
-      const prior = findRuntimeTriggerByClientKey(commands, ownerSessionId, params.clientKey)
-      if (prior) {
+      const replayCommittedRegistration = (): RuntimeTriggerOperationDto | undefined => {
+        const prior = findRuntimeTriggerByClientKey(commands, ownerSessionId, params.clientKey)
+        if (!prior) return undefined
         if (!sameRegistration(prior, params)) fail('TRIGGER_CONFLICT', 'client-key-definition-mismatch')
         return { trigger: toDto(prior), replayed: true }
       }
+      const priorReplay = replayCommittedRegistration()
+      if (priorReplay) return priorReplay
       if (!Number.isSafeInteger(params.expiresAt) || params.expiresAt <= timestamp || params.expiresAt - timestamp > maxLifetime) fail('TRIGGER_INVALID', 'expiry-out-of-range')
       let baseline: Readonly<Record<string, unknown>>
       try { baseline = await options.resolveBaseline?.({ ownerSessionId, condition }) ?? {} }
-      catch { fail('TRIGGER_SOURCE_GAP', 'source-baseline-unavailable') }
+      catch {
+        const replayed = replayCommittedRegistration()
+        if (replayed) return replayed
+        fail('TRIGGER_SOURCE_GAP', 'source-baseline-unavailable')
+      }
+      const replayed = replayCommittedRegistration()
+      if (replayed) return replayed
       const definition = { version: 1 as const, condition, sourceBaseline: structuredClone(baseline) }
       if (condition.type === 'session_steps' && condition.mode === 'sync') {
         const activeSync = commands.runtimeTriggers.findActiveSyncTarget(condition.targetSessionId)

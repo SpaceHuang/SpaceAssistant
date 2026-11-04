@@ -110,6 +110,55 @@ describe('runtime trigger registration service', () => {
     } finally { db.close() }
   })
 
+  it('replays a concurrent same-key sync registration before sync uniqueness checks', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'concurrent sync owner' }).id
+      const receiver = createSession(db, { name: 'concurrent sync receiver' }).id
+      const commands = createSessionCommands(db)
+      const baselineResolvers: Array<(baseline: Readonly<Record<string, unknown>>) => void> = []
+      const service = createRuntimeTriggerService(commands, { now: () => 10_000, authorize: () => true, authorizeTarget: () => true,
+        resolveBaseline: () => baselineResolvers.length < 2 ? new Promise((resolve) => baselineResolvers.push(resolve)) : {} })
+      const params = { clientKey: 'concurrent-sync-key', receiverSessionId: receiver, expiresAt: 20_000,
+        condition: { type: 'session_steps', targetSessionId: owner, origin: 'registration', threshold: 1, mode: 'sync', pauseTimeoutMs: 1_000, onPauseTimeout: 'fail' } }
+      const first = service.register({ ownerSessionId: owner, params })
+      const second = service.register({ ownerSessionId: owner, params })
+      expect(baselineResolvers).toHaveLength(2)
+      baselineResolvers[0]!({})
+      const committed = await first
+      baselineResolvers[1]!({})
+      await expect(second).resolves.toEqual({ ...committed, replayed: true })
+      expect(commands.runtimeTriggers.listByState('waiting')).toHaveLength(1)
+      await expect(service.register({ ownerSessionId: owner, params: { ...params, clientKey: 'different-sync-key' } }))
+        .rejects.toThrow('TRIGGER_CONFLICT:sync-target-already-registered')
+    } finally { db.close() }
+  })
+
+  it.each([
+    ['owner', { maxActivePerOwner: 1 }],
+    ['application', { maxActiveGlobal: 1 }]
+  ] as const)('replays a concurrent same-key request at the last %s capacity slot', async (_scope, limits) => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: `concurrent ${_scope} capacity owner` }).id
+      const commands = createSessionCommands(db)
+      const baselineResolvers: Array<(baseline: Readonly<Record<string, unknown>>) => void> = []
+      const service = createRuntimeTriggerService(commands, { ...limits, now: () => 10_000, authorize: () => true, authorizeTarget: () => true,
+        resolveBaseline: () => baselineResolvers.length < 2 ? new Promise((resolve) => baselineResolvers.push(resolve)) : {} })
+      const params = { clientKey: `concurrent-${_scope}-capacity-key`, receiverSessionId: owner, expiresAt: 20_000,
+        condition: { type: 'time', at: new Date(15_000).toISOString(), taskPrompt: 'wake' } }
+      const first = service.register({ ownerSessionId: owner, params })
+      const second = service.register({ ownerSessionId: owner, params })
+      baselineResolvers[0]!({})
+      const committed = await first
+      baselineResolvers[1]!({})
+      await expect(second).resolves.toEqual({ ...committed, replayed: true })
+      expect(commands.runtimeTriggers.listByState('waiting')).toHaveLength(1)
+      await expect(service.register({ ownerSessionId: owner, params: { ...params, clientKey: `over-limit-${_scope}` } }))
+        .rejects.toMatchObject({ failure: { code: 'TRIGGER_CAPACITY' } })
+    } finally { db.close() }
+  })
+
   it('rejects invalid lifetime, capacity, synchronous self-wait, and a second active sync target', async () => {
     const db = createMemoryAppDb()
     try {
