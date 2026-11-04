@@ -43,4 +43,10 @@ src/shared/policy/policyEngine.test.ts
 
 ## 隔离回退 smoke
 
-在临时 detached worktree 对阶段实现提交执行 `git revert --no-edit`，再验证旧 script-analysis 行为与 locked-floor inventory，并运行定向 smoke。结果与临时 worktree 清理情况将在提交后补记。
+在 detached worktree `/Users/space/Documents/Develop/SpaceAssistant/.worktrees/script-finding-model-revert` 从阶段实现提交 `2c6d4a29d7c1004ae9be123abbf9ee92ed0fb615` 起执行 `git revert --no-edit`，产生隔离回退提交 `c33437401c49a886dc0d02790acc79d044ddab2c`。回退后运行：
+
+```text
+npm exec -- vitest run electron/shell/scriptIr/pythonAdapter.test.ts electron/shell/scriptContentSecurity.test.ts electron/shell/scriptGolden.test.ts electron/confirmation/extractors/extractors.test.ts src/shared/policy/lockedFloorClassification.test.ts
+```
+
+结果：5 files / 238 tests passed；旧 script-analysis 路径和旧 locked-floor inventory 在阶段回退后可用。临时 worktree 已确认干净，之后移除。
