@@ -73,6 +73,43 @@ describe('runtime trigger registration service', () => {
     } finally { db.close() }
   })
 
+  it('replays a concurrent same-key Turn registration after its target ends', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'concurrent turn owner' }).id
+      const receiver = createSession(db, { name: 'concurrent turn receiver' }).id
+      const commands = createSessionCommands(db)
+      let active = true
+      const baselineResolvers: Array<(baseline: Readonly<Record<string, unknown>>) => void> = []
+      const service = createRuntimeTriggerService(commands, { now: () => 10_000, authorize: () => true, authorizeTarget: () => true,
+        resolveBaseline: () => new Promise((resolve) => baselineResolvers.push(resolve)),
+        validateRegistrationAtCommit: () => active })
+      const params = { clientKey: 'concurrent-turn-key', receiverSessionId: receiver, expiresAt: 20_000,
+        condition: { type: 'turn_completed', targetSessionId: owner, turnId: 'concurrent-turn' } }
+      const first = service.register({ ownerSessionId: owner, params })
+      const second = service.register({ ownerSessionId: owner, params })
+      expect(baselineResolvers).toHaveLength(2)
+      baselineResolvers[0]!({})
+      const committed = await first
+      active = false
+      baselineResolvers[1]!({})
+      await expect(second).resolves.toEqual({ ...committed, replayed: true })
+      expect(commands.runtimeTriggers.listByState('waiting')).toHaveLength(1)
+      await expect(service.register({ ownerSessionId: owner, params: { ...params, condition: { ...params.condition, turnId: 'different-turn' } } }))
+        .rejects.toThrow('TRIGGER_CONFLICT:client-key-definition-mismatch')
+
+      active = true
+      const firstDefinition = { ...params, clientKey: 'concurrent-mismatch-key' }
+      const conflictingDefinition = { ...firstDefinition, condition: { ...firstDefinition.condition, turnId: 'other-turn' } }
+      const third = service.register({ ownerSessionId: owner, params: firstDefinition })
+      const fourth = service.register({ ownerSessionId: owner, params: conflictingDefinition })
+      baselineResolvers[2]!({})
+      await third
+      baselineResolvers[3]!({})
+      await expect(fourth).rejects.toThrow('TRIGGER_CONFLICT:client-key-definition-mismatch')
+    } finally { db.close() }
+  })
+
   it('rejects invalid lifetime, capacity, synchronous self-wait, and a second active sync target', async () => {
     const db = createMemoryAppDb()
     try {

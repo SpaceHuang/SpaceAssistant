@@ -55,7 +55,7 @@ describe('runtime trigger host capability adapter', () => {
       let reads = 0
       const execution = { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: ({ sessionId, turnId }: { sessionId: string; turnId: string }) => {
         reads += 1
-        if (reads === 2) updatePersistedTurnState(db, 'racing-turn', 'terminal', { outcome: 'completed' })
+        if (reads === 1) updatePersistedTurnState(db, 'racing-turn', 'terminal', { outcome: 'completed' })
         const turn = getPersistedTurn(db, turnId)
         return turn?.sessionId === sessionId ? turn : undefined
       } }
