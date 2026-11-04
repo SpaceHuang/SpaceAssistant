@@ -15,7 +15,7 @@ export function createPendingConfirmNotification(input: {
   entry: PendingConfirmEntry
   title: string
   body: string
-  onClick: (target: { sessionId: string; toolUseId: string }) => void
+  onClick: (target: { sessionId: string; toolUseId: string }) => void | Promise<void>
 }) {
   try {
     if (!input.NotificationApi.isSupported()) return null

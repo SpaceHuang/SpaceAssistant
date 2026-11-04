@@ -140,7 +140,7 @@ describe('FloatingNotificationManager', () => {
       expect(JSON.stringify((Notification as any).mock.calls[0])).not.toContain('npm install')
       expect(mainWin.focus).not.toHaveBeenCalled()
       const callback = notificationInstances[0].on.mock.calls.find((call: unknown[]) => call[0] === 'click')?.[1]
-      callback()
+      await callback()
       expect(mainWin.restore).not.toHaveBeenCalled()
       expect(mainWin.show).toHaveBeenCalledOnce()
       expect(mainWin.focus).toHaveBeenCalledOnce()
@@ -150,6 +150,32 @@ describe('FloatingNotificationManager', () => {
       manager.onToolResult('req-1', 'tool-2')
       expect(setBadge).toHaveBeenLastCalledWith('')
       expect(notificationInstances[0].close).toHaveBeenCalledOnce()
+      manager.destroy()
+    })
+
+    it('recreates a missing main window before navigating when the native notification is clicked', async () => {
+      let mainWin: ReturnType<typeof createMockMainWindow> | null = null
+      const ensureMainWindow = vi.fn(async () => {
+        mainWin = createMockMainWindow({ isVisible: true, isFocused: true })
+      })
+      const manager = new FloatingNotificationManager(
+        () => mainWin,
+        '/fake/mainDirname',
+        { readSession: vi.fn(() => null) } as any,
+        'darwin',
+        undefined,
+        ensureMainWindow
+      )
+
+      manager.onConfirmRequest(TEST_ENTRY)
+      const callback = notificationInstances[0].on.mock.calls.find((call: unknown[]) => call[0] === 'click')?.[1]
+      await callback()
+
+      expect(ensureMainWindow).toHaveBeenCalledOnce()
+      expect(mainWin?.webContents.send).toHaveBeenCalledWith('notification:navigate-session', {
+        sessionId: 'session-1',
+        toolUseId: 'tool-1'
+      })
       manager.destroy()
     })
   })

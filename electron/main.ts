@@ -1034,7 +1034,8 @@ app.whenReady().then(async () => {
     __dirname,
     sessionStorage.queries,
     process.platform,
-    createHostTranslator({ locale: readAppLocale(db) })
+    createHostTranslator({ locale: readAppLocale(db) }),
+    () => createMainWindow()
   )
 
   const executeClaudeRequest = registerClaudeStreamHandlers(ipcMain, {

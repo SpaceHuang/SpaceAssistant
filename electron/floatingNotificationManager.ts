@@ -55,6 +55,7 @@ export class FloatingNotificationManager {
   private sessionQueries: SessionQueries
   private platform: NodeJS.Platform
   private translate?: TranslateFn
+  private ensureMainWindow?: () => Promise<void>
   private pendingNotification: { close(): void } | null = null
   private testNotification: { close(): void } | null = null
   private notificationSentForBatch = false
@@ -64,13 +65,15 @@ export class FloatingNotificationManager {
     mainDirname: string,
     sessionQueries: SessionQueries,
     platform: NodeJS.Platform = process.platform,
-    translate?: TranslateFn
+    translate?: TranslateFn,
+    ensureMainWindow?: () => Promise<void>
   ) {
     this.mainWindowGetter = mainWindowGetter
     this.mainDirname = mainDirname
     this.sessionQueries = sessionQueries
     this.platform = platform
     this.translate = translate
+    this.ensureMainWindow = ensureMainWindow
   }
 
   onConfirmRequest(entry: PendingConfirmEntry): void {
@@ -144,13 +147,7 @@ export class FloatingNotificationManager {
         entry: { ...item, requestId: 'test-notification', input: {} },
         title: this.translate?.({ key: 'notification.desktopButlerTitle' }) ?? 'SpaceAssistant',
         body: this.translate?.({ key: 'notification.aria.notification', params: { count: 1 } }) ?? '1 pending confirmation',
-        onClick: () => {
-          const win = this.mainWindowGetter()
-          if (!win || win.isDestroyed()) return
-          if (win.isMinimized()) win.restore()
-          if (!win.isVisible()) win.show()
-          win.focus()
-        }
+        onClick: () => this.focusMainWindow().then(() => undefined)
       })
       return
     }
@@ -270,20 +267,39 @@ export class FloatingNotificationManager {
           entry: latest,
           title: this.translate?.({ key: 'notification.desktopButlerTitle' }) ?? 'SpaceAssistant',
           body: this.translate?.({ key: 'notification.aria.notification', params: { count } }) ?? `${count} pending confirmation(s)`,
-          onClick: () => {
-            const win = this.mainWindowGetter()
-            if (!win || win.isDestroyed()) return
-            const currentLatest = [...this.pendingItems.values()].sort((a, b) => b.createdAt - a.createdAt)[0]
-            if (!currentLatest) return
-            if (win.isMinimized()) win.restore()
-            if (!win.isVisible()) win.show()
-            win.focus()
-            win.webContents.send('notification:navigate-session', { sessionId: currentLatest.sessionId, toolUseId: currentLatest.toolUseId })
-          }
+          onClick: () => this.focusAndNavigateToLatestPending()
         })
         this.notificationSentForBatch = this.pendingNotification !== null
       }
     }
+  }
+
+  private async focusMainWindow(): Promise<BrowserWindow | null> {
+    let win = this.mainWindowGetter()
+    if ((!win || win.isDestroyed()) && this.ensureMainWindow) {
+      try {
+        await this.ensureMainWindow()
+      } catch {
+        return null
+      }
+      win = this.mainWindowGetter()
+    }
+    if (!win || win.isDestroyed()) return null
+    if (win.isMinimized()) win.restore()
+    if (!win.isVisible()) win.show()
+    win.focus()
+    return win
+  }
+
+  private async focusAndNavigateToLatestPending(): Promise<void> {
+    const win = await this.focusMainWindow()
+    if (!win) return
+    const currentLatest = [...this.pendingItems.values()].sort((a, b) => b.createdAt - a.createdAt)[0]
+    if (!currentLatest) return
+    win.webContents.send('notification:navigate-session', {
+      sessionId: currentLatest.sessionId,
+      toolUseId: currentLatest.toolUseId
+    })
   }
 
   private ensureFloatingWindow(): void {
