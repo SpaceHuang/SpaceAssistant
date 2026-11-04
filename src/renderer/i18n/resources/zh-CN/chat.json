@@ -258,6 +258,20 @@
           "aliasResolution": "别名解析",
           "decodeThenExec": "解码后执行",
           "dynamicDispatch": "动态分派"
+        },
+        "evidence": {
+          "processCreate": "进程调用",
+          "fsDestructive": "文件删除或移动调用",
+          "dynamicExec": "动态代码执行调用",
+          "dynamicImport": "动态导入调用",
+          "nativeCode": "本机代码加载调用",
+          "network": "网络请求调用",
+          "writePath": "文件写入调用",
+          "cwdChange": "工作目录变更调用",
+          "reflection": "反射访问调用",
+          "alias": "动态别名解析",
+          "decodeExec": "解码后执行链",
+          "dynamicDispatch": "无法静态解析的动态分派"
         }
       }
     },

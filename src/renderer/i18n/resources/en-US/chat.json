@@ -258,6 +258,20 @@
           "aliasResolution": "Alias resolution",
           "decodeThenExec": "Decode then execute",
           "dynamicDispatch": "Dynamic dispatch"
+        },
+        "evidence": {
+          "processCreate": "Process invocation",
+          "fsDestructive": "File deletion or move call",
+          "dynamicExec": "Dynamic code execution call",
+          "dynamicImport": "Dynamic import call",
+          "nativeCode": "Native code loading call",
+          "network": "Network request call",
+          "writePath": "File write call",
+          "cwdChange": "Working directory change call",
+          "reflection": "Reflective access call",
+          "alias": "Dynamic alias resolution",
+          "decodeExec": "Decode then execute chain",
+          "dynamicDispatch": "Dynamically dispatched call not statically resolved"
         }
       }
     },

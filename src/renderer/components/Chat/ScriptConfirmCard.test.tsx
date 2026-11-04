@@ -57,6 +57,12 @@ describe('ScriptConfirmCard', () => {
     expect(onConfirm).toHaveBeenCalledWith(true)
   })
 
+  it('shows localized structured evidence phrase for each finding', () => {
+    const item = findings(1)[0]!
+    renderCard(<ScriptConfirmCard record={record({ scriptFindings: [item] })} onConfirm={vi.fn()} />)
+    expect(screen.getByText('进程调用')).toBeDefined()
+  })
+
   it('highlights python code via shiki', async () => {
     const { highlightCode } = await import('../../utils/shikiHighlighter')
     render(

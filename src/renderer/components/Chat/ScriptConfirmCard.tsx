@@ -25,6 +25,21 @@ const FINDING_CLASS_KEYS = {
   'dynamic-dispatch': 'confirm.script.findings.classes.dynamicDispatch'
 } as const
 
+const FINDING_EVIDENCE_KEYS = {
+  'process-create': 'confirm.script.findings.evidence.processCreate',
+  'fs-destructive': 'confirm.script.findings.evidence.fsDestructive',
+  'dynamic-exec': 'confirm.script.findings.evidence.dynamicExec',
+  'dynamic-import': 'confirm.script.findings.evidence.dynamicImport',
+  'native-code': 'confirm.script.findings.evidence.nativeCode',
+  network: 'confirm.script.findings.evidence.network',
+  'write-path': 'confirm.script.findings.evidence.writePath',
+  'cwd-change': 'confirm.script.findings.evidence.cwdChange',
+  reflection: 'confirm.script.findings.evidence.reflection',
+  alias: 'confirm.script.findings.evidence.alias',
+  'decode-exec': 'confirm.script.findings.evidence.decodeExec',
+  'dynamic-dispatch': 'confirm.script.findings.evidence.dynamicDispatch'
+} as const
+
 export function ScriptConfirmCard({ record, onConfirm, reasonLabel }: Props) {
   const { t } = useTypedTranslation('chat')
   const [findingsExpanded, setFindingsExpanded] = useState(false)
@@ -59,6 +74,7 @@ export function ScriptConfirmCard({ record, onConfirm, reasonLabel }: Props) {
                     <span className="script-confirm-card__finding-location">{t('confirm.script.findings.location', { line: finding.range.startLine })}</span>
                     <code className="script-confirm-card__finding-snippet">{finding.snippet}</code>
                     <span className="script-confirm-card__finding-class">{t(FINDING_CLASS_KEYS[finding.class])}</span>
+                    <span className="script-confirm-card__finding-evidence">{t(FINDING_EVIDENCE_KEYS[finding.evidence.kind])}</span>
                   </li>
                 ))}
               </ol>

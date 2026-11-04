@@ -85,6 +85,12 @@ describe('commandSequenceExtractor', () => {
     expect(r.summary.text).toContain(`${JSON.stringify(['cat', 'a.txt'])} && ${JSON.stringify(['grep', 'x', '/tmp'])}`)
   })
 
+  it('脚本摘要仅提供总述，由确认展示层从 findings 派生列表', () => {
+    const result = extractScriptSignals("import os\nos.system('id')", env)
+    expect(result.summary).toEqual({ text: expect.any(String) })
+    expect(result.summary).not.toHaveProperty('sections')
+  })
+
   it('`FOO=1 cmd` 与 `cd x && cmd` 不命中同一 exact 签名（变体绕过防护）', () => {    const a = extractCommandSignals('FOO=1 cmd', env)
     const b = extractCommandSignals('cd x && cmd', env)
     const sig = (r: ReturnType<typeof extractCommandSignals>) =>

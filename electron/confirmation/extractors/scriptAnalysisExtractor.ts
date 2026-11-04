@@ -91,15 +91,9 @@ export function extractScriptSignals(
     }
   }
 
-  const summaryText = CONFIRMATION_LABELS.summaryScriptAnalysis
   return {
     signals,
-    summary: {
-      text: summaryText,
-      sections: analysis.findings.length > 0
-        ? [{ label: '命中模式', value: [...new Set(analysis.findings.map((finding) => finding.pattern))].join(', ') }]
-        : []
-    }
+    summary: { text: CONFIRMATION_LABELS.summaryScriptAnalysis }
   }
 }
 

@@ -3486,7 +3486,7 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('run_script 远程含网络 → deny(script-network-deny-remote)，回传 rawScriptAnalysis', async () => {
+  it('run_script 远程含网络 → deny(script-network-deny-remote)，不回传冗余原始分析', async () => {
     const r = await evaluateToolCallGate(
       base({
         toolName: 'run_script',
@@ -3495,7 +3495,7 @@ describe('evaluateToolCallGate', () => {
       })
     )
     expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'script-network-deny-remote' })
-    expect(r.rawScriptAnalysis).toBeTruthy()
+    expect(r).not.toHaveProperty('rawScriptAnalysis')
   })
 })
 

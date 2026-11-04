@@ -8,7 +8,7 @@ import { createImAttachmentFacts } from '../../src/shared/confirmation/imAttachm
 import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { resolveImPolicyFloorForVersion, validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
 import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
-import { analyzeScriptContent, parsePythonModule, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
+import { parsePythonModule } from '../shell/scriptContentSecurity'
 import type { IrModule } from '../shell/scriptIr/types'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import type {
@@ -309,8 +309,6 @@ export interface ToolCallGateResult {
   fileAutoApproved?: boolean
   /** MCP 条目回传（确认卡片载荷）。 */
   mcpEntry?: McpToolSnapshotEntry
-  /** run_script 原始分析（拒绝消息桥接 / 日志 patterns）。 */
-  rawScriptAnalysis?: ScriptAnalysisResult
   /** run_script 路径分析未覆盖时的用户提示。 */
   scriptPathHint?: string
   /** R2：结构化诊断（deny / require-confirm 与 decision 成对出现；auto-allow 不产）。 */
@@ -744,9 +742,6 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       summary
     }
     result.scriptPathHint = scriptPathHint
-    result.rawScriptAnalysis = pythonLanguage
-      ? analyzeScriptContent(code, preParsedIr)
-      : { findings: [], coverage: 'failed', totalCount: 0, reason: '该脚本语言尚未接入完整内容安全分析' }
   } else if (args.toolName === 'write_file' || args.toolName === 'edit_file') {
     const descriptor = getBuiltinToolMetadata(args.toolName)
     const rawPath = extractPathField(args.toolInput)
