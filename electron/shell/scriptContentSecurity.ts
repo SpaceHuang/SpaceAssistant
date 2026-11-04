@@ -353,6 +353,14 @@ function isDecodeCall(expr: IrExpr): boolean {
   return last !== null && DECODE_FUNCS.has(last)
 }
 
+function decodeFunctionName(expr: IrExpr): string {
+  if (expr.kind !== 'call') return 'unknown'
+  const chain = resolveExprChain(expr.callee, createScope())
+  return chain.attrs.at(-1) ?? chain.module ?? 'unknown'
+}
+
+type DecodeBinding = { name: string; stmtOffset: number; decodeFn: string }
+
 function isExecImportCallee(callee: IrExpr): boolean {
   if (callee.kind === 'name') return EXEC_IMPORT_NAMES.has(callee.id)
   if (callee.kind === 'attr') {
@@ -385,9 +393,9 @@ class Analyzer {
     return this.hits
   }
 
-  private addHit(pattern: string, verdict: ScriptVerdict): void {
+  private addHit(pattern: string, verdict: ScriptVerdict, evidenceOverride?: ScriptFindingEvidence): void {
     const range = this.activeExpr?.range ?? this.activeRange
-    const evidence = this.findingEvidence(pattern)
+    const evidence = evidenceOverride ?? this.findingEvidence(pattern)
     const existing = this.hits.find((hit) => hit.pattern === pattern && sameRange(hit.range, range))
     if (existing) {
       existing.verdict = mergeVerdict(existing.verdict, verdict)
@@ -426,10 +434,53 @@ class Analyzer {
         pathClass: rawPath ? classifyPath(rawPath) : 'unresolved'
       }
     }
+    if (pattern === 'A3') {
+      const entry = attr || (expr.callee.kind === 'name' ? expr.callee.id : 'unknown')
+      const arg = expr.args[0]
+      return { kind: 'dynamic-exec', entry, ...(arg?.kind === 'name' ? { boundName: arg.id } : {}) }
+    }
+    if (pattern === 'A4' || pattern === 'B4' || pattern === 'B10') {
+      const moduleName = foldStringExpr(expr.args[0] ?? { kind: 'none' })
+      const isImportCall = attr === 'import_module' || attr === '__import__' || expr.callee.kind === 'name' && expr.callee.id === '__import__'
+      if (pattern === 'B4' && !isImportCall) {
+        return { kind: 'alias', alias: chain.root ?? attr, resolved: chain.fullName ?? attr }
+      }
+      if (pattern !== 'B10' || isImportCall) {
+        return { kind: 'dynamic-import', moduleName, ...(expr.args[1]?.kind === 'name' ? { boundName: expr.args[1].id } : {}) }
+      }
+    }
+    if (pattern === 'A5') {
+      const module = chain.module === 'cffi' ? 'cffi' : 'ctypes'
+      const symbol = expr.args[0] ? foldStringExpr(expr.args[0]) ?? undefined : undefined
+      return { kind: 'native-code', module, ...(symbol ? { symbol } : {}) }
+    }
+    if (pattern === 'A6' || pattern === 'B10') {
+      const module = chain.module ?? chain.root ?? 'unknown'
+      const hostLiteral = expr.args[0] ? foldStringExpr(expr.args[0]) : null
+      let host: string | undefined
+      if (hostLiteral) {
+        try { host = new URL(hostLiteral).hostname || undefined } catch { host = undefined }
+      }
+      return { kind: 'network', module, attr, ...(host ? { host } : {}) }
+    }
+    if (pattern === 'A9') {
+      const rawPath = expr.args[0] ? foldStringExpr(expr.args[0]) : null
+      return { kind: 'cwd-change', rawPath, pathClass: rawPath ? classifyPath(rawPath) : 'unresolved' }
+    }
+    if (['B1', 'B2', 'B3', 'B8'].includes(pattern)) {
+      const target = expr.args[1] ? foldStringExpr(expr.args[1]) : null
+      return { kind: 'reflection', target: target ?? attr, ...(chain.fullName ? { resolvedChain: chain.fullName } : {}) }
+    }
+    if (['B5', 'B6', 'B7'].includes(pattern)) {
+      return { kind: 'alias', alias: chain.root ?? attr, resolved: chain.fullName ?? attr }
+    }
+    if (pattern === 'B9') {
+      return { kind: 'dynamic-dispatch', unresolvableReason: expr.callee.kind === 'subscript' ? 'computed-member-index' : 'unresolved-reflection-target' }
+    }
     return undefined
   }
 
-  private walkStmts(stmts: IrStmt[], scope: Scope, startIndex: number, inheritedDecodeBindings?: { name: string; stmtOffset: number }[]): void {
+  private walkStmts(stmts: IrStmt[], scope: Scope, startIndex: number, inheritedDecodeBindings?: DecodeBinding[]): void {
     // v5 评审 N14:decode→exec 链必须贯穿块边界——if test 里的 walrus 登记、
     // while body 内的 decode 赋值,在其后的语句(含嵌套块)应可见(词法作用域真实语义;
     // 窗口 ≤3 语句由 checkB11 兜底防远距误报)。
@@ -451,7 +502,9 @@ class Analyzer {
         if (isDangerousModule(mod)) {
           for (const { name, alias } of stmt.names) {
             if (name !== '*' && isDangerousAttr(name)) {
-              this.addHit(alias ? 'B7' : 'B6', 'ask')
+              this.addHit(alias ? 'B7' : 'B6', 'ask', {
+                kind: 'alias', alias: alias ?? name, resolved: `${mod}.${name}`
+              })
             }
           }
         }
@@ -464,8 +517,9 @@ class Analyzer {
           scope.modules.set(stmt.targets[0]!, modName)
           if (isDangerousModule(modName)) {
             const v = isNetworkModule(modName) ? networkVerdict(this.ctx) : 'ask'
-            this.addHit('B4', v)
-            this.addHit('B10', v)
+            const importEvidence: ScriptFindingEvidence = { kind: 'dynamic-import', moduleName: modName, boundName: stmt.targets[0]! }
+            this.addHit('B4', v, importEvidence)
+            this.addHit('B10', v, importEvidence)
           }
         }
         // Same-scope rebind: x = os / y = os.system / z = o (alias) / w = y (callable alias)
@@ -473,7 +527,7 @@ class Analyzer {
           applyAssignmentRebind(stmt.targets[0]!, stmt.value, scope)
         }
         if (isDecodeCall(stmt.value) && stmt.targets.length === 1) {
-          decodeBindings.push({ name: stmt.targets[0]!, stmtOffset: stmtIndex })
+          decodeBindings.push({ name: stmt.targets[0]!, stmtOffset: stmtIndex, decodeFn: decodeFunctionName(stmt.value) })
         }
         this.analyzeExpr(stmt.value, scope)
         continue
@@ -507,7 +561,7 @@ class Analyzer {
       if (stmt.kind === 'aug_assign') {
         // i += 1：按赋值重绑同语义处理（value 为 os.system 等 attr 时保持别名追踪）
         applyAssignmentRebind(stmt.target, stmt.value, scope)
-        if (isDecodeCall(stmt.value)) decodeBindings.push({ name: stmt.target, stmtOffset: stmtIndex })
+        if (isDecodeCall(stmt.value)) decodeBindings.push({ name: stmt.target, stmtOffset: stmtIndex, decodeFn: decodeFunctionName(stmt.value) })
         this.analyzeExpr(stmt.value, scope, decodeBindings, stmtIndex)
         continue
       }
@@ -674,7 +728,7 @@ class Analyzer {
       // 使 (x := b64decode(...)); exec(x) 仍升级为 dangerous(而非降级 locked 确认)。
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(expr.target)) {
         applyAssignmentRebind(expr.target, expr.value, scope)
-        if (isDecodeCall(expr.value)) decodeBindings.push({ name: expr.target, stmtOffset: stmtIndex })
+        if (isDecodeCall(expr.value)) decodeBindings.push({ name: expr.target, stmtOffset: stmtIndex, decodeFn: decodeFunctionName(expr.value) })
       }
       this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
       return
@@ -704,7 +758,7 @@ class Analyzer {
   private analyzeCall(
     call: IrExpr & { kind: 'call' },
     scope: Scope,
-    decodeBindings: { name: string; stmtOffset: number }[],
+    decodeBindings: DecodeBinding[],
     stmtIndex: number
   ): void {
     const callee = call.callee
@@ -1002,19 +1056,24 @@ class Analyzer {
   private checkB11(
     arg: IrExpr | undefined,
     scope: Scope,
-    decodeBindings: { name: string; stmtOffset: number }[],
+    decodeBindings: DecodeBinding[],
     stmtIndex: number,
     sameExpr: boolean
   ): void {
     if (!arg) return
     if (sameExpr && isDecodeCall(arg)) {
-      this.addHit('B11', 'ask')
+      const decodeChain = resolveExprChain(arg.callee, scope)
+      const decodeFn = decodeChain.attrs.at(-1) ?? decodeChain.module ?? 'unknown'
+      this.addHit('B11', 'ask', { kind: 'decode-exec', decodeFn, boundName: '<inline>', stmtDistance: 0 })
       return
     }
     if (arg.kind === 'name') {
       for (const b of decodeBindings) {
         if (b.name === arg.id && stmtIndex - b.stmtOffset <= 3) {
-          this.addHit('B11', 'ask')
+          this.addHit('B11', 'ask', {
+            kind: 'decode-exec', decodeFn: b.decodeFn, boundName: b.name,
+            stmtDistance: stmtIndex - b.stmtOffset
+          })
           return
         }
       }
@@ -1052,11 +1111,23 @@ export function collectPatternHits(ast: IrModule, ctx?: ScriptAnalysisContext): 
   return new Analyzer(ctx).analyze(ast)
 }
 
+/** Facts-stage projection only: this table classifies detected syntax and never chooses an action. */
 const FINDING_CLASS_BY_PATTERN: Record<string, ScriptFinding['class'] | undefined> = {
   A1: 'process-creation',
   A2: 'destructive-fs',
+  A3: 'dynamic-execution',
+  A4: 'dynamic-import',
+  A5: 'native-code-load',
+  A6: 'network-api',
   A7: 'file-write',
-  A8: 'file-write'
+  A8: 'file-write',
+  A9: 'cwd-change',
+  B1: 'reflection', B2: 'reflection', B3: 'reflection', B8: 'reflection',
+  B4: 'dynamic-import',
+  B5: 'alias-resolution', B6: 'alias-resolution', B7: 'alias-resolution',
+  B9: 'dynamic-dispatch',
+  B10: 'network-api',
+  B11: 'decode-then-exec'
 }
 
 const MAX_SCRIPT_FINDING_SNIPPET_CHARS = 2000
@@ -1080,11 +1151,18 @@ function limitSnippet(snippet: string): string {
 }
 
 function buildScriptFindings(code: string, hits: PatternHit[]): ScriptFinding[] | null {
+  // A detected class without range or evidence invalidates the whole projection; caller emits
+  // failed coverage instead of silently presenting the script as clean. Boundary tests live in
+  // scriptContentSecurity.test.ts and the fixture-wide range audit in scriptGolden.test.ts.
   const relevant = hits.filter((hit) => FINDING_CLASS_BY_PATTERN[hit.pattern])
   if (relevant.some((hit) => !hit.range || !hit.evidence)) return null
   return relevant.map((hit) => ({
     pattern: hit.pattern,
-    class: FINDING_CLASS_BY_PATTERN[hit.pattern]!,
+    class: hit.pattern === 'B10' && hit.evidence?.kind === 'dynamic-import'
+      ? 'dynamic-import'
+      : hit.pattern === 'B4' && hit.evidence?.kind === 'alias'
+        ? 'alias-resolution'
+        : FINDING_CLASS_BY_PATTERN[hit.pattern]!,
     range: hit.range!,
     snippet: sourceSnippet(code, hit.range!),
     evidence: hit.evidence!

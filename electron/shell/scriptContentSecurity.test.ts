@@ -39,6 +39,43 @@ describe('scriptContentSecurity — List A (baseline)', () => {
     expect(result.totalCount).toBe(result.findings?.length)
   })
 
+  it.each([
+    ['dynamic-execution with bound input', "source = input()\nexec(source)", 'dynamic-execution', 'dynamic-exec'],
+    ['network call without static host', "import requests\nrequests.get(url)", 'network-api', 'network'],
+    ['cwd change with dynamic path', "import os\nos.chdir(target)", 'cwd-change', 'cwd-change'],
+    ['decode binding close to exec', "import base64\npayload = base64.b64decode(data)\nexec(payload)", 'decode-then-exec', 'decode-exec'],
+    ['dynamic subscript dispatch', "handlers[name]()", 'dynamic-dispatch', 'dynamic-dispatch']
+  ] as const)('%s remains located when key evidence is dynamic', (_name, code, findingClass, evidenceKind) => {
+    const result = analyzeScriptContent(code)
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ class: findingClass, range: expect.any(Object), snippet: expect.any(String), evidence: expect.objectContaining({ kind: evidenceKind }) })
+    ]))
+  })
+
+  it('captures the static network host and exact dynamic-execution entry', () => {
+    const network = analyzeScriptContent("import requests\nrequests.get('https://api.example.test/v1')").findings?.find((finding) => finding.class === 'network-api')
+    const execution = analyzeScriptContent("exec('pass')").findings?.find((finding) => finding.class === 'dynamic-execution')
+    expect(network?.evidence).toMatchObject({ kind: 'network', module: 'requests', attr: 'get', host: 'api.example.test' })
+    expect(execution?.evidence).toMatchObject({ kind: 'dynamic-exec', entry: 'exec' })
+  })
+
+  it.each([
+    ['dynamic-execution', "eval('1 + 1')", 'A3', 'dynamic-execution', 'dynamic-exec'],
+    ['dynamic-import', "__import__('os')", 'A4', 'dynamic-import', 'dynamic-import'],
+    ['native-code-load', "import ctypes\nctypes.CDLL('libx.so')", 'A5', 'native-code-load', 'native-code'],
+    ['network-api', "import requests\nrequests.get('https://example.test/path')", 'A6', 'network-api', 'network'],
+    ['cwd-change', "import os\nos.chdir('../work')", 'A9', 'cwd-change', 'cwd-change'],
+    ['reflection', "getattr(__import__('os'), 'system')", 'B2', 'reflection', 'reflection'],
+    ['alias-resolution', "import os as operating\noperating.system('id')", 'B5', 'alias-resolution', 'alias'],
+    ['decode-then-exec', "import base64\nexec(base64.b64decode('cGFzcw=='))", 'B11', 'decode-then-exec', 'decode-exec'],
+    ['dynamic-dispatch', "obj[key]()", 'B9', 'dynamic-dispatch', 'dynamic-dispatch']
+  ] as const)('%s emits a located finding with category evidence', (_name, code, pattern, findingClass, evidenceKind) => {
+    const result = analyzeScriptContent(code)
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pattern, class: findingClass, range: expect.any(Object), snippet: expect.any(String), evidence: expect.objectContaining({ kind: evidenceKind }) })
+    ]))
+  })
+
   it('bounds an unusually long finding snippet without changing its source range', () => {
     const code = `open('/tmp/${'x'.repeat(2500)}', 'w')`
     const finding = analyzeScriptContent(code).findings?.[0]
@@ -190,6 +227,7 @@ describe('scriptContentSecurity — List A (baseline)', () => {
       const r = analyzeScriptContent('def foo(:\n  pass', { remote: true })
       expect(r.verdict).toBe('ask')
       expect(r.patterns).toContain('A-fail')
+      expect(r).toMatchObject({ coverage: 'failed', findings: [], totalCount: 0 })
     })
   })
 
