@@ -638,7 +638,7 @@ class Analyzer {
   private analyzeExpr(
     expr: IrExpr,
     scope: Scope,
-    decodeBindings: { name: string; stmtOffset: number }[] = [],
+    decodeBindings: DecodeBinding[] = [],
     stmtIndex = 0
   ): void {
     const previousRange = this.activeRange
@@ -659,7 +659,7 @@ class Analyzer {
   private analyzeExprNode(
     expr: IrExpr,
     scope: Scope,
-    decodeBindings: { name: string; stmtOffset: number }[],
+    decodeBindings: DecodeBinding[],
     stmtIndex: number
   ): void {
     if (expr.kind === 'call') {
@@ -1061,7 +1061,7 @@ class Analyzer {
     sameExpr: boolean
   ): void {
     if (!arg) return
-    if (sameExpr && isDecodeCall(arg)) {
+    if (sameExpr && arg.kind === 'call' && isDecodeCall(arg)) {
       const decodeChain = resolveExprChain(arg.callee, scope)
       const decodeFn = decodeChain.attrs.at(-1) ?? decodeChain.module ?? 'unknown'
       this.addHit('B11', 'ask', { kind: 'decode-exec', decodeFn, boundName: '<inline>', stmtDistance: 0 })
