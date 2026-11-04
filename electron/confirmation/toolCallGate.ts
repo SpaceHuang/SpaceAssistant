@@ -706,6 +706,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         ? { unknownReason: scriptPaths.unknownReason ?? 'dynamic-execution' }
         : {}),
       dynamicKinds: scriptPaths.dynamicKinds,
+      sourceEvidenceComplete: false,
       contentDigest: createHash('sha256').update(code, 'utf8').digest('hex'),
       workdirDigest: createHash('sha256').update(path.resolve(args.workDir), 'utf8').digest('hex'),
       parametersDigest: createHash('sha256').update(JSON.stringify({ ...args.toolInput, code }), 'utf8').digest('hex'),

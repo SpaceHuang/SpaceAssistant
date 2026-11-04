@@ -112,6 +112,7 @@ export function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<Approv
     }
   }
   const scriptAnalysis = facts.signals.find((signal) => signal.kind === 'script-analysis')
+  const pathExtraction = facts.signals.find((signal) => signal.kind === 'script-path-extraction')
   const scriptDigest = extras.scriptApprovalBinding?.sha256
   if (scriptAnalysis?.findings !== undefined && scriptDigest) {
     const coverage = scriptAnalysis.coverage ?? 'failed'
@@ -142,6 +143,7 @@ export function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<Approv
       truncated,
       contentDigest: scriptDigest,
       sufficiency: coverage === 'complete' && !truncated && findings.length === scriptAnalysis.findings.length && findings.every((finding) => finding.status === 'complete')
+        && !(pathExtraction?.kind === 'script-path-extraction' && pathExtraction.dynamicKinds?.includes('unresolved-write-target') && pathExtraction.sourceEvidenceComplete !== true)
         ? 'sufficient'
         : 'undetermined',
       findings

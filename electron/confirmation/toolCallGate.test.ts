@@ -1944,8 +1944,8 @@ describe('evaluateToolCallGate', () => {
     expect(await approvalChannel.request({ facts: desktopStandard.facts, riskLevel: desktopStandard.decision.type === 'require-confirm'
       ? desktopStandard.decision.riskLevel : 'high', memoryTiers: desktopStandard.decision.type === 'require-confirm'
         ? desktopStandard.decision.memoryTiers : [], timeoutMs: 5_000 }))
-      .toMatchObject({ kind: 'approved', answererKind: 'agent' })
-    expect(invokeApproval).toHaveBeenCalledOnce()
+      .toMatchObject({ kind: 'rejected', cause: 'agent-undetermined' })
+    expect(invokeApproval).not.toHaveBeenCalled()
 
     for (const tier of ['strict', 'custom'] as const) {
       writePolicyPackages(db, { desktop: tier, wechat: 'standard', feishu: 'standard', automation: 'standard' })
@@ -1967,6 +1967,40 @@ describe('evaluateToolCallGate', () => {
     expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
   })
 
+  it('未知写入的 gate 事实不得作为充分材料发送给 Agent', async () => {
+    const root = await fs.realpath(await makeTempDir('script-unknown-write-agent-'))
+    const result = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script',
+      toolInput: { code: "open(target, 'w')" } }))
+    expect(result.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    const invokeApproval = vi.fn(async () => ({ ok: true as const,
+      verdict: { kind: 'approve' as const, reason: { summary: 'must not reach model' } } }))
+    const channel = new AgentChannel({ lane: 'desktop', requestId: 'unknown-write-proof', sessionId: 's', toolName: 'run_script',
+      policy: { kind: 'agent' }, invokeApproval })
+    expect(await channel.request({ facts: result.facts, riskLevel: 'high', memoryTiers: [], timeoutMs: 5_000 }))
+      .toMatchObject({ kind: 'rejected', cause: 'agent-undetermined' })
+    expect(invokeApproval).not.toHaveBeenCalled()
+
+    const emptyFindings = structuredClone(result.facts)
+    emptyFindings.signals = emptyFindings.signals.map((signal) => signal.kind === 'script-analysis'
+      ? { ...signal, findings: [], totalCount: 0 } : signal)
+    const emptyChannel = new AgentChannel({ lane: 'desktop', requestId: 'empty-write-proof', sessionId: 's', toolName: 'run_script',
+      policy: { kind: 'agent' }, invokeApproval })
+    expect(await emptyChannel.request({ facts: emptyFindings, riskLevel: 'high', memoryTiers: [], timeoutMs: 5_000 }))
+      .toMatchObject({ kind: 'rejected', cause: 'agent-undetermined' })
+    expect(invokeApproval).not.toHaveBeenCalled()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it.each(['wechat', 'feishu'] as const)('%s 动态导入网络模块维持远程网络拒绝', async (lane) => {
+    const root = await fs.realpath(await makeTempDir('dynamic-network-import-'))
+    for (const code of ["__import__('socket')", "import importlib\nimportlib.import_module('requests')", "__import__('urllib.request')"]) {
+      const result = await evaluateToolCallGate(base({ lane, remoteContext: remoteContext({ source: lane }), workDir: root,
+        userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput: { code } }))
+      expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'script-network-deny-remote' })
+    }
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
   it.each([
     ['unresolved read', 'open(target)', 'unresolved-read-target'],
     ['delete', 'import os\nos.remove(target)', 'unresolved-destructive-target'],
@@ -1983,6 +2017,21 @@ describe('evaluateToolCallGate', () => {
     expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction',
       completeness: 'unknown', dynamicKinds: expect.arrayContaining([dynamicKind]) }))
     expect(result.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+  })
+
+  it.each([
+    ['absolute path inside join', "import os\nopen(os.path.join('base', '/tmp/script-finding-review-absolute.txt'), 'w')"],
+    ['path constructor', "from pathlib import Path\nPath('/tmp/script-finding-review-absolute.txt').write_text('x')"]
+  ])('写目标表达式 %s 不可被纯写入快通道免确认', async (_case, code) => {
+    const root = await fs.realpath(await makeTempDir('script-absolute-write-'))
+    try {
+      const result = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'),
+        toolName: 'run_script', toolInput: { code } }))
+      expect(result.decision.type).not.toBe('allow')
+      expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'path-target', zone: 'outside-workdir' }))
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 
   it('路径分析不可用的脚本不提供记忆档位且每次都需真人确认', async () => {

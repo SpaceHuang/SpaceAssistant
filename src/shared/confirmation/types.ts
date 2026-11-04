@@ -173,8 +173,9 @@ export type FactSignal =
       dynamicAccess: boolean
       /** Present only when incomplete analysis was classified; absent stays fail-closed. */
       unknownReason?: 'dynamic-execution' | 'unmodeled-call' | null
-      /** Multi-valued path-analysis facts; absent legacy payloads must stay conservative. */
+      /** Bounded path-analysis categories; source provenance is not included unless complete. */
       dynamicKinds?: ScriptPathDynamicKind[]
+      sourceEvidenceComplete?: boolean
       /** Absent/unknown categories remain fail-closed for legacy or malformed producers. */
       /** SHA-256 of exact run_script code; used only for session-scoped trust. */
       contentDigest?: string
@@ -226,6 +227,8 @@ export type FactSignal =
   | { kind: 'policy-tier'; tier: 'loose' | 'standard' | 'strict' | 'custom' }
   | { kind: 'outbound-content'; inspectionCoverage: 'complete' | 'partial' | 'unavailable'; evidenceKinds: readonly string[] }
   | { kind: 'network-egress'; domains: string[] }
+  /** Network-capable script syntax; policy owns its disposition by lane. */
+  | { kind: 'script-network'; patterns: string[] }
   | { kind: 'outbound-target'; channel: string; recipient?: string; domains?: string[] }
   | {
       kind: 'script-analysis'

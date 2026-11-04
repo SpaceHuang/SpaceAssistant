@@ -174,7 +174,7 @@ describe('scriptAnalysisExtractor', () => {
     expect(analysis.findings?.map((finding) => finding.range.startLine)).toEqual([2, 3])
   })
 
-  it('脚本分析只输出 findings 与 coverage，不输出旧三档结论或脚本网络 token', () => {
+  it('脚本分析输出 findings 与 coverage，并为网络 finding 产出策略事实', () => {
     const result = extractScriptSignals("import requests\nrequests.get('https://example.test')", env)
     const analysis = result.signals.find((signal) => signal.kind === 'script-analysis')
     expect(analysis).toMatchObject({
@@ -184,7 +184,7 @@ describe('scriptAnalysisExtractor', () => {
     })
     expect(analysis).not.toHaveProperty('signal')
     expect(analysis).not.toHaveProperty('patterns')
-    expect(result.signals.map((signal) => signal.kind)).not.toContain('script-network')
+    expect(result.signals).toContainEqual({ kind: 'script-network', patterns: ['A6'] })
     expect(signalKinds(result.signals)).toContain('script-uncertified')
   })
 
@@ -201,11 +201,16 @@ describe('scriptAnalysisExtractor', () => {
     expect(result.signals.find((signal) => signal.kind === 'script-analysis')).toMatchObject({ coverage: 'failed', findings: [], totalCount: 0 })
   })
 
-  it('网络命中只由 network-api finding 表达', () => {
+  it('网络命中同时形成 finding 与策略网络事实', () => {
     const r = extractScriptSignals("import requests\nrequests.get('http://x')", env)
     const analysis = r.signals.find((signal) => signal.kind === 'script-analysis')
     expect(analysis?.kind === 'script-analysis' && analysis.findings.some((finding) => finding.class === 'network-api')).toBe(true)
-    expect(signalKinds(r.signals)).not.toContain('script-network')
+    expect(r.signals).toContainEqual({ kind: 'script-network', patterns: ['A6'] })
+  })
+
+  it('动态网络模块导入产出网络事实，但非网络动态导入不产出网络事实', () => {
+    expect(extractScriptSignals("__import__('socket')", env).signals).toContainEqual({ kind: 'script-network', patterns: ['B10'] })
+    expect(extractScriptSignals("__import__('os')", env).signals.map((signal) => signal.kind)).not.toContain('script-network')
   })
 
   it('仅将无副作用、单一静态 HTTPS GET/HEAD 目标标为 IM 网络审核候选', () => {

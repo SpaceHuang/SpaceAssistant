@@ -670,8 +670,8 @@ function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'type
     completeness: state.unknown ? 'unknown' : 'complete',
     dynamicAccess: state.unknown,
     unknownReason: state.unknown ? 'dynamic-execution' : null,
-    dynamicKinds: [...state.dynamicKinds],
-    unknownEvidence: []
+    unknownEvidence: [],
+    dynamicKinds: state.unknown ? [...state.dynamicKinds] : []
   }
 }
 

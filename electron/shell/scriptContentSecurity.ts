@@ -393,7 +393,8 @@ class Analyzer {
       const pathExpr = isOpen ? expr.args[0] : expr.callee.kind === 'attr' ? expr.callee.base : undefined
       const modeExpr = expr.kwargs.find((kw) => kw.name === 'mode')?.value ?? expr.args[1]
       const mode = isOpen && modeExpr ? foldStringIr(modeExpr) : null
-      const rawPath = pathExpr ? (foldStringIr(pathExpr) ?? (pathExpr.kind === 'call' ? foldStringIr(pathExpr.args[0] ?? { kind: 'none' }) : null)) : null
+      // A call's first argument is not necessarily its resulting path (for example os.path.join).
+      const rawPath = pathExpr ? foldStringIr(pathExpr) : null
       return {
         kind: 'write-path',
         call: isOpen ? 'open' : attr || 'unknown',
@@ -1100,12 +1101,10 @@ function sourceSnippet(code: string, range: SourceRange): string {
   const first = range.startLine - 1
   const last = range.endLine - 1
   if (first < 0 || last < first || last >= lines.length) throw new Error('finding source range is outside script')
-  const sliceBytes = (line: string, start: number, end: number) =>
-    Buffer.from(line, 'utf8').subarray(start, end).toString('utf8')
-  if (first === last) return sliceBytes(lines[first]!, range.startCol - 1, range.endCol - 1)
-  const selected = [sliceBytes(lines[first]!, range.startCol - 1, Buffer.byteLength(lines[first]!, 'utf8'))]
+  if (first === last) return lines[first]!.slice(range.startCol - 1, range.endCol - 1)
+  const selected = [lines[first]!.slice(range.startCol - 1)]
   for (let index = first + 1; index < last; index += 1) selected.push(lines[index]!)
-  selected.push(sliceBytes(lines[last]!, 0, range.endCol - 1))
+  selected.push(lines[last]!.slice(0, range.endCol - 1))
   return selected.join('\n')
 }
 
@@ -1118,13 +1117,16 @@ function buildScriptFindings(code: string, hits: PatternHit[]): ScriptFinding[] 
   return relevant.map((hit) => ({
     pattern: hit.pattern,
     class: hit.pattern === 'B10' && hit.evidence?.kind === 'dynamic-import'
-      ? 'dynamic-import'
+      ? hit.evidence.moduleName && isNetworkModule(hit.evidence.moduleName.split('.')[0]!) ? 'network-api' : 'dynamic-import'
       : hit.pattern === 'B4' && hit.evidence?.kind === 'alias'
         ? 'alias-resolution'
         : FINDING_CLASS_BY_PATTERN[hit.pattern]!,
     range: hit.range!,
     snippet: sourceSnippet(code, hit.range!),
-    evidence: hit.evidence!
+    evidence: hit.pattern === 'B10' && hit.evidence?.kind === 'dynamic-import' && hit.evidence.moduleName
+      && isNetworkModule(hit.evidence.moduleName.split('.')[0]!)
+      ? { kind: 'network', module: hit.evidence.moduleName.split('.')[0]!, attr: 'dynamic-import' }
+      : hit.evidence!
   }))
 }
 

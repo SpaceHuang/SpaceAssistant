@@ -82,6 +82,7 @@ export function extractScriptSignals(
       signals.push({ kind: 'extraction-failed', reason: analysis.reason ?? 'script-analysis-location-unavailable' })
     }
     if (analysis.findings.some((finding) => finding.class === 'network-api')) {
+      signals.push({ kind: 'script-network', patterns: [...new Set(analysis.findings.filter((finding) => finding.class === 'network-api').map((finding) => finding.pattern))] })
       const candidate = staticNetworkReviewCandidate(ir)
       if (candidate) signals.push({ kind: 'im-script-network-review-candidate', status: 'complete', ...candidate })
     }

@@ -78,6 +78,30 @@ describe('scriptContentSecurity — List A (baseline)', () => {
     expect(finding?.range.endCol).toBe(code.length + 1)
   })
 
+  it('does not infer a write target from an arbitrary call argument', () => {
+    const finding = analyzeScriptContent("open(os.path.join('base', '/tmp/out'), 'w')").findings?.[0]
+    expect(finding?.evidence).toMatchObject({ kind: 'write-path', rawPath: null, pathClass: 'unresolved' })
+  })
+
+  it.each([
+    ['Chinese before', "注释\nopen('x', 'w')", "open('x', 'w')"],
+    ['emoji before', "# 😀\nopen('x', 'w')", "open('x', 'w')"],
+    ['Unicode inside', "open('目录😀/x', 'w')", "open('目录😀/x', 'w')"],
+    ['CRLF multiline', "open(\r\n '目录/文件',\r\n 'w')", "open(\r\n '目录/文件',\r\n 'w')"]
+  ])('extracts exact Unicode snippet (%s)', (_name, code, expected) => {
+    expect(analyzeScriptContent(code).findings?.[0]?.snippet).toBe(expected)
+  })
+
+  it.each(["__import__('socket')", "import importlib\nimportlib.import_module('requests')", "__import__('urllib.request')"])(
+    'emits network evidence alongside dynamic-import for %s', (code) => {
+      const findings = analyzeScriptContent(code).findings ?? []
+      expect(findings).toEqual(expect.arrayContaining([
+        expect.objectContaining({ class: 'dynamic-import', evidence: expect.objectContaining({ kind: 'dynamic-import' }) }),
+        expect.objectContaining({ class: 'network-api', evidence: expect.objectContaining({ kind: 'network', attr: 'dynamic-import' }) })
+      ]))
+    }
+  )
+
   describe('A1 — os.system / subprocess / pty', () => {
     it('os.system produces the same pattern fact for all callers', () => {
       expectAnalysis("import os\nos.system('id')", true, { patternIds: ['A1'] })
