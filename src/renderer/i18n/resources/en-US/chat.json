@@ -239,7 +239,27 @@
     "script": {
       "actionSummary": "Run Python script",
       "allow": "Confirm run",
-      "deny": "Deny run"
+      "deny": "Deny run",
+      "findings": {
+        "title": "Script risk findings",
+        "expand": "{{count}} more",
+        "collapse": "Show fewer findings",
+        "location": "Line {{line}}",
+        "classes": {
+          "processCreation": "Process creation",
+          "destructiveFs": "File deletion or move",
+          "dynamicExecution": "Dynamic execution",
+          "dynamicImport": "Dynamic import",
+          "nativeCodeLoad": "Native code load",
+          "networkApi": "Network access",
+          "fileWrite": "File write",
+          "cwdChange": "Change working directory",
+          "reflection": "Reflection call",
+          "aliasResolution": "Alias resolution",
+          "decodeThenExec": "Decode then execute",
+          "dynamicDispatch": "Dynamic dispatch"
+        }
+      }
     },
     "lark": {
       "allowWrite": "Confirm Feishu write",

@@ -108,20 +108,20 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
 
 ### 阶段 1b：确认卡片展示
 
-- [ ] **F10 将全量发现放入确认请求载荷**（本机）
+- [x] **F10 将全量发现放入确认请求载荷**（本机）
   - 范围：`src/shared/confirmation/types.ts`、`electron/confirmation/toolCallGate.ts`、`electron/preload.ts`（仅若该载荷实际经过预加载定义）、确认请求生产/消费处与对应测试；先由 F00 事实清单确定具体调用方。
   - 产物/判据：新增字段可选可缺省，不改现有字段语义；载荷携带全量发现及总数，不在主进程预先按 UI 上限裁剪；旧请求缺字段路径兼容。
-  - 验证：受影响的 gate/确认契约测试与 `npm run typecheck:shared`。关联 AC-8、10。证据：`F10.md`。
+  - 验证：`npm exec -- vitest run src/shared/assistantFactAggregator.test.ts electron/runtime/invocationAssembler.test.ts`（2 files / 121 tests passed）；`npm run typecheck:shared`、`git diff --check` 通过。关联 AC-8、10。证据：`docs/plan/evidence/script-finding-model/F10.md`。
 
-- [ ] **F11 展示逐条发现并支持展开**（本机）
+- [x] **F11 展示逐条发现并支持展开**（本机）
   - 范围：`src/renderer/components/Chat/` 中 F00 定位的确认卡片组件及测试、相关 i18n 资源。
   - 产物/判据：默认显示前三条；第四条起显示“另有 N 条”并可展开全部；总数不超过三时无展开控件；展开状态按单卡片隔离；键盘可达；字段缺省时保持旧界面；事实载荷不被展示逻辑修改。
-  - 验证：确认卡片渲染测试覆盖 0/1/3/4/多条、展开、卡片隔离和键盘操作；`npm run i18n:check`。关联 AC-10。证据：`F11.md`。
+  - 验证：`npm exec -- vitest run src/renderer/components/Chat/ScriptConfirmCard.test.tsx`（1 file / 11 tests passed，含 0/1/3/4/8 条、展开、卡片状态隔离和键盘焦点）；`npm run typecheck:renderer`、`npm run i18n:check` 均通过。关联 AC-10。证据：`docs/plan/evidence/script-finding-model/F11.md`。
 
-- [ ] **F12 关闭 1b 阶段**（本机）
+- [x] **F12 关闭 1b 阶段**（本机）
   - 范围：F10/F11 与阶段证据。
   - 产物/判据：本阶段测试及类型/i18n 门禁通过；与 1a 分开回退时旧载荷仍可渲染；不影响分析侧全量事实。关联 AC-8、10。
-  - 验证：合并运行 F10/F11 定向测试、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run i18n:check`、`npm test`。记录阶段提交 SHA、精确文件清单、依赖闭包和回退顺序；在隔离 checkout revert 阶段提交并运行确认卡片 smoke 定向测试。证据：`phase-1b.md`。回退时同时移除载荷生产与渲染消费，保留可选字段缺省兼容。
+  - 验证：F10/F11 合并定向测试（3 files / 132 tests passed）；`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run i18n:check` 通过；`npm test`（1,257 files passed / 1 skipped；12,192 tests passed / 140 skipped）。记录阶段提交 SHA、精确文件清单、依赖闭包和回退顺序；在隔离 checkout revert 阶段提交并运行确认卡片 smoke 定向测试。证据：`docs/plan/evidence/script-finding-model/phase-1b.md`。回退时同时移除载荷生产与渲染消费，保留可选字段缺省兼容。
 
 ### 阶段 1c：审批材料
 
