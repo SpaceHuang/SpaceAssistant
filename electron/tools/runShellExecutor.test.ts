@@ -14,6 +14,7 @@ import { ACCIDENT_HEX } from '../processOutput/testFixtures'
 import { SHELL_OUTPUT_TRUST_SUSPECT_NOTICE } from '../../src/shared/shellToolDisplay'
 import { projectAgentToolResultForSink } from '../../src/shared/processResultProjection'
 import { WINDOWS_POWERSHELL_PRELUDE, WINDOWS_POWERSHELL_PROFILE, buildShellArgs } from '../shell/shellProfiles'
+import { managedProcessRuntimeGeneration, readManagedProcessExit } from '../triggers/processSource'
 
 vi.mock('../shell/shellAgentLogger', () => ({
   logShellAgentEvent: vi.fn()
@@ -181,6 +182,8 @@ describe('runShellExecutor', () => {
     expect(result.success).toBe(true)
     expect(String(result.data?.stdout)).toMatch(/hello/)
     expect(result.data?.exitCode).toBe(0)
+    expect(result.data?.managedProcessId).toMatch(/^mp_/)
+    expect(readManagedProcessExit(String(result.data?.managedProcessId), managedProcessRuntimeGeneration())).toMatchObject({ ok: true, exitCode: 0, toolName: 'run_shell' })
     expect(result.data?.planDigest).toMatch(/^[0-9a-f]{64}$/)
     expect(result.data?.environmentFingerprint).toBeTruthy()
     expect(logShellAgentEvent).toHaveBeenCalledWith('info', 'shell.exec.start', expect.objectContaining({ commandFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) }))
@@ -390,6 +393,9 @@ describe('runShellExecutor', () => {
     const result = await runShellExecutor.execute({ command: 'echo never-runs' }, ctx)
     expect(result.success).toBe(false)
     expect(result.data).toMatchObject({ code: 'SHELL_SPAWN_ERROR', caseId: 'SHELL-LIFECYCLE-003' })
+    const processId = String(result.data?.managedProcessId)
+    expect(processId).toMatch(/^mp_/)
+    expect(readManagedProcessExit(processId, managedProcessRuntimeGeneration())).toMatchObject({ ok: true, exitCode: null, reason: 'spawn_error' })
     expect(logShellAgentEvent).toHaveBeenCalledWith(
       'error',
       'shell.exec.error',

@@ -41,7 +41,8 @@ async function invoke(
 /** Turn a pure host read into a prepared snapshot whose context and result are revalidated before dispatch. */
 export function createSnapshotReadRegisteredTool(
   name: string,
-  executor: (input: Record<string, unknown>, context: RuntimeExecutionContext) => Promise<ToolExecutorResult>
+  executor: (input: Record<string, unknown>, context: RuntimeExecutionContext) => Promise<ToolExecutorResult>,
+  options: { resourceKeys?: RegisteredTool['resourceKeys'] } = {}
 ): RegisteredTool {
   const parseInput = (raw: unknown): Record<string, unknown> => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('INVALID_CANONICAL_TOOL_INPUT')
@@ -59,7 +60,7 @@ export function createSnapshotReadRegisteredTool(
     identities.set(value, created)
     return String(created)
   }
-  return definePlannedTool<Record<string, unknown>, PreparedSnapshotRead, ToolExecutorResult>({
+  const tool = definePlannedTool<Record<string, unknown>, PreparedSnapshotRead, ToolExecutorResult>({
     name,
     actionClass: 'read',
     parseInput,
@@ -80,4 +81,5 @@ export function createSnapshotReadRegisteredTool(
     facts: ({ contextHash, resultHash }) => ({ contextHash, resultHash }),
     display: ({ result }) => ({ toolName: name, success: result.success })
   })
+  return options.resourceKeys ? { ...tool, resourceKeys: options.resourceKeys } : tool
 }

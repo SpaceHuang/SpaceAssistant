@@ -7,7 +7,7 @@ import { appendRemoteTrackEvent, createRemoteTrack, claimRemoteTrackWork, mapRem
 import { getDbConnection } from './sqliteStore'
 import { createSession } from './operations'
 import { buildImQueueScope } from '../../src/shared/queueScope'
-import { appendImInboxMessageWithWakeEvent, parkImInboxMessageForClarification } from './imInbox'
+import { appendImInboxMessageWithWakeEvent, parkImInboxMessageForClarification } from './imInboxTestFixtures'
 import { listRemoteTrackAttributionCandidates } from '../remote/remoteTrackAttributionService'
 import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'

@@ -145,6 +145,19 @@ describe('createHostedTurnHandoff', () => {
     db.close()
   })
 
+  it('passes trusted lifecycle hooks and confirmed bounds to the SDK turn runner', async () => {
+    const hooks = { postStep: vi.fn() }
+    const limits = { callbackTimeoutMs: 5_000, maxPauseMs: 60_000 }
+    mockRunHostedAgentTurn.mockResolvedValueOnce({ text: 'ok', modelTurns: 0, finishReason: 'stop', usage: { inputTokens: 0, outputTokens: 0 }, messages: [] })
+    const history = { read: vi.fn(async () => ({ events: [{ kind: 'invocation-completed', payload: { status: 'completed' } }] })) }
+    const handoff = createHostedTurnHandoff({ agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history: history as never, invocationId: 'lifecycle-invocation', turnId: 'lifecycle-turn', routeId: 'route' })
+
+    await handoff({ request: { messages: [{ role: 'user', content: 'lifecycle' }] }, lifecycleHooks: hooks as never, lifecycleLimits: limits })
+
+    expect(mockRunHostedAgentTurn).toHaveBeenCalledWith(expect.objectContaining({ lifecycleHooks: hooks, lifecycleLimits: limits }))
+  })
+
   it('recovers the target under the session admission gate before acquiring its execution claim', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'recover-before-claim', model: 'test' })

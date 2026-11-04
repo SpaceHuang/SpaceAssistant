@@ -45,6 +45,8 @@ export type AppIpcContext = {
   /** Wake the durable source-truth spill collection queue after its owning session is deleted. */
   wakeSourceTruthSpillGc?: () => void
   executeTurn?: ClaudeTurnExecution
+  /** Internal composition hook used by the durable trigger dispatcher after ordinary turn preparation is installed. */
+  publishRuntimeTriggerReceiverStarter?: (starter: (input: import('./triggers/receiverStarter').RuntimeTriggerReceiverStartInput) => Promise<'started' | 'busy' | 'unavailable'>) => void
   /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
   isTrayEnabled?: () => boolean
 }

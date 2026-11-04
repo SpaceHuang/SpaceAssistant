@@ -23,6 +23,17 @@ import { hasActiveSessionExecutionOwner, registerActiveSessionExecutionOwner, re
 import { cleanupOrphanProcess } from '../shell/orphanProcessCleanup'
 import { restoreLegacySessionContextSnapshot, type SessionContextState } from '../../packages/agent-sdk/src/sessionContext'
 import type { DynamicModelTool } from './dynamicToolRequest'
+import { turnTerminalBusForExecution } from '../triggers/sources'
+
+async function notifyPersistedTurnTerminal(input: {
+  sessionExecution?: SessionExecutionStore
+  sessionId?: string
+  turnId: string
+}): Promise<void> {
+  if (!input.sessionExecution || !input.sessionId) return
+  try { await turnTerminalBusForExecution(input.sessionExecution).notify(input.sessionId, input.turnId) }
+  catch { /* Durable terminal scans remain authoritative; notification is an acceleration hint only. */ }
+}
 
 function hasSessionHistoryQueries(history: HistoryPort): history is SessionHistoryPort {
   return history != null && typeof (history as Partial<SessionHistoryPort>).readLatestInvocationForSession === 'function'
@@ -63,6 +74,9 @@ type HandoffInput = Readonly<{
   assistantMessageId?: string
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
   planContextReplacement?: import('../../packages/agent-sdk/src/invocation').AgentHostPorts['planContextReplacement']
+  /** Trusted host-only hooks, never populated from renderer input. */
+  lifecycleHooks?: import('../../packages/agent-sdk/src/turn').AgentTurnLifecycleHooks
+  lifecycleLimits?: import('../../packages/agent-sdk/src/turn').AgentTurnLifecycleLimits
 }>
 
 function bindAssistantMessageIdentity(history: HistoryPort, assistantMessageId: string): HistoryPort {
@@ -174,6 +188,8 @@ export function createHostedTurnHandoff(input: {
   recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
   refreshExecutionContext?: NonNullable<Parameters<HostedRuntimeFactory['createHostedTurnRuntime']>[0]['refreshExecutionContext']>
   confirmationAdapter?: Partial<Parameters<typeof createAgentSdkConfirmationPort>[0]>
+  lifecycleHooks?: import('../../packages/agent-sdk/src/turn').AgentTurnLifecycleHooks
+  lifecycleLimits?: import('../../packages/agent-sdk/src/turn').AgentTurnLifecycleLimits
   continuationContext?: ContinuationContext
   /** When true, request.messages is already built from a verified Track view. */
   trackScopedModelInput?: boolean
@@ -438,6 +454,8 @@ export function createHostedTurnHandoff(input: {
         ...(ownership && checkpoint ? { sessionTranscriptCommitProtocol: 2 as const } : {}),
         ...(transcriptFailureMessages ? { sessionTranscriptFailureMessages: transcriptFailureMessages } : {}),
         ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
+        ...(handoff.lifecycleHooks ?? input.lifecycleHooks ? { lifecycleHooks: handoff.lifecycleHooks ?? input.lifecycleHooks } : {}),
+        ...(handoff.lifecycleLimits ?? input.lifecycleLimits ? { lifecycleLimits: handoff.lifecycleLimits ?? input.lifecycleLimits } : {}),
         ...(handoff.initialResponse ? { initialResponse: handoff.initialResponse } : {})
       })
       const terminal = input.history.readLatestEvent
@@ -459,6 +477,7 @@ export function createHostedTurnHandoff(input: {
             throw new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:parked-terminal-participant-incomplete'), 'commit-uncertain')
           }
         }
+        await notifyPersistedTurnTerminal(input)
         return { result: { ok: true, content: [{ type: 'text', text: '' }], stopReason: 'parked', parked: true, parkedTodoId: todoId },
           finalization: { outcome: 'interrupted', usage: { modelTurns: 0, initialMessageCount: request.messages.length, messages: request.messages } } }
       }
@@ -489,6 +508,7 @@ export function createHostedTurnHandoff(input: {
           throw new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:terminal-participant-incomplete'), 'commit-uncertain')
         }
       }
+      await notifyPersistedTurnTerminal(input)
       return {
         result: {
           ok: true,
@@ -565,6 +585,7 @@ export function createHostedTurnHandoff(input: {
           throw new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:terminal-participant-incomplete', { cause: error }), 'commit-uncertain', terminalUsage(terminal))
         }
       }
+      if (terminal && terminal.kind !== 'invocation-parked') await notifyPersistedTurnTerminal(input)
       if (error instanceof HostedTurnFinalizedError && error.outcome === 'commit-uncertain') throw error
       // A tool-loop limit is a deliberate, user-facing stop condition (for example,
       // the shell dialect retry breaker). Preserve its diagnostic instead of

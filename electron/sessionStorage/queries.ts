@@ -1,4 +1,5 @@
 import type { AppDatabase } from '../database/sqliteStore'
+import { captureImFactFrontier, readImFactPage } from '../database/imInbox'
 import {
   getSession,
   getSessionUsage,
@@ -164,6 +165,17 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
   }
   const queries: SessionQueries = {
     continuationSources: inspectContinuationSources(db),
+    imAcceptedFacts: {
+      captureFrontier: (scope) => captureImFactFrontier(db, scope),
+      readPage: ({ channel, accountId, conversationId, after, through, coverageRevision, limit }) =>
+        readImFactPage(db, { scope: { channel, accountId, conversationId }, after, through, coverageRevision, limit }),
+      readBody: ({ channel, accountId, conversationId, messageId }) => {
+        const bound = getDbConnection(db).prepare(`SELECT 1 FROM im_inbox_message_context
+          WHERE message_id=? AND channel=? AND account_id=? AND conversation_id=?`).get(messageId, channel, accountId, conversationId)
+        if (!bound) return null
+        return getProjectedMessage(db, messageId)?.content ?? null
+      }
+    },
     readSession: (sessionId) => getSession(db, sessionId),
     readSessionIdForPlatformMessage: ({ channel, platformMessageId }) => {
       const rows = getDbConnection(db).prepare(`SELECT m.session_id FROM im_inbox_message_context AS c

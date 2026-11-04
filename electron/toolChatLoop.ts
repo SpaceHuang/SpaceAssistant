@@ -559,7 +559,7 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Run
   }, { once: true })
   // sessionId→活跃流反向登记：供 action.session.status/list 判定会话运行中（需求 §9.4，
   // 与下方 finally 的 clearSessionActiveStream 成对、按 requestId 粒度删除，重入安全）
-  registerSessionActiveStream(args.sessionId, args.requestId)
+  registerSessionActiveStream(args.sessionId, args.requestId, executionId)
   const requestLane = args.lane
     ?? (args.remoteContext
       ? args.remoteContext.source === 'feishu'

@@ -14,6 +14,7 @@ export async function createNewFeishuSession(
     metadata: {
       source: 'feishu',
       feishuChatId: msg.chatId,
+      feishuChatType: msg.chatType,
       feishuMessageId: msg.messageId,
       feishuSenderOpenId: msg.senderOpenId
     }
@@ -37,6 +38,6 @@ export async function resolveFeishuSession(
     identityKey: msg.chatId,
     getIdentityFromSession: (s) => (s.metadata as { feishuChatId?: string }).feishuChatId,
     createNew: (model) => createNewFeishuSession(sessionStorage, msg, model),
-    onReuse: (existing) => { sessionStorage.commands.recordRemoteSessionIdentity(existing.id, { channel: 'feishu', messageId: msg.messageId }) }
+    onReuse: (existing) => { sessionStorage.commands.recordRemoteSessionIdentity(existing.id, { channel: 'feishu', messageId: msg.messageId, chatType: msg.chatType }) }
   })
 }

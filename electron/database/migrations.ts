@@ -40,6 +40,11 @@ import {
   MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
   MIGRATION_V114_INVOCATION_PENDING_VIEWS_RETIREMENT_SQL,
   MIGRATION_V120_SESSION_LEDGER_CANONICAL_READ_VERSION_SQL,
+  MIGRATION_V121_RUNTIME_TRIGGERS_SQL,
+  MIGRATION_V121_IM_FACT_BACKFILL_SQL,
+  MIGRATION_V121_IM_FACT_IDENTITY_SQL,
+  MIGRATION_V122_IM_FACT_CONVERSATION_TYPE_SQL,
+  MIGRATION_V123_RUNTIME_TRIGGER_SYNC_TARGET_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SESSION_TRIGGERS_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_HISTORY_TRIGGERS_SQL,
@@ -2399,6 +2404,36 @@ export function runMigrations(conn: DatabaseSync): void {
       conn.exec(MIGRATION_V120_SESSION_LEDGER_CANONICAL_READ_VERSION_SQL)
     }
     version = 120
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v120 → v121: durable trigger registrations and independently accepted IM fact identity.
+  if (version === 120) runInTransaction(conn, () => {
+    if (hasTable(conn, 'im_inbox_message_context')) {
+      for (const column of ['account_id', 'conversation_id', 'sender_id', 'accepted_seq']) {
+        if (!hasColumn(conn, 'im_inbox_message_context', column)) conn.exec(`ALTER TABLE im_inbox_message_context ADD COLUMN ${column} ${column === 'accepted_seq' ? 'INTEGER' : 'TEXT'}`)
+      }
+    }
+    conn.exec(MIGRATION_V121_RUNTIME_TRIGGERS_SQL)
+    if (hasTable(conn, 'im_inbox_message_context')) {
+      conn.exec(MIGRATION_V121_IM_FACT_BACKFILL_SQL)
+      conn.exec(MIGRATION_V121_IM_FACT_IDENTITY_SQL)
+    }
+    version = 121
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v121 → v122: retain trusted IM conversation type with accepted source identity.
+  if (version === 121) runInTransaction(conn, () => {
+    if (hasTable(conn, 'im_inbox_message_context') && !hasColumn(conn, 'im_inbox_message_context', 'is_group')) {
+      conn.exec('ALTER TABLE im_inbox_message_context ADD COLUMN is_group INTEGER CHECK(is_group IN (0,1))')
+    }
+    if (hasTable(conn, 'im_inbox_message_context')) conn.exec(MIGRATION_V122_IM_FACT_CONVERSATION_TYPE_SQL)
+    version = 122
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v122 → v123: enforce target-based sync uniqueness and index process-exit handoff facts.
+  if (version === 122) runInTransaction(conn, () => {
+    if (hasTable(conn, 'runtime_triggers')) conn.exec(MIGRATION_V123_RUNTIME_TRIGGER_SYNC_TARGET_SQL)
+    version = 123
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

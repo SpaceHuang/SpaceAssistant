@@ -63,6 +63,7 @@ describe('resolveFeishuSession idle resume', () => {
     expect(result.isNew).toBe(false)
     expect(result.sessionId).toBe(existing.id)
     expect((getSession(db, existing.id)?.metadata as { feishuMessageId?: string }).feishuMessageId).toBe('msg-2')
+    expect((getSession(db, existing.id)?.metadata as { feishuChatType?: string }).feishuChatType).toBe('p2p')
   })
 
   it('uses the injected query and command ports when reusing a session', async () => {
@@ -85,7 +86,7 @@ describe('resolveFeishuSession idle resume', () => {
 
     expect(result).toEqual({ sessionId: existing.id, isNew: false })
     expect(listSessions).toHaveBeenCalledOnce()
-    expect(recordIdentity).toHaveBeenCalledWith(existing.id, { channel: 'feishu', messageId: 'msg-injected' })
+    expect(recordIdentity).toHaveBeenCalledWith(existing.id, { channel: 'feishu', messageId: 'msg-injected', chatType: 'p2p' })
   })
 
   it('creates new session after idle timeout', async () => {

@@ -27,7 +27,7 @@ import { appendMessage as appendMessageOperation, createPersistedTurn, listQueue
 import { listWakeEvents } from '../database/wakeEvents'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { getDbConnection } from '../database/sqliteStore'
-import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, listImInboxMessages, parkImInboxMessageForClarification } from '../database/imInbox'
+import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, listImInboxMessages, parkImInboxMessageForClarification } from '../database/imInboxTestFixtures'
 import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
@@ -575,7 +575,10 @@ describe('RemoteCommandRouter workdir binding', () => {
     await handled
 
     expect(returnedQuickly).toBe(true)
-    expect(listQueuedUserMessages(db, { sessionId: session.id, queueScope })).toHaveLength(1)
+    const queued = listQueuedUserMessages(db, { sessionId: session.id, queueScope })
+    expect(queued).toHaveLength(1)
+    expect(getDbConnection(db).prepare('SELECT account_id,conversation_id,sender_id FROM im_inbox_message_context WHERE message_id=?').get(queued[0]!.message.id))
+      .toEqual({ account_id: 'user-1', conversation_id: 'chat-1', sender_id: 'user-1' })
     expect(listWakeEvents(db, session.id)).toHaveLength(1)
     expect(dispatchSession).toHaveBeenCalledWith(session.id)
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()

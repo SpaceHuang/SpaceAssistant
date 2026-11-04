@@ -3,7 +3,8 @@ import { prepareChatBodyForRead } from './readPreparation'
 
 describe('prepareChatBodyForRead', () => {
   it.each(['PROJECTION_PREPARATION_DEFERRED_LARGE', 'PROJECTION_PREPARATION_UNAVAILABLE',
-    'PROJECTION_BUILD_DEFERRED:DEFERRED_LARGE', 'PROJECTION_BUILD_CLAIM_UNAVAILABLE'])(
+    'PROJECTION_BUILD_DEFERRED:DEFERRED_LARGE', 'PROJECTION_BUILD_CLAIM_UNAVAILABLE',
+    'PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH'])(
     'continues to the authoritative reader after %s', async (message) => {
       const events: string[] = []
       await prepareChatBodyForRead(async () => { events.push('prepare'); throw new Error(message) }, 'session')

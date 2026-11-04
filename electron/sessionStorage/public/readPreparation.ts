@@ -37,5 +37,5 @@ export async function prepareChatBodyForRead(
 }
 
 function isProjectionPreparationFailure(message: string): boolean {
-  return /^(?:PROJECTION_(?:PREPARATION|BUILD|STATE|CACHE)_|SESSION_PROJECTION_PREPARATION_)/.test(message)
+  return /^(?:PROJECTION_(?:PREPARATION|BUILD|STATE|CACHE|SOURCE_BACKFILL)_|SESSION_PROJECTION_PREPARATION_)/.test(message)
 }

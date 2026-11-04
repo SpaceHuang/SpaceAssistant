@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { CapabilityDescriptor, CapabilityContext } from '../types'
-import { isSessionActiveStream } from '../../chatActiveStreams'
+import { getSessionActiveStreamTurnId, isSessionActiveStream } from '../../chatActiveStreams'
 import { readExportPageAfterPreparation } from '../../sessionStorage/public/readMessages'
 
 /**
@@ -60,13 +60,17 @@ const listCapability: CapabilityDescriptor = {
 const statusCapability: CapabilityDescriptor = {
   id: 'action.session.status',
   family: 'action',
-  summary: '查询某个会话是否正在运行（有活跃的流式请求）',
+  summary: '查询会话运行状态；运行中返回可用于等待回合完成的 turnId',
   keywords: ['会话状态', '运行中', '正在运行', 'busy', 'running', 'status'],
   paramsSchema: z.object({ sessionId: z.string().min(1) }).passthrough(),
   paramsDoc: '{ "sessionId": "会话 ID（UUID）" }',
-  returnsDoc: '{ running: boolean }',
+  returnsDoc: '{ running: boolean, turnId?: string }（运行中提供可用于等待回合完成的 turnId，空闲时省略）',
   risk: 'read',
-  handler: async (rawParams) => ({ running: isSessionActiveStream((rawParams as { sessionId: string }).sessionId) })
+  handler: async (rawParams) => {
+    const sessionId = (rawParams as { sessionId: string }).sessionId
+    const turnId = getSessionActiveStreamTurnId(sessionId)
+    return turnId ? { running: true, turnId } : { running: false }
+  }
 }
 
 interface SessionReadParams {

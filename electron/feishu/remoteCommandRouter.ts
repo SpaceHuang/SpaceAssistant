@@ -538,11 +538,13 @@ export class RemoteCommandRouter {
     }, Math.max(0, pending.expiresAt - Date.now()))
   }
 
-  private persistInboundWake(sessionId: string, message: FeishuInboundMessage, content: string, trackContext?: RemoteTrackContext): boolean {
+  private persistInboundWake(sessionId: string, message: FeishuInboundMessage, content: string, authSnapshot: ImAuthSnapshot, trackContext?: RemoteTrackContext): boolean {
     try {
       const queueScope = buildImQueueScope('feishu', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
       appendImInboxMessageWithWakeEvent(this.deps.db, {
         sessionId, channel: 'feishu', queueScope, channelMessageId: message.messageId, content,
+        accountId: authSnapshot.owner, conversationId: message.chatId, senderId: message.senderOpenId,
+        ...(message.chatType === 'group' ? { isGroup: true } : message.chatType === 'p2p' ? { isGroup: false } : {}),
         attachments: feishuMessageAttachments(message),
         ...(trackContext ? { trackId: trackContext.trackId, trackEventId: trackContext.attributionEventId } : {})
       })
@@ -988,7 +990,7 @@ export class RemoteCommandRouter {
         if (!resolvedSession && quotedReplyContext?.sessionId) {
           const quotedSession = this.deps.sessionStorage!.queries.readSession(quotedReplyContext.sessionId)
           if (quotedSession?.metadata.feishuChatId === msg.chatId) {
-            this.deps.sessionStorage!.commands.recordRemoteSessionIdentity(quotedSession.id, { channel: 'feishu', messageId: msg.messageId })
+            this.deps.sessionStorage!.commands.recordRemoteSessionIdentity(quotedSession.id, { channel: 'feishu', messageId: msg.messageId, chatType: msg.chatType })
             resolvedSession = { sessionId: quotedSession.id, isNew: false }
           }
         }
@@ -1045,7 +1047,9 @@ export class RemoteCommandRouter {
           if (!context.originSessionId) throw new Error('FEISHU_TRACK_INBOX_SESSION_MISSING')
           const trackQueueScope = buildImQueueScope('feishu', context.originSessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
           appendImInboxMessageWithWakeEvent(this.deps.db, { sessionId: context.originSessionId, channel: 'feishu', queueScope: trackQueueScope,
-            channelMessageId: msg.messageId, content, attachments: feishuMessageAttachments(msg), trackId: context.trackId, trackEventId: context.attributionEventId })
+            channelMessageId: msg.messageId, content, attachments: feishuMessageAttachments(msg), accountId: authSnapshot.owner,
+            conversationId: msg.chatId, senderId: msg.senderOpenId, isGroup: msg.chatType === 'group' ? true : msg.chatType === 'p2p' ? false : undefined,
+            trackId: context.trackId, trackEventId: context.attributionEventId })
         } })
         if (attribution.kind === 'unresolved') {
           if (attribution.decision.kind === 'ambiguous' && attribution.decision.candidateTrackIds.length <= 5 && trackGates.clarification) {
@@ -1070,7 +1074,9 @@ export class RemoteCommandRouter {
             const expiresAt = now + 5 * 60_000
             const queueScope = buildImQueueScope('feishu', sessionId)
             parkImInboxMessageForClarification(this.deps.db, { sessionId, channel: 'feishu', queueScope,
-              channelMessageId: msg.messageId, content, attachments: feishuMessageAttachments(msg), clarificationId, identityKey: msg.chatId,
+              channelMessageId: msg.messageId, content, attachments: feishuMessageAttachments(msg), accountId: authSnapshot.owner,
+              conversationId: msg.chatId, senderId: msg.senderOpenId, isGroup: msg.chatType === 'group' ? true : msg.chatType === 'p2p' ? false : undefined,
+              clarificationId, identityKey: msg.chatId,
               ownerId: authSnapshot.owner, authorizationEpoch: epoch, handle, candidates, expiresAt, now })
             const sendAttemptId = randomUUID()
             startClarificationSendAttempt(this.deps.db, { sendAttemptId, clarificationId, version: 1, startedAt: Date.now() })
@@ -1137,7 +1143,7 @@ export class RemoteCommandRouter {
       const claim = replay ? null : tryClaimOrRelease(sessionId, requestId, appCfg.maxParallelChatSessions)
       if (claim && !claim.ok) {
         if (claim.reason === 'session_busy' && this.deps.wakeEventDispatcher) {
-          if (!this.persistInboundWake(sessionId, msg, content, trackContext)) {
+          if (!this.persistInboundWake(sessionId, msg, content, authSnapshot, trackContext)) {
             await claimFinalizer.complete('persistence_failed')
             return
           }
@@ -1211,7 +1217,7 @@ export class RemoteCommandRouter {
         touchRemoteSessionActivity(this.deps.sessionStorage!.commands, sessionId)
 
         if (this.deps.wakeEventDispatcher && !replay) {
-          if (!this.persistInboundWake(sessionId, msg, content, trackContext)) {
+          if (!this.persistInboundWake(sessionId, msg, content, authSnapshot, trackContext)) {
             await claimFinalizer.complete('persistence_failed')
             return
           }
