@@ -86,25 +86,25 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：真实生产调用链、测试落点与受影响文件表；确认解析调用次数、脚本发现所有消费方及路径事实入口；指出现有未提交差异的归属，不覆盖他人改动。
   - 验证：`git rev-parse HEAD`、`git status --short`；`rg -n 'parsePythonModule|analyzeScriptContent|extractScriptSignals|extractScriptPathFacts' electron src`；`npm exec vitest run electron/shell/scriptIr/pythonAdapter.test.ts electron/shell/scriptContentSecurity.test.ts electron/shell/scriptContentSecurity.b.test.ts electron/shell/scriptContentSecurity.residual.test.ts electron/shell/scriptGolden.test.ts electron/confirmation/extractors/extractors.test.ts electron/confirmation/extractors/scriptParseCount.test.ts electron/confirmation/extractors/scriptPathFacts.test.ts electron/confirmation/toolCallGate.test.ts`（9 files / 561 tests passed）。关联 AC-1～9/12/17 的基线，不关闭 AC。证据：`docs/plan/evidence/script-finding-model/F00.md`。
 
-- [ ] **F01 在 IR 转换中保留节点位置**（本机）
+- [x] **F01 在 IR 转换中保留节点位置**（本机）
   - 范围：`electron/shell/scriptIr/types.ts`、`electron/shell/scriptIr/pythonAdapter.ts`、对应 adapter 测试与必要快照。
   - 产物/判据：语法树到 IR 的每条可消费节点都保留 1-based 源位置；结构性穿透节点不丢位置，未知/无法映射位置以明确失败表达，不产生无位置发现；受影响 adapter 既有建模行为无退化。
-  - 验证：`npm exec vitest run electron/shell/scriptIr/pythonAdapter.test.ts`（若新增独立测试一并加入）；检查 IR 快照及位置故障用例。关联 AC-1、AC-7。证据：`F01.md`。
+  - 验证：`npm exec vitest run electron/shell/scriptIr/pythonAdapter.test.ts electron/shell/scriptGolden.test.ts electron/confirmation/extractors/scriptParseCount.test.ts`（3 files / 170 tests passed）；`npm exec tsc -- --noEmit -p tsconfig.electron.json`；`git diff --check`。关联 AC-1、AC-7。证据：`docs/plan/evidence/script-finding-model/F01.md`。
 
-- [ ] **F02 产出首批三类逐条发现并保留兼容旧结论**（本机）
+- [x] **F02 产出首批三类逐条发现并保留兼容旧结论**（本机）
   - 范围：`electron/shell/scriptContentSecurity.ts`、`electron/confirmation/extractors/scriptAnalysisExtractor.ts`、`src/shared/confirmation/types.ts` 与相关测试。
   - 产物/判据：按方案《发现结构》对 `file-write`、`destructive-fs`、`process-creation` 首批类别逐处产出发现；重复 pattern/range 命中仍逐条保留；键名不表达动作/建议；全量发现与总数进入可选字段，事实字段本身不承载动作。为兼容现有策略，旧 verdict/signal 及旧动作逻辑暂保留；此任务不声称 AC-9 完成。golden 每条发现均有位置和片段。
-  - 验证：`npm exec vitest run electron/shell/scriptContentSecurity.test.ts electron/shell/scriptContentSecurity.b.test.ts electron/shell/scriptContentSecurity.residual.test.ts electron/shell/scriptGolden.test.ts electron/confirmation/extractors/extractors.test.ts electron/confirmation/extractors/scriptParseCount.test.ts`。关联 AC-1～4、7、8；AC-9 留待 F36。证据：`F02.md`。
+  - 验证：`npm exec vitest run electron/shell/scriptContentSecurity.test.ts electron/shell/scriptContentSecurity.b.test.ts electron/shell/scriptContentSecurity.residual.test.ts electron/shell/scriptGolden.test.ts electron/confirmation/extractors/extractors.test.ts electron/confirmation/extractors/scriptParseCount.test.ts electron/confirmation/toolCallGate.test.ts`（7 files / 405 tests passed）；另 `npm run typecheck:shared`、`npm exec tsc -- --noEmit -p tsconfig.electron.json` 与 `git diff --check` 均通过。关联 AC-1～4、7、8；AC-9 留待 F36。证据：`docs/plan/evidence/script-finding-model/F02.md`。
 
-- [ ] **F03 将位置缺失收敛为提取失败事实**（本机）
+- [x] **F03 将位置缺失收敛为提取失败事实**（本机）
   - 范围：`electron/confirmation/extractors/scriptAnalysisExtractor.ts`、`electron/confirmation/toolCallGate.ts`、方案所指失败分类/锁定规则落点及对应集成测试（实现前从 `defaultRules.ts` 与 policy engine 实际位置定位）。
   - 产物/判据：位置缺失或二次扫描异常时整次内容分析 coverage failed，脚本类发现和 token 作废；专用锁定条目经真实装配与引擎落回答者为人；拒绝优先，路径 complete/unknown、网络命中、相对路径写入、语言未认证、用户动作覆盖、旧 allow 缓存组合均不越过人工确认；定时任务拒绝，批准前 executor 未调用。
-  - 验证：新增/扩展真实规则装配→引擎测试，与 `npm exec vitest run electron/confirmation/toolCallGate.test.ts electron/confirmation/extractors/extractors.test.ts electron/confirmation/extractors/scriptPathFacts.test.ts` 合并运行。关联 AC-6、12。证据：`F03.md`。
+  - 验证：`npm exec -- vitest run electron/confirmation/scriptAnalysisFailureGate.test.ts electron/confirmation/toolCallGate.test.ts electron/confirmation/extractors/extractors.test.ts electron/confirmation/extractors/scriptPathFacts.test.ts src/shared/policy/policyEngine.test.ts src/shared/policy/defaultRules.contract.test.ts`（6 files / 478 tests passed）；另 `npm run typecheck:shared`、`npm exec tsc -- --noEmit -p tsconfig.electron.json`、`npm run check:system-invariant-registry`、`git diff --check` 均通过。关联 AC-6、12。证据：`docs/plan/evidence/script-finding-model/F03.md`。
 
-- [ ] **F04 关闭 1a 阶段**（本机）
+- [x] **F04 关闭 1a 阶段**（本机）
   - 范围：F01～F03 变更与相关测试；只记录阶段证据。
   - 产物/判据：F01～F03 证据齐全；golden 位置、重复命中、单次解析、失败组合均可复现；除方案明确的分析失败锁定裁决外，其余既有输入的 ruleId/动作/回答者对拍不变；失败样本单列证明新规则落人、定时任务拒绝；旧字段与旧动作消费者保持兼容。关联 AC-1～4、6～8、12 的 1a 部分；AC-9 不在本阶段关闭。
-  - 验证：合并运行 F01～F03 定向测试；`npm run build:electron:incremental`、`npm run typecheck:shared`、`npm test`。记录阶段提交 SHA、精确文件清单、依赖闭包及回退顺序；在隔离 worktree/临时 checkout 对阶段提交执行 revert，运行受影响 smoke 定向测试后丢弃隔离环境。证据：`phase-1a.md`。源码回退实体为本阶段提交；旧策略和字段消费者保持兼容。
+  - 验证：合并运行 F01～F03 定向测试（12 files / 708 tests passed）；`npm run build:electron:incremental`、`npm run typecheck:shared`、`npm test`（1,257 files passed / 1 skipped；12,184 tests passed / 140 skipped）。记录阶段提交 SHA、精确文件清单、依赖闭包及回退顺序；在隔离 worktree/临时 checkout 对阶段提交执行 revert，运行受影响 smoke 定向测试后丢弃隔离环境。证据：`docs/plan/evidence/script-finding-model/phase-1a.md`。源码回退实体为本阶段提交；旧策略和字段消费者保持兼容。
 
 ### 阶段 1b：确认卡片展示
 

@@ -10,7 +10,7 @@
 // （转义不解释）；foldStringIr 保留「string / binop'+' / 单元素 tuple」折叠规则并
 // 新增 f-string 全静态折叠（有插值 → 不可折叠，插值表达式独立进 IR 供递归分析）。
 import { scriptParserService } from '../scriptParserService'
-import { IrCoverageError, type IrExpr, type IrKwarg, type IrModule, type IrStmt, type TsNode, type TsTree } from './types'
+import { IrCoverageError, type IrExpr, type IrKwarg, type IrModule, type IrStmt, type SourceRange, type TsNode, type TsTree } from './types'
 import {
   IGNORABLE_LEAF_NODES,
   IR_MODELED,
@@ -25,7 +25,21 @@ export type IrScope = {
 export function adaptPythonModule(tree: TsTree): IrModule {
   const root = tree.rootNode
   if (root.type !== 'module') throw new IrCoverageError(root.type, 'expected module root')
-  return { body: adaptBlock(root) }
+  return { body: adaptBlock(root), range: sourceRange(root) }
+}
+
+function sourceRange(node: TsNode): SourceRange {
+  const { row: startLine, column: startCol } = node.startPosition
+  const { row: endLine, column: endCol } = node.endPosition
+  if (![startLine, startCol, endLine, endCol].every((value) => Number.isSafeInteger(value) && value >= 0)) {
+    throw new IrCoverageError(node.type, 'missing or invalid source position')
+  }
+  return {
+    startLine: startLine + 1,
+    startCol: startCol + 1,
+    endLine: endLine + 1,
+    endCol: endCol + 1
+  }
 }
 
 /** 递归收集一段块（module/block/语句序列）内的语句。 */
@@ -62,6 +76,11 @@ function nodeText(node: TsNode): string {
 // ---------- 语句 ----------
 
 function adaptStmt(node: TsNode): IrStmt | null {
+  const adapted = adaptStmtCore(node)
+  return adapted ? { ...adapted, range: sourceRange(node) } : null
+}
+
+function adaptStmtCore(node: TsNode): IrStmt | null {
   const type = node.type
   if (!IR_MODELED.has(type) && !PASSTHROUGH_NODES.has(type)) {
     if (IGNORABLE_LEAF_NODES.has(type)) return null
@@ -479,6 +498,10 @@ function relativeImportText(node: TsNode): string {
 // ---------- 表达式 ----------
 
 function adaptExpr(node: TsNode): IrExpr {
+  return { ...adaptExprCore(node), range: sourceRange(node) }
+}
+
+function adaptExprCore(node: TsNode): IrExpr {
   const type = node.type
   if (!IR_MODELED.has(type) && !PASSTHROUGH_NODES.has(type)) {
     if (IGNORABLE_LEAF_NODES.has(type)) return { kind: 'none' }

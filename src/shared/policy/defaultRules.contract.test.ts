@@ -54,6 +54,7 @@ const EXPECTED_RULE_IDS = [
   'automation-shell-deny',
   'automation-grep-permission-missing-deny',
   'automation-script-permission-missing-deny',
+  'script-analysis-incomplete-automation-deny',
   'automation-shell-analysis-incomplete-deny',
   'automation-shell-path-facts-incomplete-deny',
   'automation-shell-outside-root-deny',
@@ -68,6 +69,7 @@ const EXPECTED_RULE_IDS = [
   'script-declared-path-scope-allow-desktop',
   'script-unmodeled-path-ask',
   'script-unverified-language-confirm',
+  'script-analysis-incomplete-confirm',
   'shell-precheck-auto-allow',
   'path-sensitive-read-confirm',
   'path-system-dir-ask',
@@ -167,5 +169,15 @@ describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {
     expect(wechatMedia.locked).toBe(true)
     expect(wechatMedia.action).toBe('deny')
     expect(JSON.stringify(wechatMedia.match)).toContain('wechat-media-target:outside-workdir')
+  })
+
+  it('脚本内容分析失败固定要求真人确认并拒绝无人值守执行', () => {
+    const byId = new Map(DEFAULT_POLICY_RULES.map((rule) => [rule.id, rule]))
+    expect(byId.get('script-analysis-incomplete-confirm')).toMatchObject({
+      locked: true, action: 'confirm-every-time', match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['extraction-failed'] }
+    })
+    expect(byId.get('script-analysis-incomplete-automation-deny')).toMatchObject({
+      locked: true, action: 'deny', match: { lane: ['automation'], toolName: 'run_script', signals: ['extraction-failed'] }
+    })
   })
 })

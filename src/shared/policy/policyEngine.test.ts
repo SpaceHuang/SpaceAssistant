@@ -1153,6 +1153,60 @@ describe('decide：extraction-failed 一律问用户', () => {
   })
 })
 
+describe('脚本分析位置/扫描失败的锁定裁决', () => {
+  const incomplete = mkFacts('run_script', 'execute', [
+    { kind: 'script-analysis', signal: 'suspicious', patterns: ['A1'], findings: [], coverage: 'failed', totalCount: 0 },
+    { kind: 'script-network', patterns: ['A6'] },
+    { kind: 'script-uncertified' },
+    { kind: 'script-language-analysis', language: 'unknown', status: 'unverified' },
+    { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false },
+    { kind: 'extraction-failed', reason: 'script-analysis-location-unavailable' }
+  ], 'high')
+
+  it('桌面落真人确认并先于自动评估与旧 allow 缓存', () => {
+    const networkAsk = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'script-network-ask-desktop')!
+    const rules = [
+      ...DEFAULT_POLICY_RULES.map((rule) => rule === networkAsk ? { ...rule, action: 'auto-evaluator' as const } : rule),
+      { id: 'user-override-analysis-failure-allow', when: 'invocation' as const,
+        match: { toolName: 'run_script', signals: ['extraction-failed'] }, action: 'allow' as const,
+        userOverride: true as const, reason: 'test user override' }
+    ]
+    const evaluator = vi.fn(() => ({ approve: true as const, reason: 'fast path' }))
+    const decision = decide(incomplete, mkContext('desktop'), rules, deps({
+      cache: allowCacheForRequestedKey('desktop'),
+      autoEvaluator: evaluator,
+      migrationComplete: true
+    }))
+    expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user', memoryTiers: [] })
+    expect(evaluator).not.toHaveBeenCalled()
+  })
+
+  it('明确危险拒绝优先于失败确认', () => {
+    const facts = mkFacts('run_script', 'execute', [
+      ...incomplete.signals,
+      { kind: 'script-analysis', signal: 'dangerous', patterns: ['A7'], coverage: 'failed', findings: [], totalCount: 0 }
+    ] as ContentFacts['signals'], 'high')
+    expect(decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())).toMatchObject({ type: 'deny', ruleId: 'script-dangerous-deny' })
+  })
+
+  it('路径事实 unknown 时失败锁仍压过动态路径真人条目', () => {
+    const unknownPath = mkFacts('run_script', 'execute', [
+      ...incomplete.signals,
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' }
+    ] as ContentFacts['signals'], 'high')
+    expect(decide(unknownPath, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())).toMatchObject({
+      type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user'
+    })
+  })
+
+  it('无人值守脚本分析失败明确拒绝', () => {
+    const automationFailure = mkFacts('run_script', 'execute', incomplete.signals.filter((signal) => signal.kind !== 'script-language-analysis'), 'high')
+    expect(decide(automationFailure, mkContext('automation'), DEFAULT_POLICY_RULES, deps())).toMatchObject({
+      type: 'deny', ruleId: 'script-analysis-incomplete-automation-deny'
+    })
+  })
+})
+
 describe('decideIngress：消息入口准入', () => {
   it('飞书群聊默认拒绝', () => {
     const r = decideIngress({ lane: 'feishu', origin: { kind: 'group' } }, DEFAULT_POLICY_RULES)

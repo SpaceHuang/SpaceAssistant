@@ -17,6 +17,35 @@ function expectAnalysis(code: string, remote: boolean | undefined, exp: Expectat
 }
 
 describe('scriptContentSecurity — List A (baseline)', () => {
+  it('produces one located finding per A1 call while preserving the legacy pattern verdict', () => {
+    const r = analyzeScriptContent("import os\nos.system('first')\nos.system('second')")
+    expect(r.patterns).toEqual(['A1'])
+    expect(r.findings).toMatchObject([
+      { pattern: 'A1', class: 'process-creation', range: { startLine: 2, startCol: 1, endLine: 2 }, snippet: "os.system('first')" },
+      { pattern: 'A1', class: 'process-creation', range: { startLine: 3, startCol: 1, endLine: 3 }, snippet: "os.system('second')" }
+    ])
+    expect(r.totalCount).toBe(2)
+  })
+
+  it.each([
+    ['A2 destructive filesystem operation', "import os\nos.remove('old.txt')", 'A2', 'destructive-fs', 'fs-destructive'],
+    ['A7 file write', "open('/tmp/out.txt', 'w')", 'A7', 'file-write', 'write-path'],
+    ['A8 relative file write', "open('out.txt', 'w')", 'A8', 'file-write', 'write-path']
+  ] as const)('%s yields a positioned finding with structural evidence', (_name, code, pattern, findingClass, evidenceKind) => {
+    const result = analyzeScriptContent(code)
+    expect(result.findings).toEqual([
+      expect.objectContaining({ pattern, class: findingClass, range: expect.any(Object), snippet: expect.any(String), evidence: expect.objectContaining({ kind: evidenceKind }) })
+    ])
+    expect(result.totalCount).toBe(result.findings?.length)
+  })
+
+  it('bounds an unusually long finding snippet without changing its source range', () => {
+    const code = `open('/tmp/${'x'.repeat(2500)}', 'w')`
+    const finding = analyzeScriptContent(code).findings?.[0]
+    expect(finding?.snippet.length).toBeLessThanOrEqual(2000)
+    expect(finding?.range.endCol).toBe(code.length + 1)
+  })
+
   describe('A1 — os.system / subprocess / pty', () => {
     it('os.system → ask (remote & desktop)', () => {
       expectAnalysis("import os\nos.system('id')", true, { verdict: 'ask', patterns: ['A1'] })

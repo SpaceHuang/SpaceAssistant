@@ -93,6 +93,40 @@ export interface ConfirmSummary {
   sections?: ConfirmSummarySection[]
 }
 
+export interface ScriptSourceRange {
+  startLine: number
+  startCol: number
+  endLine: number
+  endCol: number
+}
+
+export type ScriptFindingClass =
+  | 'process-creation' | 'destructive-fs' | 'dynamic-execution' | 'dynamic-import'
+  | 'native-code-load' | 'network-api' | 'file-write' | 'cwd-change'
+  | 'reflection' | 'alias-resolution' | 'decode-then-exec' | 'dynamic-dispatch'
+
+export type ScriptFindingEvidence =
+  | { kind: 'process-create'; module: string; attr: string; argvLiteral?: string }
+  | { kind: 'fs-destructive'; operation: string; rawPath: string | null; pathClass: 'absolute' | 'dotdot' | 'relative' | 'unresolved' }
+  | { kind: 'dynamic-exec'; entry: string; boundName?: string }
+  | { kind: 'dynamic-import'; moduleName: string | null; boundName?: string }
+  | { kind: 'native-code'; module: 'ctypes' | 'cffi'; symbol?: string }
+  | { kind: 'network'; module: string; attr: string; host?: string }
+  | { kind: 'write-path'; call: string; mode: string | null; rawPath: string | null; pathClass: 'absolute' | 'dotdot' | 'relative' | 'unresolved' }
+  | { kind: 'cwd-change'; rawPath: string | null; pathClass: 'absolute' | 'dotdot' | 'relative' | 'unresolved' }
+  | { kind: 'reflection'; target: string; resolvedChain?: string }
+  | { kind: 'alias'; alias: string; resolved: string }
+  | { kind: 'decode-exec'; decodeFn: string; boundName: string; stmtDistance: number }
+  | { kind: 'dynamic-dispatch'; unresolvableReason: string }
+
+export interface ScriptFinding {
+  pattern: string
+  class: ScriptFindingClass
+  range: ScriptSourceRange
+  snippet: string
+  evidence: ScriptFindingEvidence
+}
+
 export type FactSignal =
   | { kind: 'command-sequence'; commands: CommandFact[]; persistable?: boolean }
   | { kind: 'path-target'; path: string; zone: PathZone }
@@ -158,7 +192,14 @@ export type FactSignal =
   | { kind: 'outbound-content'; inspectionCoverage: 'complete' | 'partial' | 'unavailable'; evidenceKinds: readonly string[] }
   | { kind: 'network-egress'; domains: string[] }
   | { kind: 'outbound-target'; channel: string; recipient?: string; domains?: string[] }
-  | { kind: 'script-analysis'; signal: 'clean' | 'suspicious' | 'dangerous'; patterns: string[] }
+  | {
+      kind: 'script-analysis'
+      signal: 'clean' | 'suspicious' | 'dangerous'
+      patterns: string[]
+      findings?: ScriptFinding[]
+      coverage?: 'complete' | 'partial' | 'failed'
+      totalCount?: number
+    }
   /** 脚本专属的网络命中信号（与通用 network-egress 区分，见 §5.2 规则）。 */
   | { kind: 'script-network'; patterns: string[] }
   /** Complete, static HTTP target facts for the isolated standard IM script review candidate. */

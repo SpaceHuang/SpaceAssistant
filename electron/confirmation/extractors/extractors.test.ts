@@ -159,6 +159,28 @@ describe('scriptAnalysisExtractor', () => {
     expect(sa && sa.kind === 'script-analysis' && sa.signal).toBe('clean')
   })
 
+  it('将全量逐条发现、覆盖度和总数透传到可选事实字段', () => {
+    const result = extractScriptSignals("import os\nos.system('one')\nos.system('two')", env)
+    const analysis = result.signals.find((signal) => signal.kind === 'script-analysis')
+    expect(analysis).toMatchObject({ kind: 'script-analysis', coverage: 'complete', totalCount: 2 })
+    if (analysis?.kind !== 'script-analysis') throw new Error('missing script-analysis fact')
+    expect(analysis.findings).toHaveLength(2)
+    expect(analysis.findings?.map((finding) => finding.range.startLine)).toEqual([2, 3])
+  })
+
+  it('命中缺失 IR 位置时作废整组 findings 并产生 extraction-failed', () => {
+    const unlocatedIr = { body: [
+      { kind: 'import', names: [{ module: 'os' }] },
+      { kind: 'expr', value: {
+        kind: 'call', callee: { kind: 'attr', base: { kind: 'name', id: 'os' }, attr: 'system' },
+        args: [{ kind: 'string', value: 'id' }], kwargs: []
+      } }
+    ] }
+    const result = extractScriptSignals("import os\nos.system('id')", env, unlocatedIr as never)
+    expect(result.signals).toContainEqual(expect.objectContaining({ kind: 'extraction-failed', reason: 'script-analysis-location-unavailable' }))
+    expect(result.signals.find((signal) => signal.kind === 'script-analysis')).toMatchObject({ coverage: 'failed', findings: [], totalCount: 0 })
+  })
+
   it('网络脚本额外产 script-network 信号', () => {
     const r = extractScriptSignals("import requests\nrequests.get('http://x')", env)
     expect(signalKinds(r.signals)).toContain('script-network')

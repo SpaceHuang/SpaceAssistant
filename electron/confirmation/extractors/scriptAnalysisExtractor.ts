@@ -71,25 +71,40 @@ export function extractScriptSignals(
 
   const analysis = ir
     ? analyzeScriptContent(code, {}, ir)
-    : { verdict: 'ask' as const, patterns: ['A-fail'], reason: 'parse_error' }
+    : { verdict: 'ask' as const, patterns: ['A-fail'], reason: 'parse_error', findings: [], coverage: 'failed' as const, totalCount: 0 }
   const signal = analysis.verdict === 'allow' ? 'clean' : analysis.verdict === 'deny' ? 'dangerous' : 'suspicious'
-  signals.push({ kind: 'script-analysis', signal, patterns: analysis.patterns })
+  const analysisSignalIndex = signals.length
+  signals.push({
+    kind: 'script-analysis',
+    signal,
+    patterns: analysis.patterns,
+    findings: analysis.findings,
+    coverage: analysis.coverage,
+    totalCount: analysis.totalCount
+  })
 
   if (parseFailed || !ir) {
     signals.push({ kind: 'extraction-failed', reason: 'parse_error' })
   } else {
+    if (analysis.coverage === 'failed') {
+      signals.push({ kind: 'extraction-failed', reason: analysis.reason ?? 'script-analysis-location-unavailable' })
+    }
     // P2-1 评审修复：二次 hits 与第一次同输入，防御性兜底（若抛错按 extraction-failed 落人工，保持 fail-closed）
     let networkPatterns: string[] = []
     let hitsFailed = false
     try {
-      networkPatterns = collectPatternHits(ir, {})
+      networkPatterns = [...new Set(collectPatternHits(ir, {})
         .filter((h) => NETWORK_PATTERN_IDS.has(h.pattern))
-        .map((h) => h.pattern)
+        .map((h) => h.pattern))]
     } catch {
       hitsFailed = true
     }
     if (hitsFailed) {
       signals.push({ kind: 'extraction-failed', reason: 'pattern-hit-error' })
+      const failedAnalysis = signals[analysisSignalIndex]
+      if (failedAnalysis?.kind === 'script-analysis') {
+        signals[analysisSignalIndex] = { ...failedAnalysis, findings: [], coverage: 'failed', totalCount: 0 }
+      }
       return {
         signals,
         summary: {

@@ -299,6 +299,13 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'deny', locked: true, reason: '定时任务未获得覆盖脚本工作目录和访问路径的 run_script 授权'
   },
   {
+    id: 'script-analysis-incomplete-automation-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'run_script', signals: ['extraction-failed'] },
+    denyClass: 'forbidden',
+    action: 'deny', locked: true, reason: '无人值守脚本内容分析不完整，已拒绝执行'
+  },
+  {
     id: 'automation-unverified-script-language-deny',
     when: 'invocation',
     match: { lane: ['automation'], toolName: 'run_script', signals: ['script-language-analysis:unverified'] },
@@ -384,6 +391,12 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     when: 'invocation',
     match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-language-analysis:unverified'] },
     action: 'confirm-every-time', locked: true, reason: '该脚本语言尚未接入完整内容安全分析，需真人确认'
+  },
+  {
+    id: 'script-analysis-incomplete-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['extraction-failed'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本内容分析不完整，必须由真人逐次确认'
   },
 
   // ===== 第 4 步段：auto-evaluator（自动审批器入口）=====

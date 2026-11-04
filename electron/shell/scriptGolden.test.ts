@@ -43,6 +43,15 @@ function snapshotOf(id: string, group: GoldenBaseline['group'], code: string): G
   }
   const analysis = analyzeScriptContent(code, {})
   const { signals } = extractScriptSignals(code, {})
+  const legacySignals = JSON.parse(JSON.stringify(signals)) as Array<Record<string, unknown>>
+  for (const signal of legacySignals) {
+    if (signal.kind !== 'script-analysis') continue
+    // The golden verdict baseline remains focused on its original contract; the additive
+    // finding contract is asserted against every fixture in the dedicated test below.
+    delete signal.findings
+    delete signal.coverage
+    delete signal.totalCount
+  }
   return {
     id,
     group,
@@ -50,7 +59,7 @@ function snapshotOf(id: string, group: GoldenBaseline['group'], code: string): G
     verdict: analysis.verdict,
     patterns: analysis.patterns,
     ...(analysis.reason ? { reason: analysis.reason } : {}),
-    signals: JSON.parse(JSON.stringify(signals)) as Array<Record<string, unknown>>
+    signals: legacySignals
   }
 }
 
@@ -116,6 +125,29 @@ describe('scriptGolden（Python 判定基线，P1-T0/P1-T5）', () => {
     expect(new Set(samples.map((s) => s.id)).size).toBe(samples.length)
     expect(samples.filter((s) => s.group === 'legacy-parseable').length).toBeGreaterThanOrEqual(40)
     expect(samples.filter((s) => s.group === 'previously-failed').length).toBeGreaterThanOrEqual(30)
+  })
+
+  it('每个已产出的首批 finding 均有有效位置且片段与源码逐字节对应', () => {
+    for (const sample of samples) {
+      const result = analyzeScriptContent(sample.code)
+      expect(result.totalCount).toBe(result.findings?.length)
+      for (const finding of result.findings ?? []) {
+        const { range } = finding
+        expect(range.startLine).toBeGreaterThan(0)
+        expect(range.startCol).toBeGreaterThan(0)
+        expect(range.endLine).toBeGreaterThanOrEqual(range.startLine)
+        expect(range.endCol).toBeGreaterThan(0)
+        const lines = sample.code.split('\n')
+        const first = range.startLine - 1
+        const last = range.endLine - 1
+        const sliceBytes = (line: string, start: number, end: number) => Buffer.from(line, 'utf8').subarray(start, end).toString('utf8')
+        const expected = first === last
+          ? sliceBytes(lines[first]!, range.startCol - 1, range.endCol - 1)
+          : [sliceBytes(lines[first]!, range.startCol - 1, Buffer.byteLength(lines[first]!, 'utf8')),
+            ...lines.slice(first + 1, last), sliceBytes(lines[last]!, 0, range.endCol - 1)].join('\n')
+        expect(finding.snippet).toBe(Array.from(expected).slice(0, 2000).join(''))
+      }
+    }
   })
 
   if (RECORD_MODE) {
