@@ -183,4 +183,51 @@ describe('floating confirmation notification navigation', () => {
     expect(store.getState().chat.currentSessionId).toBe('target')
     expect(store.getState().chat.confirmFocusToolUseId).toBeNull()
   })
+
+  it('dispose 取消工作区切换时会补偿主进程已完成的切换', async () => {
+    const previous = { ...session('previous'), workDirProfileId: 'p1' }
+    const target = { ...session('target'), workDirProfileId: 'p2' }
+    const config = {
+      workDir: '/a',
+      workDirProfiles: [
+        { id: 'p1', name: 'A', path: '/a', isDefault: true },
+        { id: 'p2', name: 'B', path: '/b' }
+      ],
+      activeWorkDirProfileId: 'p1'
+    }
+    store.dispatch(setConfig(config as never))
+    let hostProfile = 'p1'
+    let finishSwitch!: () => void
+    const workdirSwitch = vi.fn((profileId: string) => profileId === 'p2'
+      ? new Promise<{ success: boolean; sessions: Session[] }>((resolve) => {
+          finishSwitch = () => {
+            hostProfile = 'p2'
+            resolve({ success: true, sessions: [target] })
+          }
+        })
+      : Promise.resolve().then(() => {
+          hostProfile = profileId
+          return { success: true, sessions: [previous] }
+        }))
+    window.api = {
+      ...window.api,
+      workdirSwitch: workdirSwitch as never,
+      configGet: vi.fn(async () => ({ ...config, activeWorkDirProfileId: hostProfile })),
+      chatGetMessages: vi.fn(async () => [])
+    }
+    const startup = new NotificationNavigationStartup()
+    startupNavigation = startup
+    await startup.completeInitialSessionLoad([previous, target])
+    const navigation = startup.receive({ sessionId: 'target', toolUseId: 'tool-confirm' })
+    await vi.waitFor(() => expect(workdirSwitch).toHaveBeenCalledWith('p2'))
+
+    startup.dispose()
+    finishSwitch()
+    await navigation
+
+    expect(workdirSwitch.mock.calls.map(([profileId]) => profileId)).toEqual(['p2', 'p1'])
+    expect(hostProfile).toBe('p1')
+    expect(store.getState().config.config?.activeWorkDirProfileId).toBe('p1')
+    expect(store.getState().chat.currentSessionId).toBe('previous')
+  })
 })

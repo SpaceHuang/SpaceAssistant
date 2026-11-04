@@ -65,7 +65,7 @@ export async function handleRemoteSessionSwitch(
       isCurrent
     })
     // 若在切换过程中被取代且已改动主进程 active，在让出队列前补偿回滚。
-    if (!isLatestSwitch(token) && result.ok && result.switched && previousProfileId) {
+    if (!isCurrent() && result.ok && result.switched && previousProfileId) {
       await rollbackWorkDirProfile(previousProfileId, store.dispatch)
       return { ok: true as const, switched: true, committed: false }
     }
