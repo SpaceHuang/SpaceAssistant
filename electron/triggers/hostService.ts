@@ -101,6 +101,13 @@ export function createRuntimeTriggerHostService(input: {
   const service = createRuntimeTriggerService(input.commands, {
     cancelSyncWait: input.cancelSyncWait,
     authorize: ({ ownerSessionId, receiverSessionId, condition }) => isSourceAuthorized(ownerSessionId, receiverSessionId, condition),
+    authorizeReplay: ({ ownerSessionId, receiverSessionId, condition, sourceBaseline, sourceEvent }) => {
+      if (!sameProfile(ownerSessionId, receiverSessionId) || !visibleSessions().some((session) => session.id === ownerSessionId)) return false
+      // A prior process registration is already an accepted source fact. Its live-process
+      // availability must not revoke its idempotency receipt after exit or restart.
+      if (condition.type === 'process_exit' && !sourceEvent) return typeof sourceBaseline.runtimeGeneration === 'string' && !!sourceBaseline.runtimeGeneration
+      return isSourceAuthorized(ownerSessionId, receiverSessionId, condition, sourceBaseline, sourceEvent)
+    },
     authorizeTarget: ({ ownerSessionId, target }) => {
       if (target.kind === 'managed-process') return listProcesses(ownerSessionId).some((item) => item.id === target.id)
       return sameProfile(ownerSessionId, target.id)

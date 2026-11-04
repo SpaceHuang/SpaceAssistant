@@ -21,6 +21,9 @@ export type RuntimeTriggerServiceOptions = Readonly<{
   maxLifetimeMs?: number
   /** Authorization boundary supplied by host policy; params never supply its result. */
   authorize: (input: { ownerSessionId: string; receiverSessionId: string; condition: RuntimeTriggerCondition }) => boolean
+  /** Reauthorization for an already persisted idempotency receipt, using its trusted source facts. */
+  authorizeReplay?: (input: { ownerSessionId: string; receiverSessionId: string; condition: RuntimeTriggerCondition;
+    sourceBaseline: Readonly<Record<string, unknown>>; sourceEvent?: Readonly<Record<string, unknown>> }) => boolean
   authorizeTarget: (input: { ownerSessionId: string; target: RuntimeTriggerTargetDto }) => boolean
   listTargets?: (ownerSessionId: string) => readonly RuntimeTriggerTargetDto[]
   cancelSyncWait?: (record: RuntimeTriggerRecord) => void
@@ -69,17 +72,22 @@ export function createRuntimeTriggerService(commands: SessionCommands, options: 
       const params = parseRuntimeTriggerRegisterParams(input.params)
       const timestamp = now()
       if (!Number.isSafeInteger(timestamp)) fail('TRIGGER_STORAGE_UNAVAILABLE', 'clock-invalid')
-      authorize(ownerSessionId, params.receiverSessionId, params.condition)
       const condition = params.condition
       if (condition.type === 'session_steps' && condition.mode === 'sync' && condition.targetSessionId === params.receiverSessionId) fail('TRIGGER_CONFLICT', 'sync-self-wait')
       const replayCommittedRegistration = (): RuntimeTriggerOperationDto | undefined => {
         const prior = findRuntimeTriggerByClientKey(commands, ownerSessionId, params.clientKey)
         if (!prior) return undefined
+        const replayAuthorized = options.authorizeReplay
+          ? options.authorizeReplay({ ownerSessionId, receiverSessionId: prior.receiverSessionId, condition: prior.definition.condition,
+            sourceBaseline: prior.definition.sourceBaseline, ...(prior.event ? { sourceEvent: prior.event } : {}) })
+          : options.authorize({ ownerSessionId, receiverSessionId: prior.receiverSessionId, condition: prior.definition.condition })
+        if (!replayAuthorized) fail('TRIGGER_NOT_FOUND_OR_FORBIDDEN', 'session-not-authorized')
         if (!sameRegistration(prior, params)) fail('TRIGGER_CONFLICT', 'client-key-definition-mismatch')
         return { trigger: toDto(prior), replayed: true }
       }
       const priorReplay = replayCommittedRegistration()
       if (priorReplay) return priorReplay
+      authorize(ownerSessionId, params.receiverSessionId, condition)
       if (!Number.isSafeInteger(params.expiresAt) || params.expiresAt <= timestamp || params.expiresAt - timestamp > maxLifetime) fail('TRIGGER_INVALID', 'expiry-out-of-range')
       let baseline: Readonly<Record<string, unknown>>
       try { baseline = await options.resolveBaseline?.({ ownerSessionId, condition }) ?? {} }
@@ -107,11 +115,8 @@ export function createRuntimeTriggerService(commands: SessionCommands, options: 
         return { trigger: toDto(insertRuntimeTrigger(commands, record, validateAtCommit)) }
       }
       catch (error) {
-        const raced = findRuntimeTriggerByClientKey(commands, ownerSessionId, params.clientKey)
-        if (raced) {
-          if (sameRegistration(raced, params)) return { trigger: toDto(raced), replayed: true }
-          fail('TRIGGER_CONFLICT', 'client-key-definition-mismatch')
-        }
+        const raced = replayCommittedRegistration()
+        if (raced) return raced
         if (error instanceof Error && error.message === 'RUNTIME_TRIGGER_INSERT_GUARD_REJECTED') fail('TRIGGER_CONFLICT', 'target-turn-not-active')
         if (condition.type === 'session_steps' && condition.mode === 'sync') fail('TRIGGER_CONFLICT', 'sync-target-already-registered')
         throw error

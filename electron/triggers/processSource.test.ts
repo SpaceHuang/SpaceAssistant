@@ -56,16 +56,28 @@ describe('managed process trigger facts', () => {
       const commands = createSessionCommands(db)
       const process = beginManagedProcess({ sessionId: owner, toolName: 'run_script' })
       let visibleSessions = [ownerSession, receiverSession]
+      const params = { clientKey: 'process-handoff', receiverSessionId: receiver, expiresAt: Date.now() + 60_000,
+        condition: { type: 'process_exit' as const, managedProcessId: process.managedProcessId } }
       const service = createRuntimeTriggerHostService({ commands,
         queries: { listSessions: () => visibleSessions, readSession: (sessionId: string) => getSession(db, sessionId), imAcceptedFacts: {} } as never,
         execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: () => undefined } as never })
-      const registered = await service.register({ ownerSessionId: owner, params: { clientKey: 'process-handoff', receiverSessionId: receiver,
-        expiresAt: Date.now() + 60_000, condition: { type: 'process_exit', managedProcessId: process.managedProcessId } } })
+      const registered = await service.register({ ownerSessionId: owner, params })
       unsubscribe = subscribeRuntimeTriggerProcessExitHandoff(commands)
       expect(finishManagedProcess(process, { exitCode: 0, signal: null, reason: 'process_exit' })).toBe(true)
       expect(commands.runtimeTriggers.read(registered.trigger.triggerId)).toMatchObject({
         state: 'matched', event: { type: 'process_exit', managedProcessId: process.managedProcessId, exitCode: 0 }
       })
+      await expect(service.register({ ownerSessionId: owner, params })).resolves.toMatchObject({ replayed: true,
+        trigger: { triggerId: registered.trigger.triggerId, state: 'matched' } })
+      await expect(service.register({ ownerSessionId: owner, params: { ...params, clientKey: 'new-key-after-exit' } }))
+        .rejects.toThrow('TRIGGER_NOT_FOUND_OR_FORBIDDEN:session-not-authorized')
+      await expect(service.register({ ownerSessionId: owner, params: { ...params, condition: { type: 'process_exit', managedProcessId: 'different-process' } } }))
+        .rejects.toThrow('TRIGGER_CONFLICT:client-key-definition-mismatch')
+      visibleSessions = [receiverSession]
+      await expect(service.register({ ownerSessionId: owner, params })).rejects.toThrow('TRIGGER_NOT_FOUND_OR_FORBIDDEN:session-not-authorized')
+      visibleSessions = [ownerSession]
+      await expect(service.register({ ownerSessionId: owner, params })).rejects.toThrow('TRIGGER_NOT_FOUND_OR_FORBIDDEN:session-not-authorized')
+      visibleSessions = [ownerSession, receiverSession]
       db.close()
       resetManagedProcessSourceForTests()
       db = openDatabase(temp.dbPath)
@@ -99,6 +111,11 @@ describe('managed process trigger facts', () => {
         queueScope: scopeForReceiver })).toBeUndefined()
       visibleSessions = [ownerSession, receiverSession]
       expect(deliver(registered.trigger.triggerId)).toMatchObject({ kind: 'enqueued', messageId: expect.any(String) })
+      const matched = reopenedCommands.runtimeTriggers.read(registered.trigger.triggerId)!
+      expect(reopenedCommands.runtimeTriggers.update(matched.id, matched.revision, { state: 'completed', updatedAt: Date.now() }))
+        .toMatchObject({ state: 'completed' })
+      await expect(reopenedService.register({ ownerSessionId: owner, params })).resolves.toMatchObject({ replayed: true,
+        trigger: { triggerId: registered.trigger.triggerId, state: 'completed' } })
     } finally { unsubscribe(); temp.cleanup(db) }
   })
 
