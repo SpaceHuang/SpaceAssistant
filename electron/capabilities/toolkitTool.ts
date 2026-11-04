@@ -52,6 +52,7 @@ export function buildCapabilityContext(ctx: ToolExecutionContext): CapabilityCon
       return stagehandService.detectDependencies(force)
     },
     ...(ctx.appDatabase ? { mcpConfig: createMcpCapabilityConfigPort(ctx.appDatabase) } : {}),
+    ...(ctx.runtimeTriggers ? { runtimeTriggers: ctx.runtimeTriggers } : {}),
     sessionQueries: ctx.sessionQueries,
     ensureChatBodyV1: ctx.ensureChatBodyV1,
     workDirManager: ctx.workDirManager,
@@ -134,7 +135,7 @@ export function createToolkitCallExecutor(registry: CapabilityRegistry = capabil
 
 export function createToolkitFindTool(registry: CapabilityRegistry = capabilityRegistry): RegisteredTool {
   const executor = createToolkitFindExecutor(registry)
-  return createSnapshotReadRegisteredTool('toolkit.find', (input) => executor(input))
+  return createSnapshotReadRegisteredTool('toolkit.find', (input) => executor(input), { resourceKeys: () => [] })
 }
 
 export function createToolkitCallTool(registry: CapabilityRegistry = capabilityRegistry): RegisteredTool {
@@ -182,9 +183,14 @@ export function createToolkitCallTool(registry: CapabilityRegistry = capabilityR
       requestId: context.remoteContext.requestId, originSessionId: context.remoteContext.originSessionId
     } : undefined
   })
+  const independentCapabilityIds = (input: Record<string, unknown>): boolean => {
+    const id = typeof input.id === 'string' ? input.id.trim().toLowerCase() : ''
+    return id === 'action.session.status' || id === 'env.time' || id.startsWith('action.runtime_trigger.')
+  }
   return definePlannedTool<Record<string, unknown>, PreparedCall, ToolExecutorResult>({
     name: 'toolkit.call',
     actionClass: 'execute',
+    resourceKeys: (input) => independentCapabilityIds(input) ? [] : undefined,
     parseInput: parseRecord,
     plan: async (input, planning) => {
       if (!planning.executionContext) throw new Error('TOOLKIT_CALL_RUNTIME_CONTEXT_REQUIRED')

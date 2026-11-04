@@ -497,11 +497,12 @@ export class WeChatCommandRouter {
       ...(input.trackContext ? { trackDelivery: { db: this.deps.db, track: input.trackContext, requestId: input.requestId, turnId: prepared.turnId } } : {}) })
   }
 
-  private persistInboundWake(sessionId: string, message: WeChatInboundMessage, content: string, trackContext?: RemoteTrackContext): boolean {
+  private persistInboundWake(sessionId: string, message: WeChatInboundMessage, content: string, authSnapshot: ImAuthSnapshot, trackContext?: RemoteTrackContext): boolean {
     try {
       const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
       appendImInboxMessageWithWakeEvent(this.deps.db, {
-        sessionId, channel: 'wechat', queueScope, channelMessageId: message.messageId, content
+        sessionId, channel: 'wechat', queueScope, channelMessageId: message.messageId, content,
+        accountId: authSnapshot.owner, conversationId: message.userId, senderId: message.userId, isGroup: false
         ,contextToken: message.contextToken, ...(trackContext ? { trackId: trackContext.trackId, trackEventId: trackContext.attributionEventId } : {})
       })
       return true
@@ -845,6 +846,7 @@ export class WeChatCommandRouter {
           const trackQueueScope = buildImQueueScope('wechat', context.originSessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
           appendImInboxMessageWithWakeEvent(this.deps.db, { sessionId: context.originSessionId, channel: 'wechat', queueScope: trackQueueScope,
             channelMessageId: msg.messageId, content: wasTruncated ? `${content}\n\n（指令过长，已截断处理）` : content,
+            accountId: authSnapshot.owner, conversationId: msg.userId, senderId: msg.userId, isGroup: false,
             contextToken: msg.contextToken, trackId: context.trackId, trackEventId: context.attributionEventId })
         } })
         if (attribution.kind === 'unresolved') {
@@ -871,6 +873,8 @@ export class WeChatCommandRouter {
             const queueScope = buildImQueueScope('wechat', sessionId)
             parkImInboxMessageForClarification(this.deps.db, {
               sessionId, channel: 'wechat', queueScope, channelMessageId: msg.messageId, content, contextToken: msg.contextToken,
+              accountId: authSnapshot.owner, conversationId: msg.userId, senderId: msg.userId,
+              isGroup: false,
               clarificationId, identityKey: msg.userId, ownerId: authSnapshot.owner, authorizationEpoch: epoch,
               handle, candidates, expiresAt
             })
@@ -942,7 +946,7 @@ export class WeChatCommandRouter {
       const claim = tryClaimOrRelease(sessionId, requestId, appCfg.maxParallelChatSessions)
       if (!claim.ok) {
         if (claim.reason === 'session_busy' && this.deps.wakeEventDispatcher) {
-          if (!this.persistInboundWake(sessionId, msg, wasTruncated ? `${content}\n\n（指令过长，已截断处理）` : content, trackContext)) {
+          if (!this.persistInboundWake(sessionId, msg, wasTruncated ? `${content}\n\n（指令过长，已截断处理）` : content, authSnapshot, trackContext)) {
             await claimFinalizer.complete('persistence_failed')
             return
           }
@@ -1012,7 +1016,7 @@ export class WeChatCommandRouter {
         touchRemoteSessionActivity(this.deps.sessionStorage!.commands, sessionId)
 
         if (this.deps.wakeEventDispatcher) {
-          if (!this.persistInboundWake(sessionId, msg, wasTruncated ? `${content}\n\n（指令过长，已截断处理）` : content, trackContext)) {
+          if (!this.persistInboundWake(sessionId, msg, wasTruncated ? `${content}\n\n（指令过长，已截断处理）` : content, authSnapshot, trackContext)) {
             await claimFinalizer.complete('persistence_failed')
             return
           }

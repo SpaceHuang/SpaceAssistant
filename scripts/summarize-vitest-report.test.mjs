@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { summarizeVitestReport } from './summarize-vitest-report.mjs'
+import { readVitestReport, summarizeVitestReport } from './summarize-vitest-report.mjs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 test('summarizes failed tests with safe names, statuses, durations and redacted errors', () => {
   const report = {
@@ -72,6 +75,34 @@ test('counts all test states and tolerates malformed optional report fields', ()
   }] }, { platform: 'Windows x64', nodeVersion: 'v22.0.0' })
   assert.deepEqual(summary.counts, { passed: 1, failed: 0, skipped: 1, other: 0 })
   assert.deepEqual(summary.failedTests, [])
+})
+
+test('marks a missing report as unavailable instead of failing the diagnostic step', () => {
+  const summary = summarizeVitestReport(undefined, { platform: 'macOS arm64', nodeVersion: 'v22.1.0' })
+  assert.equal(summary.reportAvailable, false)
+  assert.deepEqual(summary.counts, { passed: 0, failed: 0, skipped: 0, other: 0 })
+})
+
+test('fails clearly when a report exists but contains malformed JSON', () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'vitest-report-test-'))
+  const reportPath = path.join(directory, 'report.json')
+  try {
+    writeFileSync(reportPath, '{not json')
+    assert.throws(() => readVitestReport(reportPath), new RegExp(`Invalid Vitest report at ${reportPath.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}:`))
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('fails clearly when JSON is valid but is not a Vitest report', () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'vitest-report-test-'))
+  const reportPath = path.join(directory, 'report.json')
+  try {
+    writeFileSync(reportPath, JSON.stringify({ files: [] }))
+    assert.throws(() => readVitestReport(reportPath), /expected a JSON object with a testResults array/)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('includes test files that fail during collection before individual tests start', () => {

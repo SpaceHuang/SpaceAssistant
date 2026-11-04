@@ -1048,6 +1048,50 @@ export interface SearchResult {
   messageId?: string
 }
 
+export type RuntimeTriggerState = 'waiting' | 'matched' | 'completed' | 'cancelled' | 'expired' | 'failed'
+export type RuntimeTriggerProjection = RuntimeTriggerState | 'queued' | 'processing' | 'delivery_pending'
+export type RuntimeTriggerCondition =
+  | Readonly<{ type: 'turn_completed'; targetSessionId: string; turnId: string }>
+  | Readonly<{ type: 'session_steps'; targetSessionId: string; origin: 'registration'; threshold: number; mode: 'async' }>
+  | Readonly<{ type: 'session_steps'; targetSessionId: string; origin: 'registration'; threshold: number; mode: 'sync'; pauseTimeoutMs: number; onPauseTimeout: 'continue' | 'fail' }>
+  | Readonly<{ type: 'process_exit'; managedProcessId: string }>
+  | Readonly<{ type: 'im_message'; channel: 'feishu' | 'wechat'; accountId: string; conversationId: string; senderIds?: readonly string[]; bodyContains?: string }>
+  | Readonly<{ type: 'time'; at: string; taskPrompt: string }>
+export type RuntimeTriggerDefinitionV1 = Readonly<{ version: 1; condition: RuntimeTriggerCondition; sourceBaseline: Readonly<Record<string, unknown>> }>
+export type RuntimeTriggerFailure = Readonly<{
+  code: 'TRIGGER_INVALID' | 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' | 'TRIGGER_CONFLICT' | 'TRIGGER_CAPACITY' | 'TRIGGER_EXPIRED' | 'TRIGGER_TARGET_LOST' | 'TRIGGER_SOURCE_GAP' | 'TRIGGER_DELIVERY_FAILED' | 'TRIGGER_HANDLING_FAILED' | 'TRIGGER_STORAGE_UNAVAILABLE'
+  case: string
+  currentState?: RuntimeTriggerProjection
+  revision?: number
+}>
+export type RuntimeTriggerRegisterParams = Readonly<{ clientKey: string; receiverSessionId: string; expiresAt: number; condition: RuntimeTriggerCondition }>
+export type RuntimeTriggerGetParams = Readonly<{ triggerId: string }>
+export type RuntimeTriggerListParams = Readonly<{ cursor?: string; limit?: number }>
+export type RuntimeTriggerCancelParams = Readonly<{ triggerId: string; expectedRevision: number }>
+export type RuntimeTriggerTargetsParams = Readonly<{ cursor?: string; limit?: number }>
+export type RuntimeTriggerDtoV1 = Readonly<{
+  triggerId: string
+  ownerSessionId: string
+  receiverSessionId: string
+  clientKey: string
+  definition: RuntimeTriggerDefinitionV1
+  state: RuntimeTriggerProjection
+  createdAt: number
+  expiresAt: number
+  matchedAt?: number
+  messageId?: string
+  revision: number
+  failure?: RuntimeTriggerFailure
+}>
+export type RuntimeTriggerPageDto = Readonly<{ items: readonly RuntimeTriggerDtoV1[]; nextCursor?: string }>
+export type RuntimeTriggerTargetDto = Readonly<{ kind: 'session' | 'managed-process'; id: string; label: string; status?: string }>
+export type RuntimeTriggerTargetsDto = Readonly<{ items: readonly RuntimeTriggerTargetDto[]; nextCursor?: string }>
+export type RuntimeTriggerOperationDto = Readonly<{ trigger: RuntimeTriggerDtoV1; replayed?: boolean }>
+export type RuntimeTriggerAdmissionV1 = Readonly<{
+  version: 1; triggerId: string; requestId: string; receiverSessionId: string; turnId: string; invocationId: string
+  contextEventId: string; contextDigest: string; payloadDigest: string; authorizationGeneration: string; policyRevision: string; acceptedAt: number
+}>
+
 export interface FileInfo {
   name: string
   path: string

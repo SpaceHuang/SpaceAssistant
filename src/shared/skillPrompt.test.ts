@@ -15,6 +15,8 @@ describe('skillPrompt', () => {
     expect(withToolkit).toContain('toolkit_find')
     expect(withToolkit).toContain('toolkit_call')
     expect(withToolkit).not.toContain('toolkit.find')
+    expect(withToolkit).toContain('action.runtime_trigger.targets')
+    expect(withToolkit).toContain('clientKey')
     const withoutToolkit = buildToolCapabilityConventionHint(['run_shell'])
     expect(withoutToolkit).not.toContain('toolkit')
   })
@@ -34,6 +36,30 @@ describe('skillPrompt', () => {
     expect(section.text).toContain('### Available skills')
     expect(section.text).toContain('demo')
     expect(section.text).not.toContain('SECRET BODY')
+  })
+
+  it('does not expose host paths or imply that hidden skills are readable', () => {
+    const skill: SkillDefinition = {
+      meta: { name: 'private-skill', description: 'Private task helper', triggers: [], version: '1', author: '' },
+      content: 'PRIVATE BODY', scope: 'user', directoryPath: '/Users/alice/.spaceassistant/skills/private-skill',
+      filePath: '/Users/alice/.spaceassistant/skills/private-skill/SKILL.md', lastModified: 0
+    }
+    const section = buildSkillCatalogSection([skill], 10_000)
+    expect(section.text).toContain('skills.read')
+    expect(section.text).not.toContain('/Users/alice')
+    expect(section.text).not.toContain('Additional skills are available')
+  })
+
+  it('uses a stable truncation marker without suggesting hidden skills can be read', () => {
+    const skills: SkillDefinition[] = Array.from({ length: 8 }, (_, index) => ({
+      meta: { name: `skill-${index}`, description: 'A long description '.repeat(10), triggers: [], version: '1', author: '' },
+      content: '', scope: 'user', directoryPath: `/private/${index}`, filePath: `/private/${index}/SKILL.md`, lastModified: 0
+    }))
+    const first = buildSkillCatalogSection(skills, 5_000)
+    const second = buildSkillCatalogSection([...skills].reverse(), 5_000)
+    expect(first.text).toBe(second.text)
+    expect(first.text).toContain('truncated')
+    expect(first.text).not.toContain('skills.read(\"skill-')
   })
   it('builds system prompt from skills', () => {
     const skills: SkillDefinition[] = [

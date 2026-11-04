@@ -32,6 +32,7 @@ import { createAnthropicClient } from '../anthropicClientFactory'
 import { createOutboundAcceptor, createOutboundDrainer, computeContextPressureWarnings } from '../outbound/outboundAcceptor'
 import { createSkillHintSystemMessage } from '../../src/shared/skillHintRecords'
 import { createSkillManager } from '../skills/skillManager'
+import type { SkillTurnScope } from '../skills/skillTurnScope'
 import { decodeChildOutput } from '../processOutput/decodeChildOutput'
 import { discardStagedImage, readStagedImage, stageChatImage } from '../chatAttachmentManager'
 import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from '../skills/skillPaths'
@@ -79,6 +80,7 @@ import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessi
 import type { ContinuationIntentAcceptance, ContinuationSourceRef, PreparedChatBodyView } from '../sessionStorage/public/model'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import { createSessionSwitchRequestSequence } from './sessionSwitchTraceSequence'
+import { createRuntimeTriggerReceiverStarter, runtimeTriggerQueueLane } from '../triggers/receiverStarter'
 
 const nextSessionSwitchRequestOrdinal = createSessionSwitchRequestSequence()
 
@@ -433,9 +435,12 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   let activeSkillInstallAbort: AbortController | null = null
 
-  const configuringTurns = new Map<string, Promise<unknown>>()
+  type PreparedTurn = Omit<TurnStarted, 'executionConfig'>
+  type PreparedTurnRuntime = { prepared: PreparedTurn; skillTurnScope?: SkillTurnScope }
 
-  const configuringTurnsById = new Map<string, Promise<unknown>>()
+  const configuringTurns = new Map<string, Promise<PreparedTurnRuntime>>()
+
+  const configuringTurnsById = new Map<string, Promise<PreparedTurnRuntime>>()
 
   const configuringAbortControllers = new Map<string, AbortController>()
 
@@ -811,8 +816,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   // Phase 1b：prepare 编排抽为内部函数——chat:prepare-turn 与出站受理端口（chat:submit-outbound）
   // 共用同一套 configuring/skill-route/execution-config 装配，避免两处分叉。
 
-  type PreparedTurn = Omit<TurnStarted, 'executionConfig'>
-
   const prepareTurnInternal = async (intent: TurnIntent): Promise<PreparedTurn> => {
     const configuringKey = JSON.stringify([intent.sessionId, intent.requestId])
     const existing = sessionStorage.execution.readTurnByRequest({ sessionId: intent.sessionId, requestId: intent.requestId })
@@ -821,7 +824,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         // 即使同进程单飞，也要先复用 Coordinator 的消息意图校验，拒绝同 requestId 的变形重试。
         turnCoordinator.prepare({ ...intent, config: {} })
         const configuring = configuringTurns.get(configuringKey)
-        if (configuring) return (await configuring) as PreparedTurn
+        if (configuring) return (await configuring).prepared
         throw new Error('TURN_CONFIGURATION_INCOMPLETE')
       }
       const { executionConfig: _executionConfig, ...prepared } = turnCoordinator.prepare({ ...intent, config: existing.executionConfig ?? {} })
@@ -838,7 +841,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const inFlightConfiguration = configuringTurns.get(configuringKey)
     if (inFlightConfiguration) {
       turnCoordinator.prepare({ ...intent, config: {} })
-      return (await inFlightConfiguration) as PreparedTurn
+      return (await inFlightConfiguration).prepared
     }
     if (isSessionTurnAdmissionBlocked(intent.sessionId)) throw new Error('SESSION_CONTEXT_COMPACTION_BUSY')
     // 先原子占有 session 并写入 H。立即交还 turnId，使配置/路由阶段可被 cancel-turn 打断。
@@ -849,7 +852,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     // 用户消息与 configuring turn 已持久化受理；Skill 路由和上下文准备也属于本轮执行。
     turnRuntime.publishStarted?.(started)
     const controller = new AbortController()
-    const configuring = (async () => {
+    let skillTurnScope: SkillTurnScope | undefined
+    const configuring = (async (): Promise<PreparedTurnRuntime> => {
       try {
         const persisted = sessionStorage.execution.readTurn({ sessionId: intent.sessionId, turnId: started.turnId })
         if (!persisted?.userMessageId) throw new Error('TURN_PREPARE_PERSISTENCE_MISSING')
@@ -879,25 +883,21 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           (intent.mode === 'reuse-user' && reusedUserMessage?.attachments?.length) ||
           routeRead.hasVision
         )
+        const turnLane = intent.mode === 'reuse-user' ? runtimeTriggerQueueLane(intent.queueScope ?? { kind: 'desktop' }) : 'desktop'
         const baseConfig = await resolveTrustedTurnExecutionConfig(
           ctx.db,
           sessionQueries,
           sessionCommands,
           intent.sessionId,
-          'desktop',
+          turnLane,
           { projectMemoryEnabled: true },
           { requiresVision }
         )
-        const credentials = await resolveLlmCredentialsForModel(ctx.db, baseConfig.model!, { serviceId: baseConfig.llmServiceId })
-        const recentMessages: SkillRouteRecentMessage[] = routeRead.recentMessages
-        const routeInput = {
+        const routingInput = {
           userInput,
           sessionState: normalizeSessionSkillsState(session.skillsState),
           sessionMetadata: session.metadata,
-          recentMessages,
-          model: baseConfig.model!,
-          baseUrl: credentials.baseUrl,
-          getApiKey: credentials.getApiKey,
+          recentMessages: routeRead.recentMessages,
           sessionId: intent.sessionId,
           signal: controller.signal
         }
@@ -905,25 +905,27 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           sessionId: intent.sessionId,
           selection: routeRead.fence,
           routeInput: {
-            ...routeInput,
+            ...routingInput,
             userInput: routeRead.userInput ?? userInput,
             recentMessages: routeRead.recentMessages
           }
         })
-        const route = await skillManager.route(effectiveRouteInput)
+        const preparedSkills = await skillManager.prepareTurn(effectiveRouteInput)
+        skillTurnScope = preparedSkills.scope
+        if (controller.signal.aborted) throw new Error('TURN_CONFIGURATION_CANCELLED')
         if (!sessionQueries.isSelectionCurrent(intent.sessionId, routeFence)) {
           throw new Error('TURN_CONTEXT_CHANGED_DURING_PREPARATION')
         }
-        const skillFragments = route.skills.map((skill) => `## Skill: ${skill.meta.name}\n\n${skill.content.trim()}`)
+        const skillFragments = preparedSkills.skills.map((skill) => `## Skill: ${skill.meta.name}\n\n${skill.content.trim()}`)
         let system: string | undefined
-        if (route.skills.some((skill) => skill.meta.name === WIKI_VOCABULARY_PREFIX)) {
+        if (preparedSkills.skills.some((skill) => skill.meta.name === WIKI_VOCABULARY_PREFIX)) {
           // T1.14：注入经共享根读全局 SCHEMA（所有 workDir 注入同一份规范）
           const schema = readWikiSchema(ctx.getWorkDir(), readWikiConfig(ctx.db), ctx.getUserDataPath())?.trim()
           if (schema) system = system ? `${system}\n\n## Wiki Schema（项目规范）\n\n${schema}` : `## Wiki Schema（项目规范）\n\n${schema}`
         }
         const config = {
           ...baseConfig,
-          continuationSafetySnapshot: resolveContinuationSafetySnapshot(ctx, intent.sessionId, 'desktop'),
+          continuationSafetySnapshot: resolveContinuationSafetySnapshot(ctx, intent.sessionId, turnLane),
           ...(system ? { system } : {}),
           ...(skillFragments.length ? { skillFragments } : {})
         }
@@ -943,8 +945,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           throw new Error('TURN_CONTEXT_CHANGED_DURING_PREPARATION')
         }
         const { executionConfig: _executionConfig, ...prepared } = started
-        return prepared
+        return { prepared, skillTurnScope }
       } catch (error) {
+        skillTurnScope?.close()
         if (controller.signal.aborted) throw error
         // 路由/配置阶段失败也必须终结已占有的 turn，不能留下永久 configuring 状态。
         // 必须走 runtime 的 consume（而不是 coordinator.consume）才会发出 projection：
@@ -964,7 +967,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     void configuring.then(
       () => {
         if (configuringTurns.get(configuringKey) === configuring) configuringTurns.delete(configuringKey)
-        if (configuringTurnsById.get(started.turnId) === configuring) configuringTurnsById.delete(started.turnId)
         if (configuringAbortControllers.get(started.turnId) === controller) configuringAbortControllers.delete(started.turnId)
       },
       () => {
@@ -989,12 +991,19 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const executionPayload = { requestId: payload.requestId, turnId: payload.turnId, turnStartToken: payload.turnStartToken, sessionId: payload.sessionId }
     const configuring = configuringTurnsById.get(payload.turnId)
     const persisted = sessionStorage.execution.readTurn({ sessionId: payload.sessionId, turnId: payload.turnId })
-    if (persisted?.state === 'terminal') return { ok: true as const, accepted: false as const, turnId: payload.turnId }
+    if (persisted?.state === 'terminal') {
+      if (configuring) void configuring.then(({ skillTurnScope }) => skillTurnScope?.close(), () => undefined)
+      return { ok: true as const, accepted: false as const, turnId: payload.turnId }
+    }
     if (persisted?.state === 'configuring' && !configuring) throw new Error('TURN_CONFIGURATION_INCOMPLETE')
     void (async () => {
+      let preparedRuntime: PreparedTurnRuntime | undefined
+      let executionClaimed = false
       try {
-        if (configuring) await configuring
-        await ctx.executeTurn!(sender, executionPayload)
+        if (configuring) preparedRuntime = await configuring
+        // scope 归属于成功认领的 turn source；无效凭证拒绝时不能释放共享准备快照。
+        await ctx.executeTurn!(sender, executionPayload, preparedRuntime?.skillTurnScope)
+        executionClaimed = true
         if (continuationId) {
           const persistedAfterExecution = sessionStorage.execution.readTurn({ sessionId: payload.sessionId, turnId: payload.turnId })
           const status = persistedAfterExecution?.outcome === 'completed' ? 'completed'
@@ -1005,10 +1014,20 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       } catch {
         // 配置失败/取消已由 configuring 路径写入 terminal，不能把它伪装成 legacy config 错误。
         if (continuationId) sessionStorage.execution.continuations.settleForTurn({ targetTurnId: payload.turnId, status: 'failed' })
+      } finally {
+        if (executionClaimed) {
+          preparedRuntime?.skillTurnScope?.close()
+          if (configuringTurnsById.get(payload.turnId) === configuring) configuringTurnsById.delete(payload.turnId)
+        }
       }
     })()
     return { ok: true as const, accepted: true as const, turnId: payload.turnId }
   }
+
+  ctx.publishRuntimeTriggerReceiverStarter?.(createRuntimeTriggerReceiverStarter({
+    prepare: (intent) => prepareTurnInternal(intent),
+    dispatch: (sender, payload) => executeTurnInternal(sender, payload)
+  }))
 
   ipcMain.handle('chat:execute-turn', (event, payload: TurnExecutePayload) => executeTurnInternal(event.sender, payload))
 
@@ -1149,11 +1168,12 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       ...(turn ? { requestId: turn.requestId } : {}),
       accepted: cancelled
     })
-    if (cancelled && controller) {
-      controller.abort()
-      configuringAbortControllers.delete(turnId)
+    if (cancelled) {
+      controller?.abort()
+      if (controller) configuringAbortControllers.delete(turnId)
       const configuring = configuringTurnsById.get(turnId)
       if (configuring) {
+        void configuring.then(({ skillTurnScope }) => skillTurnScope?.close(), () => undefined)
         configuringTurnsById.delete(turnId)
         for (const [key, promise] of configuringTurns) {
           if (promise === configuring) configuringTurns.delete(key)

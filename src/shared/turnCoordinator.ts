@@ -20,7 +20,7 @@ export type TurnStorage = {
     },
     acceptance?: PersistedTurnRecord['continuationAcceptance']
   }) => { user: PersistedMessage; assistant: PersistedMessage }
-  claimQueuedAtomic: (input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope?: QueueScope }) => { user: PersistedMessage; assistant: PersistedMessage; executionConfig?: TurnExecutionConfig }
+  claimQueuedAtomic: (input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope?: QueueScope; source?: 'platform-im' | 'runtime-trigger' | 'ordinary-desktop' }) => { user: PersistedMessage; assistant: PersistedMessage; executionConfig?: TurnExecutionConfig }
   update: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   updateIfStreaming: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   checkpoint: (turnId: string, version: number, message: Message) => boolean
@@ -40,7 +40,7 @@ export type TurnCoordinatorMetric =
 export type CoordinatorDeps = { now: () => number; id: () => string; finishingWindowMs?: number; onMetric?: (metric: TurnCoordinatorMetric) => void }
 export type ModelResult = Pick<TurnTerminal, 'outcome'> & { error?: TurnTerminal['error']; usage?: unknown }
 export type ModelSource = (turn: TurnStarted, token: string) => Promise<ModelResult | void>
-export type PersistedTurnRecord = { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; trackId?: string; state: string; userMessageId?: string; contextBoundarySequence?: number; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; retryOfMessageId?: string; retryOfInvocationId?: string; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; version?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string }; intentFingerprint?: string; startToken?: string }
+export type PersistedTurnRecord = { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; trackId?: string; state: string; userMessageId?: string; contextBoundarySequence?: number; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; retryOfMessageId?: string; retryOfInvocationId?: string; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; version?: number; outcome?: string; updatedAt?: number; usage?: unknown; error?: { code: string; message: string }; intentFingerprint?: string; startToken?: string }
 export type Checkpoint = (turnId: string, version: number, message: Message) => boolean | void | Promise<boolean | void>
 export type CancelHook = (turnId: string) => void
 const CHECKPOINT_INTERVAL_MS = 2_000
@@ -124,7 +124,8 @@ export class TurnCoordinator {
           intentFingerprint: this.intentFingerprint(intent),
           excludeMessageIds: intent.excludeMessageIds,
           executionConfig: normalizeTurnExecutionConfig(intent.config)
-          ,...(intent.queueScope ? { queueScope: intent.queueScope } : {})
+          ,...(intent.queueScope ? { queueScope: intent.queueScope } : {}),
+          ...(intent.queueInputSource ? { source: intent.queueInputSource } : {})
         })
         const started = this.makeStarted(intent, claimed.user.message, claimed.assistant.message, { turnId, startToken, persist: false, state: initialState })
         if (claimed.executionConfig) started.executionConfig = claimed.executionConfig
@@ -187,7 +188,7 @@ export class TurnCoordinator {
   }
 
   private intentFingerprint(intent: TurnIntent): string {
-    return JSON.stringify({ mode: intent.mode, userMessageId: intent.mode === 'reuse-user' ? intent.userMessageId : undefined, contextBoundarySequence: intent.mode === 'reuse-user' ? intent.contextBoundarySequence : undefined, input: intent.mode === 'create-user' ? canonicalQueueInput(intent.input) : undefined, excludeMessageIds: [...(intent.excludeMessageIds ?? [])].sort(), config: normalizeTurnExecutionConfig(intent.config) })
+    return JSON.stringify({ mode: intent.mode, userMessageId: intent.mode === 'reuse-user' ? intent.userMessageId : undefined, contextBoundarySequence: intent.mode === 'reuse-user' ? intent.contextBoundarySequence : undefined, queueInputSource: intent.mode === 'reuse-user' ? intent.queueInputSource : undefined, input: intent.mode === 'create-user' ? canonicalQueueInput(intent.input) : undefined, excludeMessageIds: [...(intent.excludeMessageIds ?? [])].sort(), config: normalizeTurnExecutionConfig(intent.config) })
   }
 
   /** v11 及更早的 turn 没有执行快照；重放时只核对可持久验证的消息意图，不把当前设置当作原请求。 */

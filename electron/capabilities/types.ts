@@ -15,6 +15,15 @@ export interface McpCapabilityConfigPort {
   listServers(): unknown[]
 }
 
+/** Per-invocation host service; handlers never accept ownerSessionId from model parameters. */
+export interface RuntimeTriggerCapabilityPort {
+  targets(input: { ownerSessionId: string; params: unknown }): unknown
+  register(input: { ownerSessionId: string; params: unknown }): unknown
+  get(input: { ownerSessionId: string; triggerId: unknown }): unknown
+  list(input: { ownerSessionId: string; params: unknown }): unknown
+  cancel(input: { ownerSessionId: string; params: unknown }): unknown
+}
+
 /**
  * 子进程探测缝：env 探测类 handler 通过它执行外部命令（参数数组、禁 shell 拼接）。
  * 返回 null 表示命令不存在/启动失败（如非 Windows 平台的 wsl.exe）。
@@ -47,6 +56,7 @@ export interface CapabilityContext {
   detectBrowserDependencies?: (force: boolean) => Promise<unknown>
   /** MCP capability's narrow configuration port; no database handle crosses the capability boundary. */
   mcpConfig?: McpCapabilityConfigPort
+  runtimeTriggers?: RuntimeTriggerCapabilityPort
   /** Session reads are supplied by the invocation composition root. */
   sessionQueries?: SessionQueries
   ensureChatBodyV1?: (input: { sessionId: string; signal?: AbortSignal }) => Promise<unknown>

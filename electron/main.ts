@@ -32,6 +32,7 @@ import {
   autoStartFeishuEventIfNeeded,
   createFeishuBundle,
   getFeishuBundle,
+  readFeishuConfigFromDb,
   registerFeishuIpcHandlers,
   shutdownFeishuServices
 } from './feishu/feishuIpc'
@@ -39,6 +40,7 @@ import {
   autoStartWeChatPollIfNeeded,
   createWeChatBundle,
   getWeChatBundle,
+  readWeChatConfigFromDb,
   pauseWeChatPollIfWindowClosed,
   registerWeChatIpcHandlers,
   shutdownWeChatServices
@@ -47,6 +49,23 @@ import { getConfigValue, getDefaultDbPath, openDatabase, setConfigValue } from '
 import { createHash, randomUUID } from 'node:crypto'
 import { setInvalidationBroadcaster } from './database/scopeVersion'
 import { TurnRuntime } from './turnRuntime'
+import { runWithPersistedTurnTerminalNotification } from './triggers/sources'
+import { createRuntimeTriggerHostService } from './triggers/hostService'
+import { createRuntimeTriggerExecutionMaterials } from './triggers/runtimeMaterials'
+import { createRuntimeTriggerAuthorizationBinding, runtimeTriggerAuthorizationMatches, type RuntimeTriggerAuthoritySnapshot } from './triggers/hostAuthorization'
+import { createSecuritySettingsStorage } from './confirmation/securitySettingsStorage'
+import { readImPolicySnapshot } from './confirmation/imPolicyStore'
+import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
+import { readImPolicyAuthorizationRevision } from './remote/imInboundGuard'
+import { classifyQueueInputSource } from './database/queueInputSource'
+import { createRuntimeTriggerDelivery } from './triggers/delivery'
+import { createRuntimeTriggerRecovery } from './triggers/recovery'
+import { evaluateRuntimeTriggerSource, readPersistedTurnTerminal, readSessionSettledStepFacts, readSettledStepFacts, SettledStepFactsTracker, turnTerminalBusForExecution } from './triggers/sources'
+import { subscribeRuntimeTriggerProcessExitHandoff } from './triggers/processExitHandoff'
+import { createRuntimeTriggerStartAuthorizer } from './triggers/authorization'
+import { createRuntimeTriggerLifecycleAssembly, createRuntimeTriggerSyncWaitRegistry, failOrphanedRuntimeSyncTriggers } from './triggers/syncCheckpoint'
+import { waitForRuntimeTriggerReceiverTurn } from './triggers/receiverStarter'
+import { authorizeRuntimeTriggerImSource } from './triggers/imSourceAuthorization'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createTurnDisplayPublisher } from './turnDisplayPublisher'
 import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask,
@@ -294,6 +313,9 @@ let storageProfileCoordinator: StorageProfileCoordinator | null = null
 let projectionRevalidationDrainStop: { stop: () => void } | null = null
 let eventLoopWatchdogStop: (() => void) | null = null
 let turnDisplayPublisherStop: (() => void) | null = null
+let runtimeTriggerReceiverStarter: ((input: import('./triggers/receiverStarter').RuntimeTriggerReceiverStartInput) => Promise<'started' | 'busy' | 'unavailable'>) | null = null
+let runtimeTriggerRecoveryStop: (() => Promise<void>) | null = null
+let runtimeTriggerSyncWaitStop: (() => void) | null = null
 let safeDatabaseMaintenanceInFlight: Promise<void> | undefined
 let isQuitting = false
 let quitCleanupDone = false
@@ -764,6 +786,182 @@ app.whenReady().then(async () => {
     quiesceMaintenance: async () => { await safeDatabaseMaintenanceInFlight }
   })
   const sessionStorage = sessionStorageHost.storage
+  const runtimeTriggerSyncWaiters = createRuntimeTriggerSyncWaitRegistry()
+  runtimeTriggerSyncWaitStop = runtimeTriggerSyncWaiters.cancelAll
+  const runtimeTriggerService = createRuntimeTriggerHostService({ commands: sessionStorage.commands,
+    queries: sessionStorage.queries, execution: sessionStorage.execution,
+    authorizeImSource: (source) => {
+      const { channel } = source
+      const policyRevision = readImPolicyAuthorizationRevision(db)
+      const authorizationGeneration = `${channel}:${remoteAuthorizationRegistry.getGeneration(channel)}:${remoteAuthorizationRegistry.getAuthorizationEpoch(channel)}`
+      if (channel === 'feishu') {
+        const config = readFeishuConfigFromDb(db)
+        return authorizeRuntimeTriggerImSource({ source, config: { enabled: config.enabled, ready: config.appConfigured && config.userAuthorized,
+          remoteEnabled: config.remoteEnabled, loggedIn: true, remoteSenderAllowlist: config.remoteSenderAllowlist },
+        policyRules: loadEffectivePolicyRules(db, 'feishu'), policyRevision, authorizationGeneration })
+      }
+      const config = readWeChatConfigFromDb(db)
+      return authorizeRuntimeTriggerImSource({ source, config: { enabled: config.enabled, ready: true, remoteEnabled: config.remoteEnabled,
+        loggedIn: config.loggedIn, remoteSenderAllowlist: config.remoteSenderAllowlist }, policyRules: loadEffectivePolicyRules(db, 'wechat'),
+      policyRevision, authorizationGeneration })
+    },
+    accepting: () => !isQuitting,
+    cancelSyncWait: (trigger) => runtimeTriggerSyncWaiters.cancel(trigger.id) })
+  const runtimeTriggerSecuritySettings = createSecuritySettingsStorage(db)
+  const runtimeTriggerQueueScope = (receiverSessionId: string) => runtimeTriggerService.resolveQueueScope(receiverSessionId)
+  const runtimeTriggerAuthoritySnapshot = (trigger: import('./sessionStorage/public/model').RuntimeTriggerRecord): RuntimeTriggerAuthoritySnapshot | undefined => {
+    try {
+      const condition = trigger.definition.condition
+      const imChannel = condition.type === 'im_message' ? condition.channel : undefined
+      const policyRevision = imChannel
+        ? (() => { const snapshot = readImPolicySnapshot(getDbConnection(db), { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2', 'im-standard-v3'] }); return `${snapshot.policyBehaviorVersion}:${snapshot.revision}` })()
+      : `desktop-v1:${runtimeTriggerSecuritySettings.readDesktopPolicySnapshot().revision}`
+      const authorizationGeneration = imChannel
+        ? `${imChannel}:${remoteAuthorizationRegistry.getGeneration(imChannel)}:${remoteAuthorizationRegistry.getAuthorizationEpoch(imChannel)}`
+        : `desktop:${currentProcessGeneration(getDbConnection(db))}`
+      return { policyRevision, authorizationGeneration, runtimeGeneration: `process:${process.pid}:${currentProcessGeneration(getDbConnection(db))}` }
+    } catch { return undefined }
+  }
+  const resolveRuntimeTriggerBinding = (trigger: import('./sessionStorage/public/model').RuntimeTriggerRecord) => {
+    const queueScope = runtimeTriggerQueueScope(trigger.receiverSessionId)
+    const authority = runtimeTriggerAuthoritySnapshot(trigger)
+    if (!queueScope || !authority) return null
+    const sourceAuthorization = runtimeTriggerService.authorizeSource(trigger.ownerSessionId, trigger.receiverSessionId,
+      trigger.definition.condition, trigger.definition.sourceBaseline, trigger.event)
+    if (!sourceAuthorization.allowed) return null
+    return createRuntimeTriggerAuthorizationBinding({ trigger, queueScope, authority, isAuthorized: () => true,
+      ...(sourceAuthorization.policyTrace ? { sourceDecisionTrace: { kind: 'im-ingress', decisions: sourceAuthorization.policyTrace } } : {}) })
+  }
+  const runtimeTriggerExecutionMaterials = createRuntimeTriggerExecutionMaterials({
+    read: (triggerId) => sessionStorage.commands.runtimeTriggers.read(triggerId),
+    verifyPersistedAdmission: (trigger, admission) => {
+      try {
+        if (typeof admission.invocationId !== 'string' || typeof admission.contextEventId !== 'string' ||
+          typeof admission.contextDigest !== 'string' || typeof admission.requestDigest !== 'string') return false
+        const binding = trigger.result?.authorization as import('./triggers/delivery').RuntimeTriggerAuthorizationBinding | undefined
+        if (!binding || binding.bindingVersion !== 1 || binding.requestId !== `runtime-trigger:${trigger.id}` ||
+          binding.ownerSessionId !== trigger.ownerSessionId || binding.receiverSessionId !== trigger.receiverSessionId ||
+          JSON.stringify(binding.sourceIdentity) !== JSON.stringify(trigger.definition.condition) || !trigger.event ||
+          createHash('sha256').update(JSON.stringify(trigger.event)).digest('hex') !== binding.payloadDigest) return false
+        const row = getDbConnection(db).prepare(`SELECT payload_json FROM agent_history_events
+          WHERE invocation_id=? AND event_id=? AND kind='invocation-context-committed'`).get(admission.invocationId, admission.contextEventId) as { payload_json: string } | undefined
+        if (!row) return false
+        const payload = JSON.parse(row.payload_json) as Record<string, unknown>
+        const requestSnapshot = payload.requestSnapshot
+        const requestDigestPayload = requestSnapshot ?? { requestId: admission.requestId }
+        return createHash('sha256').update(JSON.stringify(payload)).digest('hex') === admission.contextDigest &&
+          createHash('sha256').update(JSON.stringify(requestDigestPayload)).digest('hex') === admission.requestDigest &&
+          (requestSnapshot === undefined || (requestSnapshot !== null && typeof requestSnapshot === 'object' &&
+            (requestSnapshot as Record<string, unknown>).requestId === admission.requestId))
+      } catch { return false }
+    },
+    isCurrentAuthorization: (trigger, approved) => {
+      const queueScope = runtimeTriggerQueueScope(trigger.receiverSessionId)
+      const authority = runtimeTriggerAuthoritySnapshot(trigger)
+      if (!queueScope || !authority) return false
+      const sourceAuthorization = runtimeTriggerService.authorizeSource(trigger.ownerSessionId, trigger.receiverSessionId,
+        trigger.definition.condition, trigger.definition.sourceBaseline, trigger.event)
+      if (!sourceAuthorization.allowed) return false
+      return runtimeTriggerAuthorizationMatches(trigger, queueScope, authority, approved,
+        sourceAuthorization.policyTrace ? { kind: 'im-ingress', decisions: sourceAuthorization.policyTrace } : undefined)
+    }
+  })
+  const runtimeTriggerReadReceipt = (trigger: import('./sessionStorage/public/model').RuntimeTriggerRecord) => {
+    const scope = runtimeTriggerQueueScope(trigger.receiverSessionId)
+    return scope ? sessionStorage.commands.scopedQueue.readReceipt({ sessionId: trigger.receiverSessionId,
+      requestId: `runtime-trigger:${trigger.id}`, queueScope: scope }) : undefined
+  }
+  const runtimeTriggerDelivery = createRuntimeTriggerDelivery({
+    read: (id) => sessionStorage.commands.runtimeTriggers.read(id),
+    update: (id, revision, patch) => sessionStorage.commands.runtimeTriggers.update(id, revision, patch),
+    expire: (id, revision) => sessionStorage.commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: Date.now() }),
+    authorize: (trigger, scope) => {
+      const resolved = resolveRuntimeTriggerBinding(trigger)
+      return resolved && JSON.stringify(resolved.queueScope) === JSON.stringify(scope) ? resolved : null
+    },
+    queueScope: (receiver) => runtimeTriggerQueueScope(receiver) ?? { kind: 'desktop' },
+    enqueue: (request) => sessionStorage.commands.scopedQueue.enqueue(request),
+    readReceipt: (receipt) => sessionStorage.commands.scopedQueue.readReceipt(receipt)
+  })
+  const runtimeTriggerSyncLifecycle = (sessionId: string, history: import('./sessionStorage/public/ports').SessionHistoryPort) => {
+    const stepFactsTrackers = new Map<string, SettledStepFactsTracker>()
+    return createRuntimeTriggerLifecycleAssembly({
+      sessionId,
+      listWaitingSync: (targetSessionId) => sessionStorage.commands.runtimeTriggers.listByState('waiting', 4_096).filter((trigger) =>
+        trigger.definition.condition.type === 'session_steps' && trigger.definition.condition.mode === 'sync' &&
+        trigger.definition.condition.targetSessionId === targetSessionId),
+      listMatchedForExecution: (invocationId, turnId) => sessionStorage.commands.runtimeTriggers.listByState('matched', 4_096).filter((trigger) =>
+        trigger.event?.invocationId === invocationId && trigger.event?.targetTurnId === turnId),
+      readStepFacts: async (invocationId) => {
+        let tracker = stepFactsTrackers.get(invocationId)
+        if (!tracker) {
+          tracker = new SettledStepFactsTracker()
+          stepFactsTrackers.set(invocationId, tracker)
+          const initial = await history.read(invocationId)
+          const facts = tracker.update(initial)
+          return { historyVersion: tracker.currentVersion, facts }
+        }
+        let facts = { ok: true, settledCount: 0, settledStepIds: [], pendingStepIds: [] } as import('./triggers/sources').SettledStepFacts
+        while (true) {
+          const page = await history.readEventsAfter(invocationId, tracker.currentVersion)
+          facts = tracker.appendEvents({ invocationId, fromVersion: tracker.currentVersion, version: Math.min(page.version, tracker.currentVersion + page.events.length), events: page.events })
+          if (!facts.ok || tracker.currentVersion >= page.version) break
+          if (page.events.length === 0) { facts = { ok: false, settledCount: 0, settledStepIds: [], pendingStepIds: [], code: 'SOURCE_GAP', case: 'history-incremental-page-gap' }; break }
+        }
+        return { historyVersion: tracker.currentVersion, facts }
+      },
+      saveProgress: (id, revision, progress) => {
+        const current = sessionStorage.commands.runtimeTriggers.read(id)
+        if (!current || current.revision !== revision || current.state !== 'waiting') return null
+        return sessionStorage.commands.runtimeTriggers.update(id, revision, {
+          result: { ...(current.result ?? {}), syncStepProgress: progress }, updatedAt: Date.now()
+        })
+      },
+      match: (id, revision, event) => sessionStorage.commands.runtimeTriggers.update(id, revision,
+        { state: 'matched', matchedAt: Date.now(), event, updatedAt: Date.now() }),
+      expire: (id, revision) => sessionStorage.commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: Date.now() }),
+      read: (id) => sessionStorage.commands.runtimeTriggers.read(id),
+      acceptPause: ({ trigger }) => sessionStorage.commands.runtimeTriggers.update(trigger.id, trigger.revision,
+        { result: { ...(trigger.result ?? {}), pauseAcceptedBySdk: true }, updatedAt: Date.now() }),
+      activateDelivery: async (trigger, { signal }) => {
+        const delivered = runtimeTriggerDelivery(trigger.id)
+        if (delivered.kind !== 'enqueued') throw new Error(`TRIGGER_SYNC_DELIVERY_${delivered.kind}`)
+        const scope = runtimeTriggerQueueScope(trigger.receiverSessionId)
+        const starter = runtimeTriggerReceiverStarter
+        if (!scope || !starter) throw new Error('TRIGGER_SYNC_RECEIVER_UNAVAILABLE')
+        const started = await starter({ sessionId: trigger.receiverSessionId, requestId: `runtime-trigger:${trigger.id}`, messageId: delivered.messageId, queueScope: scope })
+        if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason ?? 'sync wait aborted'))
+        if (started === 'busy') return 'busy'
+        if (started === 'unavailable') throw new Error('TRIGGER_SYNC_RECEIVER_UNAVAILABLE')
+        const receipt = runtimeTriggerReadReceipt(trigger)
+        if (!receipt?.turnId) throw new Error('TRIGGER_SYNC_RECEIVER_TURN_MISSING')
+        return { sessionId: trigger.receiverSessionId, turnId: receipt.turnId }
+      },
+      waitForReceiverTurn: async (trigger, { signal, deadlineAt }) => {
+        const scope = runtimeTriggerQueueScope(trigger.receiverSessionId)
+        if (!scope) throw new Error('TRIGGER_SYNC_RECEIVER_UNAVAILABLE')
+        const receipt = runtimeTriggerReadReceipt(trigger)
+        if (!receipt?.queuedMessageId) throw new Error('TRIGGER_SYNC_RECEIVER_RECEIPT_MISSING')
+        const turnId = await waitForRuntimeTriggerReceiverTurn({ readReceipt: () => runtimeTriggerReadReceipt(trigger),
+          expectedMessageId: receipt.queuedMessageId, signal, deadlineAt })
+        return { sessionId: trigger.receiverSessionId, turnId }
+      },
+      cancelPendingDelivery: (trigger) => {
+        const queueScope = runtimeTriggerQueueScope(trigger.receiverSessionId)
+        if (queueScope) sessionStorage.commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId: trigger.receiverSessionId,
+          requestId: `runtime-trigger:${trigger.id}`, queueScope })
+      },
+      subscribeReceiver: (receiverSessionId, receiverTurnId, listener) => turnTerminalBusForExecution(sessionStorage.execution)
+        .subscribe(receiverSessionId, receiverTurnId, listener),
+      readReceiver: async (receiverSessionId, receiverTurnId) => readPersistedTurnTerminal(
+        sessionStorage.execution.readTurn({ sessionId: receiverSessionId, turnId: receiverTurnId }), receiverSessionId, receiverTurnId),
+      registerWaiter: (triggerId, cancel) => {
+        return runtimeTriggerSyncWaiters.register(triggerId, cancel)
+      },
+      fail: (id, revision, code, caseId) => sessionStorage.commands.runtimeTriggers.update(id, revision,
+        { state: 'failed', result: { code, case: caseId }, updatedAt: Date.now() })
+    })
+  }
   getSessionForLedgerRepair = (sessionId) => {
     const session = sessionStorage.queries.readSession(sessionId)
     return session ? { id: session.id, createdAt: session.createdAt, generation: session.generation } : undefined
@@ -952,8 +1150,26 @@ app.whenReady().then(async () => {
     getMainWindow()?.webContents.send('chat:turn-display', { display })
   })
   turnDisplayPublisherStop = () => turnDisplayPublisher.dispose()
+  const runtimeTriggerStartAuthorizer = createRuntimeTriggerStartAuthorizer({
+    read: (id) => sessionStorage.commands.runtimeTriggers.read(id),
+    update: (id, revision, patch) => sessionStorage.commands.runtimeTriggers.update(id, revision, patch),
+    resolveQueueScope: (turn) => runtimeTriggerQueueScope(turn.sessionId),
+    readReceipt: (receipt) => sessionStorage.commands.scopedQueue.readReceipt(receipt),
+    classify: (source) => classifyQueueInputSource(db, source),
+    verifyAdmission: (trigger, turn) => runtimeTriggerExecutionMaterials.verifyAdmission(turn),
+    readCurrentAuthorization: (trigger) => runtimeTriggerAuthoritySnapshot(trigger),
+    reauthorize: (trigger, scope) => {
+      const resolved = resolveRuntimeTriggerBinding(trigger)
+      return resolved && JSON.stringify(resolved.queueScope) === JSON.stringify(scope) ? resolved : null
+    },
+    cancel: ({ sessionId, requestId, queueScope, turnId }) => sessionStorage.commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId, requestId, queueScope, expectedTurnId: turnId }),
+    fail: (trigger, caseId) => { sessionStorage.commands.runtimeTriggers.update(trigger.id, trigger.revision, {
+      state: 'failed', result: { ...(trigger.result ?? {}), code: 'TRIGGER_AUTHORIZATION_REVOKED', case: caseId }, updatedAt: Date.now()
+    }) }
+  })
   turnRuntime = createSessionTurnRuntime(sessionStorage, {
     deps: { now: Date.now, id: randomUUID },
+    authorizeRuntimeTriggerStart: runtimeTriggerStartAuthorizer,
     onCancel: (turn) => {
       signalChatCancel(turn.turnId)
       // 撤确认卡必须按 requestId 索引（toolConfirmRegistry 的 pending 按 requestId 登记）；
@@ -1080,28 +1296,47 @@ app.whenReady().then(async () => {
     floatingNotificationManager: floatingManager,
     notifyMainWindow: (channel, payload) => getMainWindow()?.webContents.send(channel, payload),
     turnRuntime,
-    sessionStorage
+    sessionStorage,
+    runtimeTriggers: runtimeTriggerService,
+    runtimeTriggerAdmission: (request) => runtimeTriggerExecutionMaterials.admission(request),
+    runtimeTriggerSourceContext: (request) => runtimeTriggerExecutionMaterials.sourceContext(request),
+    runtimeTriggerLifecycle: ({ sessionId, turnId, history }) => ({
+      ...runtimeTriggerSyncLifecycle(sessionId, history)
+    })
   })
 
-  const executeTurn = async (sender: Electron.WebContents | null, payload: ClaudeChatCreateWithToolsPayload) => {
+  const executeTurn = async (
+    sender: Electron.WebContents | null,
+    payload: ClaudeChatCreateWithToolsPayload,
+    skillTurnScope?: import('./skills/skillTurnScope').SkillTurnScope
+  ) => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
-    turnRuntime.bindRequest(payload.requestId, payload.turnId)
-    return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (_turn) => {
-      const result = await executeClaudeRequest(sender, payload) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
-      if (result.ok) {
-        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' }, payload.turnId)
-        return { outcome: 'completed' as const, usage: result.usage }
-      }
-      if (result.outcome === 'commit-uncertain') {
-        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-uncertain', message: result.error }, payload.turnId)
-        return {
-          outcome: 'commit-uncertain' as const,
-          error: { code: 'SESSION_TRANSCRIPT_COMMIT_UNCERTAIN', message: result.error ?? 'Session transcript commit is uncertain' }
+    const { turnId, turnStartToken, requestId } = payload
+    const targetTurn = turnRuntime.getTurn(turnId)
+    if (!targetTurn) throw new Error('UNKNOWN_TURN')
+    turnRuntime.bindRequest(requestId, turnId)
+    let executionClaimed = false
+    try {
+      return await runWithPersistedTurnTerminalNotification(sessionStorage.execution, targetTurn, () => turnRuntime.executeWithSource(turnId, turnStartToken, async (_turn) => {
+        executionClaimed = true
+        const result = await executeClaudeRequest(sender, { ...payload, ...(skillTurnScope ? { skillTurnScope } : {}) }) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
+        if (result.ok) {
+          turnRuntime.consumeForRequest(requestId, { type: 'source-completed' }, turnId)
+          return { outcome: 'completed' as const, usage: result.usage }
         }
-      }
-      turnRuntime.consumeForRequest(payload.requestId, { type: 'source-failed', message: result.error }, payload.turnId)
-      return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
-    })
+        if (result.outcome === 'commit-uncertain') {
+          turnRuntime.consumeForRequest(requestId, { type: 'source-uncertain', message: result.error }, turnId)
+          return {
+            outcome: 'commit-uncertain' as const,
+            error: { code: 'SESSION_TRANSCRIPT_COMMIT_UNCERTAIN', message: result.error ?? 'Session transcript commit is uncertain' }
+          }
+        }
+        turnRuntime.consumeForRequest(requestId, { type: 'source-failed', message: result.error }, turnId)
+        return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
+      }))
+    } finally {
+      if (executionClaimed) skillTurnScope?.close()
+    }
   }
 
   storageProfileCoordinator = registerAppIpcHandlers(ipcMain, {
@@ -1122,6 +1357,7 @@ app.whenReady().then(async () => {
     floatingNotificationManager: floatingManager,
     isTrayEnabled,
     turnRuntime,
+    publishRuntimeTriggerReceiverStarter: (starter) => { runtimeTriggerReceiverStarter = starter },
     wakeSourceTruthSpillGc: () => {
       const spillRoot = path.join(app.getPath('userData'), 'spill')
       void runSourceTruthSpillGcMaintenance(db, spillRoot).catch((error) => {
@@ -1132,6 +1368,58 @@ app.whenReady().then(async () => {
     },
     executeTurn
   })
+
+  const runtimeTriggerRecovery = createRuntimeTriggerRecovery({
+    listWaiting: () => sessionStorage.commands.runtimeTriggers.listByState('waiting', 4_096),
+    listMatched: (after) => sessionStorage.commands.runtimeTriggers.listByState('matched', 4_096, after),
+    read: (id) => sessionStorage.commands.runtimeTriggers.read(id),
+    evaluateWaiting: (trigger, now) => evaluateRuntimeTriggerSource(trigger, {
+      now, queries: sessionStorage.queries,
+      readSettledSteps: (targetSessionId) => readSessionSettledStepFacts(sessionStorage.execution, targetSessionId),
+      readTurnCompletion: async (targetSessionId, targetTurnId) => {
+        const turn = sessionStorage.execution.readTurn({ sessionId: targetSessionId, turnId: targetTurnId })
+        const terminal = readPersistedTurnTerminal(turn, targetSessionId, targetTurnId)
+        if (terminal.kind === 'pending') return { kind: 'pending' }
+        if (terminal.kind === 'source-gap') return { kind: 'source-gap', case: terminal.case }
+        const occurredAt = Number(turn?.updatedAt)
+        if (!Number.isSafeInteger(occurredAt)) return { kind: 'source-gap', case: 'turn-terminal-time-unavailable' }
+        const outcome = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'cancelled' ? 'cancelled'
+          : terminal.outcome === 'timed-out' || terminal.outcome === 'timed_out' ? 'timed-out' : 'failed'
+        return { kind: 'terminal', sessionId: terminal.sessionId, turnId: terminal.turnId, outcome, occurredAt }
+      }
+    }),
+    match: (id, revision, event) => sessionStorage.commands.runtimeTriggers.update(id, revision,
+      { state: 'matched', matchedAt: Date.now(), event, updatedAt: Date.now() }),
+    expire: (id, revision) => sessionStorage.commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: Date.now() }),
+    fail: (id, revision, code, caseId) => sessionStorage.commands.runtimeTriggers.update(id, revision,
+      { state: 'failed', result: { code, case: caseId }, updatedAt: Date.now() }),
+    deliver: runtimeTriggerDelivery,
+    update: (id, revision, patch) => sessionStorage.commands.runtimeTriggers.update(id, revision, patch),
+    readReceipt: runtimeTriggerReadReceipt,
+    isSessionBusy: (sessionId) => sessionStorage.execution.hasActiveTurn(sessionId),
+    startReceiver: async ({ sessionId, requestId, messageId }) => {
+      const scope = runtimeTriggerQueueScope(sessionId)
+      return scope && runtimeTriggerReceiverStarter
+        ? runtimeTriggerReceiverStarter({ sessionId, requestId, messageId, queueScope: scope })
+        : 'unavailable'
+    },
+    readTurnTerminal: (sessionId, turnId) => {
+      const terminal = readPersistedTurnTerminal(sessionStorage.execution.readTurn({ sessionId, turnId }), sessionId, turnId)
+      if (terminal.kind === 'pending') return { kind: 'active' }
+      if (terminal.kind === 'source-gap') return { kind: 'missing' }
+      const outcome = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'cancelled' ? 'cancelled'
+        : terminal.outcome === 'timed-out' || terminal.outcome === 'timed_out' ? 'timed-out' : 'failed'
+      return { kind: 'terminal', outcome }
+    },
+    onDeliveryError: (triggerId, error) => logAgentEvent('error', 'runtime-trigger.delivery.failed', {
+      triggerId, reason: error instanceof Error ? error.message : String(error)
+    })
+  })
+  subscribeRuntimeTriggerProcessExitHandoff(sessionStorage.commands)
+  failOrphanedRuntimeSyncTriggers(sessionStorage.commands, Date.now())
+  runtimeTriggerRecoveryStop = runtimeTriggerRecovery.stop
+  runtimeTriggerRecovery.start()
+  void runtimeTriggerRecovery.scan()
 
   // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ IPC 面（CRUD + 手动触发）
   // B1(偏差 23):统一调用级准入(状态归 Storage);butlerAdmission 退役。
@@ -1420,6 +1708,11 @@ app.on('before-quit', (event) => {
   try { getDefaultAgentRuntime().reviewScopeCache.clearAll() } catch { /* Startup may fail before runtime assembly. */ }
   turnDisplayPublisherStop?.()
   turnDisplayPublisherStop = null
+  const runtimeTriggerRecoveryQuiescence = runtimeTriggerRecoveryStop?.() ?? Promise.resolve()
+  runtimeTriggerRecoveryStop = null
+  runtimeTriggerSyncWaitStop?.()
+  runtimeTriggerSyncWaitStop = null
+  runtimeTriggerReceiverStarter = null
   // 必须在启动异步 cleanup 之前同步切断事件生产，否则 flush 与最后一批
   // chunk/关键事件并发，flush 返回后仍可能接受新事件并被 app.quit 丢弃。
   beginSessionEventShutdown()
@@ -1455,7 +1748,7 @@ app.on('before-quit', (event) => {
     })
     try {
       const result = await Promise.race([
-        Promise.all([runShutdownCleanup(pendingTasks), sessionProjectionMigrationShutdown, storageQuiescence]).then(([cleanupResult, _migration, storageResult]) => {
+        Promise.all([runShutdownCleanup(pendingTasks), sessionProjectionMigrationShutdown, storageQuiescence, runtimeTriggerRecoveryQuiescence]).then(([cleanupResult, _migration, storageResult]) => {
           storageQuiescent = storageResult.status === 'quiescent'
           return cleanupResult
         }),

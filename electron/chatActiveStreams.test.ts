@@ -3,6 +3,7 @@ import {
   registerSessionActiveStream,
   clearSessionActiveStream,
   isSessionActiveStream,
+  getSessionActiveStreamTurnId,
   clearAllSessionActiveStreamsForTest
 } from './chatActiveStreams'
 
@@ -23,6 +24,16 @@ describe('chatActiveStreams（sessionId → 活跃流登记）', () => {
     expect(isSessionActiveStream('s1')).toBe(true)
     clearSessionActiveStream('s1', 'r2')
     expect(isSessionActiveStream('s1')).toBe(false)
+  })
+
+  it('暴露最近仍活跃请求的 turnId，清理后回退到较早的活跃 turn', () => {
+    clearAllSessionActiveStreamsForTest()
+    expect(getSessionActiveStreamTurnId('s1')).toBeUndefined()
+    registerSessionActiveStream('s1', 'r1', 't1')
+    registerSessionActiveStream('s1', 'r2', 't2')
+    expect(getSessionActiveStreamTurnId('s1')).toBe('t2')
+    clearSessionActiveStream('s1', 'r2')
+    expect(getSessionActiveStreamTurnId('s1')).toBe('t1')
   })
 
   it('清理未注册的 requestId 是安全空操作', () => {

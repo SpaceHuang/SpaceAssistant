@@ -270,7 +270,7 @@ describe('remote Track attribution persistence boundary', () => {
     const db = createMemoryAppDb()
     try {
       const { createSession } = await import('../database/operations')
-      const { appendImInboxMessageWithWakeEvent } = await import('../database/imInbox')
+      const { appendImInboxMessageWithWakeEvent } = await import('../database/imInboxTestFixtures')
       const { buildImQueueScope } = await import('../../src/shared/queueScope')
       const sessionId = createSession(db, { name: 'track-context-wake' }).id
       const attributed = await attributeAndPersistRemoteMessage(db, { channel: 'wechat', identityKey: 'user', ownerId: 'owner', authorizationEpoch: 1,

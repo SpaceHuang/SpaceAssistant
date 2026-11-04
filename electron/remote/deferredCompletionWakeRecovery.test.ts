@@ -6,7 +6,7 @@ import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeSto
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSession } from '../database/operations'
 import { attributeAndPersistRemoteMessage } from './remoteTrackAttributionService'
-import { appendImInboxMessageWithWakeEvent } from '../database/imInbox'
+import { appendImInboxMessageWithWakeEvent } from '../database/imInboxTestFixtures'
 import { decideDeferredCompletionWakeRecovery, deliverDeferredApprovalRejectionNotice, deliverInterruptedDeferredCompletionNotice } from './deferredCompletionWakeRecovery'
 import { readDeferredCompletionWake } from './deferredCompletionWake'
 import { buildImQueueScope } from '../../src/shared/queueScope'

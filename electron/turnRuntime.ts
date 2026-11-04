@@ -7,6 +7,8 @@ export type TurnRuntimeOptions = {
   source?: ModelSource
   onEvent?: (turn: TurnStarted, event: TurnRuntimeProjectionEvent) => void
   onCancel?: (turn: TurnStarted) => void
+  /** Host current-policy gate for runtime-trigger queue starts; absent means fail closed for trigger IDs. */
+  authorizeRuntimeTriggerStart?: (turn: TurnStarted) => boolean | Promise<boolean>
 }
 
 export type TurnRuntimeProjectionEvent = AssistantFactEvent | { type: 'turn-started' }
@@ -17,6 +19,7 @@ export class TurnRuntime {
   readonly coordinator: TurnCoordinator
   private readonly source: ModelSource
   private readonly onEvent?: TurnRuntimeOptions['onEvent']
+  private readonly authorizeRuntimeTriggerStart?: TurnRuntimeOptions['authorizeRuntimeTriggerStart']
   private readonly listeners = new Set<TurnProjectionListener>()
   private readonly requestToTurns = new Map<string, Set<string>>()
   private readonly turnEventSeq = new Map<string, number>()
@@ -24,6 +27,7 @@ export class TurnRuntime {
   constructor(options: TurnRuntimeOptions) {
     this.source = options.source ?? (async () => { throw new Error('TURN_MODEL_SOURCE_NOT_CONFIGURED') })
     this.onEvent = options.onEvent
+    this.authorizeRuntimeTriggerStart = options.authorizeRuntimeTriggerStart
     this.coordinator = new TurnCoordinator(options.storage, options.deps, undefined, (turnId) => {
       const turn = this.coordinator.getTurn(turnId)
       if (turn) options.onCancel?.(turn)
@@ -97,6 +101,8 @@ export class TurnRuntime {
   }
 
   async execute(turnId: string, token: string): Promise<ModelResult | void> {
+    const authorization = this.assertRuntimeTriggerStartAuthorized(turnId)
+    if (authorization) await authorization
     const before = this.coordinator.getTurn(turnId)?.version
     const result = await this.coordinator.execute(turnId, token, this.source)
     this.publishTerminalResultProjection(turnId, before, result)
@@ -104,6 +110,8 @@ export class TurnRuntime {
   }
 
   async executeWithSource(turnId: string, token: string, source: ModelSource): Promise<ModelResult | void> {
+    const authorization = this.assertRuntimeTriggerStartAuthorized(turnId)
+    if (authorization) await authorization
     const before = this.coordinator.getTurn(turnId)?.version
     const result = await this.coordinator.execute(turnId, token, async (turn, startToken) => {
       try {
@@ -118,6 +126,26 @@ export class TurnRuntime {
     })
     this.publishTerminalResultProjection(turnId, before, result)
     return result
+  }
+
+  private assertRuntimeTriggerStartAuthorized(turnId: string): Promise<void> | undefined {
+    const turn = this.coordinator.getTurn(turnId)
+    if (!turn?.requestId.startsWith('runtime-trigger:')) return
+    const reject = () => {
+      this.coordinator.cancel(turnId)
+      throw new Error('RUNTIME_TRIGGER_AUTHORIZATION_REVOKED')
+    }
+    // final-check: host revalidates the already-approved binding before any source/provider dispatch;
+    // stale authorization returns to policy in the callback, never recalculates risk here.
+    if (!this.authorizeRuntimeTriggerStart) return reject()
+    try {
+      const decision = this.authorizeRuntimeTriggerStart(turn)
+      if (typeof (decision as Promise<boolean>)?.then === 'function') {
+        return Promise.resolve(decision).then((allowed) => { if (!allowed) reject() })
+      }
+      if (!decision) return reject()
+      return undefined
+    } catch { return reject() }
   }
 
   cancel(turnId: string): boolean {

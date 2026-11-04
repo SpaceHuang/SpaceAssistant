@@ -374,7 +374,7 @@ export interface ConfirmRequest {
   /** Per-call model claim; untrusted and shown only as review context. */
   modelJustification?: string
   modelJustificationTruncated?: boolean
-  /** Host-created candidate for an optional session review-scope grant; absence means one-call approval only. */
+  /** Host-created review-scope candidate; the host may register a bounded session grant after Agent approval. */
   reviewScopeCandidate?: ReviewScopeApprovalCandidate
 }
 
@@ -452,9 +452,6 @@ export type ApprovalVerdict =
       reason: ApprovalReason
       riskLevel?: ApprovalRiskDimension
       authorization?: ApprovalAuthorizationDimension
-      /** Explicit Agent choice to approve the exact host candidate for later calls in this session. */
-      reuseApproved?: true
-      scopeCandidateDigest?: string
     }
   | {
       kind: 'deny'
@@ -567,7 +564,6 @@ export type ConfirmOutcome =
   | {
       kind: 'approved'
       memory?: CacheKey
-      reviewScopeGrant?: { readonly source: ReviewCacheSource; readonly scopeCandidateDigest: string }
       reason?: ApprovalReason
       /** 本次批准的回答者；缺省视为 user（既有桌面 / IM 路径）。非 user 不得产生任何记忆写入（I3）。 */
       answererKind?: ConfirmAnswererKind
@@ -735,6 +731,12 @@ export interface SecurityAuditEvent {
    * fail-closed 各路径与 agent-deny 可区分）。
    */
   cause?: ConfirmOutcomeCause
+  /** Host-only review-scope cache diagnostic; contains no candidate digest or object data. */
+  reviewScopeOutcome?: 'created' | 'skipped' | 'hit' | 'miss'
+  reviewScopeReasonCode?: 'grant_created' | 'candidate_missing' | 'review_material_incomplete' | 'candidate_digest_invalid' |
+    'unsupported_tool' | 'grant_duplicate_or_capacity' | 'grant_lookup_hit' | 'grant_lookup_miss'
+  reviewScopeSource?: ReviewCacheSource
+  reviewScopeCandidateVersion?: 'review-scope-candidate-v1'
   /** actor='agent' 时的归因细节（哪个 Profile / 模型 / 哪次审批调用）。 */
   actorRef?: { profileId: string; model?: string; invocationId?: string }
   /** 该事件的耗时（审批调用等有明确时长的动作，成本观测用）。 */
@@ -758,6 +760,7 @@ export type SecurityAuditEventKind =
   | 'confirm.answerer-fallback'
   // 运行期审批失败转人工（fail-open-to-user）；与解析期配置告警 confirm.answerer-fallback 方向相反（§8.3）
   | 'confirm.answerer-fallback-to-user'
+  | 'confirm.review-scope'
   | 'cache.hit'
   | 'cache.write'
   | 'cache.clear'

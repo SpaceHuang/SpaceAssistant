@@ -6,6 +6,10 @@ const { setTimeout: delay } = require('node:timers/promises')
 const { app, BrowserWindow } = require('electron')
 const { configureCriticalFlowLocale } = require('./critical-user-flow-environment.cjs')
 const { waitForCriticalFlowAssistant } = require('./wait-for-critical-flow-assistant.cjs')
+const {
+  waitForCriticalFlowReadConfirmation,
+  waitForCriticalFlowToolApprovalAccepted
+} = require('./wait-for-critical-flow-confirmation.cjs')
 
 // Must run before app.whenReady(): i18next reads navigator.language during renderer startup.
 configureCriticalFlowLocale(app)
@@ -249,6 +253,15 @@ async function runToolRoundtrip(win) {
   fs.writeFileSync(fixture, 'critical-flow-tool-fixture')
   const session = await createSessionThroughUi(win)
   await sendMessage(win, '请读取 tool-fixture.txt 并告诉我文件中的固定内容。')
+  const listActiveTurns = () => execute(win, `window.api.chatListActiveTurns({sessionId:${JSON.stringify(session.id)}})`)
+  const confirmation = await waitForCriticalFlowReadConfirmation({
+    sessionId: session.id,
+    toolName: 'read_file',
+    waitFor,
+    listActiveTurns,
+    readConfirmation: (payload) => execute(win, `window.api.chatGetPendingConfirmation(${JSON.stringify(payload)})`)
+  })
+  stage('read-confirmation-host-ready', confirmation)
   const approval = await waitFor('enabled user-visible read approval', () => execute(win, `(() => { const button=[...document.querySelectorAll('button')].find((node)=>(node.getAttribute('aria-label')||node.innerText.trim())==='允许读取'); if(!button || button.disabled) return false; button.click(); return true })()`), 20_000).catch(async (error) => {
     const controls = await execute(win, `({buttons:[...document.querySelectorAll('button')].map((node)=>({name:node.getAttribute('aria-label')||node.innerText.trim(),disabled:node.disabled})).filter((node)=>node.name),body:document.body.innerText.slice(-1000)})`)
     stage('read-approval-unavailable', controls)
@@ -256,6 +269,14 @@ async function runToolRoundtrip(win) {
   })
   assert(approval, 'read approval was not accepted through the UI')
   stage('read-approved-through-ui')
+  await waitForCriticalFlowToolApprovalAccepted({
+    sessionId: session.id,
+    turnId: confirmation.turnId,
+    toolCallId: confirmation.toolCallId,
+    waitFor,
+    listActiveTurns
+  })
+  stage('read-approval-accepted-by-host', confirmation)
   const data = await waitForAssistant(win, session.id, '工具调用后的最终回复')
   stage('tool-roundtrip-message-facts', { messages: data.all.map((item) => ({ role: item.role, content: item.content?.slice(0, 120), status: item.status, toolCalls: item.toolCalls?.map((tool) => ({ toolName: tool.toolName, status: tool.status })), toolUse: item.toolUse?.slice?.(0, 120) })) })
   assert(data.all.some((item) => item.role === 'assistant' && item.content?.includes('critical-flow-tool-fixture')), 'real tool result was not returned to the model')
@@ -357,14 +378,15 @@ async function runRestartSetup(win) {
 async function runRestartResume(win) {
   const sessions = await sessionList(win)
   stage('restart-resume-session-list', { sessionCount: sessions.length })
-  const session = sessions.find((item) => (item.name || '').includes('会话')) || sessions[0]
-  assert(session, 'session from pre-restart profile is missing')
-  const selected = await execute(win, `(() => { const row=[...document.querySelectorAll('.session-item-select')].find((button)=>button.querySelector('.session-item-name')?.innerText.trim()===${JSON.stringify(session.name)}); if(!row || row.disabled) return false; row.click(); return true })()`)
+  const sessionId = process.env.CRITICAL_FLOW_SESSION_ID
+  const session = sessions.find((item) => item.id === sessionId)
+  assert(session, `session from pre-restart profile is missing: ${sessionId || 'session id unavailable'}`)
+  const selected = await execute(win, `(() => { const row=[...document.querySelectorAll('.session-item-select')].find((button)=>button.getAttribute('data-session-id')===${JSON.stringify(session.id)}); if(!row || row.disabled) return false; row.click(); return true })()`)
   assert(selected, 'pre-restart conversation could not be reopened from the real session list')
-  await waitFor('restarted session list selection committed in the renderer', () => execute(win, `Boolean([...document.querySelectorAll('.session-item-select[aria-current="true"]')].find((button)=>button.querySelector('.session-item-name')?.innerText.trim()===${JSON.stringify(session.name)}))`))
+  await waitFor('restarted session list selection committed in the renderer', () => execute(win, `Boolean([...document.querySelectorAll('.session-item-select[aria-current="true"]')].find((button)=>button.getAttribute('data-session-id')===${JSON.stringify(session.id)}))`))
   await execute(win, 'new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   await waitFor('reopened conversation composer ready', () => execute(win, `Boolean([...document.querySelectorAll('textarea')].find((node) => node.placeholder === '输入消息…' && !node.disabled))`))
-  stage('restart-session-reopened-through-ui', { sessionName: session.name })
+  stage('restart-session-reopened-through-ui', { sessionId: session.id })
   const readActiveTurns = () => execute(win, `window.api.chatListActiveTurns({sessionId:${JSON.stringify(session.id)}})`)
   await waitFor('restarted application has settled orphan turn', async () => (await readActiveTurns()).length === 0, 25_000).catch(async (error) => {
     const diagnostics = { active: await readActiveTurns(), messages: (await messages(win, session.id)).map((item) => ({ role: item.role, status: item.status, content: item.content?.slice(0, 120) })) }
@@ -422,4 +444,3 @@ app.whenReady().then(() => run()).catch((error) => {
   console.error(`CRITICAL_FLOW_FAILURE ${FLOW}: ${error.stack || error}`)
   try { app.exit(1) } catch { process.exitCode = 1 }
 })
-

@@ -11,6 +11,7 @@ import type { SessionContextState } from '../../../packages/agent-sdk/src/sessio
 export type PreparedIdentity = Readonly<{
   sessionId: string; turnId: string; requestId: string; startToken: string; userMessage?: Pick<Message, 'id'>
 }>
+import type { RuntimeTriggerHistoryAdmission } from './model'
 export type ExecutionLease = Readonly<{ sessionId: string; turnId: string; ownerId: string; generation: number }>
 export type ExecutionClaimResult = Readonly<{ acquired: true; generation: number }> | Readonly<{ acquired: false; reason: 'owned' | 'blocked' }>
 export type PrepareTurnInput = Parameters<TurnStorage['prepareAtomic']>[0] & Readonly<{
@@ -66,7 +67,7 @@ export interface SessionExecutionStore {
   readonly continuationLaunch: ContinuationLaunchStore
   prepareTurn(input: PrepareTurnInput): PreparedTurnResult
   claimQueuedTurn(input: ClaimQueuedTurnInput): ClaimedQueuedTurnResult
-  historyFor(input: Readonly<{ sessionId: string }>): SessionHistoryPort
+  historyFor(input: Readonly<{ sessionId: string; runtimeTriggerAdmission?: RuntimeTriggerHistoryAdmission }>): SessionHistoryPort
   acceptPrepared(input: { prepared: PreparedIdentity; lane: NonNullable<TurnExecutionConfig['lane']>; config: TurnExecutionConfig }): AcceptedTurn
   commitExecutionConfig(input: { ref: Readonly<{ sessionId: string; turnId: string }>; config: TurnExecutionConfig; intentFingerprint: string; fence: SelectionFence }): boolean
   failConfiguring(input: { ref: Readonly<{ sessionId: string; turnId: string }>; version: number; error: { code: string; message: string } }): boolean

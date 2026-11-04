@@ -108,14 +108,21 @@ describe('action.session.list', () => {
 })
 
 describe('action.session.status', () => {
+  it('能力描述说明运行中的 turnId 可用于等待回合完成', () => {
+    const status = findCap('action.session.status')
+    expect(status.summary).toContain('等待')
+    expect(status.returnsDoc).toContain('等待')
+  })
+
   it('活跃请求存在 → running:true；否则 false', async () => {
     const id = await seedSession('某会话')
     const status = findCap('action.session.status')
-    const idle = (await status.handler({ sessionId: id }, ctx())) as { running: boolean }
+    const idle = (await status.handler({ sessionId: id }, ctx())) as { running: boolean; turnId?: string }
     expect(idle.running).toBe(false)
-    registerSessionActiveStream(id, 'req-9')
+    expect(idle).not.toHaveProperty('turnId')
+    registerSessionActiveStream(id, 'req-9', 'turn-9')
     const running = (await status.handler({ sessionId: id }, ctx())) as { running: boolean }
-    expect(running.running).toBe(true)
+    expect(running).toEqual({ running: true, turnId: 'turn-9' })
     clearSessionActiveStream(id, 'req-9')
   })
 

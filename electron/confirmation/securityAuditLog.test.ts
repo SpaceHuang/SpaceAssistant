@@ -63,6 +63,19 @@ describe('安全审计日志：脱敏', () => {
     expect(sanitizeAuditField('ping baidu.com')).toBe('ping baidu.com')
   })
 
+  it('范围缓存诊断只保留白名单字段，不落候选路径、正文或摘要', () => {
+    const line = auditLine({ ...baseEvent(), event: 'confirm.review-scope', reviewScopeOutcome: 'created',
+      reviewScopeReasonCode: 'grant_created', reviewScopeSource: 'agent', reviewScopeCandidateVersion: 'review-scope-candidate-v1',
+      invocationId: 'inv-scope-1', factsSummary: '/Users/alice/private/file.txt secret=body',
+      cacheKey: 'a'.repeat(64), reason: 'content digest: ' + 'b'.repeat(64) })
+    expect(line).toContain('"reviewScopeReasonCode":"grant_created"')
+    expect(line).toContain('"invocationId":"inv-scope-1"')
+    expect(line).not.toContain('/Users/alice/private/file.txt')
+    expect(line).not.toContain('secret=body')
+    expect(line).not.toContain('a'.repeat(64))
+    expect(line).not.toContain('b'.repeat(64))
+  })
+
   it('JSON 形态凭据字段打码（评审 B1）：序列化 params 流经摘要时不落明文', () => {
     const summary =
       'toolkit.call · action.mcp.add：添加 MCP 连接；参数 {"name":"scys","endpoint":"https://mcp.scys.com/mcp","accessToken":"ghp_secret123456","headerValue":"Bearer xyz","env":{"API_TOKEN":"tok_789"}}'

@@ -144,6 +144,7 @@ export function SessionListPane() {
                           <button
                             type="button"
                             className="session-item-select"
+                            data-session-id={item.id}
                             aria-current={active ? 'true' : undefined}
                             aria-label={pending ? t('session.pendingConfirm.itemCountAria', { name, count: pending.count }) : undefined}
                             disabled={deleting}

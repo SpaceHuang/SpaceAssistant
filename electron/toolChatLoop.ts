@@ -29,7 +29,8 @@ import type {
   ShellConfig,
   ToolCallResultPersisted,
   ToolsConfig,
-  WikiConfig
+  WikiConfig,
+  SkillDefinition
 } from '../src/shared/domainTypes'
 import { buildToolCapabilityConventionHint } from '../src/shared/skillPrompt'
 import { buildMcpToolCatalogSection } from '../src/shared/toolCatalogPrompt'
@@ -243,6 +244,8 @@ export type RunToolChatSessionArgs = {
   /** P4：思维强度档位（装配期解析；发起时冻结，调用内不变）。 */
   reasoningEffort?: import('../src/shared/agent/invocation').AgentReasoningEffort
   skillFragments?: string[]
+  /** Frozen Desktop Skill catalog and read budget for this turn. */
+  skillTurnScope?: import('./skills/skillTurnScope').SkillTurnScope
   /** 当轮 user 消息 id（tool loop 日志等） */
   currentUserMessageId?: string
   /** 由 Core 从当前授权会话事实构造，供 history.read 只读回查。 */
@@ -483,6 +486,7 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     locale: invocation.profile.locale as AppLocale | undefined,
     projectMemoryEnabled: invocation.profile.projectMemoryEnabled,
     skillFragments: invocation.profile.skillFragments,
+    skillTurnScope: additional['electron.skillTurnScope'] as RunToolChatSessionArgs['skillTurnScope'],
     currentUserMessageId: invocation.messages.currentUserMessageId,
     historyFacts: additional[AGENT_ADDITIONAL_CONTEXT_KEYS.historyFacts] as readonly HistoryFact[] | undefined,
     assistantMessageId: invocation.messages.assistantMessageId,
@@ -555,7 +559,7 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Run
   }, { once: true })
   // sessionId→活跃流反向登记：供 action.session.status/list 判定会话运行中（需求 §9.4，
   // 与下方 finally 的 clearSessionActiveStream 成对、按 requestId 粒度删除，重入安全）
-  registerSessionActiveStream(args.sessionId, args.requestId)
+  registerSessionActiveStream(args.sessionId, args.requestId, executionId)
   const requestLane = args.lane
     ?? (args.remoteContext
       ? args.remoteContext.source === 'feishu'
@@ -1033,7 +1037,7 @@ async function runToolChatSessionInner(
     memoryEnabled: projectMemoryEnabled ?? true,
     locale,
     hasImageAttachments: hasImageAttachments ?? false,
-    skillCatalog: getCachedSkills(userDataDir, resolveWorkDir?.() ?? initialWorkDir),
+    skillCatalog: (args.skillTurnScope?.catalogSkills as SkillDefinition[] | undefined) ?? getCachedSkills(userDataDir, resolveWorkDir?.() ?? initialWorkDir),
     contextWindow: args.contextWindow,
     ...(mcpCatalog ? { mcpCatalog } : {})
   })

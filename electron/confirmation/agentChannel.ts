@@ -385,14 +385,6 @@ export class AgentChannel implements ConfirmationChannel {
             answererKind: 'agent',
             cause: 'agent-approved',
             reason: result.verdict.reason,
-            ...(this.deps.reviewScopeEvidenceComplete === true && typeof this.deps.taskDigest === 'string' && this.deps.taskDigest.trim().length > 0 &&
-              typeof this.deps.reviewScopeTaskIdentity === 'string' && this.deps.reviewScopeTaskIdentity.length > 0 &&
-              Buffer.byteLength(this.deps.reviewScopeTaskIdentity, 'utf8') <= 64 * 1024 &&
-              this.deps.taskDigestTruncated !== true &&
-              result.verdict.reuseApproved === true && result.verdict.scopeCandidateDigest &&
-              result.verdict.scopeCandidateDigest === clue.reviewScopeCandidate?.scopeCandidateDigest
-              ? { reviewScopeGrant: { source: 'agent' as const, scopeCandidateDigest: result.verdict.scopeCandidateDigest } }
-              : {})
           }
         // R5：undetermined 是有效裁决「判不了」——映射为独立 cause（缺此分支会静默退化 agent-deny）
         : result.verdict.kind === 'undetermined'

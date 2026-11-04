@@ -33,6 +33,23 @@ export function sanitizeAuditField(value: unknown): unknown {
 }
 
 export function sanitizeAuditEvent(event: SecurityAuditEvent): SecurityAuditEvent {
+  if (event.event === 'confirm.review-scope') {
+    return {
+      ts: event.ts, event: event.event, lane: event.lane, sessionId: event.sessionId, actor: event.actor,
+      ...(event.requestId ? { requestId: event.requestId } : {}),
+      ...(event.invocationId ? { invocationId: event.invocationId } : {}),
+      ...(event.toolUseId ? { toolUseId: event.toolUseId } : {}),
+      ...(event.toolName ? { toolName: event.toolName } : {}),
+      ...(event.reviewScopeOutcome && ['created', 'skipped', 'hit', 'miss'].includes(event.reviewScopeOutcome)
+        ? { reviewScopeOutcome: event.reviewScopeOutcome } : {}),
+      ...(event.reviewScopeReasonCode && ['grant_created', 'candidate_missing', 'review_material_incomplete', 'candidate_digest_invalid',
+        'unsupported_tool', 'grant_duplicate_or_capacity', 'grant_lookup_hit', 'grant_lookup_miss'].includes(event.reviewScopeReasonCode)
+        ? { reviewScopeReasonCode: event.reviewScopeReasonCode } : {}),
+      ...(event.reviewScopeSource === 'agent' || event.reviewScopeSource === 'user' ? { reviewScopeSource: event.reviewScopeSource } : {}),
+      ...(event.reviewScopeCandidateVersion === 'review-scope-candidate-v1'
+        ? { reviewScopeCandidateVersion: event.reviewScopeCandidateVersion } : {})
+    }
+  }
   const out: SecurityAuditEvent = { ...event }
   // audit storage boundary: replace transient raw findings with a structure-only projection.
   // The shared facts producer does not decide policy; this is the final local-file content check.

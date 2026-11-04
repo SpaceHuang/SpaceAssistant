@@ -12,6 +12,7 @@ import { requireInvocationAnthropicRoute } from './runtime/invocationProviderRou
 import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { runToolChatSession, DESKTOP_TOOL_LOOP_MAX_ROUNDS } from './toolChatLoop'
 import { assembleInvocation } from './runtime/invocationAssembler'
+import { formatRuntimeTriggerSourceContext } from './triggers/sourceContext'
 import { createAgentSdkSessionEventProjector } from './runtime/agentSdkSessionEventProjection'
 import { isAppLocale } from '../src/shared/locale'
 import { buildApprovalConversationContext, buildApprovalTaskEvidence, buildApprovalTaskIdentity,
@@ -71,6 +72,16 @@ export type ClaudeStreamDeps = {
   notifyMainWindow?: (channel: string, payload: unknown) => void
   turnRuntime?: TurnRuntime
   sessionStorage?: SessionStorage
+  runtimeTriggers?: import('./capabilities/types').RuntimeTriggerCapabilityPort
+  /** Trusted SQLite admission material for the first runtime-trigger source context. */
+  runtimeTriggerAdmission?: (input: { sessionId: string; turnId: string; requestId: string }) => import('./sessionStorage/public/model').RuntimeTriggerHistoryAdmission | undefined
+  /** Current-authorized source facts held only in memory until History commits the admission receipt. */
+  runtimeTriggerSourceContext?: (input: { sessionId: string; turnId: string; requestId: string }) => { triggerId: string; event: Readonly<Record<string, unknown>> } | undefined
+  /** Main-process trusted lifecycle assembler for SDK-hosted turns. */
+  runtimeTriggerLifecycle?: (input: { sessionId: string; turnId: string; history: import('./sessionStorage/public/ports').SessionHistoryPort }) => Readonly<{
+    hooks: import('../packages/agent-sdk/src/turn').AgentTurnLifecycleHooks
+    limits: import('../packages/agent-sdk/src/turn').AgentTurnLifecycleLimits
+  }> | undefined
 }
 
 const automaticSummaryCache = new SessionContextSummaryCache()
@@ -121,6 +132,8 @@ export type ClaudeChatCreateWithToolsPayload = {
   }
   projectMemoryEnabled?: boolean
   locale?: string
+  /** Per-turn Skill snapshot transferred only in memory by the agent protocol. */
+  skillTurnScope?: import('./skills/skillTurnScope').SkillTurnScope
 }
 
 function assertValidClaudeContentBlocks(
@@ -246,7 +259,8 @@ export function normalizeAndValidateClaudeMessagesWithContentBlocks(
 export type ClaudeTurnExecution = (
   /** 排水器等主进程内部驱动源没有 IPC sender；事实事件全走 emitFactEvent/emitSessionEvent 出口 */
   sender: WebContents | null,
-  payload: ClaudeChatCreateWithToolsPayload
+  payload: ClaudeChatCreateWithToolsPayload,
+  skillTurnScope?: import('./skills/skillTurnScope').SkillTurnScope
 ) => Promise<unknown>
 
 type EventPersistenceFailure = {
@@ -298,7 +312,8 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
   const sessionStorage: SessionStorage = injectedStorage
   const pendingCompactionCards = new Map<string, import('../src/shared/domainTypes').SystemOperationRecord>()
   const pendingCompactionSummaries = new Map<string, { key: string; summary: SessionContextSummary }>()
-  const executeClaudeRequest: ClaudeTurnExecution = async (_sender, payload) => {
+  const executeClaudeRequest: ClaudeTurnExecution = async (_sender, payload, skillTurnScope) => {
+      if (skillTurnScope && !payload.skillTurnScope) payload = { ...payload, skillTurnScope }
       let requestId = ''
       let eventWriter: SessionEventSink | undefined
       let eventTurnId = ''
@@ -503,6 +518,14 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         // 仅比较 replay surface，避免其有损投影本身触发误切换。
         const replayApplied = JSON.stringify(replayedMessages) !== JSON.stringify(replaySurface)
         if (replayApplied) builtMessages = restoreReplaySurface(builtMessages, replayedMessages)
+        const runtimeTriggerSource = deps.runtimeTriggerSourceContext?.({ sessionId, turnId, requestId })
+        if (requestId.startsWith('runtime-trigger:') && !runtimeTriggerSource) throw new Error('RUNTIME_TRIGGER_SOURCE_MATERIALS_REQUIRED')
+        if (runtimeTriggerSource) {
+          builtMessages = [...builtMessages, {
+            id: `runtime-trigger-source:${runtimeTriggerSource.triggerId}`, role: 'user',
+            content: formatRuntimeTriggerSourceContext(runtimeTriggerSource), timestamp: Date.now()
+          }]
+        }
         const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(builtMessages, {
           sessionId,
           requiredUserMessageId: authoritative.currentUserMessageId
@@ -564,6 +587,8 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           locale: typeof localeCandidate === 'string' && isAppLocale(localeCandidate) ? localeCandidate : undefined,
           projectMemoryEnabled: frozen.projectMemoryEnabled,
           skillFragments: frozen.skillFragments,
+          ...(payload.skillTurnScope ? { skillTurnScope: payload.skillTurnScope } : {}),
+          skillTurnScope: payload.skillTurnScope,
           options: { maxTokens: frozen.maxTokens, enableThinking: frozen.enableThinking },
           // §7.2：主链路显式传档位（优先于 options.enableThinking 兼容映射；旧 turn 记录无该字段时回退）。
           // 评审 B1：能力降级时传降级前档位，装配层照旧落 reasoning_degraded 审计（冻结档位仍是 off）
@@ -594,7 +619,15 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           getApiKey,
           appDb: deps.getAppDatabase(),
           sessionStorage,
-          historyForSession: (scopeSessionId: string) => sessionStorage.execution.historyFor({ sessionId: scopeSessionId }),
+          ...(deps.runtimeTriggers ? { runtimeTriggers: deps.runtimeTriggers } : {}),
+          historyForSession: (scopeSessionId: string) => {
+            const admission = scopeSessionId === sessionId
+              ? deps.runtimeTriggerAdmission?.({ sessionId, turnId, requestId }) : undefined
+            if (requestId.startsWith('runtime-trigger:') && scopeSessionId === sessionId && !admission) {
+              throw new Error('RUNTIME_TRIGGER_HISTORY_ADMISSION_REQUIRED')
+            }
+            return sessionStorage.execution.historyFor({ sessionId: scopeSessionId, ...(admission ? { runtimeTriggerAdmission: admission } : {}) })
+          },
           ...(session ? { sessionEventLocation: { workDir: deps.getWorkDir(), sessionId, createdAt: session.createdAt } } : {}),
           currentUserMessageId: authoritative.currentUserMessageId,
           historyFacts,
@@ -832,8 +865,12 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             deps.emitFactEvent?.(requestId, fact)
           }
         })
+        const triggerAdmission = deps.runtimeTriggerAdmission?.({ sessionId, turnId, requestId })
+        if (requestId.startsWith('runtime-trigger:') && !triggerAdmission) throw new Error('RUNTIME_TRIGGER_HISTORY_ADMISSION_REQUIRED')
+        const triggerLifecycleHistory = sessionStorage.execution.historyFor({ sessionId, ...(triggerAdmission ? { runtimeTriggerAdmission: triggerAdmission } : {}) })
+        const triggerLifecycle = deps.runtimeTriggerLifecycle?.({ sessionId, turnId, history: triggerLifecycleHistory })
         const hostedHandoffOptions = {
-          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, ...(turnPorts.planContextReplacement ? { planContextReplacement: turnPorts.planContextReplacement } : {}), ...(authoritative.executionConfig?.continuationContext ? { continuationContext: authoritative.executionConfig.continuationContext } : {}), refreshExecutionContext: (_call, stage, current) => {
+          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, ...(triggerLifecycle ? { lifecycleHooks: triggerLifecycle.hooks, lifecycleLimits: triggerLifecycle.limits } : {}), ...(turnPorts.planContextReplacement ? { planContextReplacement: turnPorts.planContextReplacement } : {}), ...(authoritative.executionConfig?.continuationContext ? { continuationContext: authoritative.executionConfig.continuationContext } : {}), refreshExecutionContext: (_call, stage, current) => {
             const toolsConfig = deps.getToolsConfig()
             const browserConfig = deps.getBrowserConfig()
             const shellConfig = deps.getShellConfig()
@@ -909,6 +946,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             : {})
         }
       } finally {
+        payload.skillTurnScope?.close()
         const refreshSessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
         try {
           // P0-③: turn-terminal checkpoints stay on the cheap fast path; anything else

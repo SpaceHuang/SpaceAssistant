@@ -183,10 +183,6 @@ function renderCluePack(clue: ApprovalCluePack, maxAuthorization: ApprovalAuthor
     '',
     '请依据裁决标准独立给出三态 JSON 结论（approve / deny / undetermined）；',
     '事实链不完整、无法判定安全性时必须输出 undetermined 并写明缺什么证据——不得在证据不足时猜测 approve。',
-    ...(clue.reviewScopeCandidate ? [
-      '若且仅若本次 approve 同时明确覆盖候选中的工具、操作和全部目标，且可信任务证据允许在当前会话复用该范围，才可附加 reuseApproved=true 与原样 scopeCandidateDigest。',
-      '该字段只申请后续同会话审核范围；不扩大本次 approve，不得用于敏感目标、执行/外发/删除或超出可信任务的范围。否则省略这两个字段或令 reuseApproved=false。'
-    ] : [])
   ]
   return lines.join('\n')
 }
@@ -282,8 +278,6 @@ export function parseApprovalVerdict(
         kind?: unknown
         riskLevel?: unknown
         authorization?: unknown
-        reuseApproved?: unknown
-        scopeCandidateDigest?: unknown
         reason?: { summary?: unknown }
       }
       if (parsed.kind !== 'approve' && parsed.kind !== 'deny' && parsed.kind !== 'undetermined') continue
@@ -315,9 +309,6 @@ export function parseApprovalVerdict(
         kind,
         riskLevel: risk,
         authorization: auth,
-        ...(kind === 'approve' && parsed.reuseApproved === true && typeof parsed.scopeCandidateDigest === 'string' && /^[a-f0-9]{64}$/.test(parsed.scopeCandidateDigest)
-          ? { reuseApproved: true as const, scopeCandidateDigest: parsed.scopeCandidateDigest }
-          : {}),
         reason: {
           summary: matrixSaysDeny
             ? `模型结论 approve 与阈值矩阵矛盾（risk=${risk}，authorization=${auth}），已降级为拒绝。`
