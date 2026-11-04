@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 122
+export const DB_SCHEMA_VERSION = 123
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -1795,6 +1795,9 @@ CREATE TABLE IF NOT EXISTS runtime_triggers (
 );
 CREATE INDEX IF NOT EXISTS idx_runtime_triggers_state_due ON runtime_triggers(state,next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_runtime_triggers_owner_created ON runtime_triggers(owner_session_id,created_at,id);
+CREATE INDEX IF NOT EXISTS idx_runtime_triggers_waiting_process_source
+  ON runtime_triggers(owner_session_id,json_extract(definition_json,'$.condition.managedProcessId'),json_extract(definition_json,'$.sourceBaseline.runtimeGeneration'))
+  WHERE state='waiting' AND json_extract(definition_json,'$.condition.type')='process_exit';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_triggers_active_sync_target ON runtime_triggers(receiver_session_id)
   WHERE state IN ('waiting','matched') AND json_extract(definition_json,'$.condition.type')='session_steps'
     AND json_extract(definition_json,'$.condition.mode')='sync';
@@ -1857,6 +1860,35 @@ WHEN OLD.content_storage_state='canonical-backed-only' AND (
   SELECT RAISE(ABORT,'canonical-backed-only message content is immutable');
 END;
 
+`
+
+/** v122 → v123: bind sync uniqueness to its target and index durable process-exit handoff. */
+export const MIGRATION_V123_RUNTIME_TRIGGER_SYNC_TARGET_SQL = `
+UPDATE runtime_triggers
+SET state='failed',
+    result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,
+      '$.code','TRIGGER_CONFLICT','$.case','sync-target-duplicate-migration'),
+    revision=revision+1,
+    updated_at=MAX(updated_at,created_at)
+WHERE id IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY json_extract(definition_json,'$.condition.targetSessionId')
+      ORDER BY created_at,id
+    ) AS duplicate_rank
+    FROM runtime_triggers
+    WHERE state IN ('waiting','matched')
+      AND json_extract(definition_json,'$.condition.type')='session_steps'
+      AND json_extract(definition_json,'$.condition.mode')='sync'
+  ) WHERE duplicate_rank>1
+);
+DROP INDEX IF EXISTS idx_runtime_triggers_active_sync_target;
+CREATE UNIQUE INDEX idx_runtime_triggers_active_sync_target ON runtime_triggers(json_extract(definition_json,'$.condition.targetSessionId'))
+  WHERE state IN ('waiting','matched') AND json_extract(definition_json,'$.condition.type')='session_steps'
+    AND json_extract(definition_json,'$.condition.mode')='sync';
+CREATE INDEX IF NOT EXISTS idx_runtime_triggers_waiting_process_source
+  ON runtime_triggers(owner_session_id,json_extract(definition_json,'$.condition.managedProcessId'),json_extract(definition_json,'$.sourceBaseline.runtimeGeneration'))
+  WHERE state='waiting' AND json_extract(definition_json,'$.condition.type')='process_exit';
 `
 
 /** v46: tables and integrity backfill for the global History allocator. */

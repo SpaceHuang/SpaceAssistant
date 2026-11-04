@@ -87,7 +87,8 @@ describe('runtime trigger capacity and local registration latency', () => {
       // This local fixture records measurement without making a machine-specific speed promise.
       expect({ machine: process.platform, registrations: samples.length, p95Ms: p95 }).toMatchObject({ machine: process.platform, registrations: 128 })
       now += 120_000
-      expect(commands.runtimeTriggers.countActive({ ownerSessionId: owner, now })).toBe(0)
+      // All registrations reached matched state; their source deadlines cannot release active quota.
+      expect(commands.runtimeTriggers.countActive({ ownerSessionId: owner, now })).toBe(128)
     } finally { db.close() }
   })
 

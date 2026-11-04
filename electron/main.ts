@@ -61,6 +61,7 @@ import { classifyQueueInputSource } from './database/queueInputSource'
 import { createRuntimeTriggerDelivery } from './triggers/delivery'
 import { createRuntimeTriggerRecovery } from './triggers/recovery'
 import { evaluateRuntimeTriggerSource, readPersistedTurnTerminal, readSessionSettledStepFacts, readSettledStepFacts, SettledStepFactsTracker, turnTerminalBusForExecution } from './triggers/sources'
+import { subscribeRuntimeTriggerProcessExitHandoff } from './triggers/processExitHandoff'
 import { createRuntimeTriggerStartAuthorizer } from './triggers/authorization'
 import { createRuntimeTriggerLifecycleAssembly, createRuntimeTriggerSyncWaitRegistry, failOrphanedRuntimeSyncTriggers } from './triggers/syncCheckpoint'
 import { waitForRuntimeTriggerReceiverTurn } from './triggers/receiverStarter'
@@ -1370,7 +1371,7 @@ app.whenReady().then(async () => {
 
   const runtimeTriggerRecovery = createRuntimeTriggerRecovery({
     listWaiting: () => sessionStorage.commands.runtimeTriggers.listByState('waiting', 4_096),
-    listMatched: () => sessionStorage.commands.runtimeTriggers.listByState('matched', 4_096),
+    listMatched: (after) => sessionStorage.commands.runtimeTriggers.listByState('matched', 4_096, after),
     read: (id) => sessionStorage.commands.runtimeTriggers.read(id),
     evaluateWaiting: (trigger, now) => evaluateRuntimeTriggerSource(trigger, {
       now, queries: sessionStorage.queries,
@@ -1414,6 +1415,7 @@ app.whenReady().then(async () => {
       triggerId, reason: error instanceof Error ? error.message : String(error)
     })
   })
+  subscribeRuntimeTriggerProcessExitHandoff(sessionStorage.commands)
   failOrphanedRuntimeSyncTriggers(sessionStorage.commands, Date.now())
   runtimeTriggerRecoveryStop = runtimeTriggerRecovery.stop
   runtimeTriggerRecovery.start()

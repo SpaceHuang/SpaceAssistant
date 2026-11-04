@@ -44,6 +44,7 @@ import {
   MIGRATION_V121_IM_FACT_BACKFILL_SQL,
   MIGRATION_V121_IM_FACT_IDENTITY_SQL,
   MIGRATION_V122_IM_FACT_CONVERSATION_TYPE_SQL,
+  MIGRATION_V123_RUNTIME_TRIGGER_SYNC_TARGET_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_SESSION_TRIGGERS_SQL,
   MIGRATION_V116_SESSION_BODY_LOCATOR_HISTORY_TRIGGERS_SQL,
@@ -2427,6 +2428,12 @@ export function runMigrations(conn: DatabaseSync): void {
     }
     if (hasTable(conn, 'im_inbox_message_context')) conn.exec(MIGRATION_V122_IM_FACT_CONVERSATION_TYPE_SQL)
     version = 122
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v122 → v123: enforce target-based sync uniqueness and index process-exit handoff facts.
+  if (version === 122) runInTransaction(conn, () => {
+    if (hasTable(conn, 'runtime_triggers')) conn.exec(MIGRATION_V123_RUNTIME_TRIGGER_SYNC_TARGET_SQL)
+    version = 123
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

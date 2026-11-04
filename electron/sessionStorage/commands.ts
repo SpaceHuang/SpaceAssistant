@@ -49,14 +49,25 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
         : getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE owner_session_id=? ORDER BY created_at,id LIMIT ?`).all(ownerSessionId,limit + 1)
       return (rows as TriggerRow[]).map(decodeRuntimeTriggerRow)
     },
-    listByState: (state, limit = 4_096) => {
+    listByState: (state, limit = 4_096, after) => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4_096) throw new TypeError('invalid runtime trigger recovery limit')
-      const rows = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE state=? ORDER BY created_at,id LIMIT ?`).all(state, limit) as TriggerRow[]
+      const rows = after
+        ? getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE state=? AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT ?`).all(state, after.createdAt, after.createdAt, after.id, limit) as TriggerRow[]
+        : getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE state=? ORDER BY created_at,id LIMIT ?`).all(state, limit) as TriggerRow[]
       return rows.map(decodeRuntimeTriggerRow)
     },
-    countActive: (input = {}) => Number(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM runtime_triggers WHERE state IN ('waiting','matched') AND expires_at>?${input.ownerSessionId ? ' AND owner_session_id=?' : ''}`).get(...(input.ownerSessionId ? [input.now ?? Date.now(), input.ownerSessionId] : [input.now ?? Date.now()]))?.count ?? 0),
-    findActiveSyncTarget: (receiverSessionId) => {
-      const row = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE receiver_session_id=? AND state IN ('waiting','matched') AND json_extract(definition_json,'$.condition.type')='session_steps' AND json_extract(definition_json,'$.condition.mode')='sync'`).get(receiverSessionId) as TriggerRow | undefined
+    listWaitingForManagedProcessExit: ({ managedProcessId, runtimeGeneration, ownerSessionId }) => {
+      const rows = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at
+        FROM runtime_triggers WHERE state='waiting' AND owner_session_id=?
+          AND json_extract(definition_json,'$.condition.type')='process_exit'
+          AND json_extract(definition_json,'$.condition.managedProcessId')=?
+          AND json_extract(definition_json,'$.sourceBaseline.runtimeGeneration')=? ORDER BY created_at,id`)
+        .all(ownerSessionId, managedProcessId, runtimeGeneration) as TriggerRow[]
+      return rows.map(decodeRuntimeTriggerRow)
+    },
+    countActive: (input = {}) => Number(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM runtime_triggers WHERE (state='matched' OR (state='waiting' AND expires_at>?))${input.ownerSessionId ? ' AND owner_session_id=?' : ''}`).get(...(input.ownerSessionId ? [input.now ?? Date.now(), input.ownerSessionId] : [input.now ?? Date.now()]))?.count ?? 0),
+    findActiveSyncTarget: (targetSessionId) => {
+      const row = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE state IN ('waiting','matched') AND json_extract(definition_json,'$.condition.type')='session_steps' AND json_extract(definition_json,'$.condition.mode')='sync' AND json_extract(definition_json,'$.condition.targetSessionId')=?`).get(targetSessionId) as TriggerRow | undefined
       return row ? decodeRuntimeTriggerRow(row) : null
     },
     insert: (input) => {

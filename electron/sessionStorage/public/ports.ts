@@ -79,9 +79,10 @@ export interface SessionCommands {
     read(triggerId: string): RuntimeTriggerRecord | null
     findByClientKey(ownerSessionId: string, clientKey: string): RuntimeTriggerRecord | null
     listByOwner(input: { ownerSessionId: string; cursor?: { createdAt: number; id: string }; limit: number }): readonly RuntimeTriggerRecord[]
-    listByState(state: 'waiting' | 'matched', limit?: number): readonly RuntimeTriggerRecord[]
+    listByState(state: 'waiting' | 'matched', limit?: number, after?: { createdAt: number; id: string }): readonly RuntimeTriggerRecord[]
+    listWaitingForManagedProcessExit(input: { managedProcessId: string; runtimeGeneration: string; ownerSessionId: string }): readonly RuntimeTriggerRecord[]
     countActive(input?: { ownerSessionId?: string; now?: number }): number
-    findActiveSyncTarget(receiverSessionId: string): RuntimeTriggerRecord | null
+    findActiveSyncTarget(targetSessionId: string): RuntimeTriggerRecord | null
     insert(record: RuntimeTriggerRecord): RuntimeTriggerRecord
     update(triggerId: string, expectedRevision: number, patch: RuntimeTriggerPatch): RuntimeTriggerRecord | null
   }>

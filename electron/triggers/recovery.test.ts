@@ -85,6 +85,25 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
     recovery.stop()
   })
 
+  it('advances matched recovery pages so legacy backlog cannot starve newer triggers', async () => {
+    const rows = Array.from({ length: 4_097 }, (_, index) => matched({ id: `trigger-${String(index).padStart(4, '0')}`,
+      createdAt: index + 1, updatedAt: index + 1 }))
+    const delivered: string[] = []
+    const recovery = createRuntimeTriggerRecovery({
+      listWaiting: () => [],
+      listMatched: (after) => rows.filter((row) => !after || row.createdAt > after.createdAt || (row.createdAt === after.createdAt && row.id > after.id)).slice(0, 4_096),
+      read: (id) => rows.find((row) => row.id === id) ?? null, evaluateWaiting: () => ({ kind: 'none' }),
+      match: vi.fn(), expire: vi.fn(), fail: vi.fn(), deliver: (id) => { delivered.push(id); return { kind: 'deferred', case: 'queued' } },
+      update: vi.fn(() => null), readReceipt: () => undefined, isSessionBusy: () => true, startReceiver: () => 'busy',
+      readTurnTerminal: () => ({ kind: 'active' })
+    })
+    await recovery.scan()
+    expect(delivered).toHaveLength(4_096)
+    await recovery.scan()
+    expect(delivered).toHaveLength(4_097)
+    expect(delivered.at(-1)).toBe('trigger-4096')
+  })
+
   it('waits for an active durable scan to settle before shutdown proceeds', async () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })

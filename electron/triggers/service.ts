@@ -82,7 +82,7 @@ export function createRuntimeTriggerService(commands: SessionCommands, options: 
       catch { fail('TRIGGER_SOURCE_GAP', 'source-baseline-unavailable') }
       const definition = { version: 1 as const, condition, sourceBaseline: structuredClone(baseline) }
       if (condition.type === 'session_steps' && condition.mode === 'sync') {
-        const activeSync = commands.runtimeTriggers.findActiveSyncTarget(params.receiverSessionId)
+        const activeSync = commands.runtimeTriggers.findActiveSyncTarget(condition.targetSessionId)
         if (activeSync && activeSync.expiresAt <= timestamp) updateRuntimeTrigger(commands, activeSync.id, activeSync.revision, { state: 'expired', updatedAt: timestamp })
         else if (activeSync) fail('TRIGGER_CONFLICT', 'sync-target-already-registered')
       }

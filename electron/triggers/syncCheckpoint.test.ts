@@ -32,7 +32,7 @@ describe('sync runtime trigger checkpoint', () => {
     expect(RUNTIME_TRIGGER_LIMITS).toEqual({ callbackTimeoutMs: 5000, maxPauseMs: 60000 })
   })
 
-  it('closes persisted sync waiters on startup because their in-memory SDK pause cannot be resumed', () => {
+  it('only fails matched sync waiters at startup; unmatched registrations survive restart', () => {
     const sync = syncRecord()
     const matchedSync = { ...sync, id: 'sync-matched', state: 'matched' as const, revision: 3, result: { pauseAcceptedBySdk: true } }
     const ordinary = { ...sync, id: 'async-1', definition: { ...sync.definition, condition: { ...sync.definition.condition, mode: 'async' as const } } }
@@ -41,9 +41,11 @@ describe('sync runtime trigger checkpoint', () => {
       return record && patch.result.case === 'sync-waiter-lost-on-restart' ? ({ ...record, ...patch }) as RuntimeTriggerRecord : null
     })
     const commands = { runtimeTriggers: { listByState: vi.fn((state: string) => state === 'waiting' ? [sync, ordinary] : [matchedSync]), update } }
-    expect(failOrphanedRuntimeSyncTriggers(commands as never, 1234)).toBe(2)
-    expect(update).toHaveBeenCalledTimes(2)
-    expect(update).toHaveBeenCalledWith(sync.id, sync.revision, { state: 'failed', result: { code: 'TRIGGER_SOURCE_GAP', case: 'sync-waiter-lost-on-restart' }, updatedAt: 1234 })
+    expect(failOrphanedRuntimeSyncTriggers(commands as never, 1234)).toBe(1)
+    expect(update).toHaveBeenCalledOnce()
+    expect(update).toHaveBeenCalledWith(matchedSync.id, matchedSync.revision, { state: 'failed', result: { pauseAcceptedBySdk: true,
+      code: 'TRIGGER_SOURCE_GAP', case: 'sync-waiter-lost-on-restart' }, updatedAt: 1234 })
+    expect(update).not.toHaveBeenCalledWith(sync.id, expect.anything(), expect.anything())
   })
 
   it('assembles production hooks with the confirmed bounds, without fixture defaults', () => {

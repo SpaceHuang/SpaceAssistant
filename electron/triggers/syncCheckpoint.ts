@@ -180,15 +180,21 @@ export function createRuntimeTriggerLifecycleAssembly(input: Omit<SyncCheckpoint
   return { hooks: createSyncCheckpointLifecycleHooks({ ...input, limits: RUNTIME_TRIGGER_LIMITS }), limits: RUNTIME_TRIGGER_LIMITS }
 }
 
-/** An in-memory SDK waiter cannot be resumed after process restart; close durable sync records explicitly. */
+/** An in-memory SDK pause cannot resume after restart; fail only sync triggers that already matched a lost checkpoint. */
 export function failOrphanedRuntimeSyncTriggers(commands: Pick<SessionCommands, 'runtimeTriggers'>, now = Date.now()): number {
   let failed = 0
-  for (const state of ['waiting', 'matched'] as const) {
-    for (const trigger of commands.runtimeTriggers.listByState(state, 4_096)) {
+  let cursor: { createdAt: number; id: string } | undefined
+  while (true) {
+    const page = commands.runtimeTriggers.listByState('matched', 4_096, cursor)
+    if (page.length === 0) break
+    for (const trigger of page) {
       if (trigger.definition.condition.type !== 'session_steps' || trigger.definition.condition.mode !== 'sync') continue
       if (commands.runtimeTriggers.update(trigger.id, trigger.revision, { state: 'failed',
         result: { ...(trigger.result ?? {}), code: 'TRIGGER_SOURCE_GAP', case: 'sync-waiter-lost-on-restart' }, updatedAt: now })) failed += 1
     }
+    if (page.length < 4_096) break
+    const last = page[page.length - 1]!
+    cursor = { createdAt: last.createdAt, id: last.id }
   }
   return failed
 }

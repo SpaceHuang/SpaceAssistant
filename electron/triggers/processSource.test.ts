@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { beginManagedProcess, finishManagedProcess, listManagedProcessTargets, managedProcessRuntimeGeneration, readManagedProcessExit, resetManagedProcessSourceForTests } from './processSource'
+import { createTempDatabase } from '../database/testHelpers'
+import { createSession } from '../database/operations'
+import { createSessionCommands } from '../sessionStorage/commands'
+import { createRuntimeTriggerService } from './service'
+import { subscribeRuntimeTriggerProcessExitHandoff } from './processExitHandoff'
+import { openDatabase } from '../database'
 
 describe('managed process trigger facts', () => {
   it('tracks opaque IDs and emits one settled exit with code, signal and bounded output reference', () => {
@@ -33,6 +39,32 @@ describe('managed process trigger facts', () => {
     expect(handle.runtimeGeneration).toBe(previousGeneration)
     expect(previousGeneration).not.toBe(managedProcessRuntimeGeneration())
     expect(readManagedProcessExit(handle.managedProcessId, handle.runtimeGeneration)).toMatchObject({ kind: 'source-gap', code: 'TRIGGER_SOURCE_GAP' })
+  })
+
+  it('commits matching registrations before a managed process exit can be observed or lost to restart', async () => {
+    resetManagedProcessSourceForTests()
+    const temp = createTempDatabase('runtime-trigger-process-handoff-')
+    let db = temp.db
+    let unsubscribe = () => undefined
+    try {
+      const owner = createSession(db, { name: 'process owner' }).id
+      const receiver = createSession(db, { name: 'process receiver' }).id
+      const commands = createSessionCommands(db)
+      const process = beginManagedProcess({ sessionId: owner, toolName: 'run_script' })
+      const service = createRuntimeTriggerService(commands, { authorize: () => true, authorizeTarget: () => true,
+        resolveBaseline: () => ({ runtimeGeneration: process.runtimeGeneration }) })
+      const registered = await service.register({ ownerSessionId: owner, params: { clientKey: 'process-handoff', receiverSessionId: receiver,
+        expiresAt: Date.now() + 60_000, condition: { type: 'process_exit', managedProcessId: process.managedProcessId } } })
+      unsubscribe = subscribeRuntimeTriggerProcessExitHandoff(commands)
+      expect(finishManagedProcess(process, { exitCode: 0, signal: null, reason: 'process_exit' })).toBe(true)
+      expect(commands.runtimeTriggers.read(registered.trigger.triggerId)).toMatchObject({
+        state: 'matched', event: { type: 'process_exit', managedProcessId: process.managedProcessId, exitCode: 0 }
+      })
+      db.close()
+      resetManagedProcessSourceForTests()
+      db = openDatabase(temp.dbPath)
+      expect(createSessionCommands(db).runtimeTriggers.read(registered.trigger.triggerId)).toMatchObject({ state: 'matched', event: { exitCode: 0 } })
+    } finally { unsubscribe(); temp.cleanup(db) }
   })
 
   it.each([

@@ -91,6 +91,26 @@ describe('runtime trigger registration service', () => {
     } finally { db.close() }
   })
 
+  it('enforces synchronous uniqueness by supervised target, not receiver', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'sync owner' }).id
+      const targetA = createSession(db, { name: 'target A' }).id
+      const targetB = createSession(db, { name: 'target B' }).id
+      const receiverA = createSession(db, { name: 'receiver A' }).id
+      const receiverB = createSession(db, { name: 'receiver B' }).id
+      const service = createRuntimeTriggerService(createSessionCommands(db), { now: () => 10_000, authorize: () => true, authorizeTarget: () => true })
+      const sync = (targetSessionId: string) => ({ type: 'session_steps' as const, targetSessionId, origin: 'registration' as const,
+        threshold: 1, mode: 'sync' as const, pauseTimeoutMs: 1000, onPauseTimeout: 'continue' as const })
+      await service.register({ ownerSessionId: owner, params: { clientKey: 'target-shared-a', receiverSessionId: receiverA,
+        expiresAt: 20_000, condition: sync(targetA) } })
+      await expect(service.register({ ownerSessionId: owner, params: { clientKey: 'target-shared-b', receiverSessionId: receiverB,
+        expiresAt: 20_000, condition: sync(targetA) } })).rejects.toThrow('TRIGGER_CONFLICT:sync-target-already-registered')
+      await service.register({ ownerSessionId: owner, params: { clientKey: 'receiver-shared', receiverSessionId: receiverA,
+        expiresAt: 20_000, condition: sync(targetB) } })
+    } finally { db.close() }
+  })
+
   it('uses revision CAS for cancel versus match and never resurrects a terminal record', async () => {
     const db = createMemoryAppDb()
     try {

@@ -16,7 +16,7 @@ const DEFAULT_TRIGGER_RETRY: WakeEventRetryConfig = { maxAttempts: 5, baseDelayM
 /** Durable recovery owner for waiting source facts and matched queue delivery. */
 export function createRuntimeTriggerRecovery(input: {
   listWaiting(): readonly RuntimeTriggerRecord[]
-  listMatched(): readonly RuntimeTriggerRecord[]
+  listMatched(after?: { createdAt: number; id: string }): readonly RuntimeTriggerRecord[]
   read(triggerId: string): RuntimeTriggerRecord | null
   evaluateWaiting(trigger: RuntimeTriggerRecord, now: number): Promise<Candidate> | Candidate
   match(triggerId: string, expectedRevision: number, event: Readonly<Record<string, unknown>>): unknown
@@ -40,6 +40,7 @@ export function createRuntimeTriggerRecovery(input: {
   let busy = false
   let timer: ReturnType<typeof setInterval> | undefined
   let activeScan: Promise<void> | undefined
+  let matchedCursor: { createdAt: number; id: string } | undefined
 
   const settleFromTurn = async (trigger: RuntimeTriggerRecord, receipt: Receipt): Promise<void> => {
     if (!receipt.turnId) return
@@ -140,7 +141,14 @@ export function createRuntimeTriggerRecovery(input: {
           else if (candidate.kind === 'expired') input.expire(trigger.id, trigger.revision)
           else if (candidate.kind === 'source-gap') input.fail(trigger.id, trigger.revision, 'TRIGGER_SOURCE_GAP', candidate.case)
         }
-        for (const trigger of input.listMatched()) {
+        const matchedPage = input.listMatched(matchedCursor)
+        if (matchedCursor && matchedPage.length === 0) {
+          matchedCursor = undefined
+        } else if (matchedPage.length > 0) {
+          const last = matchedPage[matchedPage.length - 1]!
+          matchedCursor = { createdAt: last.createdAt, id: last.id }
+        }
+        for (const trigger of matchedPage) {
           if (trigger.state !== 'matched') continue
           try { await deliverMatched(trigger, timestamp) }
           catch (error) {
