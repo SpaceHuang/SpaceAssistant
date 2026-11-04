@@ -7,6 +7,7 @@ import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
 import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
 import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
+import { createBuiltinToolRegistry } from '../tools/builtinExecutors'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { createAgentRuntime } from './agentRuntime'
 import { resetDefaultAgentRuntimeForTests, setDefaultAgentRuntime } from './agentRuntimeDefaults'
@@ -505,6 +506,179 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
 
   afterEach(() => {
     resetDefaultAgentRuntimeForTests()
+  })
+
+  it('Agent approve 自动登记当前宿主候选，模型无需回传缓存字段', async () => {
+    const sessionId = 'auto-scope-grant-session'
+    const scope = { lane: 'desktop' as const, sessionId, subjectId: '/profile',
+      authorizationDomain: { id: 'desktop' as const, revision: 0, epoch: 0 }, toolName: 'edit_file' as const,
+      operation: 'edit' as const, objects: [{ role: 'target', value: '/workspace/note.txt' }],
+      environment: '/workspace', policyVersion: 'desktop-policy-v1', exactParameters: { replaceAll: false }, taskConstraint: '{"task":"Update note.txt"}' }
+    const digest = runtime.reviewScopeCache.candidateDigest(scope)
+    const candidate = { scopeCandidateDigest: digest, toolName: 'edit_file' as const, operation: 'edit' as const,
+      objects: [{ role: 'target', target: '/workspace/note.txt' }] }
+    const { agentSdk } = assembleInvocation({ requestId: 'auto-scope-grant', sessionId, lane: 'desktop', model: 'test-model', locale: 'zh-CN',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/workspace', userDataDir: '/profile', getApiKey: async () => 'test-key',
+      approvalTaskDigest: 'Update note.txt', approvalReviewScopeTaskIdentity: scope.taskConstraint, approvalReviewScopeEvidenceComplete: true,
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const channel = { request: vi.fn(async (request: { reviewScopeCandidate?: unknown }) => {
+      expect(request.reviewScopeCandidate).toEqual(candidate)
+      return { kind: 'approved' as const, cause: 'agent-approved' as const, answererKind: 'agent' as const }
+    }), cancel: vi.fn() }
+    const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, {
+      createChannel: () => channel as never, publish: vi.fn(), cancel: vi.fn()
+    })
+    const result = await confirmation({ call: { invocationId: 'auto-scope-grant', toolCallId: 'scope-call', toolName: 'edit_file', input: {} },
+      confirmationId: 'scope-call', answerer: 'agent', reasonCode: 'agent-approval',
+      context: { facts: { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit note' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop',
+        reviewScopeCandidate: candidate, reviewScopeCandidateScope: scope, reviewScopeCandidateDigest: digest } })
+    expect(result).toMatchObject({ kind: 'approved', answerer: 'agent' })
+    expect(runtime.reviewScopeCache.state(scope)).toMatchObject({ source: 'agent', state: 'pending_first_write' })
+  })
+
+  it('Agent 批准后真实 edit_file receipt 激活范围授权，第二次编辑命中缓存', async () => {
+    const routeId = 'agent-review-scope-receipt-route'
+    ;(runtime.modelProviders as ModelProviderRegistry).register({ routeId, protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, {
+      stream: async function* () { yield { type: 'message_stop' as const } }
+    } as never)
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agent-review-scope-receipt-')))
+    const target = path.join(workDir, 'note.txt')
+    await fs.writeFile(target, 'before')
+    const db = createMemoryAppDb('agent-review-scope-receipt')
+    commitDesktopPolicySnapshot(getDbConnection(db), { expectedRevision: 0, policyBehaviorVersion: 'desktop-v1',
+      snapshot: { selectedPackage: 'standard', ruleOverrides: {} }, updatedAt: 1, eventId: 'agent-review-scope-receipt' })
+    const taskIdentity = '{"task":"Update note.txt twice"}'
+    const assembled = assembleInvocation({
+      requestId: 'agent-review-scope-receipt', turnId: 'agent-review-scope-turn', sessionId: 'agent-review-scope-session', providerRouteId: routeId,
+      lane: 'desktop', model: 'test-model', locale: 'zh-CN', agentSdkHistory: new MemoryHistory(), appDb: db, messages: [],
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1, autoApproveMaxEditChars: 1 }, workDir, userDataDir: '/tmp',
+      approvalTaskDigest: 'Update note.txt twice', approvalReviewScopeTaskIdentity: taskIdentity, approvalReviewScopeEvidenceComplete: true,
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    const agentRequest = vi.fn(async (request: { reviewScopeCandidate?: { scopeCandidateDigest: string } }) => ({
+      kind: 'approved' as const, cause: 'agent-approved' as const, answererKind: 'agent' as const,
+      ...(request.reviewScopeCandidate ? { reviewScopeGrant: { source: 'agent' as const,
+        scopeCandidateDigest: request.reviewScopeCandidate.scopeCandidateDigest } } : {})
+    }))
+    const composed = assembled.agentSdk.createHostedTurnRuntime({ registry: createBuiltinToolRegistry(),
+      history: new MemoryHistory(), authorizedToolNames: new Set(['read_file', 'edit_file']), confirmationAdapter: {
+        cancel: vi.fn(), createChannel: () => ({ request: agentRequest, cancel: vi.fn() }) as never
+      } })
+    const capabilities = new CapabilityRegistry()
+    const permitStore = runtime.safetyPermits
+    capabilities.define('agent-review-scope-receipt', ['read_file', 'edit_file'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore, policy: composed.policy })
+    const edit = (toolCallId: string, old_string: string, new_string: string) => ({ invocationId: 'agent-review-scope-receipt', toolCallId,
+      toolName: 'edit_file', input: { path: 'note.txt', old_string, new_string } })
+    const read = { invocationId: 'agent-review-scope-receipt', toolCallId: 'read-note-before-edit', toolName: 'read_file', input: { path: 'note.txt' } }
+    try {
+      const readBinding = await composed.registeredTools.prepareTool(read, { kind: 'initial' })
+      expect(await safetyGate.evaluate(readBinding)).toMatchObject({ kind: 'allow' })
+      const readRecheck = await composed.registeredTools.prepareTool(read, { kind: 'recheck' })
+      const readPermit = await safetyGate.authorize(readRecheck)
+      expect(readPermit.kind).toBe('allow')
+      if (readPermit.kind !== 'allow') throw new Error('EXPECTED_READ_PERMIT')
+      await composed.registeredTools.toolExecution.execute(read, readPermit.permitId)
+
+      const firstCall = edit('edit-note-first', 'before', 'after')
+      const firstBinding = await composed.registeredTools.prepareTool(firstCall, { kind: 'initial' })
+      const firstDecision = await safetyGate.evaluate(firstBinding)
+      expect(firstDecision).toMatchObject({ kind: 'ask', answerer: 'agent' })
+      if (firstDecision.kind !== 'ask') throw new Error('EXPECTED_AGENT_APPROVAL')
+      await expect(composed.confirmation({ call: firstCall, confirmationId: firstDecision.confirmationId, answerer: firstDecision.answerer,
+        reasonCode: firstDecision.reasonCode, context: firstDecision.context })).resolves.toMatchObject({ kind: 'approved', answerer: 'agent' })
+      expect(agentRequest).toHaveBeenCalledWith(expect.objectContaining({ reviewScopeCandidate: { scopeCandidateDigest: expect.any(String), toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target }] } }))
+      const firstRecheck = await composed.registeredTools.prepareTool(firstCall, { kind: 'recheck', confirmation: { receipt: 'confirmation:agent-approved' } })
+      const firstAuthorization = await safetyGate.authorize(firstRecheck)
+      expect(firstAuthorization.kind).toBe('allow')
+      if (firstAuthorization.kind !== 'allow') throw new Error('EXPECTED_FIRST_WRITE_PERMIT')
+      const firstResult = await composed.registeredTools.toolExecution.execute(firstCall, firstAuthorization.permitId)
+      expect(firstResult).toMatchObject({ output: { success: true } })
+      expect(await fs.readFile(target, 'utf8')).toBe('after')
+
+      const secondCall = edit('edit-note-second', 'after', 'final')
+      const secondBinding = await composed.registeredTools.prepareTool(secondCall, { kind: 'initial' })
+      const secondDecision = await safetyGate.evaluate(secondBinding)
+      expect(secondDecision).toMatchObject({ kind: 'allow' })
+      if (secondDecision.kind !== 'allow') throw new Error('EXPECTED_SCOPE_CACHE_ALLOW')
+      const secondRecheck = await composed.registeredTools.prepareTool(secondCall, { kind: 'recheck' })
+      const secondAuthorization = await safetyGate.authorize(secondRecheck)
+      expect(secondAuthorization.kind).toBe('allow')
+      if (secondAuthorization.kind !== 'allow') throw new Error('EXPECTED_SECOND_WRITE_PERMIT')
+      const secondResult = await composed.registeredTools.toolExecution.execute(secondCall, secondAuthorization.permitId)
+      expect(secondResult).toMatchObject({ output: { success: true } })
+      expect(await fs.readFile(target, 'utf8')).toBe('final')
+      expect(agentRequest).toHaveBeenCalledTimes(1)
+    } finally {
+      await composed.dispose()
+      db.close()
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('候选缺失或审批材料不完整时不登记 grant，且非 approve 不登记', async () => {
+    const makeScope = (sessionId: string, target: string) => ({ lane: 'desktop' as const, sessionId, subjectId: '/profile',
+      authorizationDomain: { id: 'desktop' as const, revision: 0, epoch: 0 }, toolName: 'edit_file' as const,
+      operation: 'edit' as const, objects: [{ role: 'target', value: target }], environment: '/workspace',
+      policyVersion: 'desktop-policy-v1', exactParameters: { replaceAll: false }, taskConstraint: '{"task":"Update note.txt"}' })
+    const createApprovalPort = (sessionId: string, complete: boolean, answer: 'approved' | 'rejected' = 'approved') => {
+      const { agentSdk } = assembleInvocation({ requestId: `skip-scope-${sessionId}`, sessionId, lane: 'desktop', model: 'test-model', locale: 'zh-CN',
+        messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/workspace', userDataDir: '/profile', getApiKey: async () => 'test-key',
+        approvalTaskDigest: 'Update note.txt', approvalReviewScopeTaskIdentity: '{"task":"Update note.txt"}',
+        approvalReviewScopeEvidenceComplete: complete, emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+      const channel = { request: vi.fn(async () => answer === 'approved'
+        ? { kind: 'approved' as const, cause: 'agent-approved' as const, answererKind: 'agent' as const }
+        : { kind: 'rejected' as const, cause: 'agent-deny' as const, answererKind: 'agent' as const }), cancel: vi.fn() }
+      const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, {
+        createChannel: () => channel as never, publish: vi.fn(), cancel: vi.fn()
+      })
+      return { confirmation, channel }
+    }
+    const missingScope = makeScope('missing-scope-session', '/workspace/missing.txt')
+    const missing = createApprovalPort(missingScope.sessionId, true)
+    await expect(missing.confirmation({ call: { invocationId: 'missing-scope', toolCallId: 'missing-scope-call', toolName: 'edit_file', input: {} },
+      confirmationId: 'missing-scope-call', answerer: 'agent', reasonCode: 'agent-approval',
+      context: { facts: { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop' } }))
+      .resolves.toMatchObject({ kind: 'approved' })
+    expect(runtime.reviewScopeCache.state(missingScope)).toBeNull()
+
+    const mismatchedScope = makeScope('mismatched-scope-session', '/workspace/approved.txt')
+    const mismatchedDigest = runtime.reviewScopeCache.candidateDigest(mismatchedScope)
+    const mismatched = createApprovalPort(mismatchedScope.sessionId, true)
+    await mismatched.confirmation({ call: { invocationId: 'mismatched-scope', toolCallId: 'mismatched-scope-call', toolName: 'edit_file', input: {} },
+      confirmationId: 'mismatched-scope-call', answerer: 'agent', reasonCode: 'agent-approval', context: {
+        facts: { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop',
+        reviewScopeCandidate: { scopeCandidateDigest: mismatchedDigest, toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: '/workspace/different.txt' }] },
+        reviewScopeCandidateScope: mismatchedScope, reviewScopeCandidateDigest: mismatchedDigest
+      } })
+    expect(runtime.reviewScopeCache.state(mismatchedScope)).toBeNull()
+
+    const incompleteScope = makeScope('incomplete-scope-session', '/workspace/incomplete.txt')
+    const incompleteDigest = runtime.reviewScopeCache.candidateDigest(incompleteScope)
+    const incomplete = createApprovalPort(incompleteScope.sessionId, false)
+    await incomplete.confirmation({ call: { invocationId: 'incomplete-scope', toolCallId: 'incomplete-scope-call', toolName: 'edit_file', input: {} },
+      confirmationId: 'incomplete-scope-call', answerer: 'agent', reasonCode: 'agent-approval', context: {
+        facts: { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop',
+        reviewScopeCandidate: { scopeCandidateDigest: incompleteDigest, toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: '/workspace/incomplete.txt' }] },
+        reviewScopeCandidateScope: incompleteScope, reviewScopeCandidateDigest: incompleteDigest
+      } })
+    expect(runtime.reviewScopeCache.state(incompleteScope)).toBeNull()
+
+    const deniedScope = makeScope('denied-scope-session', '/workspace/denied.txt')
+    const deniedDigest = runtime.reviewScopeCache.candidateDigest(deniedScope)
+    const denied = createApprovalPort(deniedScope.sessionId, true, 'rejected')
+    await denied.confirmation({ call: { invocationId: 'denied-scope', toolCallId: 'denied-scope-call', toolName: 'edit_file', input: {} },
+      confirmationId: 'denied-scope-call', answerer: 'agent', reasonCode: 'agent-approval', context: {
+        facts: { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop',
+        reviewScopeCandidate: { scopeCandidateDigest: deniedDigest, toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: '/workspace/denied.txt' }] },
+        reviewScopeCandidateScope: deniedScope, reviewScopeCandidateDigest: deniedDigest
+      } })
+    expect(runtime.reviewScopeCache.state(deniedScope)).toBeNull()
   })
 
   it.each(['wechat', 'feishu'] as const)('loads the same validated IM policy snapshot for %s runtime gates', async (lane) => {
