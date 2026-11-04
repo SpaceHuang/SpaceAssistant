@@ -25,4 +25,4 @@
 
 回退阶段提交 `ecd3fb9a` 时同时移除共享证据类型、生产线索、审核材料消费与相关测试；1a/1b 提交应独立保留。执行计划和证据文档作为后续独立文档提交维护。
 
-隔离 detached worktree revert 与 agentChannel/approvalAgent 定向 smoke 待完成后补录。
+隔离回退 smoke：以 `0a0ce36b` 为基线创建 detached worktree，revert `ecd3fb9a` 后运行 `vitest run electron/confirmation/agentChannel.test.ts electron/confirmation/approvalAgent.test.ts`，2 files / 80 tests passed。临时 worktree 已清理。该临时 checkout 没有 node_modules，测试借用阶段 worktree 依赖，并为 Electron runtime 链接原 checkout 的 Electron 包；链接已在清理 worktree 前移除。验证确认回退 1c 实现后，1a/1b 的旧审批材料仍可运行。

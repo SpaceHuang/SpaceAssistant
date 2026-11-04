@@ -140,10 +140,10 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：不可核验来源标记 insufficient；材料不足、超预算或必要内容缺失时整体 undetermined，审批链路确定性要求人工，不交由模型自行裁量；正常充足材料仍保留可区分证据。
   - 验证：`npm exec -- vitest run electron/confirmation/agentChannel.test.ts electron/confirmation/agentChannel.clueExtras.test.ts electron/confirmation/approvalAgent.test.ts electron/confirmation/agentSdkConfirmationPort.test.ts src/shared/confirmation/scriptApprovalEvidence.test.ts`（5 files / 119 tests passed）；覆盖充分材料、超预算、片段过长、partial coverage、缺绑定/缺发现，并断言不足材料不调用 Agent、返回 `agent-undetermined`；既有桌面人工 fallback 集成测试通过。`npm run typecheck:shared` 通过。关联 AC-16。证据：`docs/plan/evidence/script-finding-model/F22.md`。
 
-- [ ] **F23 关闭 1c 阶段**（本机）
+- [x] **F23 关闭 1c 阶段**（本机）
   - 范围：F20～F22 与阶段证据。
   - 产物/判据：共享契约、最终材料内容和降级行为可独立验证；1c 回退不会破坏 1a/1b。关联 AC-16。
-  - 验证：合并运行 F20～F22 定向测试；`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron:incremental`、`npm test`。记录阶段提交 SHA、文件清单、回退顺序，并在隔离 checkout 执行阶段 revert 后跑 agentChannel/approvalAgent smoke 定向测试。证据：`phase-1c.md`。阶段回退包括该阶段引入的共享字段与所有该阶段消费者，不能只撤类型或只撤主进程接线。
+  - 验证：F20～F22 合并回归（5 files / 119 tests passed）；`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron:incremental` 均通过；`npm test`（1258 files passed / 1 skipped；12198 tests passed / 140 skipped）。隔离 detached worktree revert `ecd3fb9a` 后 agentChannel/approvalAgent smoke（2 files / 80 tests passed）。证据：`docs/plan/evidence/script-finding-model/phase-1c.md`。阶段回退包括该阶段引入的共享字段与所有该阶段消费者，不能只撤类型或只撤主进程接线。
 
 ### 阶段 2：语义矫正
 
