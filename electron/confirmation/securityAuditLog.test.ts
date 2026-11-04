@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -75,6 +76,75 @@ describe('安全审计日志：脱敏', () => {
   it('JSON 形态打码不影响普通 JSON 数值与布尔', () => {
     const out = sanitizeAuditField('{"limit":20,"force":true,"name":"x"}') as string
     expect(out).toBe('{"limit":20,"force":true,"name":"x"}')
+  })
+})
+
+describe('脚本发现审计：结构投影与片段摘要', () => {
+  it('从完整事件写入 JSONL：只保留投影骨架、摘要、引用与截断状态', async () => {
+    const dir = await tmpDir()
+    const source = [
+      `requests.get("https://host-secret.example", auth=("user", "plain-password"), headers={"X-API-Key": "sk-test-secret"})  # keep-this-comment-private`,
+      `payload = {"nested": ["nested-secret", 12.5]}`,
+      `open("report-private.txt", "w")`,
+      `value = "${'long-secret-'.repeat(210)}"`,
+      `print("unterminated-secret`
+    ].join('\r\n')
+    const snippets = source.split('\r\n')
+    const contentDigest = createHash('sha256').update(source.replace(/\r\n?/g, '\n'), 'utf8').digest('hex')
+    const scriptAuditInput = {
+      turnId: 'turn-script-audit',
+      contentDigest,
+      totalCount: 6,
+      findings: [
+        { pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: snippets[0]!.length + 1 }, snippet: snippets[0]! },
+        { pattern: 'B1', class: 'reflection', range: { startLine: 2, startCol: 1, endLine: 2, endCol: snippets[1]!.length + 1 }, snippet: snippets[1]! },
+        { pattern: 'A7', class: 'file-write', range: { startLine: 3, startCol: 1, endLine: 3, endCol: snippets[2]!.length + 1 }, snippet: snippets[2]! },
+        { pattern: 'A7', class: 'file-write', range: { startLine: 4, startCol: 1, endLine: 4, endCol: snippets[3]!.length + 1 }, snippet: snippets[3]! },
+        { pattern: 'A1', class: 'process-creation', range: { startLine: 5, startCol: 1, endLine: 5, endCol: snippets[4]!.length + 1 }, snippet: snippets[4]! }
+      ]
+    }
+    const log = new SecurityAuditLog({ logDir: dir })
+    log.record({ ...baseEvent(), toolName: 'run_script', scriptAuditInput } as SecurityAuditEvent)
+    await log.flush()
+
+    const files = await fs.readdir(dir)
+    const content = await fs.readFile(path.join(dir, files.find((file) => file.endsWith('.log'))!), 'utf8')
+    const persisted = JSON.parse(content.trim()) as { scriptAudit?: {
+      sessionId: string; turnId: string; contentDigest: string; totalCount: number; truncated: boolean
+      findings: Array<{ pattern: string; range: unknown; skeleton: string; snippetSha256: string }>
+    } }
+    expect(persisted.scriptAudit).toMatchObject({
+      sessionId: 's1', turnId: 'turn-script-audit', contentDigest, totalCount: 6, truncated: true
+    })
+    expect(persisted.scriptAudit?.findings).toHaveLength(5)
+    expect(persisted.scriptAudit?.findings[0]).toMatchObject({ pattern: 'A6', range: scriptAuditInput.findings[0]!.range })
+    expect(persisted.scriptAudit?.findings[0]?.skeleton).toContain('requests.get')
+    expect(persisted.scriptAudit?.findings[0]?.skeleton).toContain('auth=')
+    expect(persisted.scriptAudit?.findings[0]?.skeleton).toContain('"…"')
+    expect(persisted.scriptAudit?.findings[0]?.snippetSha256).toBe(
+      createHash('sha256').update(snippets[0]!, 'utf8').digest('hex')
+    )
+    expect(persisted.scriptAudit?.findings[3]?.skeleton.length).toBeLessThanOrEqual(2_000)
+    expect(persisted.scriptAudit?.findings[3]?.snippetSha256).toBe(
+      createHash('sha256').update(snippets[3]!, 'utf8').digest('hex')
+    )
+    expect(persisted.scriptAudit?.findings[4]?.skeleton).toBe('[unavailable]')
+    for (const secret of ['host-secret.example', 'plain-password', 'sk-test-secret', 'keep-this-comment-private', 'nested-secret', 'report-private.txt', 'long-secret', 'unterminated-secret']) {
+      expect(content).not.toContain(secret)
+    }
+    expect(content).not.toContain(source)
+  })
+
+  it('同定位键内容变更会改变摘要；同一原始片段可稳定复算', () => {
+    const makeLine = (snippet: string) => auditLine({ ...baseEvent(), scriptAuditInput: {
+      turnId: 'turn-hash', contentDigest: 'a'.repeat(64), totalCount: 1,
+      findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 20 }, snippet }]
+    } } as SecurityAuditEvent)
+    const first = JSON.parse(makeLine("requests.get('https://one.test')")) as { scriptAudit?: { findings: Array<{ snippetSha256: string }> } }
+    const second = JSON.parse(makeLine("requests.get('https://two.test')")) as { scriptAudit?: { findings: Array<{ snippetSha256: string }> } }
+    const replay = JSON.parse(makeLine("requests.get('https://one.test')")) as { scriptAudit?: { findings: Array<{ snippetSha256: string }> } }
+    expect(first.scriptAudit?.findings[0]?.snippetSha256).not.toBe(second.scriptAudit?.findings[0]?.snippetSha256)
+    expect(first.scriptAudit?.findings[0]?.snippetSha256).toBe(replay.scriptAudit?.findings[0]?.snippetSha256)
   })
 })
 

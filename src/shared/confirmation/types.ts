@@ -127,6 +127,33 @@ export interface ScriptFinding {
   evidence: ScriptFindingEvidence
 }
 
+/** Transient facts passed to the audit writer; raw snippets must never be serialized. */
+export interface ScriptAuditInput {
+  turnId: string
+  contentDigest: string
+  totalCount: number
+  findings: Array<Pick<ScriptFinding, 'pattern' | 'class' | 'range' | 'snippet'>>
+}
+
+export interface ScriptAuditFinding {
+  pattern: string
+  class: ScriptFindingClass
+  range: ScriptSourceRange
+  /** Structure-only projection; string/number literals and comments are masked. */
+  skeleton: string
+  /** SHA-256 of the normalized raw snippet before projection and truncation. */
+  snippetSha256: string
+}
+
+export interface ScriptAuditRef {
+  sessionId: string
+  turnId: string
+  contentDigest: string
+  totalCount: number
+  truncated: boolean
+  findings: ScriptAuditFinding[]
+}
+
 export type ScriptPathDynamicKind =
   | 'dynamic-code-execution' | 'unresolved-write-target' | 'unresolved-read-target'
   | 'unresolved-destructive-target' | 'unresolved-transfer-target'
@@ -695,6 +722,10 @@ export interface SecurityAuditEvent {
   /** settings.* 事件的新旧值（JSON 序列化文本，写入前脱敏）。 */
   before?: string
   after?: string
+  /** Transient raw script findings. SecurityAuditLog projects these and omits this property on disk. */
+  scriptAuditInput?: ScriptAuditInput
+  /** Persisted script audit reference; generated only by the audit writer. */
+  scriptAudit?: ScriptAuditRef
   actor: 'user' | 'system' | 'migration' | 'agent'
   /**
    * 确认结束原因（仅 confirm.outcome 等有裁决的事件携带；与 outcome 联动，

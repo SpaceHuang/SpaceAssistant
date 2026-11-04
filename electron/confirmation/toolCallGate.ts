@@ -1581,6 +1581,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     })
   }
   const invariantId = SYSTEM_INVARIANT_ID_BY_GATE_RULE[decision.ruleId]
+  const scriptAnalysisSignal = facts.signals.find((signal) => signal.kind === 'script-analysis')
+  const scriptContentDigest = facts.signals.find((signal) => signal.kind === 'script-path-extraction')?.contentDigest
   audit.record({
     ts: Date.now(),
     event: 'policy.decision',
@@ -1612,6 +1614,16 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     riskLevel: facts.baseRiskLevel,
     factsSummary: args.toolName === 'run_shell' ? 'run_shell 路径及命令影响事实已检查' : facts.summary.text,
     signals: facts.signals.map((s) => s.kind),
+    ...(args.toolName === 'run_script' && scriptAnalysisSignal?.kind === 'script-analysis' && scriptContentDigest
+      ? { scriptAuditInput: {
+        turnId: args.requestId ?? args.toolUseId ?? args.sessionId,
+        contentDigest: scriptContentDigest,
+        totalCount: scriptAnalysisSignal.totalCount,
+        findings: scriptAnalysisSignal.findings.map(({ pattern, class: findingClass, range, snippet }) => ({
+          pattern, class: findingClass, range, snippet
+        }))
+      } }
+      : {}),
     ...(selectedDirectoryGrant ? { directoryGrantId: selectedDirectoryGrant.grantId, directoryGrantSource: selectedDirectoryGrant.source } : {}),
     pathZones: [...new Set(facts.signals.flatMap((s) => s.kind === 'path-target' ? [s.zone] : s.kind === 'wechat-media-target' && s.zone ? [s.zone] : []))],
     decision: decision.type,

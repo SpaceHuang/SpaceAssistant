@@ -14,6 +14,7 @@ import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { effectiveActionFor, resolveImPolicyRulesForVersion } from '../../src/shared/policy/policyPackages'
 import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
+import { SecurityAuditLog } from './securityAuditLog'
 import { AgentChannel } from './agentChannel'
 import { renderCluePackForTest } from './approvalAgent'
 import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
@@ -1785,6 +1786,28 @@ describe('evaluateToolCallGate', () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
+  })
+
+  it('run_script 真实 gate 将脚本发现安全投影后写入 JSONL', async () => {
+    const logDir = await makeTempDir('script-audit-gate-')
+    const audit = new SecurityAuditLog({ logDir })
+    const code = 'import os\nos.system("audit-command-secret")'
+    const gateArgs = base({ toolName: 'run_script', toolInput: { language: 'python', code }, audit })
+    const gate = await evaluateToolCallGate(gateArgs)
+    const pathFact = gate.facts.signals.find((signal) => signal.kind === 'script-path-extraction')
+    await audit.flush()
+    const files = await fs.readdir(logDir)
+    const persistedText = await fs.readFile(path.join(logDir, files.find((file) => file.endsWith('.log'))!), 'utf8')
+    const persisted = JSON.parse(persistedText.trim()) as SecurityAuditEvent
+    expect(persisted.scriptAudit).toMatchObject({
+      sessionId: gateArgs.sessionId,
+      turnId: gateArgs.requestId,
+      contentDigest: pathFact?.kind === 'script-path-extraction' ? pathFact.contentDigest : undefined,
+      totalCount: 1,
+      findings: [expect.objectContaining({ pattern: 'A1', class: 'process-creation', skeleton: expect.stringContaining('os.system') })]
+    })
+    expect(persistedText).not.toContain('audit-command-secret')
+    expect(persistedText).not.toContain(code)
   })
 
   it('3.2.4: script review facts change when code, parameters or environment change', async () => {
