@@ -147,10 +147,10 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
 
 ### 阶段 2：语义矫正
 
-- [ ] **F30 补齐其余九类发现生产**（本机）
+- [x] **F30 补齐其余九类发现生产**（本机）
   - 范围：`electron/shell/scriptContentSecurity.ts`、`electron/confirmation/extractors/scriptAnalysisExtractor.ts`、`electron/shell/scriptIr/` 中实际需要的节点模型、`src/shared/confirmation/types.ts` 与对应单测/golden。覆盖 `dynamic-execution`、`dynamic-import`、`native-code-load`、`network-api`、`cwd-change`、`reflection`、`alias-resolution`、`decode-then-exec`、`dynamic-dispatch`。
   - 产物/判据：方案 12 类每类均有生产样本及逐条发现证据；类别证据字段严格按方案契约；无法分类的构造产生方案规定的 partial/failed 覆盖信息，不静默当干净；旧 verdict/signal 与既有动作逻辑暂留作兼容，不在本任务切换决策。需先按方案类别表逐项确认三类首批与九类剩余的边界，避免类别重复或遗漏。
-  - 验证：golden 对每类至少覆盖正例、边界/不可解析例；合并运行 F02 既有分析测试及新增类别测试，确认解析仍一次。关联 AC-1～3、6～8。证据：`F30.md`。
+  - 验证：`npm exec -- vitest run electron/shell/scriptContentSecurity.test.ts electron/shell/scriptGolden.test.ts electron/shell/scriptParserService.test.ts electron/shell/scriptIr/pythonAdapter.test.ts electron/confirmation/scriptAnalysisFailureGate.test.ts`（5 files / 230 tests passed）；新增 12 类类别样本、动态边界与 parse-failed 覆盖断言，golden 检查所有产物 range/snippet 且旧 verdict/patterns/signal 基线通过。关联 AC-1～3、6～8。证据：`docs/plan/evidence/script-finding-model/F30.md`。
 
 - [ ] **F31 将记忆资格迁移到发现集合与覆盖度**（本机）
   - 范围：`src/shared/policy/memoryEligibility.ts`、调用方/类型及其测试。
