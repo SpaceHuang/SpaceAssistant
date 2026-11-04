@@ -10,7 +10,7 @@ describe('extractScriptPathFacts', () => {
   afterAll(() => resetScriptParserServiceForTests())
 
   it('没有文件访问或动态执行时可标记 complete', () => {
-    expect(extractScriptPathFacts('print("hello")', 'python')).toEqual({ paths: [], completeness: 'complete', dynamicAccess: false, unknownReason: null, unknownEvidence: [] })
+    expect(extractScriptPathFacts('print("hello")', 'python')).toEqual({ paths: [], completeness: 'complete', dynamicAccess: false, unknownReason: null, dynamicKinds: [], unknownEvidence: [] })
   })
 
   it.each([
@@ -34,7 +34,7 @@ describe('extractScriptPathFacts', () => {
       'os.remove("./old.txt")',
       'shutil.copy("./a", "./b")'
     ].join('\n'), 'python')
-    expect(result).toEqual({ paths: ['/tmp/report.txt', './notes.txt', './old.txt', './a', './b'], completeness: 'complete', dynamicAccess: false, unknownReason: null, unknownEvidence: [] })
+    expect(result).toEqual({ paths: ['/tmp/report.txt', './notes.txt', './old.txt', './a', './b'], completeness: 'complete', dynamicAccess: false, unknownReason: null, dynamicKinds: [], unknownEvidence: [] })
   })
 
   it('任何动态文件路径、别名调用或进程执行都 unknown，并保留可静态提取目标', () => {
@@ -45,7 +45,7 @@ describe('extractScriptPathFacts', () => {
   })
 
   it('静态可解析的 API 导入别名按原始 API 提取目标', () => {
-    expect(extractScriptPathFacts('from os import remove as rm\nrm("./old.txt")', 'python')).toEqual({ paths: ['./old.txt'], completeness: 'complete', dynamicAccess: false, unknownReason: null, unknownEvidence: [] })
+    expect(extractScriptPathFacts('from os import remove as rm\nrm("./old.txt")', 'python')).toEqual({ paths: ['./old.txt'], completeness: 'complete', dynamicAccess: false, unknownReason: null, dynamicKinds: [], unknownEvidence: [] })
     expect(extractScriptPathFacts('import subprocess as sp\nsp.run("echo ok")', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })
   })
 
@@ -63,7 +63,7 @@ describe('extractScriptPathFacts', () => {
       "writeFile('/tmp/out.txt', 'data')"
     ].join('\n')
     expect(extractScriptPathFacts(code, language)).toEqual({
-      paths: ['/etc/hosts', './notes.txt', '/tmp/out.txt'], completeness: 'complete', dynamicAccess: false, unknownReason: null, unknownEvidence: []
+      paths: ['/etc/hosts', './notes.txt', '/tmp/out.txt'], completeness: 'complete', dynamicAccess: false, unknownReason: null, dynamicKinds: [], unknownEvidence: []
     })
   })
 
@@ -81,13 +81,49 @@ describe('extractScriptPathFacts', () => {
   })
 
   it('PowerShell 提取文件 cmdlet 静态路径，进程和动态访问 unknown', () => {
-    expect(extractScriptPathFacts("Get-Content -LiteralPath 'C:\\secrets\\key.txt'", 'powershell')).toEqual({ paths: ['C:\\secrets\\key.txt'], completeness: 'complete', dynamicAccess: false, unknownReason: null, unknownEvidence: [] })
+    expect(extractScriptPathFacts("Get-Content -LiteralPath 'C:\\secrets\\key.txt'", 'powershell')).toEqual({ paths: ['C:\\secrets\\key.txt'], completeness: 'complete', dynamicAccess: false, unknownReason: null, dynamicKinds: [], unknownEvidence: [] })
     expect(extractScriptPathFacts("Remove-Item -Path $target; Start-Process 'cmd.exe'", 'powershell')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })
   })
 
   it('解析服务未就绪时 fail-closed', () => {
     resetScriptParserServiceForTests()
     expect(extractScriptPathFacts('open("/tmp/x")', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })
+  })
+})
+
+describe('extractScriptPathFacts:D-5 dynamicKinds 分类矩阵', () => {
+  beforeAll(async () => { await scriptParserService.ensureInitialized() })
+  afterAll(() => resetScriptParserServiceForTests())
+
+  it.each([
+    ['open 写模式', "open(target, 'w')", ['unresolved-write-target']],
+    ['Path 写入', 'from pathlib import Path\nPath(target).write_text("x")', ['unresolved-write-target']],
+    ['open 缺省读模式', 'open(target)', ['unresolved-read-target']],
+    ['open 显式读模式', "open(target, 'r')", ['unresolved-read-target']],
+    ['Path 读取', 'from pathlib import Path\nPath(target).read_text()', ['unresolved-read-target']],
+    ['删除', 'import os\nos.remove(target)', ['unresolved-destructive-target']],
+    ['Path unlink', 'from pathlib import Path\nPath(target).unlink()', ['unresolved-destructive-target']],
+    ['双目标搬运', 'import shutil\nshutil.move(source, target)', ['unresolved-transfer-target']],
+    ['执行代码', 'exec(payload)', ['dynamic-code-execution']],
+    ['绑定链断裂', 'import os\nos = fake\nopen("/a")', ['binding-chain-broken']],
+    ['未建模调用', 'customApi()', ['path-analysis-unavailable']],
+    ['解析失败', 'def broken(:\n pass', ['path-analysis-unavailable']],
+    ['未支持语言', 'code', ['path-analysis-unavailable']]
+  ] as const)('%s maps to only the matching path category', (_name, code, dynamicKinds) => {
+    const language = _name === '未支持语言' ? 'bash' : 'python'
+    expect(extractScriptPathFacts(code, language)).toMatchObject({ completeness: 'unknown', dynamicKinds })
+  })
+
+  it('并存多个原因时保留多个类别；纯未知写入是唯一只含 write token 的形状', () => {
+    expect(extractScriptPathFacts("open(target, 'w')\nimport os\nos.remove(path)", 'python').dynamicKinds)
+      .toEqual(['unresolved-write-target', 'unresolved-destructive-target'])
+    expect(extractScriptPathFacts("open(target, 'w')", 'python').dynamicKinds)
+      .toEqual(['unresolved-write-target'])
+  })
+
+  it('complete 事实类别为空，旧字段缺省的统一失败出口有 path-analysis-unavailable', () => {
+    expect(extractScriptPathFacts('print("x")', 'python')).toMatchObject({ completeness: 'complete', dynamicKinds: [] })
+    expect(extractScriptPathFacts('const = ;', 'javascript')).toMatchObject({ completeness: 'unknown', dynamicKinds: ['path-analysis-unavailable'] })
   })
 })
 
@@ -111,7 +147,7 @@ describe('extractScriptPathFacts:P0 假阳性修复(探针矩阵回归)', () => 
 
   it('f4 内层 join 折叠进 open 实参(§10-6 拍板:统一以 / 折叠,平台变体交探测归一)', () => {
     expect(extractScriptPathFacts('import os\nopen(os.path.join("d", "events.jsonl"))', 'python')).toEqual({
-      paths: ['d/events.jsonl'], completeness: 'complete', dynamicAccess: false, unknownReason: null, unknownEvidence: []
+      paths: ['d/events.jsonl'], completeness: 'complete', dynamicAccess: false, unknownReason: null, dynamicKinds: [], unknownEvidence: []
     })
   })
 
@@ -135,7 +171,7 @@ describe('extractScriptPathFacts:P0 假阳性修复(探针矩阵回归)', () => 
 
   it('f3 join 赋值给变量后经 open(变量) 使用 → 传播生效', () => {
     expect(extractScriptPathFacts('import os\np = os.path.join("/d", "events.jsonl")\nopen(p, "r")', 'python')).toEqual({
-      paths: ['/d/events.jsonl'], completeness: 'complete', dynamicAccess: false, unknownReason: null, unknownEvidence: []
+      paths: ['/d/events.jsonl'], completeness: 'complete', dynamicAccess: false, unknownReason: null, dynamicKinds: [], unknownEvidence: []
     })
   })
 
@@ -165,7 +201,7 @@ describe('extractScriptPathFacts:P0 假阳性修复(探针矩阵回归)', () => 
       'print(counter.most_common(5))'
     ].join('\n')
     expect(extractScriptPathFacts(script, 'python')).toEqual({
-      paths: ['logs/app/events.jsonl'], completeness: 'complete', dynamicAccess: false, unknownReason: null, unknownEvidence: []
+      paths: ['logs/app/events.jsonl'], completeness: 'complete', dynamicAccess: false, unknownReason: null, dynamicKinds: [], unknownEvidence: []
     })
   })
 
@@ -294,7 +330,7 @@ describe('extractScriptPathFacts:P1 unknown 分类', () => {
   })
 
   it('complete 结果 unknownReason 为 null', () => {
-    expect(extractScriptPathFacts('print("hello")', 'python')).toEqual({ paths: [], completeness: 'complete', dynamicAccess: false, unknownReason: null, unknownEvidence: [] })
+    expect(extractScriptPathFacts('print("hello")', 'python')).toEqual({ paths: [], completeness: 'complete', dynamicAccess: false, unknownReason: null, dynamicKinds: [], unknownEvidence: [] })
   })
 })
 

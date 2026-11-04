@@ -678,7 +678,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       : 'unknown'
     const scriptPaths: ScriptPathFacts = pythonLanguage
       ? preParsedIr ? extractScriptPathFacts(code, 'python', preParsedIr) : {
-        paths: [], completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', unknownEvidence: []
+        paths: [], completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', dynamicKinds: ['path-analysis-unavailable'], unknownEvidence: []
       }
       : extractScriptPathFacts(code, language)
     const pythonSignals = pythonLanguage ? extractScriptSignals(code, env, preParsedIr) : undefined
@@ -707,6 +707,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       ...(scriptPaths.completeness === 'unknown'
         ? { unknownReason: scriptPaths.unknownReason ?? 'dynamic-execution' }
         : {}),
+      dynamicKinds: scriptPaths.dynamicKinds,
       contentDigest: createHash('sha256').update(code, 'utf8').digest('hex'),
       workdirDigest: createHash('sha256').update(path.resolve(args.workDir), 'utf8').digest('hex'),
       parametersDigest: createHash('sha256').update(JSON.stringify({ ...args.toolInput, code }), 'utf8').digest('hex'),

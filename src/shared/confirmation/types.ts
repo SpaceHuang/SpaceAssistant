@@ -141,6 +141,9 @@ export type FactSignal =
       dynamicAccess: boolean
       /** Present only when incomplete analysis was classified; absent stays fail-closed. */
       unknownReason?: 'dynamic-execution' | 'unmodeled-call' | null
+      /** Multi-valued path-analysis facts; absent legacy payloads must stay conservative. */
+      dynamicKinds?: Array<'dynamic-code-execution' | 'unresolved-write-target' | 'unresolved-read-target' | 'unresolved-destructive-target' | 'unresolved-transfer-target' | 'binding-chain-broken' | 'path-analysis-unavailable'>
+      /** Absent/unknown categories remain fail-closed for legacy or malformed producers. */
       /** SHA-256 of exact run_script code; used only for session-scoped trust. */
       contentDigest?: string
       /** Opaque SHA-256 of the active work directory; scopes script trust to its filesystem boundary. */
