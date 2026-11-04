@@ -127,6 +127,11 @@ export interface ScriptFinding {
   evidence: ScriptFindingEvidence
 }
 
+export type ScriptPathDynamicKind =
+  | 'dynamic-code-execution' | 'unresolved-write-target' | 'unresolved-read-target'
+  | 'unresolved-destructive-target' | 'unresolved-transfer-target'
+  | 'binding-chain-broken' | 'path-analysis-unavailable'
+
 export type FactSignal =
   | { kind: 'command-sequence'; commands: CommandFact[]; persistable?: boolean }
   | { kind: 'path-target'; path: string; zone: PathZone }
@@ -142,7 +147,7 @@ export type FactSignal =
       /** Present only when incomplete analysis was classified; absent stays fail-closed. */
       unknownReason?: 'dynamic-execution' | 'unmodeled-call' | null
       /** Multi-valued path-analysis facts; absent legacy payloads must stay conservative. */
-      dynamicKinds?: Array<'dynamic-code-execution' | 'unresolved-write-target' | 'unresolved-read-target' | 'unresolved-destructive-target' | 'unresolved-transfer-target' | 'binding-chain-broken' | 'path-analysis-unavailable'>
+      dynamicKinds?: ScriptPathDynamicKind[]
       /** Absent/unknown categories remain fail-closed for legacy or malformed producers. */
       /** SHA-256 of exact run_script code; used only for session-scoped trust. */
       contentDigest?: string

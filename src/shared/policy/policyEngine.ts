@@ -12,6 +12,7 @@ import type {
 } from '../confirmation/types'
 import { memoryTierLabel } from '../confirmation/labels'
 import { deriveMemoryEligibility } from './memoryEligibility'
+import { getScriptClassDisposition } from './scriptClassDisposition'
 
 export interface InvocationPolicyConstraints {
   readonly mandatoryConfirmationRuleId?: string
@@ -33,6 +34,12 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         // 把 script-analysis 的子档位（clean/suspicious/dangerous）作为独立 token 暴露，
         // 使规则能用 `signals:['clean']` / `['dangerous']` 匹配。
         tokens.add(signal.signal)
+        for (const finding of signal.findings ?? []) {
+          tokens.add(`script-finding:${finding.class}`)
+          const pathClass = 'pathClass' in finding.evidence ? finding.evidence.pathClass : undefined
+          if (pathClass) tokens.add(`script-finding:${finding.class}:${pathClass}`)
+          if (getScriptClassDisposition(finding.class, pathClass).action !== 'allow') tokens.add('script-finding:non-allow')
+        }
         break
       case 'path-target':
         tokens.add(signal.kind)
@@ -145,6 +152,19 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         if (signal.dynamicAccess) tokens.add('script-dynamic-access')
         if (signal.unknownReason) tokens.add(`script-path-extraction:${signal.unknownReason}`)
         else if (signal.completeness === 'unknown') tokens.add('script-path-extraction:unclassified')
+        {
+          const knownKinds = new Set([
+            'dynamic-code-execution', 'unresolved-write-target', 'unresolved-read-target',
+            'unresolved-destructive-target', 'unresolved-transfer-target', 'binding-chain-broken',
+            'path-analysis-unavailable'
+          ])
+          const hasExplicitKinds = Array.isArray(signal.dynamicKinds) && signal.dynamicKinds.length > 0
+          const kinds = new Set((signal.dynamicKinds ?? []).filter((kind) => knownKinds.has(kind)))
+          if (signal.completeness === 'unknown' && kinds.size === 0) kinds.add('path-analysis-unavailable')
+          for (const kind of kinds) tokens.add(`script-path-extraction:${kind}`)
+          if (hasExplicitKinds && kinds.size > 0) tokens.add('script-path-extraction:dynamic-execution')
+          if (hasExplicitKinds && kinds.size === 1 && kinds.has('unresolved-write-target')) tokens.add('script-path-extraction:write-target-only')
+        }
         break
       case 'im-script-network-review-candidate':
         tokens.add(signal.kind)

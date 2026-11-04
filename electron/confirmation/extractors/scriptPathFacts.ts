@@ -5,11 +5,11 @@ import type { IrExpr, IrModule, IrStmt } from '../../shell/scriptIr/types'
 import { scriptParserService } from '../../shell/scriptParserService'
 import type * as ts from 'typescript'
 import { createLazyRuntimeModule } from '../../lazyRuntimeModule'
+import type { ScriptPathDynamicKind } from '../../../src/shared/confirmation/types'
 
 const getTypeScript = createLazyRuntimeModule(() => require('typescript') as typeof ts)
 
 export type ScriptPathUnknownReason = 'dynamic-execution' | 'unmodeled-call' | null
-export type ScriptPathDynamicKind = 'dynamic-code-execution' | 'unresolved-write-target' | 'unresolved-read-target' | 'unresolved-destructive-target' | 'unresolved-transfer-target' | 'binding-chain-broken' | 'path-analysis-unavailable'
 /** P2-1:unknown 证据(调用名;方案 §5「回显具体调用名」),去重封顶。 */
 export type ScriptPathEvidence = { call: string; reason: Exclude<ScriptPathUnknownReason, null> }
 export type ScriptPathDeclaration = 'workdir-readonly'

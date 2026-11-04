@@ -1479,6 +1479,41 @@ describe('shell signal tokens', () => {
   })
 })
 
+describe('script finding and path classification tokens', () => {
+  it('derives class/path tokens and non-allow aggregate from the strategy disposition table', () => {
+    const tokens = signalTokenSet(mkFacts('run_script', 'execute', [{
+      kind: 'script-analysis', signal: 'suspicious', patterns: [], coverage: 'complete', totalCount: 2,
+      findings: [
+        { pattern: 'A5', class: 'native-code-load', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'x', evidence: { kind: 'native-code', module: 'ctypes' } },
+        { pattern: 'A7', class: 'file-write', range: { startLine: 2, startCol: 1, endLine: 2, endCol: 2 }, snippet: 'x', evidence: { kind: 'write-path', call: 'open', mode: 'w', rawPath: '../x', pathClass: 'dotdot' } }
+      ]
+    }]))
+    expect(tokens).toContain('script-finding:native-code-load')
+    expect(tokens).toContain('script-finding:file-write')
+    expect(tokens).toContain('script-finding:file-write:dotdot')
+    expect(tokens).toContain('script-finding:non-allow')
+  })
+
+  it('derives one token per dynamic kind and write-target-only only for pure unresolved writes', () => {
+    const writeOnly = signalTokenSet(mkFacts('run_script', 'execute', [{ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, dynamicKinds: ['unresolved-write-target'] }]))
+    expect(writeOnly).toContain('script-path-extraction:unresolved-write-target')
+    expect(writeOnly).toContain('script-path-extraction:dynamic-execution')
+    expect(writeOnly).toContain('script-path-extraction:write-target-only')
+    const mixed = signalTokenSet(mkFacts('run_script', 'execute', [{ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, dynamicKinds: ['unresolved-write-target', 'unresolved-read-target'] }]))
+    expect(mixed).not.toContain('script-path-extraction:write-target-only')
+    expect(mixed).toContain('script-path-extraction:unresolved-read-target')
+  })
+
+  it('conservatively classifies old shapes and unknown runtime categories as unavailable', () => {
+    const old = signalTokenSet(mkFacts('run_script', 'execute', [{ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true }]))
+    expect(old).toContain('script-path-extraction:path-analysis-unavailable')
+    expect(old).not.toContain('script-path-extraction:write-target-only')
+    const future = signalTokenSet(mkFacts('run_script', 'execute', [{ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, dynamicKinds: ['future-kind' as never] }]))
+    expect(future).toContain('script-path-extraction:path-analysis-unavailable')
+    expect(future).not.toContain('script-path-extraction:write-target-only')
+  })
+})
+
 describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () => {
   it('desktop 第 5 步 ask → answerer=user（mcp-tool 默认确认）', () => {
     const d = decide(
