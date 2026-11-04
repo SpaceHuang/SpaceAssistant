@@ -172,7 +172,7 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：类别到动作的唯一映射位于共享策略域；派生每个 kind token、兼容聚合 token、仅纯写入时的 write-target-only token；旧字段/未知类别采用保守路径；事实生产器不依赖策略作决定。
   - 验证：映射单测、缺字段/未知类别保守测试、删除映射规则的反向测试；`npm run typecheck:shared`。关联 AC-3～5、9、17。证据：`F34.md`。
 
-- [ ] **F35 按类别映射重写规则并保留人工 floor**（本机）
+- [x] **F35 按类别映射重写规则并保留人工 floor**（本机）
   - 范围：`src/shared/policy/defaultRules.ts`、policy trace、lint/contract 测试及规则装配模块。
   - 产物/判据：逐条核对方案受影响规则并把三档条件换为类别条件；两条旧锁定规则排除纯写入 token；新 `script-unresolved-write-review` 只覆盖纯写入；桌面标准档走 auto-evaluator，strict/custom、远程询问，定时任务拒绝；其他分类保留人工 floor；稳定 rule ID/reason trace 完整。
   - 验证：default rules contract/lint 与 policy engine 测试；`npm run check:system-invariant-registry`、`npm run typecheck:shared`。关联 AC-4、5、9、13、17。证据：`F35.md`。
