@@ -10,7 +10,7 @@
 
 ## 在途（in-flight）
 
-- [Skill 目录优先与按需加载技术方案](./in-flight/skill-catalog-first-routing-technical-plan.md) —— 取消默认模式下的前置专用技能路由请求，复用首轮目录与 `skills.read` 按需加载；草稿待批准 D-01。
+- [Skill 目录优先与按需加载技术方案](./in-flight/skill-catalog-first-routing-technical-plan.md) —— 取消默认模式下的前置专用技能路由请求，复用首轮目录与 `skills.read` 按需加载；D-01、D-02 均已选 A；方案复审待关闭。
 - [Wiki 专属能力接口技术方案](./in-flight/wiki-domain-tools-technical-plan.md) —— Wiki 服务、工具契约、安全边界、版本/外部编辑协调、迁移与回退设计；D-TP-01 至 D-TP-05 已决定，复用现有文件存储机制。
 - [Wiki 专属能力接口执行计划](./in-flight/wiki-domain-tools-execution-plan.md) —— 对应需求 AC 的实现 DAG、阶段门禁、验证证据和发布回退顺序；尚未开始。
 

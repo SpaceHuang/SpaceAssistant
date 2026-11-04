@@ -70,6 +70,14 @@ describe('securityApprovalSkill（I2：裁决标准唯一）', () => {
     expect(skill.content).toMatch(/"authorization"\s*:/)
   })
 
+  it('范围候选是审核材料，模型合同不包含缓存回传字段', () => {
+    const skill = getBundledSecurityApprovalSkill()
+    expect(skill.content).toMatch(/候选中的工具、操作和全部目标作为本次审核材料/)
+    expect(skill.content).toMatch(/不得输出缓存开关、候选摘要或任何后续复用元数据/)
+    expect(skill.content).not.toContain('reuseApproved')
+    expect(skill.content).not.toContain('scopeCandidateDigest')
+  })
+
   it('Skill v2.1 侦查纪律节：侦查轮数用法约束——只把轮数花在能改变结论的地方（改进方案项 1）', () => {
     const skill = getBundledSecurityApprovalSkill()
     // 新增独立节，位于「输入」之后

@@ -833,6 +833,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       toolName,
       toolInput: structuredClone(call.input),
       requestId: binding.requestId,
+      invocationId: binding.invocationId,
       toolUseId: binding.toolCallId,
       sessionId: materials.sessionId,
       workDir: resolveToolCallWorkDir(call, materials.resolveWorkDir?.() ?? materials.workDir),
@@ -1193,16 +1194,42 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       return createAgentSdkConfirmationPort({
       ...confirmationAdapter,
       onScopeApproved: (call, context, primaryOutcome) => {
-        if (primaryOutcome.kind !== 'approved') return
-        const grant = primaryOutcome.reviewScopeGrant
+        if (primaryOutcome.kind !== 'approved' || primaryOutcome.answererKind !== 'agent') return
+        const cache = getDefaultAgentRuntime().reviewScopeCache
+        const recordScopeAudit = (outcome: 'created' | 'skipped', reasonCode: NonNullable<import('../../src/shared/confirmation/types').SecurityAuditEvent['reviewScopeReasonCode']>) => {
+          getSecurityAuditLog().record({ ts: Date.now(), event: 'confirm.review-scope', lane: materialsLane,
+            sessionId: materials.sessionId, requestId: materials.requestId, invocationId: call.invocationId,
+            toolUseId: call.toolCallId, toolName: call.toolName, actor: 'system', reviewScopeOutcome: outcome, reviewScopeReasonCode: reasonCode,
+            reviewScopeSource: 'agent', reviewScopeCandidateVersion: 'review-scope-candidate-v1' })
+        }
         const candidate = context.reviewScopeCandidate as import('../../src/shared/confirmation/types').ReviewScopeApprovalCandidate | undefined
-        if (!grant || primaryOutcome.answererKind !== 'agent' || !candidate ||
-          !['desktop', 'feishu', 'wechat'].includes(materialsLane) ||
-          grant.source !== 'agent' || grant.scopeCandidateDigest !== candidate.scopeCandidateDigest ||
-          !['edit_file', 'write_file', 'grep'].includes(call.toolName)) return
-        getDefaultAgentRuntime().reviewScopeCache.grantDigest({ lane: materialsLane as 'desktop' | 'feishu' | 'wechat',
-          sessionId: materials.sessionId, source: 'agent', scopeCandidateDigest: candidate.scopeCandidateDigest,
-          firstWrite: candidate.toolName !== 'grep' })
+        const candidateScope = context.reviewScopeCandidateScope as import('../confirmation/reviewScopeCache').ReviewScopeCandidate | undefined
+        if (!candidate || !candidateScope) { recordScopeAudit('skipped', 'candidate_missing'); return }
+        if (!materials.approvalReviewScopeEvidenceComplete || !materials.approvalTaskDigest?.trim() || materials.approvalTaskDigestTruncated ||
+          !materials.approvalReviewScopeTaskIdentity?.trim() || Buffer.byteLength(materials.approvalReviewScopeTaskIdentity, 'utf8') > 64 * 1024) {
+          recordScopeAudit('skipped', 'review_material_incomplete'); return
+        }
+        if (!['desktop', 'feishu', 'wechat'].includes(materialsLane) || !['edit_file', 'write_file', 'grep'].includes(call.toolName) ||
+          candidate.toolName !== call.toolName || candidateScope.toolName !== call.toolName) {
+          recordScopeAudit('skipped', 'unsupported_tool'); return
+        }
+        let digest: string
+        try { digest = cache.candidateDigest(candidateScope) } catch { recordScopeAudit('skipped', 'candidate_digest_invalid'); return }
+        const publicObjectsMatch = Array.isArray(candidate.objects) && Array.isArray(candidateScope.objects) &&
+          candidate.objects.length === candidateScope.objects.length && candidate.objects.every((object, index) => {
+            const scopedObject = candidateScope.objects[index]
+            return typeof object?.role === 'string' && typeof object?.target === 'string' &&
+              object.role === scopedObject?.role && object.target === scopedObject?.value
+          })
+        if (!publicObjectsMatch || candidate.toolName !== candidateScope.toolName || candidate.operation !== candidateScope.operation ||
+          digest !== candidate.scopeCandidateDigest || digest !== context.reviewScopeCandidateDigest ||
+          candidateScope.sessionId !== materials.sessionId || candidateScope.lane !== materialsLane) {
+          recordScopeAudit('skipped', 'candidate_digest_invalid'); return
+        }
+        const created = cache.grantDigest({ lane: materialsLane as 'desktop' | 'feishu' | 'wechat',
+          sessionId: materials.sessionId, source: 'agent', scopeCandidateDigest: digest,
+          firstWrite: candidateScope.toolName !== 'grep' })
+        recordScopeAudit(created ? 'created' : 'skipped', created ? 'grant_created' : 'grant_duplicate_or_capacity')
       },
       subscribeAuthorizationChange: confirmationAdapter.subscribeAuthorizationChange ?? ((call, listener) =>
         getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(call.invocationId, materialsLane, listener)),
