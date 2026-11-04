@@ -168,6 +168,17 @@ describe('scriptAnalysisExtractor', () => {
     expect(analysis.findings?.map((finding) => finding.range.startLine)).toEqual([2, 3])
   })
 
+  it('新 findings 与旧 signal/patterns 在同一事实中并行，兼容旧规则消费', () => {
+    const result = extractScriptSignals("import requests\nrequests.get('https://example.test')", env)
+    const analysis = result.signals.find((signal) => signal.kind === 'script-analysis')
+    expect(analysis).toMatchObject({
+      kind: 'script-analysis', signal: 'suspicious', patterns: ['A6'],
+      coverage: 'complete', totalCount: 1,
+      findings: [expect.objectContaining({ class: 'network-api', pattern: 'A6', evidence: expect.objectContaining({ kind: 'network', host: 'example.test' }) })]
+    })
+    expect(result.signals).toContainEqual({ kind: 'script-network', patterns: ['A6'] })
+  })
+
   it('命中缺失 IR 位置时作废整组 findings 并产生 extraction-failed', () => {
     const unlocatedIr = { body: [
       { kind: 'import', names: [{ module: 'os' }] },
