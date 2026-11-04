@@ -5,7 +5,7 @@ import { setSessions } from '../store/sessionSlice'
 import { navigateToPendingConfirmation } from './notificationNavigation'
 
 export type PendingConfirmationNavigation = { sessionId: string; toolUseId?: string }
-type Navigate = (payload: PendingConfirmationNavigation) => Promise<void>
+type Navigate = (payload: PendingConfirmationNavigation, isOwnerCurrent: () => boolean) => Promise<void>
 
 /**
  * Holds notification navigation until config and the startup session selection are ready.
@@ -15,6 +15,7 @@ export class NotificationNavigationStartup {
   private initialSessionSelectionReady = false
   private queuedNavigation: PendingConfirmationNavigation | null = null
   private unsubscribe: () => void
+  private disposed = false
 
   constructor(
     private navigate: Navigate = navigateToPendingConfirmation,
@@ -28,12 +29,14 @@ export class NotificationNavigationStartup {
   }
 
   receive(payload: PendingConfirmationNavigation): Promise<void> {
+    if (this.disposed) return Promise.resolve()
     this.queuedNavigation = payload
     return this.flush()
   }
 
   /** Apply the default startup session first, then allow a queued notification to take precedence. */
   completeInitialSessionLoad(sessions: Session[] | null): Promise<void> {
+    if (this.disposed) return Promise.resolve()
     if (sessions) {
       store.dispatch(setSessions(sessions))
       if (sessions[0]) store.dispatch(setSession(sessions[0].id))
@@ -43,18 +46,20 @@ export class NotificationNavigationStartup {
   }
 
   dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
     this.unsubscribe()
     this.queuedNavigation = null
   }
 
   private isReady(): boolean {
-    return this.initialSessionSelectionReady && store.getState().config.config !== null
+    return !this.disposed && this.initialSessionSelectionReady && store.getState().config.config !== null
   }
 
   private flush(): Promise<void> {
     if (!this.isReady() || !this.queuedNavigation) return Promise.resolve()
     const payload = this.queuedNavigation
     this.queuedNavigation = null
-    return this.navigate(payload)
+    return this.navigate(payload, () => !this.disposed)
   }
 }

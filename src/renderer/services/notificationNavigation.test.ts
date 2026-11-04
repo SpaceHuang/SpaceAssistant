@@ -140,4 +140,47 @@ describe('floating confirmation notification navigation', () => {
     expect(store.getState().chat.scrollToMessageId).toBe('assistant-b')
     expect(chatGetMessages).toHaveBeenCalledExactlyOnceWith({ sessionId: 'target-b' })
   })
+
+  it('已 dispose 的旧启动实例收到晚到会话列表时不得覆盖新实例的通知导航', async () => {
+    store.dispatch(setConfig({
+      workDir: '/tmp',
+      workDirProfiles: [{ id: 'p1', name: 'tmp', path: '/tmp', isDefault: true }],
+      activeWorkDirProfileId: 'p1'
+    } as never))
+    const oldStartup = new NotificationNavigationStartup()
+    oldStartup.dispose()
+    const activeStartup = new NotificationNavigationStartup()
+    const targetMessage: Message = {
+      id: 'assistant-target', sessionId: 'target-b', role: 'assistant', content: '', timestamp: 2,
+      status: 'streaming', toolCalls: [{ id: 'tool-b', toolName: 'run_shell', input: {}, status: 'confirming', riskLevel: 'high' }]
+    }
+    window.api = { ...window.api, chatGetMessages: vi.fn(async () => [targetMessage]) }
+
+    await activeStartup.receive({ sessionId: 'target-b', toolUseId: 'tool-b' })
+    await activeStartup.completeInitialSessionLoad([session('unrelated-first'), session('target-b')])
+    await oldStartup.completeInitialSessionLoad([session('unrelated-first'), session('target-b')])
+
+    expect(store.getState().chat.currentSessionId).toBe('target-b')
+    expect(store.getState().chat.confirmFocusToolUseId).toBe('tool-b')
+    activeStartup.dispose()
+  })
+
+  it('dispose 后已启动的旧通知导航不得在异步会话读取完成后提交状态', async () => {
+    let resolveMessages!: (rows: Message[]) => void
+    window.api = {
+      ...window.api,
+      chatGetMessages: vi.fn(() => new Promise<Message[]>((resolve) => { resolveMessages = resolve }))
+    }
+    const oldStartup = new NotificationNavigationStartup()
+    await oldStartup.completeInitialSessionLoad([session('target')])
+    const navigation = oldStartup.receive({ sessionId: 'target', toolUseId: 'tool-confirm' })
+    await vi.waitFor(() => expect(window.api.chatGetMessages).toHaveBeenCalled())
+
+    oldStartup.dispose()
+    resolveMessages([{ id: 'late-message', sessionId: 'target', role: 'assistant', content: '', timestamp: 1, status: 'streaming', toolCalls: [] } as Message])
+    await navigation
+
+    expect(store.getState().chat.currentSessionId).toBe('target')
+    expect(store.getState().chat.confirmFocusToolUseId).toBeNull()
+  })
 })
