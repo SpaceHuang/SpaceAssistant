@@ -637,6 +637,9 @@ export class SqliteAgentHistory implements HistoryPort {
       const triggerAdmissionEvent = triggerBinding
         ? events.find((event) => event.kind === 'invocation-context-committed' && event.eventId === triggerBinding.contextEventId)
         : undefined
+      const storedTriggerAdmissionEvent = triggerBinding
+        ? storedEvents.find((event) => event.kind === 'invocation-context-committed' && event.eventId === triggerBinding.contextEventId)
+        : undefined
       let admissionToCommit: Record<string, unknown> | undefined
       let triggerRevision = -1
       if (triggerBinding) {
@@ -673,7 +676,7 @@ export class SqliteAgentHistory implements HistoryPort {
             priorAdmission.contextEventId !== triggerBinding.contextEventId || !storedContextRow || priorAdmission.contextDigest !== sha256(storedContext) ||
             (storedRequestSnapshot !== undefined && (!isRecord(storedRequestSnapshot) || storedRequestSnapshot.requestId !== triggerBinding.requestId)) ||
             priorAdmission.requestDigest !== sha256(storedRequestSnapshot ?? { requestId: triggerBinding.requestId }) ||
-            (contextPayload && priorAdmission.contextDigest !== sha256(contextPayload)) ||
+            (contextPayload && (!storedTriggerAdmissionEvent || priorAdmission.contextDigest !== sha256(storedTriggerAdmissionEvent.payload))) ||
             priorAdmission.payloadDigest !== triggerBinding.payloadDigest || priorAdmission.authorizationGeneration !== triggerBinding.authorizationGeneration ||
             priorAdmission.policyRevision !== triggerBinding.policyRevision || priorAdmission.runtimeGeneration !== triggerBinding.runtimeGeneration) {
             throw new HistoryBatchError('runtime trigger admission inconsistent')
@@ -694,7 +697,7 @@ export class SqliteAgentHistory implements HistoryPort {
           }
           admissionToCommit = { version: 1, triggerId: triggerBinding.triggerId, requestId: triggerBinding.requestId,
             receiverSessionId: triggerBinding.receiverSessionId, turnId: triggerBinding.turnId, invocationId: triggerBinding.invocationId,
-            contextEventId: triggerBinding.contextEventId, contextDigest: sha256(initialContext), payloadDigest: triggerBinding.payloadDigest,
+            contextEventId: triggerBinding.contextEventId, contextDigest: sha256(storedTriggerAdmissionEvent?.payload ?? initialContext), payloadDigest: triggerBinding.payloadDigest,
             requestDigest: sha256(requestSnapshot ?? { requestId: triggerBinding.requestId }), authorizationGeneration: triggerBinding.authorizationGeneration,
             policyRevision: triggerBinding.policyRevision, runtimeGeneration: triggerBinding.runtimeGeneration, acceptedAt: this.now() }
           if (transcriptCommit) throw new HistoryBatchError('runtime trigger raw transcript cannot commit before admission')

@@ -5,6 +5,8 @@ import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createRuntimeTriggerStartAuthorizer } from './authorization'
+import { createSpillStore } from '../storage/spillStore'
+import path from 'node:path'
 
 function seedTrigger(conn: ReturnType<typeof getDbConnection>, receiver: string): void {
   conn.prepare(`INSERT INTO runtime_triggers(id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,event_json,attempts,revision,updated_at)
@@ -20,7 +22,7 @@ function contextEvent(receiver: string): HistoryEvent {
   return { invocationId: 'inv-1', turnId: 'turn-1', sequence: 1, schemaVersion: 1, eventId: 'inv-1:history:1',
     idempotencyKey: 'inv-1:invocation-context-committed:1', kind: 'invocation-context-committed',
     payload: { contextProtocol: 2, baseVersion: 0, inputMode: 'full', inputMessages: [{ role: 'user', content: 'approved source' }],
-      failureInputMessages: [], scope: { kind: 'session', sessionId: receiver }, messages: [{ role: 'user', content: 'approved source' }], requestSnapshot: { model: 'test' } } }
+      failureInputMessages: [], scope: { kind: 'session', sessionId: receiver }, messages: [{ role: 'user', content: 'approved source' }], requestSnapshot: { requestId: 'runtime-trigger:trigger-1', model: 'test' } } }
 }
 
 describe('runtime trigger authorization final-check', () => {
@@ -30,17 +32,19 @@ describe('runtime trigger authorization final-check', () => {
       const session = createSession(temp.db, { name: 'receiver' })
       const conn = getDbConnection(temp.db)
       seedTrigger(conn, session.id)
-      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id, undefined, {
+      const finalCheck = vi.fn(() => false)
+      const guardedHistory = new SqliteAgentHistory(conn, 1, Date.now, session.id, undefined, {
         triggerId: 'trigger-1', requestId: 'runtime-trigger:trigger-1', receiverSessionId: session.id, turnId: 'turn-1',
         invocationId: 'inv-1', contextEventId: 'inv-1:history:1', payloadDigest: 'payload-digest',
-        authorizationGeneration: '2', policyRevision: '3', runtimeGeneration: '1', finalCheck: () => false
+        authorizationGeneration: '2', policyRevision: '3', runtimeGeneration: '1', finalCheck
       })
-      await expect(history.appendBatch([contextEvent(session.id)], 0)).rejects.toThrow('authorization final-check rejected')
-      await expect(history.appendBatch([{ ...contextEvent(session.id), sequence: 1, eventId: 'inv-1:failed', idempotencyKey: 'inv-1:failed',
+      await expect(guardedHistory.appendBatch([contextEvent(session.id)], 0)).rejects.toThrow('authorization final-check rejected')
+      expect(finalCheck).toHaveBeenCalledOnce()
+      await expect(guardedHistory.appendBatch([{ ...contextEvent(session.id), sequence: 1, eventId: 'inv-1:failed', idempotencyKey: 'inv-1:failed',
         kind: 'invocation-failed', payload: { status: 'failed' } }], 0,
       { sessionId: session.id, baseVersion: 0, outcome: 'failed', protocol: 1, messages: [{ role: 'user', content: 'unapproved raw source' }] }))
         .rejects.toThrow('runtime trigger history cannot advance before admission')
-      expect(await history.read('inv-1')).toMatchObject({ version: 0, events: [] })
+      expect(await guardedHistory.read('inv-1')).toMatchObject({ version: 0, events: [] })
       expect(JSON.parse((conn.prepare("SELECT result_json FROM runtime_triggers WHERE id='trigger-1'").get() as { result_json: string }).result_json)).not.toHaveProperty('admission')
     } finally { temp.cleanup() }
   })
@@ -51,11 +55,11 @@ describe('runtime trigger authorization final-check', () => {
       const session = createSession(temp.db, { name: 'receiver' })
       const conn = getDbConnection(temp.db)
       seedTrigger(conn, session.id)
-      let authorized = true
+      const finalCheck = vi.fn(() => true)
       const history = new SqliteAgentHistory(conn, 1, Date.now, session.id, undefined, {
         triggerId: 'trigger-1', requestId: 'runtime-trigger:trigger-1', receiverSessionId: session.id, turnId: 'turn-1',
         invocationId: 'inv-1', contextEventId: 'inv-1:history:1', payloadDigest: 'payload-digest',
-        authorizationGeneration: '2', policyRevision: '3', runtimeGeneration: '1', finalCheck: () => authorized
+        authorizationGeneration: '2', policyRevision: '3', runtimeGeneration: '1', finalCheck
       })
       await history.appendBatch([contextEvent(session.id)], 0)
       const persisted = JSON.parse((conn.prepare("SELECT result_json FROM runtime_triggers WHERE id='trigger-1'").get() as { result_json: string }).result_json).admission
@@ -64,9 +68,10 @@ describe('runtime trigger authorization final-check', () => {
         receiverSessionId: session.id, turnId: 'turn-1', invocationId: 'inv-1', contextEventId: 'inv-1:history:1',
         payloadDigest: 'payload-digest', authorizationGeneration: '2', policyRevision: '3' })
       await expect(history.appendBatch([contextEvent(session.id)], 0)).resolves.toMatchObject({ duplicate: true })
-      authorized = false
+      finalCheck.mockReturnValue(false)
       await history.appendBatch([{ ...contextEvent(session.id), sequence: 2, eventId: 'inv-1:completed', idempotencyKey: 'inv-1:completed',
         kind: 'invocation-completed', payload: { status: 'completed' } }], 1)
+      expect(finalCheck).toHaveBeenCalledOnce()
       expect((await history.read('inv-1')).events.at(-1)?.kind).toBe('invocation-completed')
     } finally { temp.cleanup() }
   })
@@ -79,14 +84,38 @@ describe('runtime trigger authorization final-check', () => {
       seedTrigger(conn, session.id)
       conn.exec(`CREATE TRIGGER reject_runtime_admission BEFORE UPDATE OF result_json ON runtime_triggers
         BEGIN SELECT RAISE(ABORT, 'injected admission write failure'); END`)
-      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id, undefined, {
+      const finalCheck = vi.fn(() => true)
+      const guardedHistory = new SqliteAgentHistory(conn, 1, Date.now, session.id, undefined, {
         triggerId: 'trigger-1', requestId: 'runtime-trigger:trigger-1', receiverSessionId: session.id, turnId: 'turn-1',
         invocationId: 'inv-1', contextEventId: 'inv-1:history:1', payloadDigest: 'payload-digest',
-        authorizationGeneration: '2', policyRevision: '3', runtimeGeneration: '1', finalCheck: () => true
+        authorizationGeneration: '2', policyRevision: '3', runtimeGeneration: '1', finalCheck
       })
-      await expect(history.appendBatch([contextEvent(session.id)], 0)).rejects.toThrow('injected admission write failure')
-      expect(await history.read('inv-1')).toMatchObject({ version: 0, events: [] })
+      await expect(guardedHistory.appendBatch([contextEvent(session.id)], 0)).rejects.toThrow('injected admission write failure')
+      expect(finalCheck).toHaveBeenCalledOnce()
+      expect(await guardedHistory.read('inv-1')).toMatchObject({ version: 0, events: [] })
       expect(JSON.parse((conn.prepare("SELECT result_json FROM runtime_triggers WHERE id='trigger-1'").get() as { result_json: string }).result_json)).not.toHaveProperty('admission')
+    } finally { temp.cleanup() }
+  })
+
+  it('continues a large admitted context after spill persistence and History port reconstruction', async () => {
+    const temp = createTempDatabase('runtime-trigger-auth-spill-')
+    try {
+      const session = createSession(temp.db, { name: 'receiver' })
+      const conn = getDbConnection(temp.db)
+      seedTrigger(conn, session.id)
+      const spillStore = createSpillStore(path.join(path.dirname(temp.dbPath), 'spill'))
+      const binding = { triggerId: 'trigger-1', requestId: 'runtime-trigger:trigger-1', receiverSessionId: session.id, turnId: 'turn-1',
+        invocationId: 'inv-1', contextEventId: 'inv-1:history:1', payloadDigest: 'payload-digest', authorizationGeneration: '2',
+        policyRevision: '3', runtimeGeneration: '1', finalCheck: () => true }
+      const initial = contextEvent(session.id)
+      initial.payload = { ...(initial.payload as Record<string, unknown>), messages: [{ role: 'user', content: 'x'.repeat(70_000) }] }
+      const firstHistory = new SqliteAgentHistory(conn, 1, Date.now, session.id, spillStore, binding)
+      await firstHistory.appendBatch([initial], 0)
+      const stored = conn.prepare("SELECT payload_json FROM agent_history_events WHERE event_id=?").get(binding.contextEventId) as { payload_json: string }
+      expect(stored.payload_json).toContain('__spaceassistant_spill_v1')
+      const reopenedHistory = new SqliteAgentHistory(conn, 1, Date.now, session.id, spillStore, binding)
+      await expect(reopenedHistory.appendBatch([{ ...initial, sequence: 2, eventId: 'inv-1:continued', idempotencyKey: 'inv-1:continued',
+        kind: 'model-request-started', payload: { requestId: binding.requestId } }], 1)).resolves.toMatchObject({ version: 2 })
     } finally { temp.cleanup() }
   })
 })
