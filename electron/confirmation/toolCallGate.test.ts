@@ -2025,7 +2025,9 @@ describe('evaluateToolCallGate', () => {
   })
 
   it.each([
-    ['absolute path inside join', "import os\nopen(os.path.join('base', '/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', 'script-finding-review', 'agent'],
+    // A POSIX-rooted path passed to os.path.join has different semantics under ntpath;
+    // Windows conservatively reports incomplete analysis and requires the user directly.
+    ['absolute path inside join', "import os\nopen(os.path.join('base', '/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', path.sep === '\\' ? 'script-analysis-incomplete-confirm' : 'script-finding-review', path.sep === '\\' ? 'user' : 'agent'],
     ['arbitrary call result', "open(custom_path('/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', 'script-non-write-path-confirm', 'user'],
     ['multi-argument Path', "from pathlib import Path\nPath('base', '/tmp/script-finding-review-absolute.txt').write_text('x')", 'unresolved', 'require-confirm', 'script-unresolved-write-review', 'agent']
   ] as const)('写目标表达式 %s 不被误折叠为相对路径', async (_case, code, pathClass, decisionType, ruleId, answerer) => {
