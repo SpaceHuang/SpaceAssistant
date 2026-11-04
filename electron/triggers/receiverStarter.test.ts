@@ -16,7 +16,7 @@ describe('runtime trigger receiver starter', () => {
     await expect(starter({ sessionId: 'receiver', requestId: 'runtime-trigger:t1', messageId: 'marker-1', queueScope: { kind: 'desktop' } }))
       .resolves.toBe('started')
     expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ mode: 'reuse-user', requestId: 'runtime-trigger:t1',
-      sessionId: 'receiver', userMessageId: 'marker-1', queueScope: { kind: 'desktop' } }))
+      sessionId: 'receiver', userMessageId: 'marker-1', queueScope: { kind: 'desktop' }, queueInputSource: 'runtime-trigger' }))
     expect(dispatch).toHaveBeenCalledWith(null, { requestId: 'runtime-trigger:t1', turnId: 'turn-1', turnStartToken: 'secret', sessionId: 'receiver' })
   })
 

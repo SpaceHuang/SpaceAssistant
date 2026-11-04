@@ -887,7 +887,9 @@ async function ensureInitialHistoryContext(input: RunAgentTurnInput, call: Prepa
       scope: { kind: 'session', sessionId: input.sessionId ?? input.invocationId },
       // Keep the legacy field useful to old readers without persisting a second full request on delta turns.
       messages: structuredClone(contextInputs.inputMessages),
-      requestSnapshot: canonicalRequestSnapshot(call),
+      // Bind the preparation snapshot to this invocation; hosts use this stable identity
+      // for trigger admission and replay validation independently of provider request IDs.
+      requestSnapshot: { requestId: input.invocationId, ...canonicalRequestSnapshot(call) },
       ...(requiredUserMessage
         ? { requiredUserMessage: structuredClone(requiredUserMessage) }
         : {})

@@ -135,7 +135,7 @@ export function createToolkitCallExecutor(registry: CapabilityRegistry = capabil
 
 export function createToolkitFindTool(registry: CapabilityRegistry = capabilityRegistry): RegisteredTool {
   const executor = createToolkitFindExecutor(registry)
-  return createSnapshotReadRegisteredTool('toolkit.find', (input) => executor(input))
+  return createSnapshotReadRegisteredTool('toolkit.find', (input) => executor(input), { resourceKeys: () => [] })
 }
 
 export function createToolkitCallTool(registry: CapabilityRegistry = capabilityRegistry): RegisteredTool {
@@ -183,9 +183,14 @@ export function createToolkitCallTool(registry: CapabilityRegistry = capabilityR
       requestId: context.remoteContext.requestId, originSessionId: context.remoteContext.originSessionId
     } : undefined
   })
+  const independentCapabilityIds = (input: Record<string, unknown>): boolean => {
+    const id = typeof input.id === 'string' ? input.id.trim().toLowerCase() : ''
+    return id === 'action.session.status' || id === 'env.time' || id.startsWith('action.runtime_trigger.')
+  }
   return definePlannedTool<Record<string, unknown>, PreparedCall, ToolExecutorResult>({
     name: 'toolkit.call',
     actionClass: 'execute',
+    resourceKeys: (input) => independentCapabilityIds(input) ? [] : undefined,
     parseInput: parseRecord,
     plan: async (input, planning) => {
       if (!planning.executionContext) throw new Error('TOOLKIT_CALL_RUNTIME_CONTEXT_REQUIRED')

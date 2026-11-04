@@ -847,9 +847,11 @@ app.whenReady().then(async () => {
         if (!row) return false
         const payload = JSON.parse(row.payload_json) as Record<string, unknown>
         const requestSnapshot = payload.requestSnapshot
+        const requestDigestPayload = requestSnapshot ?? { requestId: admission.requestId }
         return createHash('sha256').update(JSON.stringify(payload)).digest('hex') === admission.contextDigest &&
-          createHash('sha256').update(JSON.stringify(requestSnapshot)).digest('hex') === admission.requestDigest &&
-          requestSnapshot !== null && typeof requestSnapshot === 'object' && (requestSnapshot as Record<string, unknown>).requestId === admission.requestId
+          createHash('sha256').update(JSON.stringify(requestDigestPayload)).digest('hex') === admission.requestDigest &&
+          (requestSnapshot === undefined || (requestSnapshot !== null && typeof requestSnapshot === 'object' &&
+            (requestSnapshot as Record<string, unknown>).requestId === admission.requestId))
       } catch { return false }
     },
     isCurrentAuthorization: (trigger, approved) => {
@@ -1378,7 +1380,7 @@ app.whenReady().then(async () => {
         const terminal = readPersistedTurnTerminal(turn, targetSessionId, targetTurnId)
         if (terminal.kind === 'pending') return { kind: 'pending' }
         if (terminal.kind === 'source-gap') return { kind: 'source-gap', case: terminal.case }
-        const occurredAt = Number((turn as { updatedAt?: unknown }).updatedAt)
+        const occurredAt = Number(turn?.updatedAt)
         if (!Number.isSafeInteger(occurredAt)) return { kind: 'source-gap', case: 'turn-terminal-time-unavailable' }
         const outcome = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'cancelled' ? 'cancelled'
           : terminal.outcome === 'timed-out' || terminal.outcome === 'timed_out' ? 'timed-out' : 'failed'
@@ -1407,7 +1409,10 @@ app.whenReady().then(async () => {
       const outcome = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'cancelled' ? 'cancelled'
         : terminal.outcome === 'timed-out' || terminal.outcome === 'timed_out' ? 'timed-out' : 'failed'
       return { kind: 'terminal', outcome }
-    }
+    },
+    onDeliveryError: (triggerId, error) => logAgentEvent('error', 'runtime-trigger.delivery.failed', {
+      triggerId, reason: error instanceof Error ? error.message : String(error)
+    })
   })
   failOrphanedRuntimeSyncTriggers(sessionStorage.commands, Date.now())
   runtimeTriggerRecoveryStop = runtimeTriggerRecovery.stop

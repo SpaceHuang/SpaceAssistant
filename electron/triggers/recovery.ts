@@ -32,6 +32,7 @@ export function createRuntimeTriggerRecovery(input: {
   retryPolicy?: WakeEventRetryConfig
   random?: () => number
   intervalMs?: number
+  onDeliveryError?: (triggerId: string, error: unknown) => void
 }): { scan(): Promise<void>; start(): void; stop(): Promise<void> } {
   const now = input.now ?? Date.now
   const retryPolicy = { ...DEFAULT_TRIGGER_RETRY, ...input.retryPolicy, ...(input.random ? { random: input.random } : {}) }
@@ -142,7 +143,8 @@ export function createRuntimeTriggerRecovery(input: {
         for (const trigger of input.listMatched()) {
           if (trigger.state !== 'matched') continue
           try { await deliverMatched(trigger, timestamp) }
-          catch {
+          catch (error) {
+            input.onDeliveryError?.(trigger.id, error)
             const current = input.read(trigger.id)
             if (current?.state === 'matched') recordDeliveryFailure(current, 'delivery-runtime-failed')
           }

@@ -666,11 +666,13 @@ export class SqliteAgentHistory implements HistoryPort {
             .get(triggerBinding.invocationId, triggerBinding.contextEventId, 'invocation-context-committed') as { payload_json: string } | undefined
           let storedContext: unknown
           try { storedContext = storedContextRow ? JSON.parse(storedContextRow.payload_json) : undefined } catch { storedContext = undefined }
+          const storedRequestSnapshot = isRecord(storedContext) ? storedContext.requestSnapshot : undefined
           if (priorAdmission.version !== 1 || priorAdmission.triggerId !== triggerBinding.triggerId ||
             priorAdmission.requestId !== triggerBinding.requestId || priorAdmission.receiverSessionId !== triggerBinding.receiverSessionId ||
             priorAdmission.turnId !== triggerBinding.turnId || priorAdmission.invocationId !== triggerBinding.invocationId ||
             priorAdmission.contextEventId !== triggerBinding.contextEventId || !storedContextRow || priorAdmission.contextDigest !== sha256(storedContext) ||
-            priorAdmission.requestDigest !== sha256(isRecord(storedContext) ? storedContext.requestSnapshot : undefined) ||
+            (storedRequestSnapshot !== undefined && (!isRecord(storedRequestSnapshot) || storedRequestSnapshot.requestId !== triggerBinding.requestId)) ||
+            priorAdmission.requestDigest !== sha256(storedRequestSnapshot ?? { requestId: triggerBinding.requestId }) ||
             (contextPayload && priorAdmission.contextDigest !== sha256(contextPayload)) ||
             priorAdmission.payloadDigest !== triggerBinding.payloadDigest || priorAdmission.authorizationGeneration !== triggerBinding.authorizationGeneration ||
             priorAdmission.policyRevision !== triggerBinding.policyRevision || priorAdmission.runtimeGeneration !== triggerBinding.runtimeGeneration) {
@@ -679,6 +681,10 @@ export class SqliteAgentHistory implements HistoryPort {
         } else if (triggerAdmissionEvent) {
           const initialContext = contextPayload
           if (!initialContext) throw new HistoryBatchError('runtime trigger context payload invalid')
+          const requestSnapshot = initialContext.requestSnapshot
+          if (requestSnapshot !== undefined && (!isRecord(requestSnapshot) || requestSnapshot.requestId !== triggerBinding.requestId)) {
+            throw new HistoryBatchError('runtime trigger request snapshot invalid')
+          }
           const alreadyStored = this.conn.prepare('SELECT 1 FROM agent_history_events WHERE invocation_id=? AND event_id=?')
             .get(triggerBinding.invocationId, triggerBinding.contextEventId)
           // final-check: synchronously revalidate the approved identity/material on this connection;
@@ -686,11 +692,10 @@ export class SqliteAgentHistory implements HistoryPort {
           if (alreadyStored || row.state !== 'matched' || !triggerBinding.finalCheck(this.conn)) {
             throw new HistoryBatchError('runtime trigger authorization final-check rejected')
           }
-          const requestSnapshot = initialContext.requestSnapshot
           admissionToCommit = { version: 1, triggerId: triggerBinding.triggerId, requestId: triggerBinding.requestId,
             receiverSessionId: triggerBinding.receiverSessionId, turnId: triggerBinding.turnId, invocationId: triggerBinding.invocationId,
             contextEventId: triggerBinding.contextEventId, contextDigest: sha256(initialContext), payloadDigest: triggerBinding.payloadDigest,
-            requestDigest: sha256(requestSnapshot), authorizationGeneration: triggerBinding.authorizationGeneration,
+            requestDigest: sha256(requestSnapshot ?? { requestId: triggerBinding.requestId }), authorizationGeneration: triggerBinding.authorizationGeneration,
             policyRevision: triggerBinding.policyRevision, runtimeGeneration: triggerBinding.runtimeGeneration, acceptedAt: this.now() }
           if (transcriptCommit) throw new HistoryBatchError('runtime trigger raw transcript cannot commit before admission')
         } else {

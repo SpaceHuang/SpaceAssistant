@@ -60,7 +60,7 @@ export function createRuntimeTriggerReceiverStarter(input: {
     let prepared: Awaited<ReturnType<typeof input.prepare>>
     try {
       prepared = await input.prepare({ mode: 'reuse-user', requestId: receiver.requestId, sessionId: receiver.sessionId,
-        userMessageId: receiver.messageId, excludeMessageIds: [], config: {}, queueScope: receiver.queueScope })
+        userMessageId: receiver.messageId, excludeMessageIds: [], config: {}, queueScope: receiver.queueScope, queueInputSource: 'runtime-trigger' })
     } catch (error) {
       const code = error instanceof Error ? error.message : String(error)
       if (code === 'SESSION_TURN_BUSY' || code === 'SESSION_CONTEXT_COMPACTION_BUSY' || code === 'SESSION_EXECUTION_ACTIVE' ||

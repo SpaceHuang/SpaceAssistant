@@ -369,6 +369,17 @@ describe('TurnCoordinator', () => {
     expect(db.claimQueuedAtomic).toHaveBeenCalledWith(expect.objectContaining({ queueScope, requestId: 'wake:event-1' }))
   })
 
+  it('queued reuse 将可信输入来源传递给原子认领', () => {
+    const db = storage()
+    db.getMessage = vi.fn().mockReturnValue({ ...user, status: 'queued' })
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'trigger-queued-id' })
+
+    coordinator.prepare({ mode: 'reuse-user', requestId: 'runtime-trigger:t1', sessionId: 's1', userMessageId: 'u1',
+      excludeMessageIds: [], config: {}, queueScope: { kind: 'desktop' }, queueInputSource: 'runtime-trigger' })
+
+    expect(db.claimQueuedAtomic).toHaveBeenCalledWith(expect.objectContaining({ source: 'runtime-trigger' }))
+  })
+
   it('prepare 拒绝跨 session exclude，并禁止排除 required user', () => {
     const db = storage()
     db.getMessage = vi.fn((id) => id === 'u1' ? user : id === 'other' ? { ...user, id: 'other', sessionId: 's2' } : undefined)

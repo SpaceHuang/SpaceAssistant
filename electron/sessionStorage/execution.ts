@@ -478,21 +478,117 @@ function createSessionHistoryPort(db: AppDatabase, sessionId: string, requestBod
     listInvocationIds: () => history.listInvocationIdsForSession(sessionId),
     appendBatch: async (events: Parameters<HistoryPort['appendBatch']>[0], expectedVersion: number,
       transcriptCommit?: Parameters<HistoryPort['appendBatch']>[2]) => {
-      const contextEvent = events.find((event) => event.kind === 'invocation-context-committed')
-      if (contextEvent && runtimeTriggerAdmission?.contextEventId && runtimeTriggerAdmission.contextEventId !== contextEvent.eventId) {
+      let admissionBinding = runtimeTriggerAdmission
+      if (runtimeTriggerAdmission && !runtimeTriggerAdmission.contextEventId) {
+        const row = getDbConnection(db).prepare(`SELECT result_json FROM runtime_triggers
+          WHERE id=? AND receiver_session_id=? AND state='matched'`).get(runtimeTriggerAdmission.triggerId,
+          runtimeTriggerAdmission.receiverSessionId) as { result_json: string | null } | undefined
+        let persistedAdmission: Record<string, unknown> | undefined
+        try {
+          const result = row?.result_json ? JSON.parse(row.result_json) as Record<string, unknown> : undefined
+          persistedAdmission = result?.admission && typeof result.admission === 'object' && !Array.isArray(result.admission)
+            ? result.admission as Record<string, unknown> : undefined
+        } catch { persistedAdmission = undefined }
+        if (persistedAdmission?.triggerId === runtimeTriggerAdmission.triggerId &&
+          persistedAdmission.requestId === runtimeTriggerAdmission.requestId &&
+          persistedAdmission.receiverSessionId === runtimeTriggerAdmission.receiverSessionId &&
+          persistedAdmission.turnId === runtimeTriggerAdmission.turnId &&
+          persistedAdmission.invocationId === runtimeTriggerAdmission.invocationId &&
+          typeof persistedAdmission.contextEventId === 'string' && persistedAdmission.contextEventId.trim()) {
+          // The initial HistoryPort is created before context admission. Resolve the committed
+          // event identity again on later batches so the same port can append normal turn events.
+          admissionBinding = { ...runtimeTriggerAdmission, contextEventId: persistedAdmission.contextEventId }
+        }
+      }
+      let appendEvents = events
+      const replayInputIndex = admissionBinding ? events.findIndex((event) => event.kind === 'session-input-committed') : -1
+      if (admissionBinding && replayInputIndex >= 0 && events.some((event) => event.kind === 'invocation-context-committed')) {
+        const inputEvent = events[replayInputIndex]!
+        const payload = inputEvent.payload as { sessionId?: unknown; messageId?: unknown; role?: unknown; inputFingerprint?: unknown }
+        const turn = getPersistedTurn(db, admissionBinding.turnId)
+        const rows = await history.read(admissionBinding.invocationId)
+        const prior = rows.events.find((candidate) => candidate.eventId === inputEvent.eventId)
+        if (inputEvent.invocationId !== admissionBinding.invocationId || inputEvent.turnId !== admissionBinding.turnId ||
+          payload.sessionId !== admissionBinding.receiverSessionId || payload.role !== 'user' ||
+          typeof payload.messageId !== 'string' || typeof payload.inputFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(payload.inputFingerprint) ||
+          turn?.requestId !== admissionBinding.requestId || turn.sessionId !== admissionBinding.receiverSessionId ||
+          turn.userMessageId !== payload.messageId || turn.acceptedInputHistoryVersion !== 1 || !prior ||
+          prior.idempotencyKey !== inputEvent.idempotencyKey || JSON.stringify(prior.payload) !== JSON.stringify(inputEvent.payload)) {
+          throw new Error('runtime trigger raw transcript cannot commit before admission [identity-context-replay-rejected]')
+        }
+        appendEvents = events.filter((_, index) => index !== replayInputIndex)
+      }
+      const contextEvent = appendEvents.find((event) => event.kind === 'invocation-context-committed')
+      if (contextEvent && admissionBinding?.contextEventId && admissionBinding.contextEventId !== contextEvent.eventId) {
         throw new Error('runtime trigger context event identity mismatch')
       }
-      const contextEventId = contextEvent?.eventId ?? runtimeTriggerAdmission?.contextEventId
-      if (runtimeTriggerAdmission && !contextEventId) throw new Error('runtime trigger raw transcript cannot commit before admission')
-      if (runtimeTriggerAdmission && contextEventId) {
+      const contextEventId = contextEvent?.eventId ?? admissionBinding?.contextEventId
+      if (admissionBinding && !contextEventId) {
+        if (events.length === 1 && events[0]?.kind === 'invocation-failed' &&
+          events[0].invocationId === admissionBinding.invocationId && events[0].turnId === admissionBinding.turnId) {
+          // A pre-admission failure may be recorded, but it must not publish any transcript
+          // material or create an admission. Preserve the original execution failure.
+          return await history.appendBatch(events, expectedVersion)
+        }
+        // Queue claim already commits this identity-only receipt atomically with the turn.
+        // The runner may replay the identity receipt in the same batch as its first context event.
+        // Remove only an exact persisted replay, then admit the remaining context normally.
+        const inputIndex = events.findIndex((event) => event.kind === 'session-input-committed')
+        if (inputIndex >= 0) {
+          const event = events[inputIndex]!
+          const payload = event.payload as { sessionId?: unknown; messageId?: unknown; role?: unknown; inputFingerprint?: unknown }
+          const turn = getPersistedTurn(db, admissionBinding.turnId)
+          const rows = await history.read(admissionBinding.invocationId)
+          const prior = rows.events.find((candidate) => candidate.eventId === event.eventId)
+          if (event.invocationId === admissionBinding.invocationId && event.turnId === admissionBinding.turnId &&
+            payload.sessionId === admissionBinding.receiverSessionId && payload.role === 'user' &&
+            typeof payload.messageId === 'string' && typeof payload.inputFingerprint === 'string' && /^[a-f0-9]{64}$/.test(payload.inputFingerprint) &&
+            turn?.requestId === admissionBinding.requestId && turn.sessionId === admissionBinding.receiverSessionId &&
+            turn.userMessageId === payload.messageId && turn.acceptedInputHistoryVersion === 1 && prior &&
+            prior.idempotencyKey === event.idempotencyKey && JSON.stringify(prior.payload) === JSON.stringify(event.payload)) {
+            const remaining = appendEvents.filter((_, index) => index !== inputIndex)
+            if (remaining.length === 0) {
+              // Ignore a transcript participant on an identity-only duplicate.
+              return await history.appendBatch(appendEvents, expectedVersion)
+            }
+            const remainingContext = remaining.find((candidate) => candidate.kind === 'invocation-context-committed')
+            if (remainingContext) {
+              const boundHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId, undefined,
+                { ...admissionBinding, contextEventId: remainingContext.eventId })
+              const result = await boundHistory.appendBatch(remaining, expectedVersion, transcriptCommit)
+              try { requestBodySourceBackfill?.() } catch { /* Maintenance scheduling must not alter the committed write. */ }
+              return result
+            }
+          }
+        }
+        throw new Error(`runtime trigger raw transcript cannot commit before admission [no-context:${events.map((event) => event.kind).join(',')}]`)
+      }
+      if (admissionBinding && contextEventId) {
+        const admittedEvents = appendEvents.map((event) => {
+          if (event.kind !== 'invocation-context-committed' || !event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) return event
+          const payload = event.payload as Record<string, unknown>
+          const requestSnapshot = payload.requestSnapshot
+          if (requestSnapshot && typeof requestSnapshot === 'object' && !Array.isArray(requestSnapshot)) {
+            const snapshot = requestSnapshot as Record<string, unknown>
+            if (snapshot.route && typeof snapshot.route === 'object' && snapshot.request && typeof snapshot.request === 'object') {
+              if (snapshot.requestId !== undefined) return event
+              return { ...event, payload: { ...payload, requestSnapshot: { ...snapshot, requestId: admissionBinding.requestId } } }
+            }
+          }
+          // Do not persist a partial request snapshot: replay compatibility treats absent
+          // snapshots as legacy history, while a present snapshot must be fully verifiable.
+          const contextPayload = { ...payload }
+          delete contextPayload.requestSnapshot
+          return { ...event, payload: contextPayload }
+        })
         const boundHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId, undefined,
-          { ...runtimeTriggerAdmission, contextEventId })
-        const result = await boundHistory.appendBatch(events, expectedVersion, transcriptCommit)
+          { ...admissionBinding, contextEventId })
+        const result = await boundHistory.appendBatch(admittedEvents, expectedVersion, transcriptCommit)
         try { requestBodySourceBackfill?.() } catch { /* Maintenance scheduling must not alter the committed write. */ }
         return result
       }
-      if (runtimeTriggerAdmission && transcriptCommit) throw new Error('runtime trigger raw transcript cannot commit before admission')
-      const result = await history.appendBatch(events, expectedVersion, transcriptCommit)
+      if (admissionBinding && transcriptCommit) throw new Error(`runtime trigger raw transcript cannot commit before admission [transcript-only:${appendEvents.map((event) => event.kind).join(',')}]`)
+      const result = await history.appendBatch(appendEvents, expectedVersion, transcriptCommit)
       try { requestBodySourceBackfill?.() } catch { /* Maintenance scheduling must not alter the committed write. */ }
       return result
     },

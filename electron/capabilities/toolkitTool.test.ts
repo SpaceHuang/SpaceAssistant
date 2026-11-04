@@ -149,6 +149,21 @@ describe('toolkit prepared registrations', () => {
     expect(createToolkitCallTool(registry).kind).toBe('planned')
   })
 
+  it('keeps read-only capability lookup and session/runtime-trigger waits independent of unknown side effects', () => {
+    const find = createToolkitFindTool(registry)
+    const call = createToolkitCallTool(registry)
+
+    // An empty resource-key set is an explicit statement that these operations do not
+    // participate in the conservative unknown:* side-effect lock used by run_shell.
+    expect(find.resourceKeys?.({ query: 'action.session.status' })).toEqual([])
+    expect(call.resourceKeys?.({ id: 'action.session.status', params: { sessionId: 'source' } })).toEqual([])
+    expect(call.resourceKeys?.({ id: 'action.runtime_trigger.register', params: {} })).toEqual([])
+    expect(call.resourceKeys?.({ id: 'action.runtime_trigger.get', params: {} })).toEqual([])
+    expect(call.resourceKeys?.({ id: 'env.time', params: {} })).toEqual([])
+    // Other capabilities retain the conservative default until they declare their own scope.
+    expect(call.resourceKeys?.({ id: 'action.mcp.add', params: {} })).toBeUndefined()
+  })
+
   it('caller context drift after confirmation blocks handler dispatch', async () => {
     const localRegistry = new CapabilityRegistry()
     const handler = vi.fn(async () => ({ changed: false }))

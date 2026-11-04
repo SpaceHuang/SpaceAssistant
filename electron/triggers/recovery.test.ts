@@ -221,6 +221,21 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
     expect(record.result).toMatchObject({ receiverTurnId: 'receiver-turn' })
   })
 
+  it('reports the original receiver startup error before recording a retryable delivery failure', async () => {
+    const record = matched({ messageId: 'marker-1' })
+    const startupError = new Error('PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH')
+    const onDeliveryError = vi.fn()
+    const recovery = createRuntimeTriggerRecovery({
+      listWaiting: () => [], listMatched: () => [record], read: () => record, evaluateWaiting: async () => ({ kind: 'none' }),
+      match: vi.fn(), expire: vi.fn(), fail: vi.fn(), deliver: vi.fn(), update: vi.fn(() => record),
+      readReceipt: () => ({ queuedMessageId: 'marker-1', state: 'queued' }), isSessionBusy: () => false,
+      startReceiver: vi.fn(async () => { throw startupError }), readTurnTerminal: vi.fn(async () => ({ kind: 'active' })),
+      onDeliveryError
+    })
+    await recovery.scan()
+    expect(onDeliveryError).toHaveBeenCalledExactlyOnceWith('trigger-1', startupError)
+  })
+
   it('does not redeliver after a persisted fixed-request receipt is recovered', async () => {
     let record = matched({ messageId: 'marker-1' })
     const deliver = vi.fn(() => { throw new Error('must reuse original receipt') })

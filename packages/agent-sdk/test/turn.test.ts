@@ -4505,7 +4505,7 @@ describe('runAgentTurn', () => {
       },
       messagesCount: request.messages.length
     }
-    expect(snapshot.events[0]?.payload).toMatchObject({ requestSnapshot: expectedSnapshot })
+    expect(snapshot.events[0]?.payload).toMatchObject({ requestSnapshot: { requestId: 'inv-request-snapshot', ...expectedSnapshot } })
     // 摘要与本地实算比对（不只验证格式）：摘要必须忠实对应被省略的 messages 正文。
     const { createHash } = await import('node:crypto')
     const expectedMessagesSha = createHash('sha256').update(JSON.stringify(request.messages), 'utf8').digest('hex')
