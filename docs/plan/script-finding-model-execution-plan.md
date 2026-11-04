@@ -157,10 +157,10 @@ F00 先核对依赖、测试可启动性与基线。若方案文档当前未跟�
   - 产物/判据：资格从旧 `signal` 三档迁到方案规定的发现集合与 coverage；明确 clean、partial、failed 与各类别的资格结果；可选记忆档位不因字段缺省意外放宽，记忆写入仍遵守方案边界；保留旧字段时不得继续让新路径资格判定依赖旧 verdict。
   - 验证：`npm exec -- vitest run src/shared/policy/memoryEligibility.test.ts src/shared/policy/policyEngine.test.ts src/shared/policy/policyPackages.scope.test.ts electron/confirmation/agentSdkSafetyPolicy.test.ts electron/confirmation/toolCallGate.test.ts`（5 files / 406 tests passed）；覆盖 12 类发现、complete 空发现、partial/failed、缺字段、旧形状、缓存 lookup 与审批档位。`npm run typecheck:shared` 通过。关联 INV-5、AC-6、13。证据：`docs/plan/evidence/script-finding-model/F31.md`。
 
-- [ ] **F32 准备旧模型切换清单与兼容适配**（本机）
+- [x] **F32 准备旧模型切换清单与兼容适配**（本机）
   - 范围：`electron/shell/scriptContentSecurity.ts`、`electron/confirmation/extractors/scriptAnalysisExtractor.ts`、受影响类型/消费者、内容分析 golden 与规则对拍测试。
   - 产物/判据：形成旧字段/动作逻辑生产与消费点清单，逐点标注 F36 将删除、迁移或保留；建立短期兼容适配，使新旧事实可并行供旧规则消费，但尚不关闭 AC-9、不删除旧 verdict/signal。认证结论仍按方案状态所有权保持其独立责任，不混入发现事实。所有适配只承载兼容，不提前实现 F34/F35 的策略映射。
-  - 验证：旧字段和消费者的 `rg` 清单、兼容适配单测及现有规则基线通过；核对适配边界不含类别动作映射。关联 AC-3/4 的准备证据；AC-9 留待 F36。证据：`F32.md`。
+  - 验证：旧字段/生产/消费者清单见 `docs/plan/evidence/script-finding-model/F32.md`；`npm exec -- vitest run electron/confirmation/extractors/extractors.test.ts electron/shell/scriptGolden.test.ts`（2 files / 142 tests passed），断言 findings 与旧 signal/patterns/network token 并行；golden 旧规则基线通过。未新增类别策略映射。关联 AC-3/4 的准备证据；AC-9 留待 F36。证据：`docs/plan/evidence/script-finding-model/F32.md`。
 
 - [ ] **F33 按 D-5 分类路径动态原因**（本机）
   - 范围：`electron/confirmation/extractors/scriptPathFacts.ts`、其测试与共享路径事实类型。
