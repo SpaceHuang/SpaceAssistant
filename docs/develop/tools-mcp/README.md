@@ -22,6 +22,8 @@ Agent Runtime 触发器当前实现入口见[工具能力-现状 §6](./工具�
 
 ## 在途（in-flight）
 
+- [cross-session-message-technical-design.md](./in-flight/cross-session-message-technical-design.md) —— 跨会话来信、桌面队列复用、撤回及按请求等待；技术方案草案，待评审
+
 - [run-shell-dialect-mismatch-false-positive-and-fatal-turn-abort-improvement-plan.md](./in-flight/run-shell-dialect-mismatch-false-positive-and-fatal-turn-abort-improvement-plan.md) —— v1.4 定案 D-1/D-7/D-8，待重审
 
 ## 归档（已完成迭代/过程产物）
