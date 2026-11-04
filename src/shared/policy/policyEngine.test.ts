@@ -1543,7 +1543,7 @@ describe('script finding and path classification tokens', () => {
   it('derives one token per dynamic kind and write-target-only only for pure unresolved writes', () => {
     const writeOnly = signalTokenSet(mkFacts('run_script', 'execute', [{ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, dynamicKinds: ['unresolved-write-target'] }]))
     expect(writeOnly).toContain('script-path-extraction:unresolved-write-target')
-    expect(writeOnly).toContain('script-path-extraction:dynamic-execution')
+    expect(writeOnly).not.toContain('script-path-extraction:dynamic-execution')
     expect(writeOnly).toContain('script-path-extraction:write-target-only')
     const mixed = signalTokenSet(mkFacts('run_script', 'execute', [{ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, dynamicKinds: ['unresolved-write-target', 'unresolved-read-target'] }]))
     expect(mixed).not.toContain('script-path-extraction:write-target-only')
@@ -1600,6 +1600,18 @@ describe('D-5 unresolved write review policy', () => {
     expect(decide(facts, { ...mkContext('desktop'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
       deps({ transform: (rule) => effectiveActionFor('desktop', 'standard', rule) })))
       .toMatchObject({ type: 'require-confirm', answerer: 'user' })
+  })
+
+  it('does not classify unresolved paths as dynamic code execution', () => {
+    const facts = mkFacts('run_script', 'execute', [{
+      kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true,
+      unknownReason: 'dynamic-execution', dynamicKinds: ['unresolved-read-target']
+    }], 'high')
+    expect(signalTokenSet(facts)).not.toContain('script-path-extraction:dynamic-execution')
+    expect(signalTokenSet(facts)).toContain('script-path-extraction:locked-path-review')
+    expect(decide(facts, { ...mkContext('desktop'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('desktop', 'standard', rule) })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'script-non-write-path-confirm', answerer: 'user' })
   })
 
   it('mixed write and execution does not enter the write-only review domain', () => {

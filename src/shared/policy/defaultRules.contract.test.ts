@@ -62,6 +62,7 @@ const EXPECTED_RULE_IDS = [
   'automation-authorized-shell-allow',
   'script-sensitive-path-confirm',
   'script-system-dir-confirm',
+  'script-non-write-path-confirm',
   'script-path-unknown-confirm',
   'script-path-unclassified-confirm',
   'script-dynamic-execution-confirm',
@@ -133,6 +134,7 @@ describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {
     const pathFloor = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'script-path-unknown-confirm')!
     const executionFloor = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'script-dynamic-execution-confirm')!
     const writeReview = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'script-unresolved-write-review')!
+    const nonWriteFloor = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'script-non-write-path-confirm')!
     expect(pathFloor.locked).toBe(true)
     expect(pathFloor.match?.excludeSignals).toContain('script-path-extraction:write-target-only')
     expect(executionFloor.locked).toBe(true)
@@ -140,6 +142,9 @@ describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {
     expect(writeReview.match?.signals).toEqual(['script-path-extraction:write-target-only'])
     expect(writeReview.action).toBe('ask')
     expect(writeReview.reason).toBeTruthy()
+    expect(nonWriteFloor.locked).toBe(true)
+    expect(nonWriteFloor.match?.signals).toContain('script-path-extraction:locked-path-review')
+    expect(nonWriteFloor.match?.excludeSignals).toContain('script-path-extraction:write-target-only')
   })
 
   it('wiki/远程/automation/敏感读 六条关键 locked 规则的 action 与匹配信号保持基线', () => {

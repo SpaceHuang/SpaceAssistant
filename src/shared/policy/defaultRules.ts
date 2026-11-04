@@ -349,6 +349,12 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'confirm-every-time', locked: true, reason: '脚本涉及系统目录，需真人确认'
   },
   {
+    id: 'script-non-write-path-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:locked-path-review'], excludeSignals: ['script-path-extraction:write-target-only', 'im-script-network-review-candidate:complete'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本路径无法安全归类，需逐次真人确认'
+  },
+  {
     id: 'script-path-unknown-confirm',
     when: 'invocation',
     match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-dynamic-access'], excludeSignals: ['script-path-extraction:write-target-only', 'im-script-network-review-candidate:complete'] },

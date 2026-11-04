@@ -1890,12 +1890,12 @@ describe('evaluateToolCallGate', () => {
 
   it('V3 run_script 路径分析不可用时桌面逐次真人确认、automation lane 拒绝', async () => {
     const root = await fs.realpath(await makeTempDir('script-facts-root-'))
-    const toolInput = { code: 'custom_accessor(target)' }
+    const toolInput = { code: 'def broken(:\n pass' }
     try {
       const desktop = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(desktop.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown' }))
-      expect(desktop.scriptPathHint).toContain('路径分析未覆盖：')
-      expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-dynamic-execution-confirm', answerer: 'user', memoryTiers: [] })
+      expect(desktop.scriptPathHint).toContain('脚本含动态执行面：')
+      expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user', memoryTiers: [] })
 
       const unattended = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
@@ -1963,7 +1963,7 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('路径分析不可用的脚本不提供记忆档位且每次都需真人确认', async () => {
-    const code = 'custom_accessor(target)'
+    const code = 'def broken(:\n pass'
     for (const options of [
       {},
       { workDir: path.join(base().workDir, 'other') },
@@ -1971,7 +1971,7 @@ describe('evaluateToolCallGate', () => {
       { sessionId: 'script-session-2' }
     ]) {
       const result = await evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: { code }, ...options }))
-      expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-dynamic-execution-confirm', answerer: 'user', memoryTiers: [] })
+      expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user', memoryTiers: [] })
     }
   })
 
@@ -1988,28 +1988,28 @@ describe('evaluateToolCallGate', () => {
 
     writePolicyPackages(db, { desktop: 'loose', wechat: 'standard', feishu: 'standard', automation: 'standard' })
     const unknownScript = await evaluateToolCallGate(base({
-      appDb: db, toolName: 'run_script', toolInput: { code: 'custom_accessor(target)' }
+      appDb: db, toolName: 'run_script', toolInput: { code: 'eval(source)' }
     }))
     expect(unknownScript.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-dynamic-execution-confirm', answerer: 'user' })
 
     writePolicyPackages(db, { desktop: 'standard', wechat: 'standard', feishu: 'standard', automation: 'standard' })
     const declaredByDefault = await evaluateToolCallGate(base({
       appDb: db, toolName: 'run_script',
-      toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)' }
+      toolInput: { code: '# @path-scope workdir-readonly\neval(source)' }
     }))
     expect(declaredByDefault.decision.type).not.toBe('auto-allow')
 
     const declaredWhenEnabled = await evaluateToolCallGate(base({
       appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
       toolName: 'run_script',
-      toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)' }
+      toolInput: { code: '# @path-scope workdir-readonly\neval(source)' }
     }))
     expect(declaredWhenEnabled.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-dynamic-execution-confirm', answerer: 'user' })
 
     const declaredWithSensitivePath = await evaluateToolCallGate(base({
       appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
       toolName: 'run_script',
-      toolInput: { code: `# @path-scope workdir-readonly\ncustom_accessor(target)\nopen(${JSON.stringify(systemFilePath())}, "r")` }
+      toolInput: { code: `# @path-scope workdir-readonly\neval(source)\nopen(${JSON.stringify(systemFilePath())}, "r")` }
     }))
     expect(declaredWithSensitivePath.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-declaration', consistent: false }))
     expect(declaredWithSensitivePath.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-dynamic-execution-confirm' })

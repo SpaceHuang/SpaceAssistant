@@ -150,8 +150,11 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`script-path-extraction:${signal.completeness}`)
         if (signal.dynamicAccess) tokens.add('script-dynamic-access')
-        if (signal.unknownReason) tokens.add(`script-path-extraction:${signal.unknownReason}`)
-        else if (signal.completeness === 'unknown') tokens.add('script-path-extraction:unclassified')
+        if (signal.unknownReason) {
+          if (signal.unknownReason !== 'dynamic-execution' || !signal.dynamicKinds?.length) {
+            tokens.add(`script-path-extraction:${signal.unknownReason}`)
+          }
+        } else if (signal.completeness === 'unknown') tokens.add('script-path-extraction:unclassified')
         {
           const knownKinds = new Set([
             'dynamic-code-execution', 'unresolved-write-target', 'unresolved-read-target',
@@ -160,9 +163,20 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
           ])
           const hasExplicitKinds = Array.isArray(signal.dynamicKinds) && signal.dynamicKinds.length > 0
           const kinds = new Set((signal.dynamicKinds ?? []).filter((kind) => knownKinds.has(kind)))
-          if (signal.completeness === 'unknown' && kinds.size === 0) kinds.add('path-analysis-unavailable')
+          if (signal.completeness === 'unknown' && kinds.size === 0 && signal.unknownReason !== 'unmodeled-call') {
+            kinds.add('path-analysis-unavailable')
+          }
           for (const kind of kinds) tokens.add(`script-path-extraction:${kind}`)
-          if (hasExplicitKinds && kinds.size > 0) tokens.add('script-path-extraction:dynamic-execution')
+          if (kinds.has('dynamic-code-execution')) tokens.add('script-path-extraction:dynamic-execution')
+          else if (signal.unknownReason === 'dynamic-execution' && !signal.dynamicKinds?.length) tokens.add('script-path-extraction:dynamic-execution')
+          // policy stage: F35 D-5 keeps every explicit non-write path class on the locked human floor.
+          // A pure unresolved write remains eligible for its dedicated review rule; unmodeled calls remain a separate fact.
+          const unmodeledPathReadCandidate = signal.unknownReason === 'unmodeled-call'
+            && !signal.dynamicAccess && kinds.size === 1 && kinds.has('path-analysis-unavailable')
+          if (kinds.size > 0 && !unmodeledPathReadCandidate
+            && !(kinds.size === 1 && kinds.has('unresolved-write-target'))) {
+            tokens.add('script-path-extraction:locked-path-review')
+          }
           if (hasExplicitKinds && kinds.size === 1 && kinds.has('unresolved-write-target')) tokens.add('script-path-extraction:write-target-only')
         }
         break
