@@ -3,7 +3,7 @@
 > 文档类型：技术方案（方向已确认）  
 > 核验日期：2026-11-04  
 > 代码基线：`90a0f7bd3af7d7530a0028c71923e7c6a15e21bd`  
-> 状态：方向已由用户确认；P1 实施已完成并通过定向自动化与 Electron 类型检查；增量构建被既有运行时闭包门禁阻断；P2 macOS / Windows 原生平台验收未完成。
+> 状态：方向已由用户确认；P1 实施已完成并通过定向自动化、Electron 类型检查、增量构建及全量测试；P2 macOS 通知可见性 / 点击 / Dock 原生验收和 Windows 实机回归未完成。
 
 ## 第 0 层：决策摘要【人必读】
 
@@ -136,6 +136,8 @@ confirm-request
 当前环境可验证：管理器状态转换、系统通知创建 / 点击 / 关闭、Dock 角标计数与清理、macOS 自动提醒不创建浮窗，以及 Windows 旧行为未变的定向测试。
 必须在实际 Electron macOS 窗口验证：前台应用名、键盘第一响应者、正在输入时焦点保持、系统通知权限 / 勿扰状态、通知点击返回路径、Dock 角标出现与清除。Windows 回归确认当前自绘浮窗保持现状。
 
+P2 本机观察（2026-11-04）：以临时用户目录启动 worktree Electron，在 TextEdit 输入区聚焦后由开发控制台延时触发测试通知；触发后 TextEdit 仍为前台，AX 仍报告原文本输入区为键盘焦点，符合 AC-1 的“不因提醒切焦点”观察。通知横幅未出现；只读查看“系统设置 → 通知”发现已安装版 SpaceAssistant 的通知状态为“关闭”，未更改系统设置。因此本次没有验证系统通知可见性、通知点击返回或 Dock 角标的原生呈现。当前主机为 macOS，Windows 浮窗实机回归未执行；Windows 自动化回归仍覆盖原浮窗路径。
+
 本轮执行了：
 
 ```text
@@ -144,7 +146,9 @@ node_modules/.bin/vitest run --project=electron electron/floatingNotification.te
 
 结果：2 个测试文件、25 项测试通过（方案核验时）。该测试集 mock 了 Electron `BrowserWindow`，不证明系统级激活行为。隔离 Electron 探测当时未得到有效进程输出，记为未验证；实施后仍须完成 macOS 原生验收。
 
-P1 实施验证：`npm exec vitest run --project=electron electron/pendingConfirmNotification.test.ts electron/floatingNotificationManager.test.ts electron/floatingNotification.test.ts` 通过（3 个测试文件、31 项测试）；`npx tsc -p tsconfig.electron.json --noEmit` 通过。`npm run build:electron:incremental` 在 `check:pi-ai-runtime-closure` 失败，提示缺少 `api/anthropic-messages.js`、`utils/transcript.js` 且运行时闭包清单漂移；门禁在本次 TypeScript 编译前退出。
+P1 实施验证：`npm exec vitest run --project=electron electron/pendingConfirmNotification.test.ts electron/floatingNotificationManager.test.ts electron/floatingNotification.test.ts` 通过（3 个测试文件、31 项测试）；`npx tsc -p tsconfig.electron.json --noEmit` 通过；`npm run build:electron:incremental` 通过运行时闭包、session storage 边界 / 模块图、agent provider 构建及 TypeScript 编译门禁。
+
+全量验收：`npm test` 通过，1,257 个测试文件通过、1 个跳过；12,171 项测试通过、140 项跳过（总计 12,311 项）。
 
 ### 阶段建议
 
