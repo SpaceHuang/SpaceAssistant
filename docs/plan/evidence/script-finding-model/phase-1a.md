@@ -2,7 +2,7 @@
 
 ## 结果
 
-- 阶段提交 SHA：待提交后填入
+- 阶段实现提交 SHA：`2c6d4a29d7c1004ae9be123abbf9ee92ed0fb615`
 - 基线依赖：F00 提交 `317d5789`（包含执行计划、技术方案快照和 F00 基线证据）
 - 阶段任务：F01、F02、F03、F04
 - 阶段任务证据：[`F01.md`](F01.md)、[`F02.md`](F02.md)、[`F03.md`](F03.md)、[`F04.md`](F04.md)
@@ -10,7 +10,30 @@
 
 ## 阶段提交文件清单
 
-提交后以 `git show --format= --name-only <SHA>` 复核并记录精确文件清单。
+由 `git show --format= --name-only 2c6d4a29d7c1004ae9be123abbf9ee92ed0fb615` 复核的精确文件清单：
+
+```text
+docs/develop/safety-approval/security-policy-locked-floor-classification.md
+docs/plan/evidence/script-finding-model/F01.md
+docs/plan/evidence/script-finding-model/F02.md
+docs/plan/evidence/script-finding-model/F03.md
+docs/plan/evidence/script-finding-model/F04.md
+docs/plan/evidence/script-finding-model/phase-1a.md
+docs/plan/script-finding-model-execution-plan.md
+electron/confirmation/extractors/extractors.test.ts
+electron/confirmation/extractors/scriptAnalysisExtractor.ts
+electron/confirmation/scriptAnalysisFailureGate.test.ts
+electron/shell/scriptContentSecurity.test.ts
+electron/shell/scriptContentSecurity.ts
+electron/shell/scriptGolden.test.ts
+electron/shell/scriptIr/pythonAdapter.test.ts
+electron/shell/scriptIr/pythonAdapter.ts
+electron/shell/scriptIr/types.ts
+src/shared/confirmation/types.ts
+src/shared/policy/defaultRules.contract.test.ts
+src/shared/policy/defaultRules.ts
+src/shared/policy/policyEngine.test.ts
+```
 
 ## 依赖闭包与回退
 
@@ -20,4 +43,4 @@
 
 ## 隔离回退 smoke
 
-待阶段提交后，在临时 detached worktree 对该提交执行 `git revert --no-edit`，再验证旧 script-analysis 行为与 locked-floor inventory，并运行定向 smoke。结果与临时 worktree 清理情况将在提交后补记。
+在临时 detached worktree 对阶段实现提交执行 `git revert --no-edit`，再验证旧 script-analysis 行为与 locked-floor inventory，并运行定向 smoke。结果与临时 worktree 清理情况将在提交后补记。
