@@ -41,6 +41,13 @@ export type AgentSessionExecutionApproval = Readonly<{
   runtimeGeneration: string
   approvedAt: number
 }>
+export type AgentSessionExecutionFinalCheckFacts = Readonly<{
+  source: AgentSessionInputSource
+  approval: AgentSessionExecutionApproval
+  originDigest: string
+  approvalDigest: string
+  targetGeneration: string
+}>
 export type AgentInputNotExecutedReason = 'sender-revoked' | 'authorized-cancel' | 'target-unavailable' | 'policy-rejected' | 'start-failed'
 export type AgentInputSettlement =
   | Readonly<{ kind: 'queued'; targetSessionId: string; messageId: string }>

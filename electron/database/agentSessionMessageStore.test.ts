@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
-import { agentSessionOriginDigest, classifyQueueInputSource } from './queueInputSource'
+import { describe, expect, it, vi } from 'vitest'
+import { agentSessionInputEventDigest, agentSessionOriginDigest, classifyQueueInputSource } from './queueInputSource'
 import { claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, readAgentInputSettlement, updateQueueInputReceiptStateInScope, updateQueuedUserMessageContentInScope } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
@@ -21,6 +21,22 @@ function bindAgentSource(db: ReturnType<typeof createMemoryAppDb>, sessionId: st
       version: sourceVersion, kind: 'agent-session', ownerSessionId, requestId,
       targetSessionId: sessionId, messageId, payloadSha256, authorizationBinding: {}
     }), sessionId, requestId)
+}
+
+function approveAgentInput(db: ReturnType<typeof createMemoryAppDb>, ownerSessionId: string, target: ReturnType<typeof createSession>, requestId: string, messageId: string) {
+  const commands = createSessionCommands(db).agentSessionMessages
+  const snapshot = commands.readApprovalSnapshot({ sessionId: target.id, requestId })
+  if (!snapshot) throw new Error('test approval snapshot missing')
+  const approval = {
+    version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: `decision:${requestId}`, permitRef: `permit:${requestId}`,
+    ownerSessionId, targetSessionId: target.id, targetGeneration: target.generation, requestId, messageId, queueScope: 'desktop' as const,
+    payloadDigest: snapshot.source.payloadSha256, policyRevision: 'policy-current', authorizationGeneration: 'auth-current',
+    runtimeGeneration: 'runtime-current', approvedAt: 500
+  }
+  const refreshed = commands.refreshExecutionApproval({ sessionId: target.id, requestId, expectedOriginDigest: snapshot.originDigest,
+    expectedApprovalDigest: snapshot.approvalDigest ?? null, approval })
+  if (!refreshed) throw new Error('test approval refresh failed')
+  return { approval, ...refreshed }
 }
 
 describe('agent session message source classification', () => {
@@ -172,9 +188,10 @@ describe('agent session message acceptance persistence', () => {
     const claimed = enqueueAgentSessionMessageInScope(db, {
       ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'claimed-request', content: 'claimed body', authorizationBinding: {}
     })
+    approveAgentInput(db, owner.id, target, 'claimed-request', claimed.source.messageId)
     claimQueuedTurnAtomicallyInScope(db, {
       sessionId: target.id, userMessageId: claimed.receipt.queuedMessageId!, turnId: 'exact-agent-turn',
-      assistantMessageId: 'exact-agent-assistant', requestId: 'claimed-request', queueScope: { kind: 'desktop' }, source: 'agent-session'
+      assistantMessageId: 'exact-agent-assistant', requestId: 'claimed-request', queueScope: { kind: 'desktop' }, source: 'agent-session', agentSessionFinalCheck: () => true
     })
     expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'claimed-request' })).toMatchObject({ kind: 'claimed', turnId: 'exact-agent-turn' })
     getDbConnection(db).prepare("UPDATE turns SET state='terminal',outcome='failed',updated_at=123 WHERE turn_id=?").run('exact-agent-turn')
@@ -281,12 +298,135 @@ describe('agent session message acceptance persistence', () => {
     expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId: 'approval-guard-request',
       expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval: { ...approval, requestId: 'other-request' } })).toBeNull()
 
+    approveAgentInput(db, owner.id, target, 'approval-guard-request', accepted.source.messageId)
     claimQueuedTurnAtomicallyInScope(db, {
       sessionId: target.id, userMessageId: accepted.source.messageId, turnId: 'approval-claimed-turn',
-      assistantMessageId: 'approval-claimed-assistant', requestId: 'approval-guard-request', queueScope: { kind: 'desktop' }, source: 'agent-session'
+      assistantMessageId: 'approval-claimed-assistant', requestId: 'approval-guard-request', queueScope: { kind: 'desktop' }, source: 'agent-session', agentSessionFinalCheck: () => true
     })
     expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId: 'approval-guard-request',
       expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })).toBeNull()
+    db.close()
+  })
+
+  it('requires a current execution approval and final-check before any Turn claim writes', () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'final-check-owner' })
+    const target = createSession(db, { name: 'final-check-target' })
+    const accepted = enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'final-check-request', content: 'body', authorizationBinding: {}
+    })
+    const claim = () => claimQueuedTurnAtomicallyInScope(db, {
+      sessionId: target.id, userMessageId: accepted.source.messageId, turnId: 'final-check-turn',
+      assistantMessageId: 'final-check-assistant', requestId: 'final-check-request', queueScope: { kind: 'desktop' }, source: 'agent-session',
+      agentSessionFinalCheck: () => true
+    })
+    expect(claim).toThrow('AGENT_SESSION_EXECUTION_APPROVAL_MISSING')
+    approveAgentInput(db, owner.id, target, 'final-check-request', accepted.source.messageId)
+    expect(() => claimQueuedTurnAtomicallyInScope(db, {
+      sessionId: target.id, userMessageId: accepted.source.messageId, turnId: 'final-check-turn',
+      assistantMessageId: 'final-check-assistant', requestId: 'final-check-request', queueScope: { kind: 'desktop' }, source: 'agent-session'
+    })).toThrow('AGENT_SESSION_EXECUTION_APPROVAL_FINAL_CHECK_REQUIRED')
+    expect(() => claimQueuedTurnAtomicallyInScope(db, {
+      sessionId: target.id, userMessageId: accepted.source.messageId, turnId: 'final-check-turn',
+      assistantMessageId: 'final-check-assistant', requestId: 'final-check-request', queueScope: { kind: 'desktop' }, source: 'agent-session',
+      agentSessionFinalCheck: () => false
+    })).toThrow('AGENT_SESSION_EXECUTION_APPROVAL_FINAL_CHECK_FAILED')
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(accepted.source.messageId)).toEqual({ status: 'queued' })
+    expect(getDbConnection(db).prepare('SELECT state,turn_id FROM queue_input_requests WHERE session_id=? AND request_id=?')
+      .get(target.id, 'final-check-request')).toEqual({ state: 'queued', turn_id: null })
+    expect(getDbConnection(db).prepare('SELECT turn_id FROM turns WHERE turn_id=?').get('final-check-turn')).toBeUndefined()
+    db.close()
+  })
+
+  it('commits approved claim, History source anchor and admission material atomically', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const owner = createSession(db, { name: 'admission-owner' })
+    const target = createSession(db, { name: 'admission-target' })
+    const accepted = enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'admission-request', content: 'approved input', authorizationBinding: {}
+    })
+    const approved = approveAgentInput(db, owner.id, target, 'admission-request', accepted.source.messageId)
+    const checked = vi.fn(() => true)
+
+    const claimed = claimQueuedTurnAtomicallyInScope(db, {
+      sessionId: target.id, userMessageId: accepted.source.messageId, turnId: 'admission-turn', assistantMessageId: 'admission-assistant',
+      requestId: 'admission-request', queueScope: { kind: 'desktop' }, source: 'agent-session', agentSessionFinalCheck: checked
+    })
+    expect(claimed.user.message.status).toBe('sent')
+    expect(checked).toHaveBeenCalledWith(expect.objectContaining({ originDigest: approved.originDigest, approvalDigest: approved.approvalDigest,
+      targetGeneration: target.generation, source: expect.objectContaining({ requestId: 'admission-request', messageId: accepted.source.messageId }) }))
+    const receipt = conn.prepare('SELECT state,turn_id,source_json FROM queue_input_requests WHERE session_id=? AND request_id=?')
+      .get(target.id, 'admission-request') as { state: string; turn_id: string; source_json: string }
+    const source = JSON.parse(receipt.source_json) as AgentSessionInputSource
+    const historyRow = conn.prepare("SELECT event_id,payload_json FROM agent_history_events WHERE invocation_id=? AND kind='session-input-committed'")
+      .get('admission-turn') as { event_id: string; payload_json: string }
+    const payload = JSON.parse(historyRow.payload_json) as Record<string, unknown>
+    const admission = source.admission as Record<string, unknown>
+    expect({ state: receipt.state, turnId: receipt.turn_id }).toEqual({ state: 'claimed', turnId: 'admission-turn' })
+    expect(payload.inputSource).toEqual({ kind: 'agent-session', originDigest: approved.originDigest })
+    expect(admission).toMatchObject({ version: 1, originDigest: approved.originDigest, approvalDigest: approved.approvalDigest,
+      sessionId: target.id, sessionGeneration: target.generation, requestId: 'admission-request', messageId: accepted.source.messageId,
+      turnId: 'admission-turn', invocationId: 'admission-turn', inputEventId: historyRow.event_id, inputFingerprint: accepted.receipt.fingerprint,
+      queueScope: 'desktop' })
+    expect(admission.inputEventDigest).toBe(agentSessionInputEventDigest({
+      invocationId: 'admission-turn', turnId: 'admission-turn', sequence: 1, schemaVersion: 1, eventId: historyRow.event_id,
+      idempotencyKey: 'admission-turn:session-input', kind: 'session-input-committed', payload
+    }))
+    expect(source.authorizationBinding).toEqual(accepted.source.authorizationBinding)
+    expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'admission-request' })).toMatchObject({ kind: 'claimed', turnId: 'admission-turn' })
+    db.close()
+  })
+
+  it('refuses to claim an approved agent message that is no longer the desktop queue head', () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'fifo-owner' })
+    const target = createSession(db, { name: 'fifo-target' })
+    enqueueQueuedUserMessage(db, { sessionId: target.id, requestId: 'older-ordinary', content: 'older input' })
+    const accepted = enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'fifo-agent', content: 'agent input', authorizationBinding: {}
+    })
+    approveAgentInput(db, owner.id, target, 'fifo-agent', accepted.source.messageId)
+
+    expect(() => claimQueuedTurnAtomicallyInScope(db, {
+      sessionId: target.id, userMessageId: accepted.source.messageId, turnId: 'fifo-turn', assistantMessageId: 'fifo-assistant',
+      requestId: 'fifo-agent', queueScope: { kind: 'desktop' }, source: 'agent-session', agentSessionFinalCheck: () => true
+    })).toThrow('AGENT_SESSION_QUEUE_HEAD_CHANGED')
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(accepted.source.messageId)).toEqual({ status: 'queued' })
+    expect(getDbConnection(db).prepare('SELECT turn_id FROM turns WHERE turn_id=?').get('fifo-turn')).toBeUndefined()
+    db.close()
+  })
+
+  it.each([
+    ['message transition', `CREATE TRIGGER fail_claim_message BEFORE UPDATE ON messages WHEN OLD.id='fault-message' AND NEW.status='sent' BEGIN SELECT RAISE(ABORT,'fault message'); END;`],
+    ['assistant insert', `CREATE TRIGGER fail_claim_assistant BEFORE INSERT ON messages WHEN NEW.id='fault-assistant' BEGIN SELECT RAISE(ABORT,'fault assistant'); END;`],
+    ['Turn insert', `CREATE TRIGGER fail_claim_turn BEFORE INSERT ON turns WHEN NEW.turn_id='fault-turn' BEGIN SELECT RAISE(ABORT,'fault turn'); END;`],
+    ['History append', `CREATE TRIGGER fail_claim_history BEFORE INSERT ON agent_history_events WHEN NEW.invocation_id='fault-turn' AND NEW.kind='session-input-committed' BEGIN SELECT RAISE(ABORT,'fault history'); END;`],
+    ['receipt claim', `CREATE TRIGGER fail_claim_receipt BEFORE UPDATE ON queue_input_requests WHEN NEW.request_id='fault-request' AND NEW.state='claimed' BEGIN SELECT RAISE(ABORT,'fault receipt'); END;`],
+    ['admission write', `CREATE TRIGGER fail_claim_admission BEFORE UPDATE OF source_json ON queue_input_requests WHEN json_type(NEW.source_json,'$.admission')='object' BEGIN SELECT RAISE(ABORT,'fault admission'); END;`]
+  ])('rolls back every claim write when %s fails', (_step, triggerSql) => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const owner = createSession(db, { name: 'fault-owner' })
+    const target = createSession(db, { name: 'fault-target' })
+    const accepted = enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'fault-request', content: 'body', authorizationBinding: {}
+    })
+    approveAgentInput(db, owner.id, target, 'fault-request', accepted.source.messageId)
+    conn.exec(triggerSql.replaceAll('fault-message', accepted.source.messageId))
+    expect(() => claimQueuedTurnAtomicallyInScope(db, {
+      sessionId: target.id, userMessageId: accepted.source.messageId, turnId: 'fault-turn', assistantMessageId: 'fault-assistant',
+      requestId: 'fault-request', queueScope: { kind: 'desktop' }, source: 'agent-session', agentSessionFinalCheck: () => true
+    })).toThrow()
+    expect(conn.prepare('SELECT status FROM messages WHERE id=?').get(accepted.source.messageId)).toEqual({ status: 'queued' })
+    expect(conn.prepare('SELECT id FROM messages WHERE id=?').get('fault-assistant')).toBeUndefined()
+    expect(conn.prepare('SELECT turn_id FROM turns WHERE turn_id=?').get('fault-turn')).toBeUndefined()
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE invocation_id=?').get('fault-turn')).toEqual({ count: 0 })
+    const receipt = conn.prepare('SELECT state,turn_id,source_json FROM queue_input_requests WHERE session_id=? AND request_id=?')
+      .get(target.id, 'fault-request') as { state: string; turn_id: string | null; source_json: string }
+    expect(receipt.state).toBe('queued')
+    expect(receipt.turn_id).toBeNull()
+    expect((JSON.parse(receipt.source_json) as AgentSessionInputSource).admission).toBeUndefined()
     db.close()
   })
 })

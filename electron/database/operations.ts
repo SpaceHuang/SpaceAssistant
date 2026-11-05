@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto'
-import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionExecutionApproval, AgentSessionInputSource, Message, MessageStatus, Session } from '../../src/shared/domainTypes'
+import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionExecutionApproval, AgentSessionExecutionFinalCheckFacts, AgentSessionInputSource, Message, MessageStatus, Session } from '../../src/shared/domainTypes'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
 import type { SessionOwnership, SessionVisibility } from '../../src/shared/sessionOwnership'
 import { normalizeOwnership, normalizeVisibility } from '../../src/shared/sessionOwnership'
@@ -33,7 +33,7 @@ import { parseQueueScope, serializeQueueScope, type QueueScope } from '../../src
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
 import { deleteSpillReferenceOwnerInTransaction, spillHistoryOwnerKey, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
-import { agentSessionExecutionApprovalDigest, agentSessionOriginDigest, classifyQueueInputSource, decodeAgentSessionExecutionApproval, decodeAgentSessionInputSource, encodeAgentSessionMessageEnvelope, type QueueInputSource } from './queueInputSource'
+import { agentSessionExecutionApprovalDigest, agentSessionInputEventDigest, agentSessionOriginDigest, classifyQueueInputSource, decodeAgentSessionExecutionApproval, decodeAgentSessionInputSource, encodeAgentSessionMessageEnvelope, type QueueInputSource } from './queueInputSource'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
@@ -1197,7 +1197,7 @@ export function enqueueQueuedUserMessage(
 
 export function claimQueuedTurnAtomicallyInScope(
   db: AppDatabase,
-  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope: QueueScope; source?: QueueInputSource }
+  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope: QueueScope; source?: QueueInputSource; agentSessionFinalCheck?: (facts: AgentSessionExecutionFinalCheckFacts) => boolean }
 ): { user: PersistedMessageEntry; assistant: PersistedMessageEntry; executionConfig?: TurnExecutionConfig } {
   const conn = getDbConnection(db)
   const serializedScope = serializeQueueScope(input.queueScope)
@@ -1213,6 +1213,46 @@ export function claimQueuedTurnAtomicallyInScope(
     if (classifyQueueInputSource(db, { sessionId: input.sessionId, queueScope: input.queueScope, queuedMessageId: input.userMessageId }) !== expectedSource) {
       throw new Error('QUEUE_INPUT_SOURCE_INVALID')
     }
+    let agentAdmission: {
+      source: AgentSessionInputSource
+      approval: AgentSessionExecutionApproval
+      originDigest: string
+      approvalDigest: string
+      targetGeneration: string
+      sourceJson: string
+    } | undefined
+    if (expectedSource === 'agent-session') {
+      // final-check phase: consume only this approved identity/object/generation binding; policy is not recalculated here.
+      if (input.queueScope.kind !== 'desktop') throw new Error('AGENT_SESSION_QUEUE_SCOPE_INVALID')
+      const receipt = conn.prepare(`SELECT state,turn_id,queued_message_id,source_json FROM queue_input_requests
+        WHERE session_id=? AND request_id=? AND queue_scope='desktop'`).get(input.sessionId, input.requestId) as
+        { state: string; turn_id: string | null; queued_message_id: string | null; source_json: string | null } | undefined
+      const source = decodeAgentSessionInputSource(receipt?.source_json ?? null)
+      const approval = decodeAgentSessionExecutionApproval(source?.executionApproval)
+      if (!receipt || receipt.state !== 'queued' || receipt.turn_id !== null || receipt.queued_message_id !== input.userMessageId ||
+        !receipt.source_json || !source || source.admission !== undefined || source.requestId !== input.requestId ||
+        source.targetSessionId !== input.sessionId || source.messageId !== input.userMessageId || !approval) {
+        throw new Error('AGENT_SESSION_EXECUTION_APPROVAL_MISSING')
+      }
+      const originDigest = agentSessionOriginDigest(source)
+      const approvalDigest = agentSessionExecutionApprovalDigest(approval)
+      const target = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(input.sessionId) as { generation: string } | undefined
+      if (!target || !agentExecutionApprovalMatchesSource(approval, source, originDigest) || approval.targetGeneration !== target.generation) {
+        throw new Error('AGENT_SESSION_EXECUTION_APPROVAL_STALE')
+      }
+      const queueHead = conn.prepare(`SELECT id FROM messages WHERE session_id=? AND queue_scope='desktop' AND role='user' AND status='queued'
+        ORDER BY sequence,id LIMIT 1`).get(input.sessionId) as { id: string } | undefined
+      if (queueHead?.id !== input.userMessageId) throw new Error('AGENT_SESSION_QUEUE_HEAD_CHANGED')
+      if (!input.agentSessionFinalCheck) throw new Error('AGENT_SESSION_EXECUTION_APPROVAL_FINAL_CHECK_REQUIRED')
+      let finalCheckPassed = false
+      try {
+        finalCheckPassed = input.agentSessionFinalCheck({ source, approval, originDigest, approvalDigest, targetGeneration: target.generation }) === true
+      } catch {
+        finalCheckPassed = false
+      }
+      if (!finalCheckPassed) throw new Error('AGENT_SESSION_EXECUTION_APPROVAL_FINAL_CHECK_FAILED')
+      agentAdmission = { source, approval, originDigest, approvalDigest, targetGeneration: target.generation, sourceJson: receipt.source_json }
+    }
     const userResult = updateMessageContent(db, input.userMessageId, { status: 'sent' })
     if (!userResult) throw new Error('QUEUE_MESSAGE_NOT_CLAIMABLE')
     const assistant = appendMessage(db, { id: input.assistantMessageId, sessionId: input.sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming' })
@@ -1225,16 +1265,42 @@ export function claimQueuedTurnAtomicallyInScope(
     createPersistedTurn(db, { turnId: input.turnId, requestId: input.requestId, sessionId: input.sessionId, assistantMessageId: input.assistantMessageId, userMessageId: input.userMessageId, contextBoundarySequence: boundary, state: input.state ?? 'prepared', startToken: input.startToken, intentFingerprint: input.intentFingerprint, excludeMessageIds: input.excludeMessageIds, executionConfig })
     if (continuationIntent) conn.prepare("UPDATE continuation_intents SET status='accepted_turn',target_id=?,updated_at=? WHERE session_id=? AND request_id=? AND status='queued'")
       .run(input.turnId, Date.now(), input.sessionId, input.requestId)
-    appendSessionInputHistoryInTransaction(conn, { requestId: input.requestId, turnId: input.turnId, sessionId: input.sessionId, user: userResult.message })
+    const inputEvent = appendSessionInputHistoryInTransaction(conn, {
+      requestId: input.requestId, turnId: input.turnId, sessionId: input.sessionId, user: userResult.message,
+      ...(agentAdmission ? { inputSource: { kind: 'agent-session' as const, originDigest: agentAdmission.originDigest } } : {})
+    })
     const receipt = conn.prepare('UPDATE queue_input_requests SET turn_id = ?, state = ?, updated_at = ? WHERE session_id = ? AND request_id = ? AND queue_scope = ? AND state = ?').run(input.turnId, 'claimed', Date.now(), input.sessionId, input.requestId, serializedScope, 'queued')
     if (changesToNumber(receipt.changes) !== 1) throw new Error('QUEUE_RECEIPT_NOT_CLAIMABLE')
+    if (agentAdmission) {
+      const admission = {
+        version: 1,
+        originDigest: agentAdmission.originDigest,
+        approvalDigest: agentAdmission.approvalDigest,
+        sessionId: input.sessionId,
+        sessionGeneration: agentAdmission.targetGeneration,
+        requestId: input.requestId,
+        messageId: input.userMessageId,
+        turnId: input.turnId,
+        invocationId: input.turnId,
+        inputEventId: inputEvent.eventId,
+        inputEventDigest: inputEvent.eventDigest,
+        inputFingerprint: inputEvent.inputFingerprint,
+        queueScope: serializedScope,
+        acceptedAt: Date.now()
+      }
+      const updatedSource: AgentSessionInputSource = { ...agentAdmission.source, admission }
+      const sourceChanged = conn.prepare(`UPDATE queue_input_requests SET source_json=?
+        WHERE session_id=? AND request_id=? AND queue_scope='desktop' AND state='claimed' AND turn_id=? AND source_json=?`)
+        .run(JSON.stringify(updatedSource), input.sessionId, input.requestId, input.turnId, agentAdmission.sourceJson)
+      if (changesToNumber(sourceChanged.changes) !== 1) throw new Error('AGENT_SESSION_ADMISSION_CAS_FAILED')
+    }
     return { user: userResult, assistant, ...(executionConfig ? { executionConfig } : {}) }
   })
 }
 
 export function claimQueuedTurnAtomically(
   db: AppDatabase,
-  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope?: QueueScope; source?: QueueInputSource }
+  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope?: QueueScope; source?: QueueInputSource; agentSessionFinalCheck?: (facts: AgentSessionExecutionFinalCheckFacts) => boolean }
 ): { user: PersistedMessageEntry; assistant: PersistedMessageEntry; executionConfig?: TurnExecutionConfig } {
   if (input.queueScope) return claimQueuedTurnAtomicallyInScope(db, { ...input, queueScope: input.queueScope })
   return desktopQueueCompatibility.claim(db, input)
@@ -1691,8 +1757,9 @@ export function prepareTurnAtomically(
 
 function appendSessionInputHistoryInTransaction(
   conn: ReturnType<typeof getDbConnection>,
-  input: { requestId: string; turnId: string; sessionId: string; user: Message }
-): void {
+  input: { requestId: string; turnId: string; sessionId: string; user: Message; inputSource?: { kind: 'agent-session'; originDigest: string } }
+): { eventId: string; eventDigest: string; inputFingerprint: string } {
+  const inputFingerprint = queueInputFingerprint({ text: input.user.content, attachments: input.user.attachments })
   const event: HistoryEvent = {
     invocationId: input.turnId,
     turnId: input.turnId,
@@ -1705,13 +1772,15 @@ function appendSessionInputHistoryInTransaction(
       sessionId: input.sessionId,
       messageId: input.user.id,
       role: input.user.role,
-      inputFingerprint: queueInputFingerprint({ text: input.user.content, attachments: input.user.attachments })
+      inputFingerprint,
+      ...(input.inputSource ? { inputSource: input.inputSource } : {})
     }
   }
   appendSqliteAgentHistoryBatchInTransaction(conn, [event], 0, { schemaVersion: 1, sessionId: input.sessionId })
   const marked = conn.prepare('UPDATE turns SET accepted_input_history_version = 1 WHERE turn_id = ? AND request_id = ? AND session_id = ?')
     .run(input.turnId, input.requestId, input.sessionId)
   if (changesToNumber(marked.changes) !== 1) throw new Error('TURN_ACCEPTED_INPUT_RECEIPT_MISSING')
+  return { eventId: event.eventId, eventDigest: agentSessionInputEventDigest(event), inputFingerprint }
 }
 
 export type ApiContextBaselineRow = {
@@ -2861,7 +2930,7 @@ export const desktopQueueCompatibility = Object.freeze({
     updateQueueInputReceiptStateInScope(db, sessionId, requestId, state, DESKTOP_QUEUE_SCOPE),
   enqueue: (db: AppDatabase, input: { sessionId: string; requestId: string; content: string; attachments?: Message['attachments'] }) =>
     enqueueQueuedUserMessageInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE }),
-  claim: (db: AppDatabase, input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) =>
+  claim: (db: AppDatabase, input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; source?: QueueInputSource; agentSessionFinalCheck?: (facts: AgentSessionExecutionFinalCheckFacts) => boolean }) =>
     claimQueuedTurnAtomicallyInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE }),
   reorder: (db: AppDatabase, input: { sessionId: string; messageIds: string[] }) =>
     reorderQueuedUserMessagesInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE }),

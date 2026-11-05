@@ -47,6 +47,17 @@ export function agentSessionExecutionApprovalDigest(approval: AgentSessionExecut
   return sha256Canonical(approval)
 }
 
+export function agentSessionInputEventDigest(event: {
+  invocationId: string; turnId: string; sequence: number; schemaVersion: number; eventId: string
+  idempotencyKey: string; kind: string; payload: unknown
+}): string {
+  return sha256Canonical({
+    invocationId: event.invocationId, turnId: event.turnId, sequence: event.sequence,
+    schemaVersion: event.schemaVersion, eventId: event.eventId, idempotencyKey: event.idempotencyKey,
+    kind: event.kind, payload: event.payload
+  })
+}
+
 export function decodeAgentSessionExecutionApproval(value: unknown): AgentSessionExecutionApproval | undefined {
   if (!isRecord(value) || Object.keys(value).length !== AGENT_APPROVAL_KEYS.size ||
     Object.keys(value).some((key) => !AGENT_APPROVAL_KEYS.has(key)) || value.version !== 1 || value.queueScope !== 'desktop' ||
