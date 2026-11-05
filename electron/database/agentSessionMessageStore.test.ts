@@ -472,6 +472,27 @@ describe('agent session message acceptance persistence', () => {
     db.close()
   })
 
+  it('denies claim when target generation changes after approval without writing a Turn or settling the message', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const owner = createSession(db, { name: 'generation-change-owner' })
+    const target = createSession(db, { name: 'generation-change-target' })
+    const accepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId: 'generation-change-request', content: 'approved before generation changed', authorizationBinding: {} })
+    approveAgentInput(db, owner.id, target, 'generation-change-request', accepted.source.messageId)
+    conn.prepare('UPDATE sessions SET generation=? WHERE id=?').run('replacement-generation', target.id)
+    expect(() => claimQueuedTurnAtomicallyInScope(db, {
+      sessionId: target.id, userMessageId: accepted.source.messageId, turnId: 'generation-change-turn',
+      assistantMessageId: 'generation-change-assistant', requestId: 'generation-change-request', queueScope: { kind: 'desktop' },
+      source: 'agent-session', agentSessionFinalCheck: (facts) => facts.targetGeneration === target.generation
+    })).toThrow('AGENT_SESSION_EXECUTION_APPROVAL_STALE')
+    expect(conn.prepare('SELECT state,turn_id FROM queue_input_requests WHERE session_id=? AND request_id=?')
+      .get(target.id, 'generation-change-request')).toEqual({ state: 'queued', turn_id: null })
+    expect(conn.prepare('SELECT status FROM messages WHERE id=?').get(accepted.source.messageId)).toEqual({ status: 'queued' })
+    expect(conn.prepare('SELECT turn_id FROM turns WHERE turn_id=?').get('generation-change-turn')).toBeUndefined()
+    db.close()
+  })
+
   it('commits approved claim, History source anchor and admission material atomically', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
@@ -593,6 +614,29 @@ describe('agent session message acceptance persistence', () => {
 })
 
 describe('agent session restart recovery', () => {
+  it('rejects a queued old-generation approval after SQLite reopen without claiming it', () => {
+    const temp = createTempDatabase('agent-session-stale-generation-reopen-')
+    const { db, cleanup } = temp
+    try {
+      const owner = createSession(db, { name: 'stale-generation-owner' })
+      const target = createSession(db, { name: 'stale-generation-target' })
+      const accepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+        requestId: 'stale-generation-reopen-request', content: 'must be reapproved', authorizationBinding: {} })
+      approveAgentInput(db, owner.id, target, 'stale-generation-reopen-request', accepted.source.messageId)
+      getDbConnection(db).prepare('UPDATE sessions SET generation=? WHERE id=?').run('new-generation-after-restart', target.id)
+      db.close()
+      reopenDatabaseConnection(db)
+
+      expect(() => claimQueuedTurnAtomicallyInScope(db, { sessionId: target.id, userMessageId: accepted.source.messageId,
+        turnId: 'stale-generation-reopen-turn', assistantMessageId: 'stale-generation-reopen-assistant',
+        requestId: 'stale-generation-reopen-request', queueScope: { kind: 'desktop' }, source: 'agent-session',
+        agentSessionFinalCheck: () => true })).toThrow('AGENT_SESSION_EXECUTION_APPROVAL_STALE')
+      expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'stale-generation-reopen-request' })).toMatchObject({ kind: 'queued' })
+      expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(accepted.source.messageId)).toEqual({ status: 'queued' })
+      expect(getDbConnection(db).prepare('SELECT turn_id FROM turns WHERE turn_id=?').get('stale-generation-reopen-turn')).toBeUndefined()
+    } finally { cleanup(db) }
+  })
+
   it('reopens a claimed source as the original admitted Turn and settles its orphan terminal exactly once', () => {
     const temp = createTempDatabase('agent-session-reopen-recovery-')
     const { db, cleanup } = temp

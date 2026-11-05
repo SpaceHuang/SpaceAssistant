@@ -317,8 +317,11 @@ describe('file IPC handlers', () => {
   let ipc: ReturnType<typeof mockIpcMain>
   let ctx: AppIpcContext
   let resetRealDbForwarding: (() => void) | undefined
+  let restoreDirectExecutionDatabaseMocks: (() => void) | undefined
 
   afterEach(() => {
+    restoreDirectExecutionDatabaseMocks?.()
+    restoreDirectExecutionDatabaseMocks = undefined
     try { ctx?.db.close() } catch { /* real reopen tests close their database explicitly */ }
     setCallAdmissionGate(null)
   })
@@ -446,6 +449,84 @@ describe('file IPC handlers', () => {
     expect(databaseOperations.getMessage(ctx.db, accepted.source.messageId)?.status).toBe('queued')
     expect(databaseOperations.getTurnByRequestId(ctx.db, target.id, accepted.receipt.requestId)).toBeUndefined()
     expect(executeTurn).not.toHaveBeenCalled()
+  })
+
+  it.each(['source-json', 'source-digest', 'approval', 'input-event-digest'] as const)('直接 execute IPC 在既有 Turn 凭据下遇到 %s 损坏时不进入模型', async (damage) => {
+    const owner = databaseOperations.createSession(ctx.db, { name: `direct execute owner ${damage}`, model: 'test', workDirProfileId: 'default' })
+    const target = databaseOperations.createSession(ctx.db, { name: `direct execute target ${damage}`, model: 'test', workDirProfileId: 'default' })
+    const commands = createSessionCommands(ctx.db).agentSessionMessages
+    const requestId = `direct-execute-${damage}`
+    const accepted = commands.accept({ ownerSessionId: owner.id, targetSessionId: target.id, requestId,
+      content: `trusted-${damage}-body`, authorizationBinding: {} })
+    const snapshot = commands.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: `decision:${requestId}`,
+      permitRef: `permit:${requestId}`, ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      requestId, messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: snapshot.source.payloadSha256,
+      policyRevision: 'policy-1', authorizationGeneration: 'authorization-1', runtimeGeneration: 'runtime-1', approvedAt: Date.now() }
+    expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId, expectedOriginDigest: snapshot.originDigest,
+      expectedApprovalDigest: snapshot.approvalDigest ?? null, approval })).not.toBeNull()
+
+    let savedPayload: { requestId: string; turnId: string; turnStartToken: string; sessionId: string } | undefined
+    let executeCalls = 0
+    const modelSource = vi.fn(async () => ({ outcome: 'completed' as const }))
+    ctx.executeTurn = async (_sender, payload) => {
+      executeCalls += 1
+      if (executeCalls === 1) { savedPayload = payload; return }
+      await ctx.turnRuntime!.executeWithSource(payload.turnId, payload.turnStartToken, modelSource as never)
+    }
+    const publish = vi.fn()
+    ctx.publishDesktopDrainRequester = publish
+    ctx.agentSessionExecutionAuthorization = { resolve: vi.fn(() => ({ kind: 'approved' as const, finalCheck: () => true })) }
+    const priorGetSession = vi.mocked(database.getSession).getMockImplementation()
+    const priorSnapshot = vi.mocked(database.getSessionMessageRevisionSnapshot).getMockImplementation()
+    vi.mocked(database.getSession).mockImplementation((_db, sessionId) => databaseOperations.getSession(ctx.db, sessionId))
+    vi.mocked(database.getSessionMessageRevisionSnapshot).mockImplementation((_db, sessionId) => databaseOperations.getSessionMessageRevisionSnapshot(ctx.db, sessionId))
+    restoreDirectExecutionDatabaseMocks = () => {
+      if (priorGetSession) vi.mocked(database.getSession).mockImplementation(priorGetSession)
+      else vi.mocked(database.getSession).mockReset()
+      if (priorSnapshot) vi.mocked(database.getSessionMessageRevisionSnapshot).mockImplementation(priorSnapshot)
+      else vi.mocked(database.getSessionMessageRevisionSnapshot).mockReset()
+    }
+    const readSession = vi.fn((sessionId: string) => databaseOperations.getSession(ctx.db, sessionId))
+    ctx.sessionStorage = { ...ctx.sessionStorage!, queries: { ...ctx.sessionStorage!.queries, readSession } }
+    expect(ctx.sessionStorage.queries.readSession(target.id)?.id).toBe(target.id)
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    await publish.mock.calls[0]![0](target.id)
+    expect(readSession).toHaveBeenCalledWith(target.id)
+    expect(ctx.agentSessionExecutionAuthorization.resolve).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: target.id, requestId, messageId: accepted.source.messageId
+    }))
+    const persistedTurn = databaseOperations.getTurnByRequestId(ctx.db, target.id, requestId)
+    expect(persistedTurn?.state).toBe('prepared')
+    await vi.waitFor(() => expect(savedPayload).toBeDefined())
+
+    const conn = getActualDbConnection(ctx.db)
+    if (damage === 'source-json') {
+      conn.prepare('UPDATE queue_input_requests SET source_json=NULL WHERE session_id=? AND request_id=?').run(target.id, requestId)
+    } else if (damage === 'source-digest') {
+      const row = conn.prepare('SELECT source_json FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, requestId) as { source_json: string }
+      const sourceJson = JSON.parse(row.source_json) as Record<string, unknown>
+      conn.prepare('UPDATE queue_input_requests SET source_json=? WHERE session_id=? AND request_id=?')
+        .run(JSON.stringify({ ...sourceJson, payloadSha256: '0'.repeat(64) }), target.id, requestId)
+    } else if (damage === 'approval') {
+      const row = conn.prepare('SELECT source_json FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, requestId) as { source_json: string }
+      const sourceJson = JSON.parse(row.source_json) as Record<string, unknown>
+      const executionApproval = sourceJson.executionApproval as Record<string, unknown>
+      conn.prepare('UPDATE queue_input_requests SET source_json=? WHERE session_id=? AND request_id=?')
+        .run(JSON.stringify({ ...sourceJson, executionApproval: { ...executionApproval, policyRevision: 'forged-policy' } }), target.id, requestId)
+    } else {
+      const row = conn.prepare('SELECT source_json FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, requestId) as { source_json: string }
+      const sourceJson = JSON.parse(row.source_json) as Record<string, unknown>
+      const admission = sourceJson.admission as Record<string, unknown>
+      conn.prepare('UPDATE queue_input_requests SET source_json=? WHERE session_id=? AND request_id=?')
+        .run(JSON.stringify({ ...sourceJson, admission: { ...admission, inputEventDigest: 'f'.repeat(64) } }), target.id, requestId)
+    }
+
+    await expect(ipc.getHandler('chat:execute-turn')!({ sender: {} }, savedPayload)).resolves.toMatchObject({ accepted: true })
+    await vi.waitFor(() => expect(executeCalls).toBe(2))
+    await vi.waitFor(() => expect(ctx.turnRuntime!.getTurn(savedPayload!.turnId)?.assistantMessage.status).toBe('cancelled'))
+    expect(modelSource).not.toHaveBeenCalled()
+    expect(databaseOperations.getPersistedTurn(ctx.db, savedPayload!.turnId)).toMatchObject({ state: 'terminal', outcome: 'cancelled' })
   })
 
   it('session:list filters profile in its query and does not persist legacy metadata cleanup', () => {

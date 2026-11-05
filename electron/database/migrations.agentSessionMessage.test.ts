@@ -1,4 +1,8 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { DatabaseSync } from 'node:sqlite'
 import { createSession, enqueueQueuedUserMessage } from './operations'
 import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
@@ -31,6 +35,47 @@ function restoreV123QueueInputRequests(db: ReturnType<typeof createMemoryAppDb>)
 }
 
 describe('agent session message schema migration', () => {
+  it('restores a closed pre-upgrade database snapshot and reapplies migration without losing the old receipt', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-session-migration-rollback-'))
+    const dbPath = path.join(root, 'session.sqlite')
+    const backupPath = path.join(root, 'before-upgrade.sqlite')
+    const targetId = 'rollback-target'
+    try {
+      const temp = createTempDatabase('agent-session-migration-rollback-db-')
+      let db = temp.db
+      const target = createSession(db, { id: targetId, name: 'rollback target' })
+      const accepted = enqueueQueuedUserMessage(db, { sessionId: target.id, requestId: 'rollback-receipt', content: 'legacy content' })
+      restoreV123QueueInputRequests(db)
+      db.close()
+      fs.copyFileSync(temp.dbPath, backupPath)
+
+      db = openDatabase(temp.dbPath)
+      expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
+      expect(getDbConnection(db).prepare('PRAGMA foreign_key_check').all()).toEqual([])
+      db.close()
+      fs.copyFileSync(backupPath, temp.dbPath)
+
+      const restored = new DatabaseSync(temp.dbPath)
+      expect(restored.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '123' })
+      expect(restored.prepare('SELECT state,queued_message_id FROM queue_input_requests WHERE session_id=? AND request_id=?')
+        .get(target.id, 'rollback-receipt')).toEqual({ state: 'queued', queued_message_id: accepted.persisted.message.id })
+      expect(restored.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+      restored.close()
+
+      db = openDatabase(temp.dbPath)
+      expect(getDbConnection(db).prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get())
+        .toEqual({ value: String(DB_SCHEMA_VERSION) })
+      expect(getDbConnection(db).prepare('SELECT source_json,state,queued_message_id FROM queue_input_requests WHERE session_id=? AND request_id=?')
+        .get(target.id, 'rollback-receipt')).toEqual({ source_json: null, state: 'queued', queued_message_id: accepted.persisted.message.id })
+      expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
+      expect(getDbConnection(db).prepare('PRAGMA foreign_key_check').all()).toEqual([])
+      db.close()
+      temp.cleanup()
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }) } catch { /* closed database fixture */ }
+    }
+  })
+
   it('upgrades a file-backed Electron SQLite database, preserves legacy receipts, and stays upgraded after reopen', () => {
     const temp = createTempDatabase('agent-session-v123-file-')
     let db = temp.db

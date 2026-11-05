@@ -5,7 +5,7 @@ import { getDbConnection, openDatabase, setConfigValue, type AppDatabase } from 
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
-import { primeClaudeAdmission } from './claudeStreamHandlers'
+import { clearPrimedClaudeAdmission, primeClaudeAdmission } from './claudeStreamHandlers'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createAnthropicStreamHarness } from './testSupport/anthropicStreamHarness'
 
@@ -129,6 +129,19 @@ function seedTrustedModel(db: AppDatabase): void {
 }
 
 describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
+  it('pre-admitted admission 以 sessionId 与 requestId 共同隔离', () => {
+    const firstRelease = vi.fn(() => true)
+    const secondRelease = vi.fn(() => true)
+    primeClaudeAdmission('target-a', 'same-request', { release: firstRelease } as never)
+    primeClaudeAdmission('target-b', 'same-request', { release: secondRelease } as never)
+
+    clearPrimedClaudeAdmission('target-a', 'same-request')
+    clearPrimedClaudeAdmission('target-b', 'same-request')
+
+    expect(firstRelease).toHaveBeenCalledOnce()
+    expect(secondRelease).toHaveBeenCalledOnce()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     handlers.clear()
@@ -222,7 +235,7 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
       disposition: 'defer', requestId: 'cc-pre-admitted-request' })
     expect(preAdmission.ok).toBe(true)
     if (!preAdmission.ok) throw new Error('expected pre-admission ticket')
-    primeClaudeAdmission('cc-pre-admitted-request', preAdmission.ticket)
+    primeClaudeAdmission(session.id, 'cc-pre-admitted-request', preAdmission.ticket)
     admissionAcquire.mockClear()
     await execute(makeSender(), { requestId: 'cc-pre-admitted-request', turnId: 'cc-pre-admitted-turn',
       turnStartToken: 'cc-pre-admitted-token', sessionId: session.id })

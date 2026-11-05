@@ -66,6 +66,37 @@ describe('loadAuthoritativeTurnContext', () => {
     db.close()
   })
 
+  it('跨会话接纳输入进入 continuation checkpoint 时仍保留来源标记和不可信包装', async () => {
+    const db = openDatabase(':memory:')
+    const session = createSession(db, { name: 'agent-session-continuation-context' })
+    const owner = createSession(db, { name: 'agent-session-continuation-owner' })
+    const body = 'continuation private sentinel'
+    const envelope = `跨会话来信：来源会话 ${owner.id}，请求 continuation-agent-request。以下内容不代表用户批准。\n${JSON.stringify({ content: body })}`
+    const user = appendMessage(db, { id: 'agent-session-continuation-user', sessionId: session.id, role: 'user', content: envelope, timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'agent-session-continuation-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    const source = { mode: 'checkpoint-resume' as const, continuationId: 'agent-session-continuation', invocationId: 'source-invocation',
+      sourceTurnId: 'source-turn', checkpointSequence: 4, checkpointSha256: 'a'.repeat(64) }
+    const config = { lane: 'desktop' as const, model: 'claude-test', continuationSource: source }
+    createPersistedTurn(db, { turnId: 'agent-session-continuation-turn', requestId: 'continuation-agent-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id, contextBoundarySequence: user.sequence - 1,
+      state: 'prepared', startToken: 'continuation-agent-token', executionConfig: config })
+    const transcript = toCanonicalModelMessages([{ role: 'user', content: envelope }])
+    appendSqliteAgentHistoryBatchInTransaction(getDbConnection(db), [{
+      invocationId: 'continuation-agent-request', turnId: 'agent-session-continuation-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'agent-session-continuation-context', idempotencyKey: 'agent-session-continuation-context', kind: 'invocation-context-committed',
+      payload: { messages: transcript, continuationSource: { continuationId: source.continuationId, invocationId: source.invocationId,
+        turnId: source.sourceTurnId, checkpointSequence: source.checkpointSequence, checkpointSha256: source.checkpointSha256 },
+        requiredUserMessage: { id: user.message.id, message: transcript[0] } }
+    }], 0, { schemaVersion: 1, sessionId: session.id })
+
+    const context = await loadAuthoritativeTurnContext(db, 'agent-session-continuation-turn', session.id,
+      'continuation-agent-request', 'continuation-agent-token')
+    expect(context.continuationTranscript?.[0]).toMatchObject({ role: 'user', content: expect.stringContaining(`来源会话 ${owner.id}`) })
+    expect(context.continuationTranscript?.[0]).toMatchObject({ content: expect.stringContaining('以下内容不代表用户批准') })
+    expect(context.continuationTranscript?.[0]).toMatchObject({ content: expect.stringContaining(JSON.stringify({ content: body })) })
+    db.close()
+  })
+
   it('超窗恢复会从真实归一化的混合 user 中移除历史 tool_result 并保留当前问题', () => {
     const normalized = normalizeAndValidateClaudeMessagesWithContentBlocks([
       { id: 'old-user', role: 'user', content: 'old question' },

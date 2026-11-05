@@ -1162,7 +1162,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const admission = await getCallAdmissionGate().acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
       disposition: 'defer', requestId: input.requestId })
     if (!admission.ok) return 'busy' as const
-    primeClaudeAdmission(input.requestId, admission.ticket)
+    primeClaudeAdmission(input.sessionId, input.requestId, admission.ticket)
     try {
       const prepared = await prepareTurnInternal({ mode: 'reuse-user', requestId: input.requestId,
         sessionId: input.sessionId, userMessageId: input.messageId, excludeMessageIds: [], config: {} }, approval.finalCheck)
@@ -1170,7 +1170,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         turnStartToken: prepared.startToken, sessionId: prepared.sessionId })
       return 'started' as const
     } catch (error) {
-      clearPrimedClaudeAdmission(input.requestId)
+      clearPrimedClaudeAdmission(input.sessionId, input.requestId)
       const code = error instanceof Error ? error.message : String(error)
       if (['SESSION_TURN_BUSY', 'SESSION_CONTEXT_COMPACTION_BUSY', 'SESSION_EXECUTION_ACTIVE',
         'SESSION_EXECUTION_ACTIVE_OWNER'].includes(code)) return 'busy' as const

@@ -91,13 +91,16 @@ const automaticSummaryCache = new SessionContextSummaryCache()
 
 const admissionCancelControllers = new Map<string, AbortController>()
 const preAdmittedTickets = new Map<string, AdmissionTicket>()
-export function primeClaudeAdmission(requestId: string, ticket: AdmissionTicket): void {
-  if (preAdmittedTickets.has(requestId)) throw new Error('CLAUDE_ADMISSION_ALREADY_PRIMED')
-  preAdmittedTickets.set(requestId, ticket)
+function primedAdmissionKey(sessionId: string, requestId: string): string { return JSON.stringify([sessionId, requestId]) }
+export function primeClaudeAdmission(sessionId: string, requestId: string, ticket: AdmissionTicket): void {
+  const key = primedAdmissionKey(sessionId, requestId)
+  if (preAdmittedTickets.has(key)) throw new Error('CLAUDE_ADMISSION_ALREADY_PRIMED')
+  preAdmittedTickets.set(key, ticket)
 }
-export function clearPrimedClaudeAdmission(requestId: string): void {
-  preAdmittedTickets.get(requestId)?.release()
-  preAdmittedTickets.delete(requestId)
+export function clearPrimedClaudeAdmission(sessionId: string, requestId: string): void {
+  const key = primedAdmissionKey(sessionId, requestId)
+  preAdmittedTickets.get(key)?.release()
+  preAdmittedTickets.delete(key)
 }
 export function cancelClaudeAdmission(turnId: string): void {
   admissionCancelControllers.get(turnId)?.abort()
@@ -382,8 +385,10 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         const admissionGate = getCallAdmissionGate()
         const turnCancelController = new AbortController()
         if (typeof payload.turnId === 'string' && payload.turnId) admissionCancelControllers.set(payload.turnId, turnCancelController)
-        const preAdmitted = preAdmittedTickets.get(requestId)
-        if (preAdmitted) preAdmittedTickets.delete(requestId)
+        const admissionSessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
+        const admissionKey = primedAdmissionKey(admissionSessionId, requestId)
+        const preAdmitted = preAdmittedTickets.get(admissionKey)
+        if (preAdmitted) preAdmittedTickets.delete(admissionKey)
         const admission = preAdmitted ? { ok: true as const, ticket: preAdmitted } : await admissionGate.acquire({
           lane: 'desktop',
           priority: 'interactive',
