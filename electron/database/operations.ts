@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto'
-import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionInputSource, Message, MessageStatus, Session } from '../../src/shared/domainTypes'
+import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionExecutionApproval, AgentSessionInputSource, Message, MessageStatus, Session } from '../../src/shared/domainTypes'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
 import type { SessionOwnership, SessionVisibility } from '../../src/shared/sessionOwnership'
 import { normalizeOwnership, normalizeVisibility } from '../../src/shared/sessionOwnership'
@@ -33,7 +33,7 @@ import { parseQueueScope, serializeQueueScope, type QueueScope } from '../../src
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
 import { deleteSpillReferenceOwnerInTransaction, spillHistoryOwnerKey, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
-import { classifyQueueInputSource, decodeAgentSessionInputSource, encodeAgentSessionMessageEnvelope, type QueueInputSource } from './queueInputSource'
+import { agentSessionExecutionApprovalDigest, agentSessionOriginDigest, classifyQueueInputSource, decodeAgentSessionExecutionApproval, decodeAgentSessionInputSource, encodeAgentSessionMessageEnvelope, type QueueInputSource } from './queueInputSource'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
@@ -1118,6 +1118,74 @@ export function readAgentInputSettlement(
     return typeof turn.outcome === 'string' ? { kind: 'turn-terminal', turnId: turn.turn_id, outcome: turn.outcome } : { kind: 'source-gap' }
   }
   return { kind: 'claimed', turnId: turn.turn_id, turnState: turn.state }
+}
+
+function agentExecutionApprovalMatchesSource(
+  approval: AgentSessionExecutionApproval,
+  source: AgentSessionInputSource,
+  originDigest: string
+): boolean {
+  return approval.version === 1 && approval.originDigest === originDigest &&
+    approval.ownerSessionId === source.ownerSessionId && approval.targetSessionId === source.targetSessionId &&
+    approval.requestId === source.requestId && approval.messageId === source.messageId && approval.payloadDigest === source.payloadSha256 &&
+    approval.queueScope === 'desktop'
+}
+
+export function readAgentInputApprovalSnapshot(
+  db: AppDatabase,
+  input: { sessionId: string; requestId: string }
+): {
+  source: AgentSessionInputSource; originDigest: string; approval?: AgentSessionExecutionApproval; approvalDigest?: string
+} | null {
+  const row = getDbConnection(db).prepare(`SELECT queued_message_id,state,turn_id,source_json FROM queue_input_requests
+    WHERE session_id=? AND request_id=? AND queue_scope='desktop' AND source_json IS NOT NULL`)
+    .get(input.sessionId, input.requestId) as { queued_message_id: string | null; state: string; turn_id: string | null; source_json: string } | undefined
+  const source = decodeAgentSessionInputSource(row?.source_json ?? null)
+  if (!row || row.state !== 'queued' || row.turn_id !== null || !row.queued_message_id || !source ||
+    source.targetSessionId !== input.sessionId || source.requestId !== input.requestId || source.messageId !== row.queued_message_id ||
+    classifyQueueInputSource(db, { sessionId: input.sessionId, queueScope: DESKTOP_QUEUE_SCOPE, requestId: input.requestId, queuedMessageId: row.queued_message_id }) !== 'agent-session') return null
+  const originDigest = agentSessionOriginDigest(source)
+  if (source.executionApproval === undefined) return { source, originDigest }
+  const approval = decodeAgentSessionExecutionApproval(source.executionApproval)
+  if (!approval || !agentExecutionApprovalMatchesSource(approval, source, originDigest)) return null
+  return { source, originDigest, approval, approvalDigest: agentSessionExecutionApprovalDigest(approval) }
+}
+
+export function refreshAgentInputExecutionApproval(
+  db: AppDatabase,
+  input: {
+    sessionId: string; requestId: string; expectedOriginDigest: string; expectedApprovalDigest: string | null
+    approval: AgentSessionExecutionApproval
+  }
+): { originDigest: string; approvalDigest: string } | null {
+  // facts/storage phase: policy emits this approved material elsewhere; this CAS only binds it
+  // to the immutable origin and current queued target generation, without deciding policy.
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const row = conn.prepare(`SELECT queued_message_id,turn_id,state,source_json FROM queue_input_requests
+      WHERE session_id=? AND request_id=? AND queue_scope='desktop' AND source_json IS NOT NULL`)
+      .get(input.sessionId, input.requestId) as { queued_message_id: string | null; turn_id: string | null; state: string; source_json: string } | undefined
+    const source = decodeAgentSessionInputSource(row?.source_json ?? null)
+    const approval = decodeAgentSessionExecutionApproval(input.approval)
+    if (!row || row.state !== 'queued' || row.turn_id !== null || !row.queued_message_id || !source || !approval || source.admission !== undefined ||
+      source.targetSessionId !== input.sessionId || source.requestId !== input.requestId || source.messageId !== row.queued_message_id ||
+      classifyQueueInputSource(db, { sessionId: input.sessionId, queueScope: DESKTOP_QUEUE_SCOPE, requestId: input.requestId, queuedMessageId: row.queued_message_id }) !== 'agent-session') return null
+    const originDigest = agentSessionOriginDigest(source)
+    if (originDigest !== input.expectedOriginDigest || !agentExecutionApprovalMatchesSource(approval, source, originDigest)) return null
+    const currentApproval = source.executionApproval === undefined ? undefined : decodeAgentSessionExecutionApproval(source.executionApproval)
+    if ((source.executionApproval !== undefined && (!currentApproval || !agentExecutionApprovalMatchesSource(currentApproval, source, originDigest))) ||
+      (currentApproval ? agentSessionExecutionApprovalDigest(currentApproval) : null) !== input.expectedApprovalDigest) return null
+    const target = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(input.sessionId) as { generation: string } | undefined
+    if (!target || approval.targetGeneration !== target.generation) return null
+    const approvalDigest = agentSessionExecutionApprovalDigest(approval)
+    const updatedSource: AgentSessionInputSource = { ...source, executionApproval: approval }
+    const result = conn.prepare(`UPDATE queue_input_requests SET source_json=?
+      WHERE session_id=? AND request_id=? AND queue_scope='desktop' AND state='queued' AND turn_id IS NULL AND source_json=?`)
+      .run(JSON.stringify(updatedSource), input.sessionId, input.requestId, row.source_json)
+    if (changesToNumber(result.changes) !== 1) return null
+    db.save()
+    return { originDigest, approvalDigest }
+  })
 }
 
 export function enqueueQueuedUserMessage(

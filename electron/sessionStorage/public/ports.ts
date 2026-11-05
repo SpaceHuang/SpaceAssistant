@@ -1,4 +1,4 @@
-import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionInputSource, Message, Session } from '../../../src/shared/domainTypes'
+import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionExecutionApproval, AgentSessionInputSource, Message, Session } from '../../../src/shared/domainTypes'
 import type { AcceptedTurn } from '../../../src/shared/acceptedTurn'
 import type { SessionOwnership, SessionVisibility } from '../../../src/shared/sessionOwnership'
 import type { SessionDirectoryGrantRecord } from '../../../src/shared/sessionDirectoryGrant'
@@ -8,7 +8,7 @@ import type { EnqueueResult, MessageEntry, RemoteSessionIdentityUpdate, Continua
   RoutingRead, RouteInput, SelectionFence, ExportPage, SearchCorpusPage, MessageSearchHit, MessageSkeleton, RetryContextTarget,
   PreparedChatBodyView,
   ImAcceptedFactScope, ImAcceptedFactFrontier, ImAcceptedFactPage,
-  RuntimeTriggerRecord, RuntimeTriggerPatch, QueueInputReceiptSnapshot, ScopedQueueInput, QueueInputSource, AgentSessionMessageAcceptance,
+  RuntimeTriggerRecord, RuntimeTriggerPatch, QueueInputReceiptSnapshot, ScopedQueueInput, QueueInputSource, AgentSessionMessageAcceptance, AgentSessionApprovalSnapshot,
 } from './model'
 import type { HistoryEvent, HistoryPort, HistorySnapshot } from '../../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../../packages/agent-sdk/src/model'
@@ -73,6 +73,8 @@ export interface SessionCommands {
     accept(input: { ownerSessionId: string; targetSessionId: string; requestId: string; content: string; authorizationBinding: AgentSessionInputSource['authorizationBinding'] }): AgentSessionMessageAcceptance
     markNotExecuted(input: { sessionId: string; requestId: string; reason: AgentInputNotExecutedReason }): boolean
     readSettlement(input: { ownerSessionId: string; requestId: string }): AgentInputSettlement | undefined
+    readApprovalSnapshot(input: { sessionId: string; requestId: string }): AgentSessionApprovalSnapshot | null
+    refreshExecutionApproval(input: { sessionId: string; requestId: string; expectedOriginDigest: string; expectedApprovalDigest: string | null; approval: AgentSessionExecutionApproval }): { originDigest: string; approvalDigest: string } | null
   }>
   readonly scopedQueue: Readonly<{
     enqueue(input: ScopedQueueInput): EnqueueResult

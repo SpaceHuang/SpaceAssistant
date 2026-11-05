@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { classifyQueueInputSource } from './queueInputSource'
+import { agentSessionOriginDigest, classifyQueueInputSource } from './queueInputSource'
 import { claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, readAgentInputSettlement, updateQueueInputReceiptStateInScope, updateQueuedUserMessageContentInScope } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
@@ -204,6 +204,89 @@ describe('agent session message acceptance persistence', () => {
     expect(getDbConnection(db).prepare('SELECT state,queued_message_id FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, 'target-delete'))
       .toMatchObject({ state: 'not-executed:target-unavailable', queued_message_id: null })
     expect(ordinary.receipt.queuedMessageId).toBeTruthy()
+    db.close()
+  })
+
+  it('refreshes only the execution approval under origin and prior-approval digest CAS', () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'approval-owner' })
+    const target = createSession(db, { name: 'approval-target' })
+    const accepted = enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'approval-request', content: 'approved body',
+      authorizationBinding: { originalPolicyRevision: 'policy-0' }
+    })
+    const commands = createSessionCommands(db).agentSessionMessages
+    const snapshot = commands.readApprovalSnapshot({ sessionId: target.id, requestId: 'approval-request' })!
+    expect(agentSessionOriginDigest({ ...snapshot.source, authorizationBinding: Object.fromEntries(Object.entries(snapshot.source.authorizationBinding).reverse()) }))
+      .toBe(snapshot.originDigest)
+    const approval = {
+      version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision-trace-1', permitRef: 'permit-1',
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      requestId: 'approval-request', messageId: accepted.source.messageId, queueScope: 'desktop' as const,
+      payloadDigest: accepted.source.payloadSha256, policyRevision: 'policy-1', authorizationGeneration: 'auth-1',
+      runtimeGeneration: 'runtime-1', approvedAt: 123
+    }
+
+    const first = commands.refreshExecutionApproval({ sessionId: target.id, requestId: 'approval-request',
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })
+    expect(first).toMatchObject({ originDigest: snapshot.originDigest, approvalDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId: 'approval-request',
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })).toBeNull()
+    const current = commands.readApprovalSnapshot({ sessionId: target.id, requestId: 'approval-request' })!
+    expect(current.approval).toEqual(approval)
+    expect(current.source.authorizationBinding).toEqual({ originalPolicyRevision: 'policy-0' })
+
+    const refreshed = { ...approval, decisionTraceRef: 'decision-trace-2', permitRef: 'permit-2', policyRevision: 'policy-2', approvedAt: 456 }
+    const second = commands.refreshExecutionApproval({ sessionId: target.id, requestId: 'approval-request',
+      expectedOriginDigest: current.originDigest, expectedApprovalDigest: current.approvalDigest!, approval: refreshed })
+    expect(second?.approvalDigest).not.toBe(first?.approvalDigest)
+    expect(commands.readApprovalSnapshot({ sessionId: target.id, requestId: 'approval-request' })?.approval).toEqual(refreshed)
+    expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId: 'approval-request',
+      expectedOriginDigest: 'f'.repeat(64), expectedApprovalDigest: second?.approvalDigest ?? null, approval: refreshed })).toBeNull()
+    const conn = getDbConnection(db)
+    conn.exec('PRAGMA ignore_check_constraints=ON')
+    const storedRow = conn.prepare('SELECT source_json AS sourceJson FROM queue_input_requests WHERE session_id=? AND request_id=?')
+      .get(target.id, 'approval-request') as { sourceJson: string }
+    const storedSource = JSON.parse(storedRow.sourceJson) as Record<string, unknown>
+    conn.prepare('UPDATE queue_input_requests SET source_json=? WHERE session_id=? AND request_id=?')
+      .run(JSON.stringify({ ...storedSource, executionApproval: { ...refreshed, version: 2 } }), target.id, 'approval-request')
+    expect(commands.readApprovalSnapshot({ sessionId: target.id, requestId: 'approval-request' })).toBeNull()
+    db.close()
+  })
+
+  it('rejects approval refresh after claim, on stale target generation, or with mismatched binding fields', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const owner = createSession(db, { name: 'approval-owner' })
+    const target = createSession(db, { name: 'approval-target' })
+    const accepted = enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'approval-guard-request', content: 'body', authorizationBinding: {}
+    })
+    const commands = createSessionCommands(db).agentSessionMessages
+    const snapshot = commands.readApprovalSnapshot({ sessionId: target.id, requestId: 'approval-guard-request' })!
+    const approval = {
+      version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision', permitRef: 'permit',
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      requestId: 'approval-guard-request', messageId: accepted.source.messageId, queueScope: 'desktop' as const,
+      payloadDigest: accepted.source.payloadSha256, policyRevision: 'policy', authorizationGeneration: 'auth', runtimeGeneration: 'runtime', approvedAt: 1
+    }
+    const wrongOrigin = { ...approval, originDigest: 'a'.repeat(64) }
+    expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId: 'approval-guard-request',
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval: wrongOrigin })).toBeNull()
+
+    conn.prepare('UPDATE sessions SET generation=? WHERE id=?').run('new-target-generation', target.id)
+    expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId: 'approval-guard-request',
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })).toBeNull()
+    conn.prepare('UPDATE sessions SET generation=? WHERE id=?').run(target.generation, target.id)
+    expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId: 'approval-guard-request',
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval: { ...approval, requestId: 'other-request' } })).toBeNull()
+
+    claimQueuedTurnAtomicallyInScope(db, {
+      sessionId: target.id, userMessageId: accepted.source.messageId, turnId: 'approval-claimed-turn',
+      assistantMessageId: 'approval-claimed-assistant', requestId: 'approval-guard-request', queueScope: { kind: 'desktop' }, source: 'agent-session'
+    })
+    expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId: 'approval-guard-request',
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })).toBeNull()
     db.close()
   })
 })

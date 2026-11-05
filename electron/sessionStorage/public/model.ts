@@ -1,4 +1,4 @@
-import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionInputSource, Message, Session } from '../../../src/shared/domainTypes'
+import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionExecutionApproval, AgentSessionInputSource, Message, Session } from '../../../src/shared/domainTypes'
 import type { RuntimeTriggerDefinitionV1, RuntimeTriggerState } from '../../../src/shared/domainTypes'
 import type { QueueScope } from '../../../src/shared/queueScope'
 import type { HistorySnapshot } from '../../../packages/agent-sdk/src/history'
@@ -45,6 +45,12 @@ export type AgentSessionMessageAcceptance = Readonly<{
   source: AgentSessionInputSource
   persisted?: MessageEntry
   duplicate: boolean
+}>
+export type AgentSessionApprovalSnapshot = Readonly<{
+  source: AgentSessionInputSource
+  originDigest: string
+  approval?: AgentSessionExecutionApproval
+  approvalDigest?: string
 }>
 export type { AgentInputNotExecutedReason, AgentInputSettlement }
 export type ScopedQueueInput = Readonly<{ sessionId: string; requestId: string; content: string; attachments?: Message['attachments']; queueScope: QueueScope }>

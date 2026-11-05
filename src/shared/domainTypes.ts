@@ -24,6 +24,23 @@ export type AgentSessionInputSource = Readonly<{
   executionApproval?: Readonly<Record<string, unknown>>
   admission?: Readonly<Record<string, unknown>>
 }>
+export type AgentSessionExecutionApproval = Readonly<{
+  version: 1
+  originDigest: string
+  decisionTraceRef: string
+  permitRef: string
+  ownerSessionId: string
+  targetSessionId: string
+  targetGeneration: string
+  requestId: string
+  messageId: string
+  queueScope: 'desktop'
+  payloadDigest: string
+  policyRevision: string
+  authorizationGeneration: string
+  runtimeGeneration: string
+  approvedAt: number
+}>
 export type AgentInputNotExecutedReason = 'sender-revoked' | 'authorized-cancel' | 'target-unavailable' | 'policy-rejected' | 'start-failed'
 export type AgentInputSettlement =
   | Readonly<{ kind: 'queued'; targetSessionId: string; messageId: string }>

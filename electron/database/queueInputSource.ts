@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import type { AppDatabase } from './sqliteStore'
 import { getDbConnection } from './sqliteStore'
 import { serializeQueueScope, type QueueScope } from '../../src/shared/queueScope'
-import type { AgentSessionInputSource, QueueInputSource } from '../sessionStorage/public/model'
+import type { AgentSessionExecutionApproval, AgentSessionInputSource } from '../../src/shared/domainTypes'
+import type { QueueInputSource } from '../sessionStorage/public/model'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 
 export type { QueueInputSource } from '../sessionStorage/public/model'
@@ -12,9 +13,51 @@ const AGENT_SOURCE_KEYS = new Set([
   'version', 'kind', 'ownerSessionId', 'requestId', 'targetSessionId', 'messageId',
   'payloadSha256', 'authorizationBinding', 'executionApproval', 'admission'
 ])
+const AGENT_APPROVAL_KEYS = new Set([
+  'version', 'originDigest', 'decisionTraceRef', 'permitRef', 'ownerSessionId', 'targetSessionId',
+  'targetGeneration', 'requestId', 'messageId', 'queueScope', 'payloadDigest', 'policyRevision',
+  'authorizationGeneration', 'runtimeGeneration', 'approvedAt'
+])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+}
+
+function sha256Canonical(value: unknown): string {
+  return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex')
+}
+
+export function agentSessionOriginDigest(source: AgentSessionInputSource): string {
+  return sha256Canonical({
+    version: source.version, kind: source.kind, ownerSessionId: source.ownerSessionId,
+    requestId: source.requestId, targetSessionId: source.targetSessionId, messageId: source.messageId,
+    payloadSha256: source.payloadSha256, authorizationBinding: source.authorizationBinding
+  })
+}
+
+export function agentSessionExecutionApprovalDigest(approval: AgentSessionExecutionApproval): string {
+  return sha256Canonical(approval)
+}
+
+export function decodeAgentSessionExecutionApproval(value: unknown): AgentSessionExecutionApproval | undefined {
+  if (!isRecord(value) || Object.keys(value).length !== AGENT_APPROVAL_KEYS.size ||
+    Object.keys(value).some((key) => !AGENT_APPROVAL_KEYS.has(key)) || value.version !== 1 || value.queueScope !== 'desktop' ||
+    typeof value.originDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.originDigest) ||
+    typeof value.payloadDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.payloadDigest) ||
+    typeof value.approvedAt !== 'number' || !Number.isSafeInteger(value.approvedAt)) return undefined
+  for (const key of ['decisionTraceRef', 'permitRef', 'ownerSessionId', 'targetSessionId', 'targetGeneration', 'requestId',
+    'messageId', 'policyRevision', 'authorizationGeneration', 'runtimeGeneration'] as const) {
+    if (typeof value[key] !== 'string' || !value[key]) return undefined
+  }
+  return value as unknown as AgentSessionExecutionApproval
 }
 
 export function encodeAgentSessionMessageEnvelope(ownerSessionId: string, requestId: string, content: string): string {

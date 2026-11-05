@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database/sqliteStore'
-import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, deleteQueuedUserMessageInScope, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getQueueInputReceiptInScope, getSession, markAgentInputNotExecutedInScope, readAgentInputSettlement, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage, updateMessageContentIfStreaming } from '../database/operations'
+import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, deleteQueuedUserMessageInScope, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getQueueInputReceiptInScope, getSession, markAgentInputNotExecutedInScope, readAgentInputApprovalSnapshot, readAgentInputSettlement, refreshAgentInputExecutionApproval, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage, updateMessageContentIfStreaming } from '../database/operations'
 import { updateMessageContent } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
@@ -105,7 +105,9 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
     agentSessionMessages: {
       accept: (input) => enqueueAgentSessionMessageInScope(db, input),
       markNotExecuted: (input) => markAgentInputNotExecutedInScope(db, input),
-      readSettlement: (input) => readAgentInputSettlement(db, input)
+      readSettlement: (input) => readAgentInputSettlement(db, input),
+      readApprovalSnapshot: (input) => readAgentInputApprovalSnapshot(db, input),
+      refreshExecutionApproval: (input) => refreshAgentInputExecutionApproval(db, input)
     },
     scopedQueue: {
       enqueue: (input) => enqueueQueuedUserMessageInScope(db, input),
