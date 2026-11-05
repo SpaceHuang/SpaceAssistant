@@ -66,11 +66,11 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
     overrideability: 'none'
   },
   {
-    id: 'SYS-AGENTINPUT-001', owner: 'electron/sessionStorage + electron/turnRuntime', stage: 'final-check', category: 'integrity',
-    rationale: 'A Turn carrying an agent-session input must match its persisted source, approved execution material, target generation, and committed input-history anchor before any model source runs.',
-    effect: 'validate', scope: 'electron/database/operations.ts:verifyAgentSessionAdmission;electron/turnRuntime.ts:assertPersistedInputAdmission',
-    audit: 'Invalid material cancels the exact Turn with AGENT_INPUT_ADMISSION_INVALID and a stable case ID before ModelSource or executeWithSource callback entry.',
-    tests: ['electron/database/agentSessionMessageStore.test.ts', 'electron/turnRuntime.test.ts', 'electron/sessionStorage/sessionStorage.test.ts'],
+    id: 'SYS-AGENTINPUT-001', owner: 'electron/ipc + electron/sessionStorage + electron/turnRuntime', stage: 'final-check', category: 'integrity',
+    rationale: 'Queue provenance is host-owned: renderer intents cannot supply source scope, and a Turn carrying agent-session input must match its persisted source, approved execution material, target generation, and committed input-history anchor before any model source runs.',
+    effect: 'validate', scope: 'electron/ipc/agentProtocolIpc.ts:chat:prepare-turn;electron/database/operations.ts:verifyAgentSessionAdmission;electron/turnRuntime.ts:assertPersistedInputAdmission',
+    audit: 'Renderer provenance injection fails with UNTRUSTED_QUEUE_INPUT_METADATA; invalid persisted material cancels the exact Turn with AGENT_INPUT_ADMISSION_INVALID and a stable case ID before ModelSource or executeWithSource callback entry.',
+    tests: ['electron/appIpc.file.test.ts', 'electron/database/agentSessionMessageStore.test.ts', 'electron/turnRuntime.test.ts', 'electron/sessionStorage/sessionStorage.test.ts'],
     overrideability: 'none'
   },
   {

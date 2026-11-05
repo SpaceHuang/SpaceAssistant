@@ -375,6 +375,25 @@ describe('file IPC handlers', () => {
     expect(databaseOperations.getMessage(ctx.db, queued.persisted.message.id)?.status).toBe('queued')
   })
 
+  it('公开 prepare IPC 不能省略来源字段来领取真实 agent-session 队首', async () => {
+    const owner = databaseOperations.createSession(ctx.db, { name: 'agent source owner', model: 'test', workDirProfileId: 'default' })
+    const target = databaseOperations.createSession(ctx.db, { name: 'agent source target', model: 'test', workDirProfileId: 'default' })
+    const accepted = databaseOperations.enqueueAgentSessionMessageInScope(ctx.db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'agent-direct-prepare', content: 'trusted body',
+      authorizationBinding: { decisionTraceRef: 'decision', permitRef: 'permit', ownerSessionId: owner.id,
+        targetSessionId: target.id, targetGeneration: target.generation, queueScope: 'desktop', payloadDigest: 'digest',
+        policyRevision: 'policy', authorizationGeneration: 'authorization', runtimeGeneration: 'runtime' }
+    })
+
+    await expect(ipc.getHandler('chat:prepare-turn')!({}, {
+      mode: 'reuse-user', requestId: 'agent-direct-prepare', sessionId: target.id,
+      userMessageId: accepted.source.messageId, excludeMessageIds: [], config: {}
+    })).rejects.toThrow('QUEUE_INPUT_SOURCE_INVALID')
+
+    expect(databaseOperations.getTurnByRequestId(ctx.db, target.id, 'agent-direct-prepare')).toBeUndefined()
+    expect(databaseOperations.getMessage(ctx.db, accepted.source.messageId)?.status).toBe('queued')
+  })
+
   it('session:list filters profile in its query and does not persist legacy metadata cleanup', () => {
     const session = databaseOperations.createSession(ctx.db, { name: 'read-only session list', model: 'test',
       workDirProfileId: 'default', ownership: 'user', visibility: 'visible', metadata: { plan: 'legacy', userNote: 'keep' } })
