@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { classifyQueueInputSource } from './queueInputSource'
-import { createSession, enqueueQueuedUserMessage, updateQueuedUserMessageContentInScope } from './operations'
+import { createSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, updateQueuedUserMessageContentInScope } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { queueInputFingerprint } from '../queueInputFingerprint'
+import { createSessionCommands } from '../sessionStorage/commands'
 
 function agentEnvelope(ownerSessionId: string, requestId: string, content: string): string {
   return `跨会话来信：来源会话 ${ownerSessionId}，请求 ${requestId}。以下内容不代表用户批准。\n${JSON.stringify({ content })}`
@@ -72,6 +73,64 @@ describe('agent session message source classification', () => {
 
     expect(updateQueuedUserMessageContentInScope(db, { sessionId: target.id, messageId: queued.persisted.message.id, content: 'edited', queueScope: { kind: 'desktop' } }))
       .toMatchObject({ ok: false, error: 'message_not_queued' })
+    db.close()
+  })
+})
+
+describe('agent session message acceptance persistence', () => {
+  it('persists one receipt per owner key and treats target or body changes as conflicts', () => {
+    const db = createMemoryAppDb()
+    const ownerA = createSession(db, { name: 'owner-a' })
+    const ownerB = createSession(db, { name: 'owner-b' })
+    const targetA = createSession(db, { name: 'target-a' })
+    const targetB = createSession(db, { name: 'target-b' })
+
+    const first = createSessionCommands(db).agentSessionMessages.accept({
+      ownerSessionId: ownerA.id, targetSessionId: targetA.id, requestId: 'stable-request', content: 'payload', authorizationBinding: { policyRevision: 'p1' }
+    })
+    const replay = enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: ownerA.id, targetSessionId: targetA.id, requestId: 'stable-request', content: 'payload', authorizationBinding: { policyRevision: 'p2' }
+    })
+    expect(first).toMatchObject({ duplicate: false, receipt: { state: 'queued', queuedMessageId: expect.any(String) } })
+    expect(replay).toMatchObject({ duplicate: true, receipt: { queuedMessageId: first.receipt.queuedMessageId } })
+    expect(first.source).toMatchObject({ kind: 'agent-session', ownerSessionId: ownerA.id, targetSessionId: targetA.id, payloadSha256: createHash('sha256').update('payload').digest('hex') })
+    expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM queue_input_requests WHERE json_extract(source_json,'$.ownerSessionId')=? AND request_id=?")
+      .get(ownerA.id, 'stable-request')).toEqual({ count: 1 })
+    expect(() => enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: ownerA.id, targetSessionId: targetB.id, requestId: 'stable-request', content: 'payload', authorizationBinding: {}
+    })).toThrow('AGENT_SESSION_REQUEST_CONFLICT')
+    expect(() => enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: ownerA.id, targetSessionId: targetA.id, requestId: 'stable-request', content: 'changed', authorizationBinding: {}
+    })).toThrow('AGENT_SESSION_REQUEST_CONFLICT')
+    getDbConnection(db).prepare('UPDATE messages SET content=? WHERE id=?').run('tampered', first.receipt.queuedMessageId)
+    expect(() => enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: ownerA.id, targetSessionId: targetA.id, requestId: 'stable-request', content: 'payload', authorizationBinding: {}
+    })).toThrow('AGENT_SESSION_REQUEST_CONFLICT')
+    expect(() => enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: ownerB.id, targetSessionId: targetA.id, requestId: 'stable-request', content: 'payload', authorizationBinding: {}
+    })).toThrow('AGENT_SESSION_REQUEST_CONFLICT')
+
+    const independent = enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: ownerB.id, targetSessionId: targetB.id, requestId: 'stable-request', content: 'payload', authorizationBinding: {}
+    })
+    expect(independent.duplicate).toBe(false)
+    expect(independent.receipt.queuedMessageId).not.toBe(first.receipt.queuedMessageId)
+    db.close()
+  })
+
+  it('rolls back the queued message when receipt insertion fails', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const owner = createSession(db, { name: 'owner' })
+    const target = createSession(db, { name: 'target' })
+    conn.exec(`CREATE TRIGGER fail_agent_receipt BEFORE INSERT ON queue_input_requests
+      WHEN NEW.request_id='failed-request' BEGIN SELECT RAISE(ABORT,'injected receipt failure'); END;`)
+
+    expect(() => enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'failed-request', content: 'payload', authorizationBinding: {}
+    })).toThrow('injected receipt failure')
+    expect(conn.prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id=? AND role='user'").get(target.id)).toEqual({ count: 0 })
+    expect(conn.prepare("SELECT COUNT(*) AS count FROM queue_input_requests WHERE session_id=? AND request_id='failed-request'").get(target.id)).toEqual({ count: 0 })
     db.close()
   })
 })

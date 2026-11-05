@@ -1,5 +1,5 @@
-import { randomUUID } from 'crypto'
-import type { Message, MessageStatus, Session } from '../../src/shared/domainTypes'
+import { createHash, randomUUID } from 'crypto'
+import type { AgentSessionInputSource, Message, MessageStatus, Session } from '../../src/shared/domainTypes'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
 import type { SessionOwnership, SessionVisibility } from '../../src/shared/sessionOwnership'
 import { normalizeOwnership, normalizeVisibility } from '../../src/shared/sessionOwnership'
@@ -33,7 +33,7 @@ import { parseQueueScope, serializeQueueScope, type QueueScope } from '../../src
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
 import { deleteSpillReferenceOwnerInTransaction, spillHistoryOwnerKey, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
-import { classifyQueueInputSource, type QueueInputSource } from './queueInputSource'
+import { classifyQueueInputSource, encodeAgentSessionMessageEnvelope, type QueueInputSource } from './queueInputSource'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
@@ -962,6 +962,87 @@ export function enqueueQueuedUserMessageInScope(
     const receipt: QueueInputReceipt = { sessionId: input.sessionId, requestId: input.requestId, fingerprint, queuedMessageId: id, state: 'queued', queueScope }
     createQueueInputReceiptInScope(db, receipt, queueScope)
     return { receipt, persisted, duplicate: false }
+  })
+}
+
+export type AgentSessionMessageEnqueueResult = Readonly<{
+  receipt: QueueInputReceipt
+  source: AgentSessionInputSource
+  persisted?: PersistedMessageEntry
+  duplicate: boolean
+}>
+
+/** Persist a cross-session input and its immutable provenance as one facts-phase transaction. */
+export function enqueueAgentSessionMessageInScope(
+  db: AppDatabase,
+  input: { ownerSessionId: string; targetSessionId: string; requestId: string; content: string; authorizationBinding: Readonly<Record<string, unknown>> }
+): AgentSessionMessageEnqueueResult {
+  if (!input.ownerSessionId || !input.targetSessionId || !input.requestId || !input.content.trim() ||
+    input.authorizationBinding === null || typeof input.authorizationBinding !== 'object' || Array.isArray(input.authorizationBinding)) {
+    throw new Error('AGENT_SESSION_MESSAGE_INPUT_INVALID')
+  }
+  const payloadSha256 = createHash('sha256').update(input.content, 'utf8').digest('hex')
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const existing = conn.prepare(`SELECT session_id,request_id,fingerprint,queued_message_id,turn_id,state,source_json
+      FROM queue_input_requests
+      WHERE request_id=? AND source_json IS NOT NULL AND json_extract(source_json,'$.ownerSessionId')=?`)
+      .get(input.requestId, input.ownerSessionId) as {
+        session_id: string; request_id: string; fingerprint: string; queued_message_id: string | null
+        turn_id: string | null; state: string; source_json: string
+      } | undefined
+    if (existing) {
+      let source: AgentSessionInputSource | undefined
+      try { source = JSON.parse(existing.source_json) as AgentSessionInputSource } catch { /* malformed durable source is a conflict */ }
+      if (!source || source.version !== 1 || source.kind !== 'agent-session' || source.ownerSessionId !== input.ownerSessionId ||
+        source.requestId !== input.requestId || source.targetSessionId !== input.targetSessionId || source.payloadSha256 !== payloadSha256 ||
+        source.messageId !== existing.queued_message_id) throw new Error('AGENT_SESSION_REQUEST_CONFLICT')
+      const receipt: QueueInputReceipt = {
+        sessionId: existing.session_id, requestId: existing.request_id, fingerprint: existing.fingerprint,
+        ...(existing.queued_message_id ? { queuedMessageId: existing.queued_message_id } : {}),
+        ...(existing.turn_id ? { turnId: existing.turn_id } : {}), state: existing.state, queueScope: DESKTOP_QUEUE_SCOPE
+      }
+      const message = existing.queued_message_id ? getMessage(db, existing.queued_message_id) : undefined
+      if (message && classifyQueueInputSource(db, {
+        sessionId: existing.session_id, queueScope: DESKTOP_QUEUE_SCOPE, requestId: input.requestId, queuedMessageId: message.id
+      }) !== 'agent-session') throw new Error('AGENT_SESSION_REQUEST_CONFLICT')
+      const sequence = message ? getMessageSequence(db, existing.session_id, message.id) : null
+      return { receipt, source, ...(message && sequence != null ? { persisted: { message, sequence } } : {}), duplicate: true }
+    }
+    const conflictingKey = conn.prepare(`SELECT 1 FROM queue_input_requests WHERE session_id=? AND request_id=? AND queue_scope=?`)
+      .get(input.targetSessionId, input.requestId, 'desktop')
+    if (conflictingKey) throw new Error('AGENT_SESSION_REQUEST_CONFLICT')
+
+    const messageId = randomUUID()
+    const now = Date.now()
+    const envelope = encodeAgentSessionMessageEnvelope(input.ownerSessionId, input.requestId, input.content)
+    const fingerprint = queueInputFingerprint({ text: envelope })
+    const source: AgentSessionInputSource = {
+      version: 1,
+      kind: 'agent-session',
+      ownerSessionId: input.ownerSessionId,
+      requestId: input.requestId,
+      targetSessionId: input.targetSessionId,
+      messageId,
+      payloadSha256,
+      authorizationBinding: input.authorizationBinding
+    }
+    const persisted = appendMessage(db, {
+      id: messageId, sessionId: input.targetSessionId, role: 'user', content: envelope,
+      timestamp: now, status: 'queued'
+    })
+    conn.prepare('UPDATE messages SET queue_scope=? WHERE id=?').run('desktop', messageId)
+    conn.prepare(`INSERT INTO queue_input_requests
+      (session_id,request_id,fingerprint,queued_message_id,turn_id,state,created_at,updated_at,queue_scope,source_json)
+      VALUES (?,?,?,?,NULL,'queued',?,?,?,?)`).run(
+      input.targetSessionId, input.requestId, fingerprint, messageId, now, now, 'desktop', JSON.stringify(source)
+    )
+    db.save()
+    const receipt: QueueInputReceipt = {
+      sessionId: input.targetSessionId, requestId: input.requestId, fingerprint,
+      queuedMessageId: messageId, state: 'queued', queueScope: DESKTOP_QUEUE_SCOPE
+    }
+    return { receipt, source, persisted, duplicate: false }
   })
 }
 

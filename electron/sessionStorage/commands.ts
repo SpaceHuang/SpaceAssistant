@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database/sqliteStore'
-import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, deleteQueuedUserMessageInScope, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getQueueInputReceiptInScope, getSession, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage, updateMessageContentIfStreaming } from '../database/operations'
+import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, deleteQueuedUserMessageInScope, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getQueueInputReceiptInScope, getSession, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage, updateMessageContentIfStreaming } from '../database/operations'
 import { updateMessageContent } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
@@ -102,6 +102,9 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
     }
   }
   const commands: SessionCommands = {
+    agentSessionMessages: {
+      accept: (input) => enqueueAgentSessionMessageInScope(db, input)
+    },
     scopedQueue: {
       enqueue: (input) => enqueueQueuedUserMessageInScope(db, input),
       readReceipt: ({ sessionId, requestId, queueScope }) => {

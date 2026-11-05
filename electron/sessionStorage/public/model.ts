@@ -40,6 +40,12 @@ export type RuntimeTriggerHistoryAdmission = Readonly<{
 }>
 export type RuntimeTriggerPatch = Readonly<Partial<Pick<RuntimeTriggerRecord, 'state' | 'matchedAt' | 'event' | 'messageId' | 'attempts' | 'nextAttemptAt' | 'result' | 'updatedAt'>>>
 export type QueueInputReceiptSnapshot = Readonly<{ sessionId: string; requestId: string; fingerprint: string; queuedMessageId?: string; turnId?: string; state: string }>
+export type AgentSessionMessageAcceptance = Readonly<{
+  receipt: Readonly<{ sessionId: string; requestId: string; fingerprint: string; queuedMessageId?: string; turnId?: string; state: string }>
+  source: AgentSessionInputSource
+  persisted?: MessageEntry
+  duplicate: boolean
+}>
 export type ScopedQueueInput = Readonly<{ sessionId: string; requestId: string; content: string; attachments?: Message['attachments']; queueScope: QueueScope }>
 export type QueueInputSource = 'platform-im' | 'runtime-trigger' | 'ordinary-desktop' | 'agent-session' | 'invalid'
 export type { AgentSessionInputSource }

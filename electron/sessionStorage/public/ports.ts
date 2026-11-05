@@ -1,4 +1,4 @@
-import type { Message, Session } from '../../../src/shared/domainTypes'
+import type { AgentSessionInputSource, Message, Session } from '../../../src/shared/domainTypes'
 import type { AcceptedTurn } from '../../../src/shared/acceptedTurn'
 import type { SessionOwnership, SessionVisibility } from '../../../src/shared/sessionOwnership'
 import type { SessionDirectoryGrantRecord } from '../../../src/shared/sessionDirectoryGrant'
@@ -8,7 +8,7 @@ import type { EnqueueResult, MessageEntry, RemoteSessionIdentityUpdate, Continua
   RoutingRead, RouteInput, SelectionFence, ExportPage, SearchCorpusPage, MessageSearchHit, MessageSkeleton, RetryContextTarget,
   PreparedChatBodyView,
   ImAcceptedFactScope, ImAcceptedFactFrontier, ImAcceptedFactPage,
-  RuntimeTriggerRecord, RuntimeTriggerPatch, QueueInputReceiptSnapshot, ScopedQueueInput, QueueInputSource,
+  RuntimeTriggerRecord, RuntimeTriggerPatch, QueueInputReceiptSnapshot, ScopedQueueInput, QueueInputSource, AgentSessionMessageAcceptance,
 } from './model'
 import type { HistoryEvent, HistoryPort, HistorySnapshot } from '../../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../../packages/agent-sdk/src/model'
@@ -69,6 +69,9 @@ export type SessionHistoryRecoveryOptions = Readonly<{
 
 /** Business commands for one session storage instance; implementation details stay behind the adapter. */
 export interface SessionCommands {
+  readonly agentSessionMessages: Readonly<{
+    accept(input: { ownerSessionId: string; targetSessionId: string; requestId: string; content: string; authorizationBinding: AgentSessionInputSource['authorizationBinding'] }): AgentSessionMessageAcceptance
+  }>
   readonly scopedQueue: Readonly<{
     enqueue(input: ScopedQueueInput): EnqueueResult
     readReceipt(input: { sessionId: string; requestId: string; queueScope: import('../../../src/shared/queueScope').QueueScope }): QueueInputReceiptSnapshot | undefined
