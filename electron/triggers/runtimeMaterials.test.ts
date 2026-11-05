@@ -41,4 +41,20 @@ describe('runtime trigger execution materials', () => {
     expect(materials.sourceContext(request)).toBeUndefined()
     expect(isCurrentAuthorization).toHaveBeenCalledOnce()
   })
+
+  it('passes only a body-free agent-session settlement through trigger admission materials', () => {
+    const condition = { type: 'agent_session_message', requestId: 'owner:exact-request' }
+    const event = { type: 'agent_session_message', requestId: 'owner:exact-request', status: 'not-executed',
+      reason: 'target-unavailable', occurredAt: 200 }
+    const agentBinding = { ...binding, receiverSessionId: 'owner', sourceIdentity: condition, payloadDigest: 'settlement-digest' }
+    const agentTrigger = { ...trigger, ownerSessionId: 'owner', receiverSessionId: 'owner',
+      definition: { version: 1, condition, sourceBaseline: {} }, event, result: { authorization: agentBinding } } as unknown as RuntimeTriggerRecord
+    const materials = createRuntimeTriggerExecutionMaterials({ read: () => agentTrigger, isCurrentAuthorization: () => true })
+    const request = { sessionId: 'owner', turnId: 'notify-turn', requestId: agentBinding.requestId }
+
+    expect(materials.sourceContext(request)).toEqual({ triggerId: agentTrigger.id, event })
+    expect(materials.admission(request)).toMatchObject({ triggerId: agentTrigger.id, requestId: agentBinding.requestId,
+      receiverSessionId: 'owner', turnId: 'notify-turn', payloadDigest: 'settlement-digest' })
+    expect(JSON.stringify(materials.sourceContext(request))).not.toContain('body')
+  })
 })
