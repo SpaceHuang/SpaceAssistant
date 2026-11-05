@@ -10,7 +10,9 @@
 
 ## 在途（in-flight）
 
-**当前无在途项**；在途方案（`run_shell` 方言误判与致命中断）登记在开发侧 [`../../develop/tools-mcp/in-flight/`](../../develop/tools-mcp/in-flight/)。
+- [agent-runtime-trigger-requirement.md](./in-flight/agent-runtime-trigger-requirement.md) —— **需求草案（触发器实现已完成，需求侧状态待复核）**：Agent 登记未来事件并在命中后向指定会话投递消息。
+- [cross-session-message-requirement.md](./in-flight/cross-session-message-requirement.md) —— **需求草案，待评审**：Agent 向另一个桌面会话投递消息；忙时排队，空闲时唤醒执行。
+- 在途方案（`run_shell` 方言误判与致命中断）登记在开发侧 [`../../develop/tools-mcp/in-flight/`](../../develop/tools-mcp/in-flight/)。
 
 ## 归档
 

@@ -10,6 +10,7 @@
 
 ## 在途（in-flight）
 
+- [im-assistant-execution-coordination-requirement.md](./in-flight/im-assistant-execution-coordination-requirement.md) —— IM 助理统一沟通、批量协调并行执行 Agent；桌面聊天不变；需求草案。
 - [2026-10-11-im-security-review-improvement-requirement.md](./in-flight/2026-10-11-im-security-review-improvement-requirement.md) —— **真在途**：统一 IM 策略域（少问人）的方案草案；开发侧方案见 [`../../develop/im-remote/in-flight/`](../../develop/im-remote/in-flight/)。
 
 ## 归档

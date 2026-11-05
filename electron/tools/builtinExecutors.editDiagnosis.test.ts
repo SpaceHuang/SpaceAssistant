@@ -1,6 +1,7 @@
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
+import { performance } from 'node:perf_hooks'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FileStateCache } from '../fileStateCache'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
@@ -361,25 +362,34 @@ describe('edit_file 匹配失败诊断（§7.1 场景）', () => {
       Array.from({ length: rows }, (_, i) =>
         i === 50 ? 'anchor-50 unique-needle-token' : `row-${i} lorem ipsum dolor`
       ).join('\n')
-    const smallRel = 'perf-small.md'
-    const largeRel = 'perf-large.md'
-    await fs.writeFile(path.join(tmpDir, smallRel), mkFile(500), 'utf8')
-    await fs.writeFile(path.join(tmpDir, largeRel), mkFile(5000), 'utf8')
+    const smallText = mkFile(500)
+    const largeText = mkFile(5000)
     const needle = 'anchor-50 unique-needle-tokenX'
 
-    const t1 = Date.now()
-    const resSmall = await readThenEdit(tmpDir, new FileStateCache(), smallRel, { old_string: needle, new_string: 'x' })
-    const smallMs = Math.max(Date.now() - t1, 1)
-    const t2 = Date.now()
-    const resLarge = await readThenEdit(tmpDir, new FileStateCache(), largeRel, { old_string: needle, new_string: 'x' })
-    const largeMs = Math.max(Date.now() - t2, 1)
+    // Warm up JIT, then use high-resolution median samples so filesystem setup,
+    // timer quantization, and one noisy scheduler slice don't dominate the ratio.
+    diagnoseMissingOldString(smallText, needle)
+    diagnoseMissingOldString(largeText, needle)
+    const measureMedian = (text: string) => {
+      const samples: number[] = []
+      let result: EditMissingDiagnosis | undefined
+      for (let i = 0; i < 5; i++) {
+        const start = performance.now()
+        result = diagnoseMissingOldString(text, needle)
+        samples.push(performance.now() - start)
+      }
+      samples.sort((a, b) => a - b)
+      return { result: result!, medianMs: samples[Math.floor(samples.length / 2)] }
+    }
+    const { result: resSmall, medianMs: smallMs } = measureMedian(smallText)
+    const { result: resLarge, medianMs: largeMs } = measureMedian(largeText)
 
     expect(largeMs).toBeLessThan(10_000)
     expect(largeMs / smallMs).toBeLessThan(15)
     // 10 倍规模下诊断仍正确（anchor-50 行唯一且相似度最高；差异为提交多出的 X → content-mismatch）
-    expect(diagOf(resSmall).kind).toBe('content-mismatch')
-    expect(diagOf(resLarge).kind).toBe('content-mismatch')
-    expect(diagOf(resLarge).candidateLineRange).toEqual([51, 51])
+    expect(resSmall.kind).toBe('content-mismatch')
+    expect(resLarge.kind).toBe('content-mismatch')
+    expect(resLarge.candidateLineRange).toEqual([51, 51])
   })
 
   it('#17 预检与投影一致性：预检判定与 projectAgentToolResult 真实投影结果一致', async () => {
