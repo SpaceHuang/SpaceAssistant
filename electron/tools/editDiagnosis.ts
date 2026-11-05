@@ -247,23 +247,36 @@ export function diagnoseMissingOldString(fileText: string, oldS: string): EditMi
   const oldHists = oldLines.map(charHistogram)
   const fileHists = fileLines.map(charHistogram)
   const windowCount = totalLines - oldLineCount + 1
+  // Keep only the best windows needed for LCS. Sorting every window made the
+  // cheap scan O(n log n), even though the expensive stage consumes only K.
+  // Insertion is O(K) per window (K is the small, fixed MAX_LCS_WINDOWS).
   const coarse: Array<{ windowIndex: number; score: number }> = []
+  let coarseAboveCount = 0
   if (windowCount > 0) {
     for (let w = 0; w < windowCount; w++) {
       let sum = 0
       for (let k = 0; k < oldLineCount; k++) {
         sum += lineSimilarity(oldLines[k], oldHists[k], fileLines[w + k], fileHists[w + k])
       }
-      coarse.push({ windowIndex: w, score: sum / oldLineCount })
+      const candidate = { windowIndex: w, score: sum / oldLineCount }
+      if (candidate.score >= 0.5) coarseAboveCount++
+
+      // Insert after equal scores so ties retain the prior stable-sort order
+      // (earlier file windows first).
+      let insertAt = 0
+      while (insertAt < coarse.length && coarse[insertAt].score >= candidate.score) insertAt++
+      if (insertAt < MAX_LCS_WINDOWS) {
+        coarse.splice(insertAt, 0, candidate)
+        if (coarse.length > MAX_LCS_WINDOWS) coarse.pop()
+      }
     }
-    coarse.sort((a, b) => b.score - a.score)
   }
 
   // 步骤 1b：仅对短名单窗口精算 LCS（LCS 只对短名单计算，控成本）。
   // 精算完成的候选以 LCS 占比【替换】粗筛分，而非取 max：粗筛的字符直方图对顺序不敏感
   // （乱序同字符的异位词行会打满分），不能作为精算候选的分数下限，否则 top1 错选且相似度虚高
   //（评审 v1 P1 实证：old="abcde" 时异位词行 "edcba" 粗筛 1.0、LCS 占比仅 0.2，会压过真目标 "abcdx" 0.8）。
-  const shortlist = coarse.slice(0, MAX_LCS_WINDOWS)
+  const shortlist = coarse
   const candidates: WindowCandidate[] = shortlist.map((c) => {
     const blockText = fileLines.slice(c.windowIndex, c.windowIndex + oldLineCount).join('\n')
     const oversized = oldNorm.length > MAX_LCS_INPUT_CHARS || blockText.length > MAX_LCS_INPUT_CHARS
@@ -291,8 +304,6 @@ export function diagnoseMissingOldString(fileText: string, oldS: string): EditMi
   // 「候选过多放弃」（MAX_CANDIDATES）在粗筛全量上判定：短名单只有 MAX_LCS_WINDOWS 个，
   // 用短名单计数该条件恒为假（评审 v1 P1.5 死代码）；文件中相似窗口多到超过上限时，
   // 无论精算结果如何都应当放弃下发建议。
-  const coarseAboveCount = coarse.filter((c) => c.score >= 0.5).length
-
   // 步骤 2：候选筛选（阈值 0.5；歧义不下发建议）
   if (pool.length === 0 || pool[0].score < 0.5) {
     return {
