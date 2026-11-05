@@ -1,18 +1,8 @@
 {
   "id": "a31-open-kwarg-mode",
   "group": "legacy-parseable",
-  "legacyParsed": true,
-  "verdict": "allow",
-  "patterns": [
+  "patternIds": [
     "A8"
   ],
-  "signals": [
-    {
-      "kind": "script-analysis",
-      "signal": "clean",
-      "patterns": [
-        "A8"
-      ]
-    }
-  ]
+  "coverage": "complete"
 }

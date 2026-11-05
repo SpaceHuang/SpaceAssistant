@@ -1,23 +1,6 @@
 {
   "id": "b09-def-basic",
   "group": "previously-failed",
-  "legacyParsed": false,
-  "verdict": "ask",
-  "patterns": [
-    "A-fail"
-  ],
-  "reason": "parse_error",
-  "signals": [
-    {
-      "kind": "script-analysis",
-      "signal": "suspicious",
-      "patterns": [
-        "A-fail"
-      ]
-    },
-    {
-      "kind": "extraction-failed",
-      "reason": "parse_error"
-    }
-  ]
+  "patternIds": [],
+  "coverage": "complete"
 }

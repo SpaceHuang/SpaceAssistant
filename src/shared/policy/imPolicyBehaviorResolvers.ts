@@ -50,8 +50,8 @@ export function resolveImPolicyRulesForVersion(input: ResolveImPolicyRulesForVer
         const scriptNetworkReviewRule: PolicyRule | undefined = input.pkg === 'standard' ? {
           id: 'im-script-network-review', when: 'invocation',
           match: { lane: ['wechat', 'feishu'], toolName: 'run_script',
-            signals: ['script-network', 'im-script-network-review-candidate:complete', 'script-execution-environment:complete', 'script-execution-settings:complete', 'approval-review-materials:complete'],
-            excludeSignals: ['dangerous', 'extraction-failed'] },
+            signals: ['script-finding:network-api', 'im-script-network-review-candidate:complete', 'script-execution-environment:complete', 'script-execution-settings:complete', 'approval-review-materials:complete'],
+            excludeSignals: ['script-finding:deny', 'script-analysis:failed', 'extraction-failed'] },
           action: 'ask', answerer: 'agent', reason: 'Complete static HTTPS request target and execution environment are reviewed by the IM safety agent'
         } : undefined
         resolved.push(

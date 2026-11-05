@@ -5,7 +5,7 @@ import type { ContentFacts } from './types'
 
 const facts: ContentFacts = {
   toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'medium',
-  signals: [{ kind: 'script-analysis', signal: 'suspicious', patterns: ['network-egress'] }],
+  signals: [{ kind: 'script-analysis', coverage: 'complete', findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 10 }, snippet: 'fetch(url)', evidence: { kind: 'network', module: 'builtins', attr: 'fetch' } }], totalCount: 1 }],
   summary: { text: 'run script' }
 }
 const envelope = { toolName: 'run_script', input: { code: 'fetch(url)' } }

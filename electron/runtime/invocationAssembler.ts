@@ -1154,6 +1154,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         const precheck = details.shellPrecheck as { hints?: unknown } | undefined
         const confirmDiff = details.confirmDiff as { oldContent: string; newContent: string; oldPath: string } | undefined
         const mcpEntry = details.mcpEntry as { serverId?: string; serverName?: string; originalName?: string; description?: string } | undefined
+        const scriptAnalysis = request.facts.signals.find((signal) => signal.kind === 'script-analysis')
         const fact: import('../../src/shared/assistantFactAggregator').AssistantFactEvent = {
           type: 'confirm-requested',
           id: call.toolCallId,
@@ -1175,6 +1176,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           } } : {}),
           ...(precheck?.hints ? { shellSecurityHints: precheck.hints as never } : {}),
           ...(typeof details.scriptPathHint === 'string' ? { scriptPathHint: details.scriptPathHint } : {}),
+          ...(scriptAnalysis?.findings !== undefined ? { scriptFindings: scriptAnalysis.findings } : {}),
+          ...(scriptAnalysis && (scriptAnalysis.totalCount !== undefined || scriptAnalysis.findings !== undefined)
+            ? { scriptFindingTotalCount: scriptAnalysis.totalCount ?? scriptAnalysis.findings?.length ?? 0 }
+            : {}),
           ...(details.autoApproveFallback ? { autoApproveFallback: details.autoApproveFallback as never } : {}),
           ...(mcpEntry?.serverId && mcpEntry.serverName && mcpEntry.originalName ? { mcp: {
             serverId: mcpEntry.serverId, serverName: mcpEntry.serverName,

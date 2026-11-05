@@ -39,6 +39,14 @@
 //   dict / set / lambda / await / starred / *_comp / f_string / ellipsis
 import type { Node, Tree } from 'web-tree-sitter'
 
+/** 1-based 源码范围；结束位置沿用 tree-sitter 的排他边界并转为 1-based。 */
+export interface SourceRange {
+  startLine: number
+  startCol: number
+  endLine: number
+  endCol: number
+}
+
 /** 适配器遇到「已解析但未建模」的合法语法构造时抛出（§3 不变量 1(c)，落人工确认）。 */
 export class IrCoverageError extends Error {
   constructor(public readonly nodeType: string, detail?: string) {
@@ -52,7 +60,7 @@ export interface IrKwarg {
   value: IrExpr
 }
 
-export type IrExpr =
+type IrExprShape =
   | { kind: 'string'; value: string }
   | { kind: 'f_string'; staticParts: string[]; interpolations: IrExpr[] }
   | { kind: 'number'; value: string }
@@ -81,12 +89,14 @@ export type IrExpr =
   | { kind: 'none' }
   | { kind: 'ellipsis' }
 
+export type IrExpr = IrExprShape & { range?: SourceRange }
+
 export interface IrImportName {
   module: string
   alias?: string
 }
 
-export type IrStmt =
+type IrStmtShape =
   | { kind: 'import'; names: IrImportName[] }
   | { kind: 'from_import'; module: string; names: Array<{ name: string; alias?: string }> }
   | { kind: 'assign'; targets: string[]; value: IrExpr }
@@ -115,8 +125,11 @@ export type IrStmt =
   | { kind: 'delete'; targets: IrExpr[] }
   | { kind: 'global_nonlocal'; names: string[] }
 
+export type IrStmt = IrStmtShape & { range?: SourceRange }
+
 export interface IrModule {
   body: IrStmt[]
+  range?: SourceRange
 }
 
 /** P1-T3：`parsePythonModule` 的返回类型从 ModuleAst 变更为 IR 根（IrModule）。 */

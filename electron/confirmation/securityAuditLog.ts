@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { createHash } from 'node:crypto'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
+import { createScriptAuditRef } from '../../src/shared/confirmation/scriptSnippetProjection'
 import { logAgentError } from '../agentLogger/agentLogger'
 
 /**
@@ -50,6 +51,15 @@ export function sanitizeAuditEvent(event: SecurityAuditEvent): SecurityAuditEven
     }
   }
   const out: SecurityAuditEvent = { ...event }
+  // audit storage boundary: replace transient raw findings with a structure-only projection.
+  // The shared facts producer does not decide policy; this is the final local-file content check.
+  const scriptAuditInput = out.scriptAuditInput
+  delete out.scriptAuditInput
+  delete out.scriptAudit
+  if (scriptAuditInput) {
+    const projected = createScriptAuditRef(out.sessionId, scriptAuditInput)
+    if (projected) out.scriptAudit = projected
+  }
   for (const k of [
     'factsSummary',
     'reason',

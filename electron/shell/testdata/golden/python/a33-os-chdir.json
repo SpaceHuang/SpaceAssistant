@@ -1,18 +1,8 @@
 {
   "id": "a33-os-chdir",
   "group": "legacy-parseable",
-  "legacyParsed": true,
-  "verdict": "allow",
-  "patterns": [
+  "patternIds": [
     "A9"
   ],
-  "signals": [
-    {
-      "kind": "script-analysis",
-      "signal": "clean",
-      "patterns": [
-        "A9"
-      ]
-    }
-  ]
+  "coverage": "complete"
 }

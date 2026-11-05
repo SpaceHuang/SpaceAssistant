@@ -1640,6 +1640,45 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     }))
   })
 
+  it('projects all script findings and their uncropped count into the confirmation fact event', async () => {
+    const emitFactEvent = vi.fn()
+    const { agentSdk } = assembleInvocation({
+      requestId: 'req-script-findings', sessionId: 'session-script-findings',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent, emitSessionEvent: vi.fn()
+    })
+    const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, {
+      createChannel: () => ({ request: async () => ({ kind: 'approved' as const, cause: 'user-approved' as const }), cancel: vi.fn() }),
+      cancel: vi.fn()
+    })
+    const finding = {
+      pattern: 'process-create:subprocess.Popen', class: 'process-creation' as const,
+      range: { startLine: 2, startCol: 1, endLine: 2, endCol: 19 },
+      snippet: "subprocess.Popen(['echo'])",
+      evidence: { kind: 'process-create' as const, module: 'subprocess', attr: 'Popen', argvLiteral: "['echo']" }
+    }
+    const findings = Array.from({ length: 4 }, (_, index) => ({
+      ...finding,
+      pattern: `${finding.pattern}:${index + 1}`,
+      range: { ...finding.range, startLine: index + 1, endLine: index + 1 }
+    }))
+    const call = { invocationId: 'req-script-findings', toolCallId: 'confirm-script', toolName: 'run_script', input: { code: '...' } }
+
+    await confirmation({
+      call, confirmationId: call.toolCallId, answerer: 'user', reasonCode: 'script-risk',
+      context: {
+        facts: { toolName: 'run_script', actionClass: 'write', baseRiskLevel: 'high',
+          signals: [{ kind: 'script-analysis', findings, coverage: 'complete', totalCount: 4 }],
+          summary: { text: 'script review' } },
+        decision: { riskLevel: 'high', memoryTiers: [], timeoutMs: 1000, answerer: 'user' }
+      }
+    })
+
+    expect(emitFactEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'confirm-requested', id: 'confirm-script', scriptFindings: findings, scriptFindingTotalCount: 4
+    }))
+  })
+
   it('routes Hosted remote confirmation through the invocation-bound IM channel without a Desktop notification', async () => {
     const inbound = { id: 'inbound-1' }
     const imRequest = vi.fn(async () => ({ kind: 'approved' as const, cause: 'user-approved' as const }))
