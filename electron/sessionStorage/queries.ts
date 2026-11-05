@@ -11,6 +11,7 @@ import {
   getPersistedTurn,
   listTurnErrorsByAssistantMessageIds,
   getMessages,
+  readAgentSessionMessageSource,
   getMessage,
   getMessageSkeleton,
   getLatestMessageSkeleton,
@@ -189,6 +190,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       const message = getProjectedMessage(db, messageId)
       return message?.sessionId === sessionId ? message : undefined
     },
+    readAgentSessionMessageSource: ({ sessionId, messageId }) => readAgentSessionMessageSource(db, { sessionId, messageId }),
     readMessageSkeleton: ({ sessionId, messageId }: MessageRef): MessageSkeleton | undefined => {
       const skeleton = getMessageSkeleton(db, messageId)
       if (!skeleton || skeleton.sessionId !== sessionId) return undefined

@@ -2074,6 +2074,19 @@ export function getNextDesktopQueueInput(db: AppDatabase, sessionId: string): Qu
   return null
 }
 
+/** Facts-only source projection for session.read; never parses the visible message envelope. */
+export function readAgentSessionMessageSource(db: AppDatabase, input: { sessionId: string; messageId: string }):
+  { kind: 'agent-session'; ownerSessionId: string; requestId: string } | undefined {
+  const row = getDbConnection(db).prepare(`SELECT request_id FROM queue_input_requests
+    WHERE session_id=? AND queued_message_id=? AND queue_scope='desktop' LIMIT 2`).all(input.sessionId, input.messageId) as Array<{ request_id: string }>
+  if (row.length !== 1 || classifyQueueInputSource(db, { sessionId: input.sessionId, queueScope: DESKTOP_QUEUE_SCOPE,
+    requestId: row[0]!.request_id, queuedMessageId: input.messageId }) !== 'agent-session') return undefined
+  const source = getDbConnection(db).prepare(`SELECT source_json FROM queue_input_requests
+    WHERE session_id=? AND request_id=? AND queue_scope='desktop' AND queued_message_id=?`).get(input.sessionId, row[0]!.request_id, input.messageId) as { source_json?: string } | undefined
+  const decoded = decodeAgentSessionInputSource(source?.source_json ?? null)
+  return decoded ? { kind: 'agent-session', ownerSessionId: decoded.ownerSessionId, requestId: decoded.requestId } : undefined
+}
+
 export function reorderQueuedUserMessagesInScope(
   db: AppDatabase,
   input: { sessionId: string; messageIds: string[]; queueScope: QueueScope }

@@ -52,6 +52,7 @@ export type AgentSessionApprovalSnapshot = Readonly<{
   approval?: AgentSessionExecutionApproval
   approvalDigest?: string
 }>
+export type AgentSessionMessageSourceSummary = Readonly<{ kind: 'agent-session'; ownerSessionId: string; requestId: string }>
 export type { AgentInputNotExecutedReason, AgentInputSettlement }
 export type ScopedQueueInput = Readonly<{ sessionId: string; requestId: string; content: string; attachments?: Message['attachments']; queueScope: QueueScope }>
 export type QueueInputSource = 'platform-im' | 'runtime-trigger' | 'ordinary-desktop' | 'agent-session' | 'invalid'

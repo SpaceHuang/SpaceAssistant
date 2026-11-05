@@ -14,6 +14,8 @@ import {
 import type { CapabilityContext } from '../types'
 import { createSqliteSessionStorage } from '../../sessionStorage/sqliteSessionStorage'
 import { createSessionMessageService } from '../sessionMessageService'
+import { CapabilityRegistry } from '../registry'
+import { createToolkitFindExecutor } from '../toolkitTool'
 
 let db: AppDatabase
 
@@ -140,6 +142,19 @@ describe('action.session.status', () => {
 })
 
 describe('action.session.message', () => {
+  it('exposes both write capabilities through toolkit.find with act risk and strict parameters', async () => {
+    const registry = new CapabilityRegistry()
+    for (const descriptor of createSessionCapabilities()) registry.register(descriptor)
+    const find = createToolkitFindExecutor(registry)
+    for (const id of ['action.session.message.send', 'action.session.message.revoke']) {
+      const result = await find({ query: id })
+      expect((result.data as { matches: Array<{ id: string; risk: string }> }).matches).toContainEqual({
+        id, summary: expect.any(String), usage: expect.any(String), returns: expect.any(String), risk: 'act', notes: expect.any(Array)
+      })
+      await expect(findCap(id).paramsSchema.parseAsync({ ownerSessionId: 'model-controlled' })).rejects.toThrow()
+    }
+  })
+
   it('requires a real user confirmation receipt and policy decision before issuing execution approval', async () => {
     const storage = createSqliteSessionStorage(db)
     const owner = await seedSession('approval owner')
@@ -270,6 +285,21 @@ describe('action.session.message', () => {
 })
 
 describe('action.session.read', () => {
+  it('truncated agent-session messages retain host-verified source metadata', async () => {
+    const owner = await seedSession('source metadata owner')
+    const target = await seedSession('source metadata target')
+    const storage = createSqliteSessionStorage(db)
+    const service = createSessionMessageService({ storage, requestDesktopDrain: vi.fn() })
+    const accepted = await service.send({ ownerSessionId: owner, targetSessionId: target, requestId: 'source-read', content: 'x'.repeat(5000) })
+    const read = await findCap('action.session.read').handler({ sessionId: target }, ctx()) as {
+      messages: Array<{ content: string; truncated?: boolean; source?: { kind: string; ownerSessionId: string; requestId: string } }>
+    }
+    expect(read.messages[0]).toMatchObject({ truncated: true, source: {
+      kind: 'agent-session', ownerSessionId: owner, requestId: accepted.accepted.source.requestId
+    } })
+    expect(read.messages[0]!.content).not.toContain('agent-session')
+  })
+
   it('prepares the chat body after visibility checks and before selecting export rows', async () => {
     const id = await seedSession('projection capability read', ['body'])
     const events: string[] = []

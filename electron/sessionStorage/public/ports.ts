@@ -9,6 +9,7 @@ import type { EnqueueResult, MessageEntry, RemoteSessionIdentityUpdate, Continua
   PreparedChatBodyView,
   ImAcceptedFactScope, ImAcceptedFactFrontier, ImAcceptedFactPage,
   RuntimeTriggerRecord, RuntimeTriggerPatch, QueueInputReceiptSnapshot, ScopedQueueInput, QueueInputSource, AgentSessionMessageAcceptance, AgentSessionApprovalSnapshot,
+  AgentSessionMessageSourceSummary,
 } from './model'
 import type { HistoryEvent, HistoryPort, HistorySnapshot } from '../../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../../packages/agent-sdk/src/model'
@@ -155,6 +156,7 @@ export interface SessionQueries {
   readSessionUsage(sessionId: string): SessionUsage | undefined
   listSessions(options?: { view?: 'all' | 'user-visible'; workDirProfileId?: string }): Session[]
   readMessage(ref: MessageRef): Message | undefined
+  readAgentSessionMessageSource(ref: MessageRef): AgentSessionMessageSourceSummary | undefined
   /** Read control metadata without materializing message content. */
   readMessageSkeleton(ref: MessageRef): MessageSkeleton | undefined
   readLatestMessagePreviewCandidate(sessionId: string, excludeMessageId: string): LatestMessagePreviewCandidate | undefined

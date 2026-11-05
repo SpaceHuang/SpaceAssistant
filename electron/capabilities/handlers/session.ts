@@ -157,6 +157,7 @@ const readCapability: CapabilityDescriptor = {
       { sessionId: params.sessionId, fromSequence: cursor, pageSize: limit, signal: ctx.signal })
     return {
       messages: page.rows.map(({ message: m, sequence }) => {
+        const source = queries.readAgentSessionMessageSource({ sessionId: params.sessionId, messageId: m.id })
         if (m.content.length > MESSAGE_MAX_CHARS) {
           return {
             sequence,
@@ -165,7 +166,8 @@ const readCapability: CapabilityDescriptor = {
             status: m.status,
             content: `${m.content.slice(0, MESSAGE_MAX_CHARS)}…`,
             truncated: true,
-            originalChars: m.content.length
+            originalChars: m.content.length,
+            ...(source ? { source } : {})
           }
         }
         return {
@@ -173,7 +175,8 @@ const readCapability: CapabilityDescriptor = {
           role: m.role,
           timestamp: m.timestamp,
           status: m.status,
-          content: m.content
+          content: m.content,
+          ...(source ? { source } : {})
         }
       }),
       nextSequence: page.nextSequence,
