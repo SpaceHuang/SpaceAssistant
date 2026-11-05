@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { agentSessionInputEventDigest, agentSessionOriginDigest, classifyQueueInputSource } from './queueInputSource'
 import { claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, readAgentInputSettlement, updateQueueInputReceiptStateInScope, updateQueuedUserMessageContentInScope } from './operations'
-import { createMemoryAppDb } from './testHelpers'
+import { createMemoryAppDb, createTempDatabase } from './testHelpers'
+import { openDatabase } from './index'
 import { getDbConnection } from './sqliteStore'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { createSessionCommands } from '../sessionStorage/commands'
@@ -94,6 +95,101 @@ describe('agent session message source classification', () => {
 })
 
 describe('agent session message acceptance persistence', () => {
+  it('lets sender revocation and claim race with exactly one durable winner', () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'race-owner' })
+    const target = createSession(db, { name: 'race-target' })
+    const commands = createSessionCommands(db).agentSessionMessages
+    const accepted = commands.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId: 'revoke-claim-race', content: 'race input', authorizationBinding: {} })
+    approveAgentInput(db, owner.id, target, 'revoke-claim-race', accepted.source.messageId)
+    const claim = () => claimQueuedTurnAtomicallyInScope(db, { sessionId: target.id, userMessageId: accepted.source.messageId,
+      turnId: 'race-claim-turn', assistantMessageId: 'race-claim-assistant', requestId: 'revoke-claim-race',
+      queueScope: { kind: 'desktop' }, source: 'agent-session', agentSessionFinalCheck: () => true })
+    const revoked = commands.markNotExecuted({ sessionId: target.id, requestId: 'revoke-claim-race', reason: 'sender-revoked' })
+    expect(revoked).toBe(true)
+    expect(() => claim()).toThrow('QUEUE_MESSAGE_NOT_CLAIMABLE')
+    expect(commands.readSettlement({ ownerSessionId: owner.id, requestId: 'revoke-claim-race' }))
+      .toMatchObject({ kind: 'not-executed', reason: 'sender-revoked' })
+    expect(getDbConnection(db).prepare('SELECT turn_id FROM turns WHERE turn_id=?').get('race-claim-turn')).toBeUndefined()
+    db.close()
+  })
+
+  it('lets an accepted claim beat revocation and keeps the exact claimed Turn after reopening SQLite', () => {
+    const temp = createTempDatabase('agent-session-claim-first-')
+    let db = temp.db
+    try {
+      const owner = createSession(db, { name: 'claim-first-owner' })
+      const target = createSession(db, { name: 'claim-first-target' })
+      const commands = createSessionCommands(db).agentSessionMessages
+      const accepted = commands.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
+        requestId: 'claim-first-race', content: 'durable claim', authorizationBinding: {} })
+      approveAgentInput(db, owner.id, target, 'claim-first-race', accepted.source.messageId)
+      const claim = claimQueuedTurnAtomicallyInScope(db, { sessionId: target.id, userMessageId: accepted.source.messageId,
+        turnId: 'claim-first-turn', assistantMessageId: 'claim-first-assistant', requestId: 'claim-first-race',
+        queueScope: { kind: 'desktop' }, source: 'agent-session', agentSessionFinalCheck: () => true })
+      expect(claim.user.message.status).toBe('sent')
+      expect(commands.markNotExecuted({ sessionId: target.id, requestId: 'claim-first-race', reason: 'sender-revoked' })).toBe(false)
+      db.close()
+      db = openDatabase(temp.dbPath)
+      expect(createSessionCommands(db).agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId: 'claim-first-race' }))
+        .toMatchObject({ kind: 'claimed', turnId: 'claim-first-turn' })
+      expect(getDbConnection(db).prepare('SELECT state,turn_id FROM queue_input_requests WHERE session_id=? AND request_id=?')
+        .get(target.id, 'claim-first-race')).toEqual({ state: 'claimed', turn_id: 'claim-first-turn' })
+    } finally { temp.cleanup(db) }
+  })
+
+  it('preserves settlement invariants across a fixed-seed accept, claim, revoke, delete, settle, and reopen sequence', () => {
+    const temp = createTempDatabase('agent-session-state-sequence-')
+    let db = temp.db
+    const seed = 0x5a17c0de
+    let random = seed >>> 0
+    const next = () => { random = (Math.imul(random, 1664525) + 1013904223) >>> 0; return random }
+    try {
+      const owner = createSession(db, { name: 'sequence-owner' })
+      const targets = [createSession(db, { name: 'sequence-a' }), createSession(db, { name: 'sequence-b' })]
+      const commands = createSessionCommands(db).agentSessionMessages
+      const rows: Array<{ requestId: string; targetId: string; messageId: string; outcome: 'queued' | 'claimed' | 'revoked' | 'deleted' }> = []
+      for (let index = 0; index < 36; index++) {
+        const target = targets[next() % targets.length]
+        const requestId = `seed-${seed}-${index}`
+        const accepted = commands.accept({ ownerSessionId: owner.id, targetSessionId: target.id, requestId,
+          content: `payload-${index}`, authorizationBinding: { seed, index } })
+        const row = { requestId, targetId: target.id, messageId: accepted.source.messageId, outcome: 'queued' as const }
+        rows.push(row)
+        if (next() % 3 === 0) {
+          approveAgentInput(db, owner.id, target, requestId, row.messageId)
+          claimQueuedTurnAtomicallyInScope(db, { sessionId: target.id, userMessageId: row.messageId,
+            turnId: `seed-turn-${index}`, assistantMessageId: `seed-assistant-${index}`, requestId,
+            queueScope: { kind: 'desktop' }, source: 'agent-session', agentSessionFinalCheck: () => true })
+          getDbConnection(db).prepare("UPDATE turns SET state='terminal',outcome='completed',updated_at=? WHERE turn_id=?")
+            .run(index + 1, `seed-turn-${index}`)
+          row.outcome = 'claimed'
+          expect(commands.markNotExecuted({ sessionId: target.id, requestId, reason: 'sender-revoked' })).toBe(false)
+        } else if (next() % 2 === 0) {
+          expect(commands.markNotExecuted({ sessionId: target.id, requestId, reason: 'sender-revoked' })).toBe(true)
+          row.outcome = 'revoked'
+        } else {
+          expect(deleteQueuedUserMessageInScope(db, row.messageId, { kind: 'desktop' })).toMatchObject({ ok: true })
+          row.outcome = 'deleted'
+        }
+        const settlement = commands.readSettlement({ ownerSessionId: owner.id, requestId })
+        if (row.outcome === 'claimed') expect(settlement).toMatchObject({ kind: 'turn-terminal', turnId: `seed-turn-${index}`, outcome: 'completed' })
+        else expect(settlement).toMatchObject({ kind: 'not-executed', reason: row.outcome === 'deleted' ? 'authorized-cancel' : 'sender-revoked' })
+        expect(commands.markNotExecuted({ sessionId: target.id, requestId, reason: 'start-failed' })).toBe(false)
+        expect(deleteQueuedUserMessageInScope(db, row.messageId, { kind: 'desktop' }).ok).toBe(false)
+      }
+      db.close()
+      db = openDatabase(temp.dbPath)
+      const recovered = createSessionCommands(db).agentSessionMessages
+      for (const row of rows) {
+        const settlement = recovered.readSettlement({ ownerSessionId: owner.id, requestId: row.requestId })
+        if (row.outcome === 'claimed') expect(settlement).toMatchObject({ kind: 'turn-terminal', turnId: `seed-turn-${Number(row.requestId.split('-').at(-1))}`, outcome: 'completed' })
+        else expect(settlement).toMatchObject({ kind: 'not-executed', reason: row.outcome === 'deleted' ? 'authorized-cancel' : 'sender-revoked' })
+      }
+    } finally { temp.cleanup(db) }
+  })
+
   it('persists one receipt per owner key and treats target or body changes as conflicts', () => {
     const db = createMemoryAppDb()
     const ownerA = createSession(db, { name: 'owner-a' })
