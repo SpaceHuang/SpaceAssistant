@@ -1160,6 +1160,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     },
     audit: (event, data) => logAgentEvent('warn', event as AgentLogEventName, data as AgentLogFields)
   })
+  ctx.publishDesktopDrainRequester?.((sessionId) => outboundDrainer.drain(sessionId))
   turnRuntime.subscribe((turn, event) => outboundDrainer.onTurnProjection(turn, event))
 
   ipcMain.handle('chat:cancel-turn', (_e, turnId: string) => {

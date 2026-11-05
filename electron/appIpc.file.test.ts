@@ -394,6 +394,17 @@ describe('file IPC handlers', () => {
     expect(databaseOperations.getMessage(ctx.db, accepted.source.messageId)?.status).toBe('queued')
   })
 
+  it('应用装配把唯一桌面排水入口发布给跨会话消息服务', async () => {
+    const publish = vi.fn()
+    ctx.publishDesktopDrainRequester = publish
+
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish.mock.calls[0]?.[0]).toBeTypeOf('function')
+    await expect(publish.mock.calls[0]![0]('no-queued-session')).resolves.toBeUndefined()
+  })
+
   it('session:list filters profile in its query and does not persist legacy metadata cleanup', () => {
     const session = databaseOperations.createSession(ctx.db, { name: 'read-only session list', model: 'test',
       workDirProfileId: 'default', ownership: 'user', visibility: 'visible', metadata: { plan: 'legacy', userNote: 'keep' } })

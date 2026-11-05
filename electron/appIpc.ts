@@ -47,6 +47,8 @@ export type AppIpcContext = {
   executeTurn?: ClaudeTurnExecution
   /** Internal composition hook used by the durable trigger dispatcher after ordinary turn preparation is installed. */
   publishRuntimeTriggerReceiverStarter?: (starter: (input: import('./triggers/receiverStarter').RuntimeTriggerReceiverStartInput) => Promise<'started' | 'busy' | 'unavailable'>) => void
+  /** Internal composition hook: publish the single desktop drainer to host capabilities after it is created. */
+  publishDesktopDrainRequester?: (requester: (sessionId: string) => void | Promise<void>) => void
   /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
   isTrayEnabled?: () => boolean
 }

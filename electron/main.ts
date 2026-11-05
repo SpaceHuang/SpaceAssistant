@@ -54,6 +54,7 @@ import { createRuntimeTriggerHostService } from './triggers/hostService'
 import { createRuntimeTriggerExecutionMaterials } from './triggers/runtimeMaterials'
 import { createRuntimeTriggerAuthorizationBinding, runtimeTriggerAuthorizationMatches, type RuntimeTriggerAuthoritySnapshot } from './triggers/hostAuthorization'
 import { createSecuritySettingsStorage } from './confirmation/securitySettingsStorage'
+import { createSessionMessageService, type SessionMessageDrain } from './capabilities/sessionMessageService'
 import { readImPolicySnapshot } from './confirmation/imPolicyStore'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { readImPolicyAuthorizationRevision } from './remote/imInboundGuard'
@@ -786,6 +787,9 @@ app.whenReady().then(async () => {
     quiesceMaintenance: async () => { await safeDatabaseMaintenanceInFlight }
   })
   const sessionStorage = sessionStorageHost.storage
+  let requestDesktopDrain: SessionMessageDrain = () => { throw new Error('SESSION_MESSAGE_DRAIN_UNAVAILABLE') }
+  const sessionMessages = createSessionMessageService({ storage: sessionStorage,
+    requestDesktopDrain: (sessionId) => requestDesktopDrain(sessionId) })
   const runtimeTriggerSyncWaiters = createRuntimeTriggerSyncWaitRegistry()
   runtimeTriggerSyncWaitStop = runtimeTriggerSyncWaiters.cancelAll
   const runtimeTriggerService = createRuntimeTriggerHostService({ commands: sessionStorage.commands,
@@ -1288,6 +1292,7 @@ app.whenReady().then(async () => {
       }
     },
     getAppDatabase: () => db,
+    sessionMessages,
     getProjectMemoryEnabled: () => true,
     getBrowserConfig: () => readBrowserConfigFromDb(db),
     getShellConfig: () => readShellConfigFromDb(db),
@@ -1361,6 +1366,7 @@ app.whenReady().then(async () => {
     isTrayEnabled,
     turnRuntime,
     publishRuntimeTriggerReceiverStarter: (starter) => { runtimeTriggerReceiverStarter = starter },
+    publishDesktopDrainRequester: (requester) => { requestDesktopDrain = requester },
     wakeSourceTruthSpillGc: () => {
       const spillRoot = path.join(app.getPath('userData'), 'spill')
       void runSourceTruthSpillGcMaintenance(db, spillRoot).catch((error) => {
