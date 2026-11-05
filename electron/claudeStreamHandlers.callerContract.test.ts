@@ -5,6 +5,7 @@ import { getDbConnection, openDatabase, setConfigValue, type AppDatabase } from 
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
+import { primeClaudeAdmission } from './claudeStreamHandlers'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createAnthropicStreamHarness } from './testSupport/anthropicStreamHarness'
 
@@ -209,6 +210,24 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
     // 偏差 11/3c:文件树失效归一为统一出口(scope:invalidated),不再直发 file:tree-changed
     expect(() => invocation.events.onFileTreeChanged?.({ kind: 'paths', relPaths: ['a.txt'] })).not.toThrow()
     expect(notifyMainWindow).not.toHaveBeenCalledWith('file:tree-changed', expect.anything())
+
+    const queuedUser = appendMessage(db, { id: 'cc-pre-admitted-user', sessionId: session.id, role: 'user', content: 'queued input', timestamp: 4, status: 'sent' })
+    const queuedAssistant = appendMessage(db, { id: 'cc-pre-admitted-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 5, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'cc-pre-admitted-turn', requestId: 'cc-pre-admitted-request', sessionId: session.id,
+      userMessageId: queuedUser.message.id, assistantMessageId: queuedAssistant.message.id, contextBoundarySequence: queuedUser.sequence,
+      state: 'prepared', startToken: 'cc-pre-admitted-token', executionConfig: {
+        lane: 'desktop', model: modelId, baseUrl: 'https://trusted.example.com', system: 'sys', maxTokens: 2048, enableThinking: false, locale: 'zh-CN'
+      } })
+    const preAdmission = await getCallAdmissionGate().acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
+      disposition: 'defer', requestId: 'cc-pre-admitted-request' })
+    expect(preAdmission.ok).toBe(true)
+    if (!preAdmission.ok) throw new Error('expected pre-admission ticket')
+    primeClaudeAdmission('cc-pre-admitted-request', preAdmission.ticket)
+    admissionAcquire.mockClear()
+    await execute(makeSender(), { requestId: 'cc-pre-admitted-request', turnId: 'cc-pre-admitted-turn',
+      turnStartToken: 'cc-pre-admitted-token', sessionId: session.id })
+    expect(admissionAcquire).not.toHaveBeenCalled()
+    expect(mockRunToolChatSession).toHaveBeenCalledTimes(2)
     db.close()
   })
 

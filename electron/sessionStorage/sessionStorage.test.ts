@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { appendMessage, appendMessagesAtomically, claimQueuedTurnAtomicallyInScope, createPersistedTurn, createSession, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getPersistedTurn, getQueueInputReceipt, getSession, setConfigValue, updateMessageContent, updatePersistedTurnState } from '../database/operations'
+import { appendMessage, appendMessagesAtomically, claimQueuedTurnAtomicallyInScope, createPersistedTurn, createSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getPersistedTurn, getQueueInputReceipt, getSession, setConfigValue, updateMessageContent, updatePersistedTurnState } from '../database/operations'
 import { getDbConnection, openDatabase } from '../database'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { runInTransaction } from '../database/transaction'
@@ -2136,6 +2136,36 @@ describe('SQLite session storage execution boundary', () => {
     expect(claimed.assistant.message).toMatchObject({ id: 'execution-claim-assistant', status: 'streaming' })
     expect(getPersistedTurn(db, 'execution-claim-turn')).toMatchObject({ userMessageId: queued.persisted.message.id, state: 'prepared' })
     expect(getQueueInputReceipt(db, session.id, 'execution-claim-request')).toMatchObject({ state: 'claimed', turnId: 'execution-claim-turn' })
+  })
+
+  it('host-only TurnRuntime prepare uses approved agent-session claim and commits admission before returning', () => {
+    db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'agent prepare owner', model: 'test' })
+    const target = createSession(db, { name: 'agent prepare target', model: 'test' })
+    const accepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId: 'agent-runtime-prepare', content: 'trusted body', authorizationBinding: {} })
+    const approvals = createSqliteSessionStorage(db).commands.agentSessionMessages
+    const snapshot = approvals.readApprovalSnapshot({ sessionId: target.id, requestId: accepted.receipt.requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'prepare-decision',
+      permitRef: 'prepare-permit', ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      requestId: accepted.receipt.requestId, messageId: accepted.source.messageId, queueScope: 'desktop' as const,
+      payloadDigest: accepted.source.payloadSha256, policyRevision: 'policy', authorizationGeneration: 'authorization',
+      runtimeGeneration: 'runtime', approvedAt: 1 }
+    expect(approvals.refreshExecutionApproval({ sessionId: target.id, requestId: accepted.receipt.requestId,
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })).toMatchObject({ originDigest: snapshot.originDigest })
+    const storage = createSqliteSessionStorage(db)
+    const runtime = createSessionTurnRuntime(storage, { deps: { now: () => 2, id: (() => { let n = 0; return () => `agent-runtime-${++n}` })() } })
+    const finalCheck = vi.fn(() => true)
+
+    const started = runtime.prepareAgentSession({ mode: 'reuse-user', requestId: accepted.receipt.requestId,
+      sessionId: target.id, userMessageId: accepted.source.messageId, excludeMessageIds: [], config: {} }, finalCheck)
+
+    expect(started).toMatchObject({ requestId: accepted.receipt.requestId, sessionId: target.id,
+      userMessage: { id: accepted.source.messageId, status: 'sent' } })
+    expect(finalCheck).toHaveBeenCalledOnce()
+    expect(getQueueInputReceipt(db, target.id, accepted.receipt.requestId)).toMatchObject({ state: 'claimed', turnId: started.turnId })
+    expect(storage.queries.verifyAgentSessionAdmission({ sessionId: target.id, turnId: started.turnId,
+      requestId: accepted.receipt.requestId, userMessageId: accepted.source.messageId })).toMatchObject({ kind: 'admitted' })
   })
 
   it('preserves queue identity and single-owner execution through a seeded edit-claim-reopen sequence', () => {

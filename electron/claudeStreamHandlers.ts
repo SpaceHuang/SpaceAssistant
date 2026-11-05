@@ -13,6 +13,7 @@ import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { runToolChatSession, DESKTOP_TOOL_LOOP_MAX_ROUNDS } from './toolChatLoop'
 import { assembleInvocation } from './runtime/invocationAssembler'
 import { formatRuntimeTriggerSourceContext } from './triggers/sourceContext'
+import type { AdmissionTicket } from './runtime/callAdmissionGate'
 import { createAgentSdkSessionEventProjector } from './runtime/agentSdkSessionEventProjection'
 import { isAppLocale } from '../src/shared/locale'
 import { buildApprovalConversationContext, buildApprovalTaskEvidence, buildApprovalTaskIdentity,
@@ -47,6 +48,7 @@ import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './runtime/hostedTurnFinalization'
 import { assertContinuationExecutionConfigUnchanged, fingerprintContinuationExecutionConfig } from './runtime/continuationSafetySnapshot'
 import type { SessionStorage } from './sessionStorage/host/ports'
+import type { PersistedInputAdmissionVerdict } from './sessionStorage/public/model'
 import { SessionContextSummaryCache, sessionContextSummaryCacheKey, summarizeSessionContext, waitForSessionContextSummary } from './sessionContextSummary'
 import { createLostCompactionRepairId, createSessionContextCheckpointMessage, isSessionContextCheckpointWorthCompacting, type SessionContextSummary } from './sessionContextCompaction'
 import { inspectLostCompactionRepairEvidence, isCompactionRepairSourceRevisionCurrent } from './sessionCompactionEvidence'
@@ -88,6 +90,15 @@ export type ClaudeStreamDeps = {
 const automaticSummaryCache = new SessionContextSummaryCache()
 
 const admissionCancelControllers = new Map<string, AbortController>()
+const preAdmittedTickets = new Map<string, AdmissionTicket>()
+export function primeClaudeAdmission(requestId: string, ticket: AdmissionTicket): void {
+  if (preAdmittedTickets.has(requestId)) throw new Error('CLAUDE_ADMISSION_ALREADY_PRIMED')
+  preAdmittedTickets.set(requestId, ticket)
+}
+export function clearPrimedClaudeAdmission(requestId: string): void {
+  preAdmittedTickets.get(requestId)?.release()
+  preAdmittedTickets.delete(requestId)
+}
 export function cancelClaudeAdmission(turnId: string): void {
   admissionCancelControllers.get(turnId)?.abort()
 }
@@ -101,20 +112,31 @@ type ClaudeChatMessageWithContentBlocks = {
   timestamp?: number
 }
 
-export async function loadAuthoritativeTurnContext(_db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string, sessionStorage: SessionStorage): Promise<{ messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] }> {
+export async function loadAuthoritativeTurnContext(_db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string, sessionStorage: SessionStorage): Promise<{ messages: Message[]; currentUserMessageId: string; inputAdmission: Exclude<PersistedInputAdmissionVerdict, { kind: 'invalid' }>; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] }> {
   const persisted = sessionStorage.execution.readTurn({ sessionId, turnId })
   if (!persisted || persisted.sessionId !== sessionId || persisted.requestId !== requestId || persisted.startToken !== startToken) {
     throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
   }
   if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
   if (!persisted.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
+  const source = sessionStorage.queries.readAgentSessionMessageSource({ sessionId, messageId: persisted.userMessageId })
+  const inputAdmission = source
+    ? sessionStorage.queries.verifyAgentSessionAdmission({ sessionId, turnId, requestId, userMessageId: persisted.userMessageId })
+    : { kind: 'ordinary' as const }
+  if (source && inputAdmission.kind !== 'admitted') {
+    throw new Error(`TURN_INPUT_ADMISSION_INVALID:${inputAdmission.kind === 'invalid' ? inputAdmission.caseId : 'agent-source-not-admitted'}`)
+  }
+  const verifiedInputAdmission = inputAdmission.kind === 'admitted' ? inputAdmission : { kind: 'ordinary' as const }
   const messages = await sessionStorage.execution.loadAcceptedMessagesAsync({ sessionId, turnId })
   let continuationTranscript: ClaudeChatMessageWithContentBlocks[] | undefined
   if (persisted.executionConfig?.continuationSource) {
     continuationTranscript = sessionStorage.execution.loadAcceptedContinuationTranscript({ sessionId, turnId })
     if (!continuationTranscript) throw new Error('TURN_CONTINUATION_HISTORY_MISMATCH')
   }
-  return { messages, currentUserMessageId: persisted.userMessageId, ...(persisted.assistantMessageId ? { assistantMessageId: persisted.assistantMessageId } : {}), ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}), ...(continuationTranscript ? { continuationTranscript } : {}) }
+  return { messages, currentUserMessageId: persisted.userMessageId, inputAdmission: verifiedInputAdmission,
+    ...(persisted.assistantMessageId ? { assistantMessageId: persisted.assistantMessageId } : {}),
+    ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}),
+    ...(continuationTranscript ? { continuationTranscript } : {}) }
 }
 
 export type ClaudeChatCreateWithToolsPayload = {
@@ -361,7 +383,9 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         const admissionGate = getCallAdmissionGate()
         const turnCancelController = new AbortController()
         if (typeof payload.turnId === 'string' && payload.turnId) admissionCancelControllers.set(payload.turnId, turnCancelController)
-        const admission = await admissionGate.acquire({
+        const preAdmitted = preAdmittedTickets.get(requestId)
+        if (preAdmitted) preAdmittedTickets.delete(requestId)
+        const admission = preAdmitted ? { ok: true as const, ticket: preAdmitted } : await admissionGate.acquire({
           lane: 'desktop',
           priority: 'interactive',
           role: 'top-level',

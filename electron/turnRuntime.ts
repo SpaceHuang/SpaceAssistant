@@ -1,4 +1,5 @@
 import type { AssistantFactEvent, TurnIntent, TurnTerminal } from '../src/shared/assistantFactAggregator'
+import type { AgentSessionExecutionFinalCheckFacts } from '../src/shared/domainTypes'
 import { TurnCoordinator, type CoordinatorDeps, type ModelResult, type ModelSource, type TurnStarted, type TurnStorage } from '../src/shared/turnCoordinator'
 
 export type TurnRuntimeOptions = {
@@ -40,6 +41,11 @@ export class TurnRuntime {
   }
 
   prepare(intent: TurnIntent): TurnStarted { return this.coordinator.prepare(intent) }
+
+  prepareAgentSession(intent: Omit<Extract<TurnIntent, { mode: 'reuse-user' }>, 'queueScope' | 'queueInputSource'>,
+    finalCheck: (facts: AgentSessionExecutionFinalCheckFacts) => boolean): TurnStarted {
+    return this.coordinator.prepareAgentSession(intent, finalCheck)
+  }
 
   /** 持久化受理后立即发布；后续异步上下文与配置工作继续保持运行态。 */
   publishStarted(turn: TurnStarted): void {

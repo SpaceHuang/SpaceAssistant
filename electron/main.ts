@@ -54,7 +54,10 @@ import { createRuntimeTriggerHostService } from './triggers/hostService'
 import { createRuntimeTriggerExecutionMaterials } from './triggers/runtimeMaterials'
 import { createRuntimeTriggerAuthorizationBinding, runtimeTriggerAuthorizationMatches, type RuntimeTriggerAuthoritySnapshot } from './triggers/hostAuthorization'
 import { createSecuritySettingsStorage } from './confirmation/securitySettingsStorage'
+import { readPolicyBehaviorSnapshot } from './confirmation/imPolicyStore'
+import { readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from './confirmation/policyRulesRuntime'
 import { createSessionMessageService, type SessionMessageDrain } from './capabilities/sessionMessageService'
+import { createAgentSessionExecutionAuthorization } from './capabilities/agentSessionExecutionAuthorization'
 import { readImPolicySnapshot } from './confirmation/imPolicyStore'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { readImPolicyAuthorizationRevision } from './remote/imInboundGuard'
@@ -790,6 +793,23 @@ app.whenReady().then(async () => {
   let requestDesktopDrain: SessionMessageDrain = () => { throw new Error('SESSION_MESSAGE_DRAIN_UNAVAILABLE') }
   const sessionMessages = createSessionMessageService({ storage: sessionStorage,
     requestDesktopDrain: (sessionId) => requestDesktopDrain(sessionId) })
+  const agentSessionExecutionAuthorization = createAgentSessionExecutionAuthorization({ storage: sessionStorage,
+    readCurrentAuthority: () => {
+      try {
+        const conn = getDbConnection(db)
+        const snapshot = readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] })
+        const epoch = conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get() as { epoch?: number } | undefined
+        if (!epoch || !Number.isSafeInteger(epoch.epoch)) return undefined
+        const policyBinding = { domain: 'desktop' as const, policyBehaviorVersion: snapshot.policyBehaviorVersion,
+          revision: snapshot.revision, epoch: epoch.epoch! }
+        const origin = resolveEffectivePolicyRulesWithOrigin(db, 'desktop')
+        const authorizationGeneration = createHash('sha256').update(JSON.stringify({
+          effectiveRules: origin.rules, lanePackage: readPolicyPackages(db).desktop, policyOrigins: origin.origins, policyBinding
+        })).digest('hex')
+        return { policyRevision: String(snapshot.revision), authorizationGeneration,
+          runtimeGeneration: `process:${process.pid}:${currentProcessGeneration(conn)}` }
+      } catch { return undefined }
+    } })
   const runtimeTriggerSyncWaiters = createRuntimeTriggerSyncWaitRegistry()
   runtimeTriggerSyncWaitStop = runtimeTriggerSyncWaiters.cancelAll
   const runtimeTriggerService = createRuntimeTriggerHostService({ commands: sessionStorage.commands,
@@ -1367,6 +1387,7 @@ app.whenReady().then(async () => {
     turnRuntime,
     publishRuntimeTriggerReceiverStarter: (starter) => { runtimeTriggerReceiverStarter = starter },
     publishDesktopDrainRequester: (requester) => { requestDesktopDrain = requester },
+    agentSessionExecutionAuthorization,
     wakeSourceTruthSpillGc: () => {
       const spillRoot = path.join(app.getPath('userData'), 'spill')
       void runSourceTruthSpillGcMaintenance(db, spillRoot).catch((error) => {
@@ -1435,7 +1456,20 @@ app.whenReady().then(async () => {
   // 顺序纪律(P1-1,评审):先清零 DB 活跃段、再构造门——门构造即 loadAdmissionState,
   // 反序会把上一进程的幻影票据读进内存且永无 release,并发上限被永久蚕食
   resetActiveAdmissionOnStartup(db, Date.now())
-  setCallAdmissionGate(new CallAdmissionGate({ db }))
+  setCallAdmissionGate(new CallAdmissionGate({ db, onReleased: () => {
+    // facts-only scan: global capacity release may unblock an agent-session queue in any
+    // desktop session. Only request IDs/session IDs are inspected; message bodies and IM lanes stay untouched.
+    for (const session of sessionStorage.queries.listSessions({ view: 'all' })) {
+      try {
+        if (sessionStorage.execution.getNextDesktopQueueInput(session.id)?.source !== 'agent-session') continue
+        void Promise.resolve(requestDesktopDrain(session.id)).catch((error: unknown) => {
+          console.warn('[session-message] admission-release wake failed:', error instanceof Error ? error.message : String(error))
+        })
+      } catch (error) {
+        console.warn('[session-message] admission-release scan failed:', error instanceof Error ? error.message : String(error))
+      }
+    }
+  } }))
   // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
   // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
   // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。

@@ -98,6 +98,28 @@ describe('loadAuthoritativeTurnContext', () => {
     db.close()
   })
 
+  it('provider 上下文加载会在来源 admission 材料失效时 fail closed', async () => {
+    const db = openDatabase(':memory:')
+    const session = createSession(db, { name: 'source-admission-boundary' })
+    const user = appendMessage(db, { id: 'source-admission-user', sessionId: session.id, role: 'user', content: 'body', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'source-admission-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'source-admission-turn', requestId: 'source-admission-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: 'source-admission-assistant', contextBoundarySequence: user.sequence - 1,
+      state: 'prepared', startToken: 'source-admission-token' })
+    const storage = createSqliteSessionStorage(db)
+    const verifyAdmission = vi.fn(() => ({ kind: 'invalid' as const, caseId: 'source-gap' }))
+    const injected = { ...storage, queries: { ...storage.queries,
+      readAgentSessionMessageSource: vi.fn(() => ({ kind: 'agent-session' as const, ownerSessionId: 'owner', requestId: 'source-admission-request' })),
+      verifyAgentSessionAdmission: verifyAdmission } }
+
+    await expect(loadAuthoritativeTurnContext(db, 'source-admission-turn', session.id,
+      'source-admission-request', 'source-admission-token', injected))
+      .rejects.toThrow('TURN_INPUT_ADMISSION_INVALID:source-gap')
+    expect(verifyAdmission).toHaveBeenCalledWith({ sessionId: session.id, turnId: 'source-admission-turn',
+      requestId: 'source-admission-request', userMessageId: user.message.id })
+    db.close()
+  })
+
   it('canonical accepted-input fingerprint binds Desktop turn context to the committed user message', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'accepted-input-binding' })

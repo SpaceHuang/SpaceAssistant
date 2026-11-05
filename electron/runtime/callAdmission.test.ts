@@ -189,6 +189,17 @@ describe('CallAdmissionGate 排队唤醒与审计(0b 语义)', () => {
     setCallAdmissionGate(null)
   })
 
+  it('持久化释放成功后通知宿主补扫专用队列', async () => {
+    const onReleased = vi.fn()
+    const gate = new CallAdmissionGate({ onReleased })
+    const admitted = await gate.acquire(req({ requestId: 'release-wake' }))
+    expect(admitted.ok).toBe(true)
+    if (!admitted.ok) throw new Error('expected admission ticket')
+
+    expect(admitted.ticket.release()).toBe(true)
+    expect(onReleased).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'release-wake' }))
+  })
+
   it('取消一个 turn 不会移除另一会话共享 requestId 的排队调用', async () => {
     const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
     const blocker = await gate.acquire(req({ requestId: 'blocker' }))

@@ -393,6 +393,26 @@ describe('createOutboundDrainer（排水不变量）', () => {
     expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('agent-queued')
   })
 
+  it('agent-session 队首经专用宿主 dispatch 且 stale approval 不忙等重试', async () => {
+    const session = createSession(db, { name: 'agent-session-specialized-drain' })
+    const owner = createSession(db, { name: 'agent-session-specialized-owner' })
+    const storage = createSqliteSessionStorage(db)
+    const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'agent-specialized-queued', content: 'trusted input', authorizationBinding: {} })
+    const submitOutbound = vi.fn()
+    const startAgentSession = vi.fn(async () => 'waiting' as const)
+    const drainer = createOutboundDrainer({ submitOutbound, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), startAgentSession, audit: vi.fn() })
+
+    await drainer.drain(session.id)
+    await Promise.resolve()
+
+    expect(startAgentSession).toHaveBeenCalledWith({ sessionId: session.id, requestId: accepted.receipt.requestId,
+      messageId: accepted.source.messageId })
+    expect(submitOutbound).not.toHaveBeenCalled()
+    expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('agent-specialized-queued')
+  })
+
   it('会话仍有 active turn → 不驱动（不并发双驱）', async () => {
     const h = makeDrainerHarness()
     enqueueQueuedUserMessage(db, { sessionId: h.session.id, requestId: 'q-req-2', content: 'next' })

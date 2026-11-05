@@ -10,7 +10,7 @@ import { AgentLogEventName, AgentLogFields } from '../agentLogger/types'
 import { CONFIG_KEYS, readAppLocale, readSkillsConfig, readWikiConfig, readToolsConfig, readExposureInputsFromDb } from './ipcShared'
 import { ChatImageAttachment } from '../../src/shared/domainTypes'
 import { ErrorCodes } from '../../src/shared/errorCodes'
-import { Message, ModelEntry, SessionSkillsState, SkillDefinition, SkippedCandidate, SkillRouteRecentMessage, SkillRouteResult } from '../../src/shared/domainTypes'
+import { AgentSessionExecutionFinalCheckFacts, Message, ModelEntry, SessionSkillsState, SkillDefinition, SkippedCandidate, SkillRouteRecentMessage, SkillRouteResult } from '../../src/shared/domainTypes'
 import { OutboundSubmitIntent } from '../../src/shared/outboundProtocol'
 import { TurnExecutePayload } from '../../src/shared/api'
 import { TurnIntent } from '../../src/shared/assistantFactAggregator'
@@ -65,7 +65,7 @@ import { submitToolConfirmResponse, reserveToolConfirmResponse, restoreReservedT
 import { cancelActiveAgentTool } from '../activeAgentToolCancellation'
 import { toConfirmationSnapshot, turnToDisplay } from '../../src/shared/turnDisplayProtocol'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
-import { cancelClaudeAdmission } from '../claudeStreamHandlers'
+import { cancelClaudeAdmission, clearPrimedClaudeAdmission, primeClaudeAdmission } from '../claudeStreamHandlers'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, markConfirmationSubmissionReconciling, reconcileConfirmationSubmission, reconcileConfirmationSubmissions, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { forgetMcpSessionTrust, isMcpSessionTrusted, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
 import { createContinuationSafetySnapshot, fingerprintContinuationExecutionConfig } from '../runtime/continuationSafetySnapshot'
@@ -816,7 +816,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   // Phase 1b：prepare 编排抽为内部函数——chat:prepare-turn 与出站受理端口（chat:submit-outbound）
   // 共用同一套 configuring/skill-route/execution-config 装配，避免两处分叉。
 
-  const prepareTurnInternal = async (intent: TurnIntent): Promise<PreparedTurn> => {
+  const prepareTurnInternal = async (intent: TurnIntent,
+    agentSessionFinalCheck?: (facts: AgentSessionExecutionFinalCheckFacts) => boolean): Promise<PreparedTurn> => {
     const configuringKey = JSON.stringify([intent.sessionId, intent.requestId])
     const existing = sessionStorage.execution.readTurnByRequest({ sessionId: intent.sessionId, requestId: intent.requestId })
     if (existing) {
@@ -847,6 +848,11 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     // 先原子占有 session 并写入 H。立即交还 turnId，使配置/路由阶段可被 cancel-turn 打断。
     const started = await withSessionTurnAdmission(intent.sessionId, async () => {
       if (isSessionContextCompactionLocked(intent.sessionId) || isActiveTurnAdmissionBlocked(intent.sessionId)) throw new Error('SESSION_CONTEXT_COMPACTION_BUSY')
+      if (agentSessionFinalCheck) {
+        if (intent.mode !== 'reuse-user') throw new Error('AGENT_SESSION_REUSE_USER_REQUIRED')
+        const { queueScope: _queueScope, queueInputSource: _queueInputSource, ...hostIntent } = intent
+        return turnCoordinator.prepareAgentSession({ ...hostIntent, config: {} }, agentSessionFinalCheck)
+      }
       return turnCoordinator.prepare({ ...intent, config: {} }, 'configuring')
     })
     // 用户消息与 configuring turn 已持久化受理；Skill 路由和上下文准备也属于本轮执行。
@@ -1149,11 +1155,35 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   // 主进程排水器：turn 终态后取队首 queued 驱动下一回合（偏差 9 核心条目——「何时发起下一回合」回主进程）。
   // 渲染端 drainQueueForSession 触发器在 1c 删除，此前两者并存（先建后删，避免双驱空窗）。
+  const startAgentSession = async (input: { sessionId: string; requestId: string; messageId: string }) => {
+    const approval = ctx.agentSessionExecutionAuthorization?.resolve(input)
+    if (!approval) return 'unavailable' as const
+    if (approval.kind === 'waiting') return 'waiting' as const
+    const admission = await getCallAdmissionGate().acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
+      disposition: 'defer', requestId: input.requestId })
+    if (!admission.ok) return 'busy' as const
+    primeClaudeAdmission(input.requestId, admission.ticket)
+    try {
+      const prepared = await prepareTurnInternal({ mode: 'reuse-user', requestId: input.requestId,
+        sessionId: input.sessionId, userMessageId: input.messageId, excludeMessageIds: [], config: {} }, approval.finalCheck)
+      void executeTurnInternal(null, { requestId: prepared.requestId, turnId: prepared.turnId,
+        turnStartToken: prepared.startToken, sessionId: prepared.sessionId })
+      return 'started' as const
+    } catch (error) {
+      clearPrimedClaudeAdmission(input.requestId)
+      const code = error instanceof Error ? error.message : String(error)
+      if (['SESSION_TURN_BUSY', 'SESSION_CONTEXT_COMPACTION_BUSY', 'SESSION_EXECUTION_ACTIVE',
+        'SESSION_EXECUTION_ACTIVE_OWNER'].includes(code)) return 'busy' as const
+      if (code.startsWith('AGENT_SESSION_EXECUTION_APPROVAL_')) return 'waiting' as const
+      throw error
+    }
+  }
 
   const outboundDrainer = createOutboundDrainer({
     submitOutbound: outboundAcceptor.submitOutbound,
     listActiveCount: (sessionId) => turnRuntime.listActive(sessionId).length,
     getNextQueued: (sessionId) => sessionStorage.execution.getNextDesktopQueueInput(sessionId),
+    startAgentSession,
     consumeQueued: (_sessionId, messageId) => {
       // B5:排队的渲染端本地命令(如 /test-cards)主进程无法执行,消费落库避免卡队
       sessionCommands.deleteQueuedMessage(messageId)

@@ -664,6 +664,8 @@ export type OutboundDrainerDeps = {
   submitOutbound: (intent: OutboundSubmitIntent) => Promise<OutboundSubmitResult>
   listActiveCount: (sessionId: string) => number
   getNextQueued: (sessionId: string) => { message: Message; sequence: number; requestId?: string; source?: import('../sessionStorage/public/model').QueueInputSource } | null
+  /** Host-only path for receipt-bound cross-session inputs; never routes through submitOutbound. */
+  startAgentSession?: (input: { sessionId: string; requestId: string; messageId: string }) => Promise<'started' | 'busy' | 'waiting' | 'unavailable'>
   /** 消费一条不可由主进程执行的排队条目(本地命令类),由实现层删除落库 */
   consumeQueued: (sessionId: string, messageId: string) => void
   audit: (event: string, data: Record<string, unknown>) => void
@@ -683,6 +685,7 @@ const MAX_DRAIN_RETRIES = 3
 export function createOutboundDrainer(deps: OutboundDrainerDeps) {
   const draining = new Set<string>()
   const retryAttempts = new Map<string, number>()
+  const parkedAgentSessions = new Set<string>()
   /** drain 进行中到达(被挡)的终态触发:B6——结束后必须补扫,否则丢触发导致队列停摆 */
   const suppressedTriggers = new Set<string>()
 
@@ -725,6 +728,10 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       }
       return
     }
+    if (parkedAgentSessions.delete(sessionId)) {
+      retryAttempts.delete(sessionId)
+      return
+    }
     if (suppressedTriggers.has(sessionId)) {
       // B6:被挡的终态触发必须补扫(有限次,防自旋)
       suppressedTriggers.delete(sessionId)
@@ -750,8 +757,28 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
         const next = deps.getNextQueued(sessionId)
         if (!next || next.message.role !== 'user' || next.message.status !== 'queued' || !next.requestId) return false
         if (next.source === 'agent-session') {
-          deps.audit('outbound.drain.rejected', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_SPECIALIZED_DISPATCH_REQUIRED' })
-          return false
+          if (!deps.startAgentSession) {
+            parkedAgentSessions.add(sessionId)
+            deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_DISPATCH_UNAVAILABLE' })
+            return false
+          }
+          draining.add(sessionId)
+          try {
+            const result = await deps.startAgentSession({ sessionId, requestId: next.requestId, messageId: next.message.id })
+            if (result === 'started') return true
+            if (result === 'busy' || result === 'waiting' || result === 'unavailable') {
+              parkedAgentSessions.add(sessionId)
+              deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: `AGENT_SESSION_${result.toUpperCase()}` })
+              return false
+            }
+            return false
+          } catch (error) {
+            deps.audit('outbound.drain.failed', { sessionId, requestId: next.requestId,
+              error: error instanceof Error ? error.message : String(error) })
+            return false
+          } finally {
+            draining.delete(sessionId)
+          }
         }
         draining.add(sessionId)
         let result: OutboundSubmitResult
