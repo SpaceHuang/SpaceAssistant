@@ -55,6 +55,21 @@ export function createRuntimeTriggerHostService(input: {
       if (input.commands.agentSessionMessages.readSourceIdentity) {
         const eventIsGap = sourceEvent?.type === 'agent_session_message' && sourceEvent.requestId === condition.requestId &&
           sourceEvent.status === 'source-gap' && Number.isSafeInteger(sourceEvent.occurredAt)
+        // When target deletion removed the protected source row, an already persisted terminal
+        // owner/request settlement is still sufficient to register or replay its body-free notice.
+        // Match any delivered event back to that exact current settlement; source-gap still needs
+        // the immutable source baseline above because its receipt is gone.
+        const settlement = input.commands.agentSessionMessages.readSettlement({ ownerSessionId, requestId: condition.requestId })
+        if (settlement && (settlement.kind === 'turn-terminal' || settlement.kind === 'not-executed')) {
+          if (!sourceEvent) return { allowed: true as const }
+          const settlementEventMatches = sourceEvent.type === 'agent_session_message' &&
+            sourceEvent.requestId === condition.requestId && sourceEvent.status === settlement.kind &&
+            sourceEvent.occurredAt === settlement.occurredAt &&
+            (settlement.kind === 'not-executed'
+              ? sourceEvent.reason === settlement.reason
+              : sourceEvent.turnId === settlement.turnId && sourceEvent.outcome === settlement.outcome)
+          return settlementEventMatches ? { allowed: true as const } : reject()
+        }
         return baselineMatches && (!sourceEvent || eventIsGap) ? { allowed: true as const } : reject()
       }
       const settlement = input.commands.agentSessionMessages.readSettlement({ ownerSessionId, requestId: condition.requestId })
