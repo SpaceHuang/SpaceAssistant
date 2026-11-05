@@ -91,14 +91,21 @@ const automaticSummaryCache = new SessionContextSummaryCache()
 
 const admissionCancelControllers = new Map<string, AbortController>()
 const preAdmittedTickets = new Map<string, AdmissionTicket>()
-function primedAdmissionKey(sessionId: string, requestId: string): string { return JSON.stringify([sessionId, requestId]) }
-export function primeClaudeAdmission(sessionId: string, requestId: string, ticket: AdmissionTicket): void {
-  const key = primedAdmissionKey(sessionId, requestId)
+export type ClaudeAdmissionRef = Readonly<{ sessionId: string; requestId: string; turnId: string }>
+function primedAdmissionKey(ref: ClaudeAdmissionRef): string { return JSON.stringify([ref.sessionId, ref.requestId, ref.turnId]) }
+export function primeClaudeAdmission(ref: ClaudeAdmissionRef, ticket: AdmissionTicket): void {
+  const key = primedAdmissionKey(ref)
   if (preAdmittedTickets.has(key)) throw new Error('CLAUDE_ADMISSION_ALREADY_PRIMED')
   preAdmittedTickets.set(key, ticket)
 }
-export function clearPrimedClaudeAdmission(sessionId: string, requestId: string): void {
-  const key = primedAdmissionKey(sessionId, requestId)
+export function takePrimedClaudeAdmission(ref: ClaudeAdmissionRef): AdmissionTicket | undefined {
+  const key = primedAdmissionKey(ref)
+  const ticket = preAdmittedTickets.get(key)
+  if (ticket) preAdmittedTickets.delete(key)
+  return ticket
+}
+export function clearPrimedClaudeAdmission(ref: ClaudeAdmissionRef): void {
+  const key = primedAdmissionKey(ref)
   preAdmittedTickets.get(key)?.release()
   preAdmittedTickets.delete(key)
 }
@@ -382,34 +389,35 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
       }
       try {
         requestId = assertValidRequestId(payload.requestId)
-        const admissionGate = getCallAdmissionGate()
-        const turnCancelController = new AbortController()
-        if (typeof payload.turnId === 'string' && payload.turnId) admissionCancelControllers.set(payload.turnId, turnCancelController)
-        const admissionSessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
-        const admissionKey = primedAdmissionKey(admissionSessionId, requestId)
-        const preAdmitted = preAdmittedTickets.get(admissionKey)
-        if (preAdmitted) preAdmittedTickets.delete(admissionKey)
-        const admission = preAdmitted ? { ok: true as const, ticket: preAdmitted } : await admissionGate.acquire({
-          lane: 'desktop',
-          priority: 'interactive',
-          role: 'top-level',
-          disposition: 'queue',
-          requestId,
-          ...(typeof payload.turnId === 'string' && payload.turnId ? { turnId: payload.turnId } : {})
-        }, { signal: turnCancelController.signal })
-        if (typeof payload.turnId === 'string' && payload.turnId) admissionCancelControllers.delete(payload.turnId)
-        if (!admission.ok) throw new Error(`当前调用暂不可运行：${admission.verdict === 'rejected' ? admission.cause : admission.verdict}`)
-        // 普通 turn 名额持有至整轮结束；审批等待期间不 park，也不重新申请。
-        releaseAdmission = admission.ticket.release
         const turnId = typeof payload.turnId === 'string' ? payload.turnId.trim() : ''
         const turnStartToken = typeof payload.turnStartToken === 'string' ? payload.turnStartToken : ''
-        if (deps.turnRuntime && turnId && turnStartToken) {
-          deps.turnRuntime.bindRequest(requestId, turnId)
-        }
         const sessionId = typeof payload.sessionId === 'string' && payload.sessionId.trim().length > 0 ? payload.sessionId : ''
         if (!sessionId) throw new Error('Invalid sessionId')
         const db = deps.getAppDatabase()
         if (!deps.turnRuntime || !turnId || !turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
+        const persistedTurn = sessionStorage.execution.readTurn({ sessionId, turnId })
+        if (!persistedTurn || persistedTurn.sessionId !== sessionId || persistedTurn.requestId !== requestId || persistedTurn.startToken !== turnStartToken) {
+          throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
+        }
+        // The ticket is keyed to the exact host-owned Turn and is consumed only after persisted
+        // credentials validate. A public execute IPC with a mismatched Turn cannot release it.
+        const admissionRef = { sessionId, requestId, turnId }
+        const preAdmitted = takePrimedClaudeAdmission(admissionRef)
+        const admissionGate = getCallAdmissionGate()
+        const admission = preAdmitted ? { ok: true as const, ticket: preAdmitted } : await (async () => {
+          const turnCancelController = new AbortController()
+          admissionCancelControllers.set(turnId, turnCancelController)
+          try {
+            return await admissionGate.acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
+              disposition: 'queue', requestId, turnId }, { signal: turnCancelController.signal })
+          } finally {
+            admissionCancelControllers.delete(turnId)
+          }
+        })()
+        if (!admission.ok) throw new Error(`当前调用暂不可运行：${admission.verdict === 'rejected' ? admission.cause : admission.verdict}`)
+        // 普通 turn 名额持有至整轮结束；审批等待期间不 park，也不重新申请。
+        releaseAdmission = admission.ticket.release
+        deps.turnRuntime.bindRequest(requestId, turnId)
         const authoritative = await loadAuthoritativeTurnContext(db, turnId, sessionId, requestId, turnStartToken, sessionStorage)
         eventTurnId = turnId
         const emitSystemOperation = (operation: import('../src/shared/domainTypes').SystemOperationRecord): void => {

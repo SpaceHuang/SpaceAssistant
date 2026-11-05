@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { createSession, updateSession } from '../database/operations'
+import { claimAgentSessionTurnAtomically, createSession, deleteSession, updateSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { createAgentSessionExecutionAuthorization } from './agentSessionExecutionAuthorization'
@@ -47,7 +47,7 @@ describe('agent-session execution authorization', () => {
     expect(resolved.finalCheck({ source: persisted.source, approval: persisted.approval!, originDigest: persisted.originDigest,
       approvalDigest: persisted.approvalDigest!, targetGeneration: target.generation })).toBe(false)
     expect(createAgentSessionExecutionAuthorization({ storage, readCurrentAuthority: () => authority })
-      .resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId })).toEqual({ kind: 'waiting', reason: 'source-mismatch' })
+      .resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId })).toEqual({ kind: 'waiting', reason: 'approval-stale' })
     expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId })).toMatchObject({ kind: 'queued' })
     expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
   })
@@ -106,5 +106,37 @@ describe('agent-session execution authorization', () => {
       .toMatchObject({ kind: 'waiting', reason: 'source-mismatch' })
     expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId })).toMatchObject({ kind: 'queued' })
     expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
+  })
+
+  it.each(['before-resolution', 'after-resolution'] as const)('keeps the approved source executable when its sender is deleted %s', (deleteTiming) => {
+    const db = createMemoryAppDb(); dbs.push(db)
+    const owner = createSession(db, { name: `deleted-owner-${deleteTiming}`, workDirProfileId: 'profile-a' })
+    const target = createSession(db, { name: `deleted-owner-target-${deleteTiming}`, workDirProfileId: 'profile-a' })
+    const storage = createSqliteSessionStorage(db)
+    const requestId = `deleted-owner-${deleteTiming}-request`
+    const payloadDigest = createHash('sha256').update('approved before sender deletion').digest('hex')
+    const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId, content: 'approved before sender deletion', authorizationBinding: { ownerSessionId: owner.id,
+        targetSessionId: target.id, targetGeneration: target.generation, queueScope: 'desktop', payloadDigest, profileId: 'profile-a' } })
+    const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision', permitRef: 'permit',
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, requestId,
+      messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
+      policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: '1', approvedAt: Date.now() }
+    storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })
+    const service = createAgentSessionExecutionAuthorization({ storage, readCurrentAuthority: () => ({
+      policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: '1'
+    }) })
+    if (deleteTiming === 'before-resolution') deleteSession(db, owner.id)
+    const resolution = service.resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId })
+    expect(resolution.kind).toBe('approved')
+    if (resolution.kind !== 'approved') throw new Error(`unexpected waiting: ${resolution.reason}`)
+    if (deleteTiming === 'after-resolution') deleteSession(db, owner.id)
+    expect(claimAgentSessionTurnAtomically(db, { sessionId: target.id, requestId, userMessageId: accepted.source.messageId,
+      turnId: `deleted-owner-${deleteTiming}-turn`, assistantMessageId: `deleted-owner-${deleteTiming}-assistant`,
+      startToken: 'start-token' }, resolution.finalCheck)).toBeTruthy()
+    expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId }))
+      .toMatchObject({ kind: 'claimed', turnId: `deleted-owner-${deleteTiming}-turn` })
   })
 })

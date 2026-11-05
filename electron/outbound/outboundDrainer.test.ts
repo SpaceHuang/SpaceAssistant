@@ -692,4 +692,55 @@ describe('createOutboundDrainer（排水不变量）', () => {
     expect(submitOutbound.mock.calls[0]?.[0].contextIntent).toMatchObject({ kind: 'reuse-user', requestId: 'after-agent' })
     expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('after-agent')
   })
+
+  it('停泊返回时消费排水期间收到的撤回唤醒并驱动新队首', async () => {
+    const session = createSession(db, { name: 'parked-wakeup-revoke' })
+    const owner = createSession(db, { name: 'parked-wakeup-owner' })
+    const storage = createSqliteSessionStorage(db)
+    const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'parked-first', content: 'revoke while dispatch is pending', authorizationBinding: {} })
+    enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'parked-next', content: 'next FIFO input' })
+    let finishFirst!: (result: 'waiting') => void
+    const firstDispatch = new Promise<'waiting'>((resolve) => { finishFirst = resolve })
+    const startAgentSession = vi.fn().mockImplementationOnce(() => firstDispatch)
+    const submitOutbound = vi.fn(async (intent: OutboundSubmitIntent) => ({ accepted: 'turn-started' as const,
+      sessionId: intent.sessionId!, turnId: 'after-revoke-turn', assistantMessage: { id: 'assistant' } as unknown as Message }))
+    const drainer = createOutboundDrainer({ submitOutbound, startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined, audit: vi.fn() })
+
+    const firstDrain = drainer.drain(session.id)
+    await vi.waitFor(() => expect(startAgentSession).toHaveBeenCalledOnce())
+    expect(storage.commands.agentSessionMessages.revoke({ ownerSessionId: owner.id, requestId: accepted.receipt.requestId }).kind).toBe('revoked')
+    await drainer.drain(session.id)
+    finishFirst('waiting')
+    await firstDrain
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(submitOutbound).toHaveBeenCalledOnce()
+    expect(submitOutbound.mock.calls[0]?.[0].contextIntent).toMatchObject({ kind: 'reuse-user', requestId: 'parked-next' })
+  })
+
+  it('停泊返回时消费容量释放唤醒且不消耗启动失败预算', async () => {
+    const session = createSession(db, { name: 'parked-wakeup-capacity' })
+    const owner = createSession(db, { name: 'parked-wakeup-capacity-owner' })
+    const storage = createSqliteSessionStorage(db)
+    storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'capacity-wakeup-head', content: 'waiting for admission', authorizationBinding: {} })
+    let finishFirst!: (result: 'busy') => void
+    const firstDispatch = new Promise<'busy'>((resolve) => { finishFirst = resolve })
+    const startAgentSession = vi.fn().mockImplementationOnce(() => firstDispatch).mockResolvedValue('started')
+    const audit = vi.fn()
+    const drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined, audit })
+
+    const firstDrain = drainer.drain(session.id)
+    await vi.waitFor(() => expect(startAgentSession).toHaveBeenCalledOnce())
+    await drainer.drain(session.id)
+    finishFirst('busy')
+    await firstDrain
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(startAgentSession).toHaveBeenCalledTimes(2)
+    expect(audit).not.toHaveBeenCalledWith('outbound.drain.stalled', expect.anything())
+  })
 })

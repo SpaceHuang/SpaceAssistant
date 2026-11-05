@@ -65,7 +65,7 @@ import { submitToolConfirmResponse, reserveToolConfirmResponse, restoreReservedT
 import { cancelActiveAgentTool } from '../activeAgentToolCancellation'
 import { toConfirmationSnapshot, turnToDisplay } from '../../src/shared/turnDisplayProtocol'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
-import { cancelClaudeAdmission, clearPrimedClaudeAdmission, primeClaudeAdmission } from '../claudeStreamHandlers'
+import { cancelClaudeAdmission, clearPrimedClaudeAdmission, primeClaudeAdmission, type ClaudeAdmissionRef } from '../claudeStreamHandlers'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, markConfirmationSubmissionReconciling, reconcileConfirmationSubmission, reconcileConfirmationSubmissions, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { forgetMcpSessionTrust, isMcpSessionTrusted, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
 import { createContinuationSafetySnapshot, fingerprintContinuationExecutionConfig } from '../runtime/continuationSafetySnapshot'
@@ -996,7 +996,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   // Phase 1b：execute 编排抽为内部函数——chat:execute-turn 与出站受理端口共用。
   // sender 为 null 表示主进程内部驱动源（排水器/受理端口）发起，事件出口不依赖 sender。
 
-  const executeTurnInternal = async (sender: Electron.WebContents | null, payload: TurnExecutePayload, continuationId?: string) => {
+  const executeTurnInternal = async (sender: Electron.WebContents | null, payload: TurnExecutePayload, continuationId?: string,
+    preAdmissionRef?: ClaudeAdmissionRef) => {
     if (!ctx.executeTurn) throw new Error('TURN_EXECUTOR_NOT_CONFIGURED')
     if (!payload || typeof payload !== 'object' || typeof payload.turnId !== 'string' || typeof payload.turnStartToken !== 'string') {
       throw new Error('INVALID_TURN_EXECUTION_PAYLOAD')
@@ -1005,7 +1006,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const configuring = configuringTurnsById.get(payload.turnId)
     const persisted = sessionStorage.execution.readTurn({ sessionId: payload.sessionId, turnId: payload.turnId })
     if (persisted?.state === 'terminal') {
-      clearPrimedClaudeAdmission(payload.sessionId, payload.requestId)
+      if (preAdmissionRef) clearPrimedClaudeAdmission(preAdmissionRef)
       if (configuring) void configuring.then(({ skillTurnScope }) => skillTurnScope?.close(), () => undefined)
       return { ok: true as const, accepted: false as const, turnId: payload.turnId }
     }
@@ -1028,7 +1029,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       } catch {
         // facts/final-check handoff: configuring may fail or be cancelled before Claude consumes
         // the pre-admitted ticket. Release the ticket only if it is still owned by this request.
-        clearPrimedClaudeAdmission(payload.sessionId, payload.requestId)
+        if (preAdmissionRef) clearPrimedClaudeAdmission(preAdmissionRef)
         // 配置失败/取消已由 configuring 路径写入 terminal，不能把它伪装成 legacy config 错误。
         if (continuationId) sessionStorage.execution.continuations.settleForTurn({ targetTurnId: payload.turnId, status: 'failed' })
       } finally {
@@ -1168,16 +1169,21 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const admission = await getCallAdmissionGate().acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
       disposition: 'defer', requestId: input.requestId })
     if (!admission.ok) return 'busy' as const
-    primeClaudeAdmission(input.sessionId, input.requestId, admission.ticket)
+    let admissionRef: ClaudeAdmissionRef | undefined
+    let ticketPrimed = false
     try {
       const prepared = await prepareTurnInternal({ mode: 'reuse-user', requestId: input.requestId,
         sessionId: input.sessionId, userMessageId: input.messageId, excludeMessageIds: [], config: {} }, approval.finalCheck)
-      void executeTurnInternal(null, { requestId: prepared.requestId, turnId: prepared.turnId,
-        turnStartToken: prepared.startToken, sessionId: prepared.sessionId }).catch(() =>
-        clearPrimedClaudeAdmission(input.sessionId, input.requestId))
+      admissionRef = { sessionId: prepared.sessionId, requestId: prepared.requestId, turnId: prepared.turnId }
+      primeClaudeAdmission(admissionRef, admission.ticket)
+      ticketPrimed = true
+      const dispatched = await executeTurnInternal(null, { requestId: prepared.requestId, turnId: prepared.turnId,
+        turnStartToken: prepared.startToken, sessionId: prepared.sessionId }, undefined, admissionRef)
+      if (!dispatched.accepted) clearPrimedClaudeAdmission(admissionRef)
       return 'started' as const
     } catch (error) {
-      clearPrimedClaudeAdmission(input.sessionId, input.requestId)
+      if (ticketPrimed && admissionRef) clearPrimedClaudeAdmission(admissionRef)
+      else admission.ticket.release()
       const code = error instanceof Error ? error.message : String(error)
       if (['SESSION_TURN_BUSY', 'SESSION_CONTEXT_COMPACTION_BUSY', 'SESSION_EXECUTION_ACTIVE',
         'SESSION_EXECUTION_ACTIVE_OWNER'].includes(code)) return 'busy' as const

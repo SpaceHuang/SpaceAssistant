@@ -5,7 +5,7 @@ import { getDbConnection, openDatabase, setConfigValue, type AppDatabase } from 
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
-import { clearPrimedClaudeAdmission, primeClaudeAdmission } from './claudeStreamHandlers'
+import { clearPrimedClaudeAdmission, primeClaudeAdmission, takePrimedClaudeAdmission } from './claudeStreamHandlers'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createAnthropicStreamHarness } from './testSupport/anthropicStreamHarness'
 
@@ -132,14 +132,30 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
   it('pre-admitted admission 以 sessionId 与 requestId 共同隔离', () => {
     const firstRelease = vi.fn(() => true)
     const secondRelease = vi.fn(() => true)
-    primeClaudeAdmission('target-a', 'same-request', { release: firstRelease } as never)
-    primeClaudeAdmission('target-b', 'same-request', { release: secondRelease } as never)
+    const firstRef = { sessionId: 'target-a', requestId: 'same-request', turnId: 'turn-a' }
+    const secondRef = { sessionId: 'target-b', requestId: 'same-request', turnId: 'turn-b' }
+    primeClaudeAdmission(firstRef, { release: firstRelease } as never)
+    primeClaudeAdmission(secondRef, { release: secondRelease } as never)
 
-    clearPrimedClaudeAdmission('target-a', 'same-request')
-    clearPrimedClaudeAdmission('target-b', 'same-request')
+    clearPrimedClaudeAdmission({ ...firstRef, turnId: 'wrong-turn' })
+    expect(firstRelease).not.toHaveBeenCalled()
+    clearPrimedClaudeAdmission(firstRef)
+    clearPrimedClaudeAdmission(secondRef)
 
     expect(firstRelease).toHaveBeenCalledOnce()
     expect(secondRelease).toHaveBeenCalledOnce()
+  })
+
+  it('pre-admitted ticket 只能由完整的 session/request/turn 身份消费', () => {
+    const ticket = { release: vi.fn(() => true) }
+    const ref = { sessionId: 'ticket-session', requestId: 'ticket-request', turnId: 'ticket-turn' }
+    primeClaudeAdmission(ref, ticket as never)
+    expect(takePrimedClaudeAdmission({ ...ref, turnId: 'old-turn' })).toBeUndefined()
+    expect(takePrimedClaudeAdmission(ref)).toBe(ticket)
+    expect(takePrimedClaudeAdmission(ref)).toBeUndefined()
+    expect(ticket.release).not.toHaveBeenCalled()
+    ticket.release()
+    expect(ticket.release).toHaveBeenCalledOnce()
   })
 
   beforeEach(() => {
@@ -235,11 +251,20 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
       disposition: 'defer', requestId: 'cc-pre-admitted-request' })
     expect(preAdmission.ok).toBe(true)
     if (!preAdmission.ok) throw new Error('expected pre-admission ticket')
-    primeClaudeAdmission(session.id, 'cc-pre-admitted-request', preAdmission.ticket)
+    const preAdmissionRef = { sessionId: session.id, requestId: 'cc-pre-admitted-request', turnId: 'cc-pre-admitted-turn' }
+    const releasePreAdmission = vi.spyOn(preAdmission.ticket, 'release')
+    primeClaudeAdmission(preAdmissionRef, preAdmission.ticket)
     admissionAcquire.mockClear()
+    const invalidExecution = await execute(makeSender(), { requestId: preAdmissionRef.requestId, turnId: preAdmissionRef.turnId,
+      turnStartToken: 'incorrect-pre-admitted-token', sessionId: session.id })
+    expect(invalidExecution).toMatchObject({ ok: false, error: 'TURN_EXECUTION_CREDENTIALS_INVALID' })
+    expect(releasePreAdmission).not.toHaveBeenCalled()
+    expect(mockRunToolChatSession).toHaveBeenCalledTimes(1)
+    expect(admissionAcquire).not.toHaveBeenCalled()
     await execute(makeSender(), { requestId: 'cc-pre-admitted-request', turnId: 'cc-pre-admitted-turn',
       turnStartToken: 'cc-pre-admitted-token', sessionId: session.id })
     expect(admissionAcquire).not.toHaveBeenCalled()
+    expect(releasePreAdmission).toHaveBeenCalledOnce()
     expect(mockRunToolChatSession).toHaveBeenCalledTimes(2)
     db.close()
   })

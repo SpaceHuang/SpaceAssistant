@@ -24,7 +24,7 @@ import type { SessionQueries } from './sessionStorage/public/ports'
 import type { SessionStorage } from './sessionStorage/host/ports'
 import { createSessionTurnRuntime, createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createSessionCommands } from './sessionStorage/commands'
-import { primeClaudeAdmission } from './claudeStreamHandlers'
+import { clearPrimedClaudeAdmission, primeClaudeAdmission } from './claudeStreamHandlers'
 import { createSessionExecutionStore } from './sessionStorage/execution'
 import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch, markSessionMessageContentWriteStopped,
   verifyAndCompleteSessionMessageContentCleanup } from './sessionStorage/maintenance'
@@ -424,9 +424,36 @@ describe('file IPC handlers', () => {
     ctx.executeTurn = vi.fn()
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     const release = vi.fn()
-    primeClaudeAdmission(session.id, requestId, { release } as never)
+    const admissionRef = { sessionId: session.id, requestId, turnId }
+    primeClaudeAdmission(admissionRef, { release } as never)
     await expect(ipc.getHandler('chat:execute-turn')!({ sender: {} }, { requestId, turnId,
       turnStartToken: 'terminal-pre-admission-token', sessionId: session.id })).resolves.toMatchObject({ accepted: false })
+    expect(release).not.toHaveBeenCalled()
+    clearPrimedClaudeAdmission(admissionRef)
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('公开执行 IPC 用旧 Turn 和新 requestId 时不能释放新来信票据', async () => {
+    const session = databaseOperations.createSession(ctx.db, { name: 'mismatched terminal execution', model: 'test', workDirProfileId: 'default' })
+    const oldRequestId = 'old-terminal-request'
+    const newRequestId = 'new-agent-request'
+    const oldTurnId = 'old-terminal-turn'
+    const user = databaseOperations.appendMessage(ctx.db, { id: 'old-terminal-user', sessionId: session.id,
+      role: 'user', content: 'old input', timestamp: 1, status: 'sent' })
+    databaseOperations.appendMessage(ctx.db, { id: 'old-terminal-assistant', sessionId: session.id,
+      role: 'assistant', content: 'finished', timestamp: 2, status: 'completed' })
+    databaseOperations.createPersistedTurn(ctx.db, { turnId: oldTurnId, requestId: oldRequestId, sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: 'old-terminal-assistant', state: 'terminal', outcome: 'failed' })
+    ctx.executeTurn = vi.fn()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const release = vi.fn()
+    const admissionRef = { sessionId: session.id, requestId: newRequestId, turnId: 'new-agent-turn' }
+    primeClaudeAdmission(admissionRef, { release } as never)
+
+    await expect(ipc.getHandler('chat:execute-turn')!({ sender: {} }, { requestId: newRequestId, turnId: oldTurnId,
+      turnStartToken: 'attacker-token', sessionId: session.id })).resolves.toMatchObject({ accepted: false })
+    expect(release).not.toHaveBeenCalled()
+    clearPrimedClaudeAdmission(admissionRef)
     expect(release).toHaveBeenCalledOnce()
   })
 

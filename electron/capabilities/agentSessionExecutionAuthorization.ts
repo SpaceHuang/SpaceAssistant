@@ -17,7 +17,9 @@ export type AgentSessionExecutionAuthorizationPort = Readonly<{
 
 /**
  * facts/final-check: resolve the persisted user approval before prepare, then re-read authority
- * inside the atomic claim callback. This never recalculates policy; a stale approval remains queued.
+ * inside the atomic claim callback. The protected source keeps historical sender identity after
+ * sender deletion; target ownership and the approved target object remain live final-check facts.
+ * This never recalculates policy; a stale approval remains queued.
  */
 export function createAgentSessionExecutionAuthorization(input: {
   storage: Pick<SessionStorage, 'queries' | 'commands'>
@@ -31,11 +33,9 @@ export function createAgentSessionExecutionAuthorization(input: {
       if (!snapshot?.approval) return { kind: 'waiting', reason: 'approval-missing' }
       const { source, approval, originDigest, approvalDigest } = snapshot
       const target = input.storage.queries.readSession(inputRequest.sessionId)
-      const ownerSession = input.storage.queries.readSession(source.ownerSessionId)
       if (!target || source.kind !== 'agent-session' || source.targetSessionId !== inputRequest.sessionId ||
         source.requestId !== inputRequest.requestId || source.messageId !== inputRequest.messageId ||
-        !target.id || target.ownership !== 'user' || target.visibility === 'hidden' || !ownerSession ||
-        ownerSession.ownership !== 'user' || ownerSession.visibility === 'hidden' || ownerSession.workDirProfileId !== target.workDirProfileId ||
+        !target.id || target.ownership !== 'user' || target.visibility === 'hidden' ||
         approval.originDigest !== originDigest || approval.ownerSessionId !== source.ownerSessionId ||
         approval.targetSessionId !== source.targetSessionId || approval.targetGeneration !== target.generation ||
         approval.requestId !== source.requestId || approval.messageId !== source.messageId || approval.queueScope !== 'desktop' ||
@@ -57,17 +57,16 @@ export function createAgentSessionExecutionAuthorization(input: {
         return { kind: 'waiting', reason: 'approval-stale' }
       }
       const authority = { ...currentAuthority }
+      const targetWorkDirProfileId = target.workDirProfileId
       return {
         kind: 'approved',
         finalCheck: (facts) => {
           const current = input.readCurrentAuthority()
           const currentTarget = input.storage.queries.readSession(inputRequest.sessionId)
-          const currentOwner = input.storage.queries.readSession(source.ownerSessionId)
           return Boolean(current && current.policyRevision === authority.policyRevision &&
             current.authorizationGeneration === authority.authorizationGeneration && current.runtimeGeneration === authority.runtimeGeneration &&
             currentTarget?.ownership === 'user' && currentTarget.visibility !== 'hidden' && currentTarget.generation === target.generation &&
-            currentOwner?.ownership === 'user' && currentOwner.visibility !== 'hidden' &&
-            currentOwner.workDirProfileId === currentTarget.workDirProfileId &&
+            currentTarget.workDirProfileId === targetWorkDirProfileId &&
             facts.originDigest === originDigest && facts.approvalDigest === approvalDigest &&
             facts.targetGeneration === target.generation && facts.source.ownerSessionId === source.ownerSessionId &&
             facts.source.targetSessionId === source.targetSessionId && facts.source.requestId === source.requestId &&

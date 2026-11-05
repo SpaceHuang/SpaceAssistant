@@ -740,6 +740,9 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
     }
     if (parkedAgentSessions.delete(sessionId)) {
       for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
+      // A wake arriving while startAgentSession was pending is an external state change
+      // (revoke, admission release, or a replacement queue head); rescan once without spending retry budget.
+      if (suppressedTriggers.delete(sessionId)) queueMicrotask(() => { void drain(sessionId) })
       return
     }
     if (suppressedTriggers.has(sessionId)) {
