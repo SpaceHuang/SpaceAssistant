@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { agentSessionInputEventDigest, agentSessionOriginDigest, classifyQueueInputSource } from './queueInputSource'
-import { claimAgentSessionTurnAtomically, claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, getNextDesktopQueueInput, readAgentInputSettlement, updateQueueInputReceiptStateInScope, updateQueuedUserMessageContentInScope } from './operations'
+import { claimAgentSessionTurnAtomically, claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, getNextDesktopQueueInput, readAgentInputSettlement, updateQueueInputReceiptStateInScope, updateQueuedUserMessageContentInScope, verifyAgentSessionAdmission } from './operations'
 import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { openDatabase } from './index'
 import { getDbConnection } from './sqliteStore'
@@ -508,7 +508,28 @@ describe('agent session message acceptance persistence', () => {
       idempotencyKey: 'admission-turn:session-input', kind: 'session-input-committed', payload
     }))
     expect(source.authorizationBinding).toEqual(accepted.source.authorizationBinding)
+    expect(verifyAgentSessionAdmission(db, { sessionId: target.id, turnId: 'admission-turn', requestId: 'admission-request',
+      userMessageId: accepted.source.messageId })).toMatchObject({ kind: 'admitted', material: {
+      source: { ownerSessionId: owner.id, messageId: accepted.source.messageId }, approval: { originDigest: approved.originDigest },
+      admission: { approvalDigest: approved.approvalDigest, turnId: 'admission-turn' }
+    } })
+    conn.prepare('UPDATE queue_input_requests SET source_json=? WHERE session_id=? AND request_id=?')
+      .run(JSON.stringify({ ...source, executionApproval: undefined }), target.id, 'admission-request')
+    expect(verifyAgentSessionAdmission(db, { sessionId: target.id, turnId: 'admission-turn', requestId: 'admission-request',
+      userMessageId: accepted.source.messageId })).toEqual({ kind: 'invalid', caseId: 'agent-source-material-missing' })
     expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'admission-request' })).toMatchObject({ kind: 'claimed', turnId: 'admission-turn' })
+    db.close()
+  })
+
+  it('classifies a normal accepted desktop turn as ordinary at the persisted admission verifier', () => {
+    const db = createMemoryAppDb()
+    const target = createSession(db, { name: 'ordinary-admission-target' })
+    const queued = enqueueQueuedUserMessage(db, { sessionId: target.id, requestId: 'ordinary-admission-request', content: 'ordinary input' })
+    claimQueuedTurnAtomicallyInScope(db, { sessionId: target.id, userMessageId: queued.persisted.message.id,
+      turnId: 'ordinary-admission-turn', assistantMessageId: 'ordinary-admission-assistant', requestId: 'ordinary-admission-request',
+      queueScope: { kind: 'desktop' }, source: 'ordinary-desktop' })
+    expect(verifyAgentSessionAdmission(db, { sessionId: target.id, turnId: 'ordinary-admission-turn', requestId: 'ordinary-admission-request',
+      userMessageId: queued.persisted.message.id })).toEqual({ kind: 'ordinary' })
     db.close()
   })
 

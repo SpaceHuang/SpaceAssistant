@@ -2087,6 +2087,65 @@ export function readAgentSessionMessageSource(db: AppDatabase, input: { sessionI
   return decoded ? { kind: 'agent-session', ownerSessionId: decoded.ownerSessionId, requestId: decoded.requestId } : undefined
 }
 
+export function verifyAgentSessionAdmission(db: AppDatabase, input: { sessionId: string; turnId: string; requestId: string; userMessageId?: string }):
+  import('../sessionStorage/public/model').PersistedInputAdmissionVerdict {
+  // final-check facts: verify the already-approved persistent source/turn/history binding; policy refresh belongs before claim.
+  const conn = getDbConnection(db)
+  const turn = conn.prepare(`SELECT session_id,request_id,user_message_id,accepted_input_history_version FROM turns WHERE turn_id=?`)
+    .get(input.turnId) as { session_id: string; request_id: string; user_message_id: string | null; accepted_input_history_version: number | null } | undefined
+  if (!turn || turn.session_id !== input.sessionId || turn.request_id !== input.requestId ||
+    (input.userMessageId && turn.user_message_id !== input.userMessageId)) return { kind: 'invalid', caseId: 'turn-identity-mismatch' }
+  const receipt = conn.prepare(`SELECT state,turn_id,queued_message_id,source_json FROM queue_input_requests
+    WHERE session_id=? AND request_id=? AND queue_scope='desktop'`).get(input.sessionId, input.requestId) as
+      { state: string; turn_id: string | null; queued_message_id: string | null; source_json: string | null } | undefined
+  const historyRow = conn.prepare(`SELECT invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json
+    FROM agent_history_events WHERE invocation_id=? AND sequence=1 AND kind='session-input-committed'`).get(input.turnId) as
+      { invocation_id: string; sequence: number; event_id: string; idempotency_key: string; turn_id: string; schema_version: number; kind: string; payload_json: string } | undefined
+  const historyStream = conn.prepare('SELECT version,schema_version,session_id FROM agent_history_streams WHERE invocation_id=?')
+    .get(input.turnId) as { version: number; schema_version: number; session_id: string } | undefined
+  if (!historyRow) {
+    if (turn.accepted_input_history_version != null || receipt?.source_json != null) return { kind: 'invalid', caseId: 'source-gap' }
+    return { kind: 'ordinary' }
+  }
+  let payload: Record<string, unknown>
+  try { const parsed = JSON.parse(historyRow.payload_json) as unknown; if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(); payload = parsed as Record<string, unknown> }
+  catch { return { kind: 'invalid', caseId: 'input-event-corrupt' } }
+  const event = { invocationId: historyRow.invocation_id, turnId: historyRow.turn_id, sequence: historyRow.sequence,
+    schemaVersion: historyRow.schema_version, eventId: historyRow.event_id, idempotencyKey: historyRow.idempotency_key,
+    kind: historyRow.kind, payload }
+  if (!historyStream || historyStream.session_id !== input.sessionId || historyStream.version < historyRow.sequence ||
+    historyStream.schema_version !== historyRow.schema_version || historyRow.turn_id !== input.turnId || historyRow.event_id !== `${input.turnId}:session-input` ||
+    historyRow.idempotency_key !== `${input.turnId}:session-input` || payload.sessionId !== input.sessionId ||
+    payload.messageId !== turn.user_message_id || payload.role !== 'user' || turn.accepted_input_history_version !== historyRow.sequence) {
+    return { kind: 'invalid', caseId: 'input-event-identity-mismatch' }
+  }
+  const declaresAgentSource = payload.inputSource !== undefined
+  if (!declaresAgentSource && receipt?.source_json == null) return { kind: 'ordinary' }
+  const source = decodeAgentSessionInputSource(receipt?.source_json ?? null)
+  const approval = decodeAgentSessionExecutionApproval(source?.executionApproval)
+  const admission = source?.admission
+  const message = turn.user_message_id ? getMessage(db, turn.user_message_id) : undefined
+  const target = getSession(db, input.sessionId)
+  if (!receipt || receipt.state !== 'claimed' || receipt.turn_id !== input.turnId || receipt.queued_message_id !== turn.user_message_id ||
+    !source || !approval || !admission || !message || !target || classifyQueueInputSource(db, { sessionId: input.sessionId,
+      queueScope: DESKTOP_QUEUE_SCOPE, requestId: input.requestId, queuedMessageId: source.messageId }) !== 'agent-session') {
+    return { kind: 'invalid', caseId: 'agent-source-material-missing' }
+  }
+  const originDigest = agentSessionOriginDigest(source)
+  const approvalDigest = agentSessionExecutionApprovalDigest(approval)
+  const inputFingerprint = queueInputFingerprint({ text: message.content, attachments: message.attachments })
+  const inputSource = payload.inputSource as Record<string, unknown>
+  const validAdmission = admission.version === 1 && admission.originDigest === originDigest && admission.approvalDigest === approvalDigest &&
+    admission.sessionId === input.sessionId && admission.sessionGeneration === target.generation && admission.requestId === input.requestId &&
+    admission.messageId === turn.user_message_id && admission.turnId === input.turnId && admission.invocationId === input.turnId &&
+    admission.inputEventId === historyRow.event_id && admission.inputEventDigest === agentSessionInputEventDigest(event) &&
+    admission.inputFingerprint === inputFingerprint && payload.inputFingerprint === inputFingerprint && admission.queueScope === 'desktop' &&
+    inputSource.kind === 'agent-session' && inputSource.originDigest === originDigest &&
+    agentExecutionApprovalMatchesSource(approval, source, originDigest) && approval.targetGeneration === target.generation
+  if (!validAdmission) return { kind: 'invalid', caseId: 'admission-material-mismatch' }
+  return { kind: 'admitted', material: { source, approval, admission } }
+}
+
 export function reorderQueuedUserMessagesInScope(
   db: AppDatabase,
   input: { sessionId: string; messageIds: string[]; queueScope: QueueScope }

@@ -80,7 +80,13 @@ function hasCurrentPriorChatBodyAuthority(conn: ReturnType<typeof getDbConnectio
 
 /** Host composition binds the private SQLite TurnStorage to the process TurnRuntime. */
 export function createSessionTurnRuntime(storage: SessionStorage, options: Omit<TurnRuntimeOptions, 'storage'>): TurnRuntime {
-  return createTurnRuntimeForSessionExecution(storage.execution, options)
+  return createTurnRuntimeForSessionExecution(storage.execution, {
+    ...options,
+    verifyPersistedInputAdmission: options.verifyPersistedInputAdmission ?? ((turn) => storage.queries.verifyAgentSessionAdmission({
+      sessionId: turn.sessionId, turnId: turn.turnId, requestId: turn.requestId,
+      ...(turn.userMessage?.id ? { userMessageId: turn.userMessage.id } : {})
+    }))
+  })
 }
 
 /** SQLite composition root. Consumers receive bound ports and never receive the database handle. */

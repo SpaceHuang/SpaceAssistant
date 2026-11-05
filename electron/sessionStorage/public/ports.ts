@@ -10,6 +10,7 @@ import type { EnqueueResult, MessageEntry, RemoteSessionIdentityUpdate, Continua
   ImAcceptedFactScope, ImAcceptedFactFrontier, ImAcceptedFactPage,
   RuntimeTriggerRecord, RuntimeTriggerPatch, QueueInputReceiptSnapshot, ScopedQueueInput, QueueInputSource, AgentSessionMessageAcceptance, AgentSessionApprovalSnapshot,
   AgentSessionMessageSourceSummary,
+  PersistedInputAdmissionVerdict,
 } from './model'
 import type { HistoryEvent, HistoryPort, HistorySnapshot } from '../../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../../packages/agent-sdk/src/model'
@@ -157,6 +158,7 @@ export interface SessionQueries {
   listSessions(options?: { view?: 'all' | 'user-visible'; workDirProfileId?: string }): Session[]
   readMessage(ref: MessageRef): Message | undefined
   readAgentSessionMessageSource(ref: MessageRef): AgentSessionMessageSourceSummary | undefined
+  verifyAgentSessionAdmission(input: { sessionId: string; turnId: string; requestId: string; userMessageId?: string }): PersistedInputAdmissionVerdict
   /** Read control metadata without materializing message content. */
   readMessageSkeleton(ref: MessageRef): MessageSkeleton | undefined
   readLatestMessagePreviewCandidate(sessionId: string, excludeMessageId: string): LatestMessagePreviewCandidate | undefined

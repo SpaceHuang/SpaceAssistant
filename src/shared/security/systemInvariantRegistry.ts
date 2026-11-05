@@ -66,6 +66,14 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
     overrideability: 'none'
   },
   {
+    id: 'SYS-AGENTINPUT-001', owner: 'electron/sessionStorage + electron/turnRuntime', stage: 'final-check', category: 'integrity',
+    rationale: 'A Turn carrying an agent-session input must match its persisted source, approved execution material, target generation, and committed input-history anchor before any model source runs.',
+    effect: 'validate', scope: 'electron/database/operations.ts:verifyAgentSessionAdmission;electron/turnRuntime.ts:assertPersistedInputAdmission',
+    audit: 'Invalid material cancels the exact Turn with AGENT_INPUT_ADMISSION_INVALID and a stable case ID before ModelSource or executeWithSource callback entry.',
+    tests: ['electron/database/agentSessionMessageStore.test.ts', 'electron/turnRuntime.test.ts', 'electron/sessionStorage/sessionStorage.test.ts'],
+    overrideability: 'none'
+  },
+  {
     id: 'SYS-AUTOOUTPUT-001', owner: 'electron/confirmation', stage: 'final-check', category: 'integrity',
     rationale: 'An unattended result write must carry a current user-confirmed result-write receipt and target a file below the archive directory derived for that run.',
     effect: 'block', scope: 'electron/confirmation/writeExecutionPermit.ts:validateWriteExecutionPermit',
