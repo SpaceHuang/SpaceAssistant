@@ -429,6 +429,25 @@ describe('file IPC handlers', () => {
     if (blocker.ok) blocker.ticket.release()
   })
 
+  it('专用 dispatcher 在原子领取 final-check 失败时不创建 Turn 或执行模型', async () => {
+    const owner = databaseOperations.createSession(ctx.db, { name: 'final-check owner', model: 'test', workDirProfileId: 'default' })
+    const target = databaseOperations.createSession(ctx.db, { name: 'final-check target', model: 'test', workDirProfileId: 'default' })
+    const accepted = databaseOperations.enqueueAgentSessionMessageInScope(ctx.db, { ownerSessionId: owner.id,
+      targetSessionId: target.id, requestId: 'final-check-agent-request', content: 'must not dispatch', authorizationBinding: {} })
+    const executeTurn = vi.fn()
+    ctx.executeTurn = executeTurn
+    ctx.publishDesktopDrainRequester = vi.fn()
+    ctx.agentSessionExecutionAuthorization = { resolve: vi.fn(() => ({ kind: 'approved' as const, finalCheck: () => false })) }
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const drain = ctx.publishDesktopDrainRequester.mock.calls[0]![0]
+
+    await expect(drain(target.id)).resolves.toBeUndefined()
+
+    expect(databaseOperations.getMessage(ctx.db, accepted.source.messageId)?.status).toBe('queued')
+    expect(databaseOperations.getTurnByRequestId(ctx.db, target.id, accepted.receipt.requestId)).toBeUndefined()
+    expect(executeTurn).not.toHaveBeenCalled()
+  })
+
   it('session:list filters profile in its query and does not persist legacy metadata cleanup', () => {
     const session = databaseOperations.createSession(ctx.db, { name: 'read-only session list', model: 'test',
       workDirProfileId: 'default', ownership: 'user', visibility: 'visible', metadata: { plan: 'legacy', userNote: 'keep' } })
