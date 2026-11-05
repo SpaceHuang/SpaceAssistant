@@ -24,6 +24,7 @@ import type { SessionQueries } from './sessionStorage/public/ports'
 import type { SessionStorage } from './sessionStorage/host/ports'
 import { createSessionTurnRuntime, createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createSessionCommands } from './sessionStorage/commands'
+import { primeClaudeAdmission } from './claudeStreamHandlers'
 import { createSessionExecutionStore } from './sessionStorage/execution'
 import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch, markSessionMessageContentWriteStopped,
   verifyAndCompleteSessionMessageContentCleanup } from './sessionStorage/maintenance'
@@ -410,6 +411,25 @@ describe('file IPC handlers', () => {
     await expect(publish.mock.calls[0]![0]('no-queued-session')).resolves.toBeUndefined()
   })
 
+  it('预留准入票据在执行入口发现 Turn 已终结时立即释放', async () => {
+    const session = databaseOperations.createSession(ctx.db, { name: 'terminal pre-admission', model: 'test', workDirProfileId: 'default' })
+    const requestId = 'terminal-pre-admission-request'
+    const turnId = 'terminal-pre-admission-turn'
+    const user = databaseOperations.appendMessage(ctx.db, { id: 'terminal-pre-admission-user', sessionId: session.id,
+      role: 'user', content: 'already finished', timestamp: 1, status: 'sent' })
+    databaseOperations.appendMessage(ctx.db, { id: 'terminal-pre-admission-assistant', sessionId: session.id,
+      role: 'assistant', content: 'finished', timestamp: 2, status: 'completed' })
+    databaseOperations.createPersistedTurn(ctx.db, { turnId, requestId, sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: 'terminal-pre-admission-assistant', state: 'terminal', outcome: 'failed' })
+    ctx.executeTurn = vi.fn()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const release = vi.fn()
+    primeClaudeAdmission(session.id, requestId, { release } as never)
+    await expect(ipc.getHandler('chat:execute-turn')!({ sender: {} }, { requestId, turnId,
+      turnStartToken: 'terminal-pre-admission-token', sessionId: session.id })).resolves.toMatchObject({ accepted: false })
+    expect(release).toHaveBeenCalledOnce()
+  })
+
   it('全局桌面容量已满时 agent-session 保持 queued 且不创建 Turn', async () => {
     const owner = databaseOperations.createSession(ctx.db, { name: 'capacity owner', model: 'test', workDirProfileId: 'default' })
     const target = databaseOperations.createSession(ctx.db, { name: 'capacity target', model: 'test', workDirProfileId: 'default' })
@@ -490,6 +510,7 @@ describe('file IPC handlers', () => {
     const readSession = vi.fn((sessionId: string) => databaseOperations.getSession(ctx.db, sessionId))
     ctx.sessionStorage = { ...ctx.sessionStorage!, queries: { ...ctx.sessionStorage!.queries, readSession } }
     expect(ctx.sessionStorage.queries.readSession(target.id)?.id).toBe(target.id)
+    expect(databaseOperations.getNextDesktopQueueInput(ctx.db, target.id)).toMatchObject({ requestId, source: 'agent-session' })
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     await publish.mock.calls[0]![0](target.id)
     expect(readSession).toHaveBeenCalledWith(target.id)

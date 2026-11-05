@@ -31,9 +31,11 @@ export function createAgentSessionExecutionAuthorization(input: {
       if (!snapshot?.approval) return { kind: 'waiting', reason: 'approval-missing' }
       const { source, approval, originDigest, approvalDigest } = snapshot
       const target = input.storage.queries.readSession(inputRequest.sessionId)
+      const ownerSession = input.storage.queries.readSession(source.ownerSessionId)
       if (!target || source.kind !== 'agent-session' || source.targetSessionId !== inputRequest.sessionId ||
         source.requestId !== inputRequest.requestId || source.messageId !== inputRequest.messageId ||
-        !target.id || target.ownership === 'internal' || target.visibility === 'hidden' ||
+        !target.id || target.ownership !== 'user' || target.visibility === 'hidden' || !ownerSession ||
+        ownerSession.ownership !== 'user' || ownerSession.visibility === 'hidden' || ownerSession.workDirProfileId !== target.workDirProfileId ||
         approval.originDigest !== originDigest || approval.ownerSessionId !== source.ownerSessionId ||
         approval.targetSessionId !== source.targetSessionId || approval.targetGeneration !== target.generation ||
         approval.requestId !== source.requestId || approval.messageId !== source.messageId || approval.queueScope !== 'desktop' ||
@@ -59,8 +61,13 @@ export function createAgentSessionExecutionAuthorization(input: {
         kind: 'approved',
         finalCheck: (facts) => {
           const current = input.readCurrentAuthority()
+          const currentTarget = input.storage.queries.readSession(inputRequest.sessionId)
+          const currentOwner = input.storage.queries.readSession(source.ownerSessionId)
           return Boolean(current && current.policyRevision === authority.policyRevision &&
             current.authorizationGeneration === authority.authorizationGeneration && current.runtimeGeneration === authority.runtimeGeneration &&
+            currentTarget?.ownership === 'user' && currentTarget.visibility !== 'hidden' && currentTarget.generation === target.generation &&
+            currentOwner?.ownership === 'user' && currentOwner.visibility !== 'hidden' &&
+            currentOwner.workDirProfileId === currentTarget.workDirProfileId &&
             facts.originDigest === originDigest && facts.approvalDigest === approvalDigest &&
             facts.targetGeneration === target.generation && facts.source.ownerSessionId === source.ownerSessionId &&
             facts.source.targetSessionId === source.targetSessionId && facts.source.requestId === source.requestId &&

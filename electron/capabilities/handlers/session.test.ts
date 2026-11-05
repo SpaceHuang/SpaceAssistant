@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'crypto'
 import { createMemoryAppDb } from '../../database/testHelpers'
 import { appendMessage, createSession, listSessions, getMessagesPage } from '../../database/operations'
@@ -25,6 +25,7 @@ function ctx(overrides?: Partial<CapabilityContext>): CapabilityContext {
     userDataDir: '/user',
     sessionId: 'current',
     requestId: 'r1',
+    lane: 'desktop',
     signal: new AbortController().signal,
     appDatabase: db,
     sessionQueries: createSqliteSessionStorage(db).queries,
@@ -254,6 +255,7 @@ describe('action.session.message', () => {
     expect(drain).toHaveBeenCalledTimes(1)
     const revoked = await revoke.handler({ requestId: 'send-key' }, messageContext) as { kind: string }
     expect(revoked.kind).toBe('revoked')
+    expect(drain).toHaveBeenCalledTimes(2)
     await expect(send.handler({ targetSessionId: owner, requestId: 'send-key', content: 'different target' }, messageContext))
       .rejects.toThrow('SESSION_MESSAGE_REQUEST_CONFLICT')
     const duplicate = await send.handler({ targetSessionId: target, requestId: 'send-key', content: 'hello' }, messageContext) as {
@@ -279,6 +281,28 @@ describe('action.session.message', () => {
       .rejects.toThrow('SESSION_MESSAGE_DESKTOP_ONLY')
     expect(drain).not.toHaveBeenCalled()
     expect(createSqliteSessionStorage(db).queries.readMessages({ sessionId: owner })).toHaveLength(0)
+  })
+
+  it('rejects remote targets, cross-profile targets, remote owners, and a missing lane without writes or wakes', async () => {
+    const owner = createSession(db, { name: 'desktop-owner', ownership: 'user', workDirProfileId: 'profile-a' })
+    const remote = createSession(db, { name: 'remote-primary', ownership: 'remote', visibility: 'primary', workDirProfileId: 'profile-a' })
+    const automation = createSession(db, { name: 'automation-primary', ownership: 'automation', visibility: 'primary', workDirProfileId: 'profile-a' })
+    const otherProfile = createSession(db, { name: 'other-profile', ownership: 'user', workDirProfileId: 'profile-b' })
+    const remoteOwner = createSession(db, { name: 'remote-owner', ownership: 'remote', visibility: 'primary', workDirProfileId: 'profile-a' })
+    const drain = vi.fn()
+    const storage = createSqliteSessionStorage(db)
+    const service = createSessionMessageService({ storage, requestDesktopDrain: drain })
+    const send = findCap('action.session.message.send')
+    for (const [caller, target, lane] of [[owner.id, remote.id, 'desktop'], [owner.id, automation.id, 'desktop'], [owner.id, otherProfile.id, 'desktop'],
+      [remoteOwner.id, owner.id, 'desktop'], [owner.id, owner.id, undefined]] as const) {
+      await expect(send.handler({ targetSessionId: target, requestId: `reject-${randomUUID()}`, content: 'no write' },
+        ctx({ sessionId: caller, lane, sessionMessages: service }))).rejects.toThrow()
+    }
+    expect(drain).not.toHaveBeenCalled()
+    expect(storage.queries.readMessages({ sessionId: remote.id })).toHaveLength(0)
+    expect(storage.queries.readMessages({ sessionId: automation.id })).toHaveLength(0)
+    expect(storage.queries.readMessages({ sessionId: otherProfile.id })).toHaveLength(0)
+    expect(storage.queries.readMessages({ sessionId: owner.id })).toHaveLength(0)
   })
 
   it('keeps the durable receipt when drain wake fails', async () => {

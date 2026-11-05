@@ -268,6 +268,42 @@ describe('agent session message acceptance persistence', () => {
     db.close()
   })
 
+  it('enforces the desktop queue limit atomically while allowing a full-queue idempotent replay', () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'limit-owner' })
+    const target = createSession(db, { name: 'limit-target' })
+    let tenth: ReturnType<typeof enqueueAgentSessionMessageInScope> | undefined
+    for (let index = 1; index <= 10; index++) {
+      tenth = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+        requestId: `limit-${index}`, content: `message-${index}`, authorizationBinding: {} })
+    }
+    expect(enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId: 'limit-10', content: 'message-10', authorizationBinding: {} })).toMatchObject({ duplicate: true })
+    expect(() => enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId: 'limit-11', content: 'message-11', authorizationBinding: {} })).toThrow('AGENT_SESSION_QUEUE_FULL')
+    expect(getNextDesktopQueueInput(db, target.id)?.requestId).toBe('limit-1')
+    expect(tenth?.receipt.state).toBe('queued')
+    expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id=? AND role='user' AND status='queued'").get(target.id))
+      .toEqual({ count: 10 })
+    db.close()
+  })
+
+  it('concurrent admissions cannot both claim the final desktop queue slot', async () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'concurrent-limit-owner' })
+    const target = createSession(db, { name: 'concurrent-limit-target' })
+    for (let index = 1; index < 10; index++) enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id,
+      targetSessionId: target.id, requestId: `concurrent-limit-${index}`, content: `message-${index}`, authorizationBinding: {} })
+    const attempts = await Promise.allSettled(['left', 'right'].map((key) => Promise.resolve().then(() =>
+      enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+        requestId: `concurrent-${key}`, content: key, authorizationBinding: {} }))))
+    expect(attempts.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(attempts.filter((result) => result.status === 'rejected')).toHaveLength(1)
+    expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id=? AND role='user' AND status='queued'").get(target.id))
+      .toEqual({ count: 10 })
+    db.close()
+  })
+
   it('rolls back the queued message when receipt insertion fails', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)

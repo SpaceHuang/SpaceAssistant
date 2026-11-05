@@ -668,4 +668,28 @@ describe('createOutboundDrainer（排水不变量）', () => {
     // 队列保留(非命令类不被消费),等下一条终态/用户动作再试
     expect(queuedCount(db, session.id)).toBe(1)
   })
+
+  it('agent-session 启动错误耗尽后写 not-executed 并推进下一条队首', async () => {
+    const session = createSession(db, { name: 'agent-start-failure' })
+    const owner = createSession(db, { name: 'agent-start-owner' })
+    const storage = createSqliteSessionStorage(db)
+    const failed = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'agent-fails', content: 'will not execute', authorizationBinding: {} })
+    enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'after-agent', content: 'next' })
+    const startAgentSession = vi.fn(async () => { throw new Error('configuration failed') })
+    const submitOutbound = vi.fn(async (intent: OutboundSubmitIntent) => ({ accepted: 'turn-started' as const,
+      sessionId: intent.sessionId!, turnId: 'next-turn', assistantMessage: { id: 'assistant' } as unknown as Message }))
+    const drainer = createOutboundDrainer({ submitOutbound, startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined,
+      settleAgentSessionStartFailure: ({ sessionId, requestId }) => storage.commands.agentSessionMessages.markNotExecuted({ sessionId, requestId, reason: 'start-failed' }),
+      audit: vi.fn() })
+    await drainer.drain(session.id)
+    for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(startAgentSession).toHaveBeenCalledTimes(4)
+    expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId: failed.receipt.requestId }))
+      .toMatchObject({ kind: 'not-executed', reason: 'start-failed' })
+    expect(submitOutbound).toHaveBeenCalledTimes(1)
+    expect(submitOutbound.mock.calls[0]?.[0].contextIntent).toMatchObject({ kind: 'reuse-user', requestId: 'after-agent' })
+    expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('after-agent')
+  })
 })

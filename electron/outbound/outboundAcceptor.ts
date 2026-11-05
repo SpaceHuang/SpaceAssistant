@@ -666,6 +666,7 @@ export type OutboundDrainerDeps = {
   getNextQueued: (sessionId: string) => { message: Message; sequence: number; requestId?: string; source?: import('../sessionStorage/public/model').QueueInputSource } | null
   /** Host-only path for receipt-bound cross-session inputs; never routes through submitOutbound. */
   startAgentSession?: (input: { sessionId: string; requestId: string; messageId: string }) => Promise<'started' | 'busy' | 'waiting' | 'unavailable'>
+  settleAgentSessionStartFailure?: (input: { sessionId: string; requestId: string }) => boolean
   /** 消费一条不可由主进程执行的排队条目(本地命令类),由实现层删除落库 */
   consumeQueued: (sessionId: string, messageId: string) => void
   audit: (event: string, data: Record<string, unknown>) => void
@@ -690,14 +691,23 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
   const suppressedTriggers = new Set<string>()
 
   function scheduleRetry(sessionId: string): void {
-    const n = (retryAttempts.get(sessionId) ?? 0) + 1
-    retryAttempts.set(sessionId, n)
+    const head = deps.getNextQueued(sessionId)
+    const retryKey = `${sessionId}\u0000${head?.requestId ?? ''}`
+    for (const key of retryAttempts.keys()) {
+      if (key.startsWith(`${sessionId}\u0000`) && key !== retryKey) retryAttempts.delete(key)
+    }
+    const n = (retryAttempts.get(retryKey) ?? 0) + 1
+    retryAttempts.set(retryKey, n)
     if (n > MAX_DRAIN_RETRIES) {
       deps.audit('outbound.drain.stalled', {
         sessionId,
         attempts: n,
-        requestId: deps.getNextQueued(sessionId)?.requestId
+        requestId: head?.requestId
       })
+      if (head?.source === 'agent-session' && head.requestId && deps.settleAgentSessionStartFailure?.({ sessionId, requestId: head.requestId })) {
+        retryAttempts.delete(retryKey)
+        queueMicrotask(() => { void drain(sessionId) })
+      }
       return
     }
     queueMicrotask(() => {
@@ -718,7 +728,7 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
     }
     if (started) {
       // 已成功发起:后续丢触发由新 turn 的终态投影接管(turn-started 必有 active)
-      retryAttempts.delete(sessionId)
+      for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
       // 但 submitOutbound await 期间可能有终态被挡(如 configuring 立即失败)——仍需补扫一次
       if (suppressedTriggers.has(sessionId)) {
         suppressedTriggers.delete(sessionId)
@@ -729,7 +739,7 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       return
     }
     if (parkedAgentSessions.delete(sessionId)) {
-      retryAttempts.delete(sessionId)
+      for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
       return
     }
     if (suppressedTriggers.has(sessionId)) {
@@ -739,7 +749,7 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       return
     }
     if (deps.listActiveCount(sessionId) > 0) {
-      retryAttempts.delete(sessionId)
+      for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
       return
     }
     if (deps.getNextQueued(sessionId)?.message.status === 'queued') {

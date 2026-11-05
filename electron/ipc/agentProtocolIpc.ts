@@ -1005,6 +1005,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const configuring = configuringTurnsById.get(payload.turnId)
     const persisted = sessionStorage.execution.readTurn({ sessionId: payload.sessionId, turnId: payload.turnId })
     if (persisted?.state === 'terminal') {
+      clearPrimedClaudeAdmission(payload.sessionId, payload.requestId)
       if (configuring) void configuring.then(({ skillTurnScope }) => skillTurnScope?.close(), () => undefined)
       return { ok: true as const, accepted: false as const, turnId: payload.turnId }
     }
@@ -1025,6 +1026,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           sessionStorage.execution.continuations.settleForTurn({ targetTurnId: payload.turnId, status })
         }
       } catch {
+        // facts/final-check handoff: configuring may fail or be cancelled before Claude consumes
+        // the pre-admitted ticket. Release the ticket only if it is still owned by this request.
+        clearPrimedClaudeAdmission(payload.sessionId, payload.requestId)
         // 配置失败/取消已由 configuring 路径写入 terminal，不能把它伪装成 legacy config 错误。
         if (continuationId) sessionStorage.execution.continuations.settleForTurn({ targetTurnId: payload.turnId, status: 'failed' })
       } finally {
@@ -1156,6 +1160,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   // 主进程排水器：turn 终态后取队首 queued 驱动下一回合（偏差 9 核心条目——「何时发起下一回合」回主进程）。
   // 渲染端 drainQueueForSession 触发器在 1c 删除，此前两者并存（先建后删，避免双驱空窗）。
   const startAgentSession = async (input: { sessionId: string; requestId: string; messageId: string }) => {
+    const requestId = input.requestId.trim()
+    if (!requestId || requestId.length > 200 || requestId !== input.requestId) throw new Error('Invalid requestId')
     const approval = ctx.agentSessionExecutionAuthorization?.resolve(input)
     if (!approval) return 'unavailable' as const
     if (approval.kind === 'waiting') return 'waiting' as const
@@ -1167,7 +1173,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       const prepared = await prepareTurnInternal({ mode: 'reuse-user', requestId: input.requestId,
         sessionId: input.sessionId, userMessageId: input.messageId, excludeMessageIds: [], config: {} }, approval.finalCheck)
       void executeTurnInternal(null, { requestId: prepared.requestId, turnId: prepared.turnId,
-        turnStartToken: prepared.startToken, sessionId: prepared.sessionId })
+        turnStartToken: prepared.startToken, sessionId: prepared.sessionId }).catch(() =>
+        clearPrimedClaudeAdmission(input.sessionId, input.requestId))
       return 'started' as const
     } catch (error) {
       clearPrimedClaudeAdmission(input.sessionId, input.requestId)
@@ -1184,6 +1191,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     listActiveCount: (sessionId) => turnRuntime.listActive(sessionId).length,
     getNextQueued: (sessionId) => sessionStorage.execution.getNextDesktopQueueInput(sessionId),
     startAgentSession,
+    settleAgentSessionStartFailure: ({ sessionId, requestId }) => sessionCommands.agentSessionMessages.markNotExecuted({ sessionId, requestId, reason: 'start-failed' }),
     consumeQueued: (_sessionId, messageId) => {
       // B5:排队的渲染端本地命令(如 /test-cards)主进程无法执行,消费落库避免卡队
       sessionCommands.deleteQueuedMessage(messageId)
@@ -1379,6 +1387,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       }
       const result = sessionCommands.deleteQueuedMessage(payload.messageId, previewCandidate)
       if (result.ok) {
+        void outboundDrainer.drain(result.sessionId).catch(() => undefined)
       }
       return result
     }

@@ -16,7 +16,7 @@ function getSessionQueries(ctx: CapabilityContext) {
 function requireMessageService(ctx: CapabilityContext) {
   if (!ctx.sessionMessages) throw new Error('SESSION_MESSAGE_SERVICE_UNAVAILABLE')
   if (!ctx.sessionId || !ctx.requestId) throw new Error('SESSION_MESSAGE_CALLER_UNAVAILABLE')
-  if ((ctx.lane ?? 'desktop') !== 'desktop') throw new Error('SESSION_MESSAGE_DESKTOP_ONLY')
+  if (ctx.lane !== 'desktop') throw new Error('SESSION_MESSAGE_DESKTOP_ONLY')
   return { service: ctx.sessionMessages, ownerSessionId: ctx.sessionId }
 }
 

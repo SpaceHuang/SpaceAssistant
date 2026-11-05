@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'crypto'
+import { MAX_CHAT_MESSAGE_QUEUE_SIZE } from '../../src/shared/chatMessageQueue'
 import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionExecutionApproval, AgentSessionExecutionFinalCheckFacts, AgentSessionInputSource, Message, MessageStatus, Session } from '../../src/shared/domainTypes'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
 import type { SessionOwnership, SessionVisibility } from '../../src/shared/sessionOwnership'
@@ -1022,6 +1023,10 @@ export function enqueueAgentSessionMessageInScope(
     const conflictingKey = conn.prepare(`SELECT 1 FROM queue_input_requests WHERE session_id=? AND request_id=? AND queue_scope=?`)
       .get(input.targetSessionId, input.requestId, 'desktop')
     if (conflictingKey) throw new Error('AGENT_SESSION_REQUEST_CONFLICT')
+
+    const queuedCount = Number(conn.prepare(`SELECT COUNT(*) AS count FROM messages
+      WHERE session_id=? AND queue_scope='desktop' AND role='user' AND status='queued'`).get(input.targetSessionId)?.count ?? 0)
+    if (queuedCount >= MAX_CHAT_MESSAGE_QUEUE_SIZE) throw new Error('AGENT_SESSION_QUEUE_FULL')
 
     const messageId = randomUUID()
     const now = Date.now()
