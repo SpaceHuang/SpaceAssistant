@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { agentSessionInputEventDigest, agentSessionOriginDigest, classifyQueueInputSource } from './queueInputSource'
-import { claimAgentSessionTurnAtomically, claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, getNextDesktopQueueInput, readAgentInputSettlement, updateQueueInputReceiptStateInScope, updateQueuedUserMessageContentInScope, verifyAgentSessionAdmission } from './operations'
+import { claimAgentSessionTurnAtomically, claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, getNextDesktopQueueInput, readAgentInputSettlement, recoverPersistedTurn, updateQueueInputReceiptStateInScope, updateQueuedUserMessageContentInScope, verifyAgentSessionAdmission } from './operations'
 import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { openDatabase } from './index'
-import { getDbConnection } from './sqliteStore'
+import { getDbConnection, reopenDatabaseConnection } from './sqliteStore'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { createSessionCommands } from '../sessionStorage/commands'
 
@@ -583,5 +583,38 @@ describe('agent session message acceptance persistence', () => {
     expect(receipt.turn_id).toBeNull()
     expect((JSON.parse(receipt.source_json) as AgentSessionInputSource).admission).toBeUndefined()
     db.close()
+  })
+})
+
+describe('agent session restart recovery', () => {
+  it('reopens a claimed source as the original admitted Turn and settles its orphan terminal exactly once', () => {
+    const temp = createTempDatabase('agent-session-reopen-recovery-')
+    const { db, cleanup } = temp
+    try {
+      const owner = createSession(db, { name: 'reopen-owner' })
+      const target = createSession(db, { name: 'reopen-target' })
+      const accepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+        requestId: 'reopen-agent-request', content: 'restart body', authorizationBinding: {} })
+      const approved = approveAgentInput(db, owner.id, target, 'reopen-agent-request', accepted.source.messageId)
+      const claimed = claimAgentSessionTurnAtomically(db, { sessionId: target.id, userMessageId: accepted.source.messageId,
+        turnId: 'reopen-agent-turn', assistantMessageId: 'reopen-agent-assistant', requestId: 'reopen-agent-request',
+        startToken: 'reopen-agent-token' }, () => true)
+
+      db.close()
+      reopenDatabaseConnection(db)
+
+      expect(verifyAgentSessionAdmission(db, { sessionId: target.id, turnId: 'reopen-agent-turn',
+        requestId: 'reopen-agent-request', userMessageId: claimed.user.message.id })).toMatchObject({ kind: 'admitted',
+        material: { admission: { approvalDigest: approved.approvalDigest, turnId: 'reopen-agent-turn' } } })
+      expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'reopen-agent-request' }))
+        .toMatchObject({ kind: 'claimed', turnId: 'reopen-agent-turn' })
+      expect(recoverPersistedTurn(db, 'reopen-agent-turn', 'reopen-agent-assistant')).toBe(true)
+      expect(recoverPersistedTurn(db, 'reopen-agent-turn', 'reopen-agent-assistant')).toBe(false)
+      expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'reopen-agent-request' }))
+        .toMatchObject({ kind: 'turn-terminal', turnId: 'reopen-agent-turn', outcome: 'recovered' })
+      expect(getNextDesktopQueueInput(db, target.id)).toBeNull()
+    } finally {
+      cleanup(db)
+    }
   })
 })

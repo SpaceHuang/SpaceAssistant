@@ -1460,6 +1460,7 @@ app.whenReady().then(async () => {
   const wakeAgentSessionQueue = () => wakeQueuedAgentSessions({
     sessionIds: () => sessionStorage.queries.listSessions({ view: 'all' }).map((session) => session.id),
     getNextQueued: (sessionId) => sessionStorage.execution.getNextDesktopQueueInput(sessionId),
+    recoverTarget: (sessionId) => sessionStorage.execution.recoverExecutionTarget(sessionId),
     drain: (sessionId) => requestDesktopDrain(sessionId),
     onError: (_sessionId, error) => console.warn('[session-message] desktop queue wake failed:',
       error instanceof Error ? error.message : String(error))
