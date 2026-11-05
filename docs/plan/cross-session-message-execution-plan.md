@@ -6,9 +6,9 @@
 
 先验证本机能否在不接外部服务的情况下重现发送、撤回、执行和等待链路。开发者用临时数据库、真实本机运行时和替身模型验证。负责人已按方案推荐项批准来信保存格式与撤权边界；B-01 五项设计条件完成复审，具体入口屏障仍须由实现测试验收。
 
-其他平台、候选安装包和真实模型账号只用于本功能发布验收，不阻断本机开发、测试或源码关闭。上游触发器代码合入 main 并通过本计划 B02 定向测试，即满足源码集成基线；不要求先正式发布上游安装包。正式发布只属于发布验收，不作为迁移、等待集成或源码关闭的前置。真实 IM 发送不在本期验收范围；本机用调用计数核对没有平台外发。排查入口、构造样本、设计竞态和恢复测试由执行者负责。
+上游触发器代码合入 main 并通过本计划 B02 定向测试，即满足源码集成基线；不要求先正式发布上游安装包。真实 IM 发送不在本期验收范围；本机用调用计数核对没有平台外发。排查入口、构造样本、设计竞态和恢复测试由执行者负责。
 
-**本轮执行终点：**T08 本机源码门禁通过，阶段提交合并进 `main`。E04/E02/E03 是独立的候选包与发布验收流程，不属于本轮实现完成条件；它们不阻断 T08、源码关闭或合入 `main`，也不要求产出正式版本。
+**本轮执行终点：**本机源码门禁通过，阶段提交合并进 `main`。打包、正式版本和对外发布不属于本执行计划的任务或完成条件。
 
 ## 1. 阶段交付与回退【人机共读】
 
@@ -18,9 +18,8 @@
 | P1 存储与来源 | 交付迁移、可信来源、请求与撤回、批准刷新和最终接纳事务 | 存储、数据库、共享类型及就近测试；不注册新工具/条件 | 按方案 §11 回退阶段提交或恢复升级前整库；保留旧格式读取，仅替换指定删除关系 |
 | P2 桌面能力 | 交付服务、策略、排水、模型材料、全部执行与恢复核验 | 工具、排水、IPC 内部处理、运行时、历史和装配；新工具仅在本机测试装配暴露 | 阶段提交可回退；已接纳事实不得清除；不移除旧触发器或普通输入门禁 |
 | P3 等待与源码关闭 | 交付准确等待、一次通知、全链回归、本机关闭演练；T08 通过后将源码阶段提交合并进 `main` | 原触发器、装配与测试；使用临时库完成完整功能接线 | 回退阶段提交或恢复整库；不移除旧条件、旧通知授权或引入永久开关 |
-| 独立发布验收（不属于本轮） | 由发布负责人另行决定是否产出候选包、进行外部验收及启用 | E04/E02/E03；不作为源码关闭或合入 `main` 的前置 | 按发布流程使用对应旧版本及整库备份；与源码关闭分别记录 |
 
-方案 U-01 改为本机源码集成核验：确认触发器合入 SHA 是 main 祖先，并在 B04 检出通过 B02 的定向测试。该证据满足正式迁移与等待集成的源码前置；不依赖上游正式发布。B04 将已有隔离检出前移到当前 main 后代，重走依赖与基线测试，不在旧 schema 上分配迁移号。U-02 用本机 Electron SQLite 临时库核验，U-03 用替身捕获实际适配器输出并核对策略，U-04 留给本功能候选包和真机发布验收。Python 机制实验不抵扣应用级用例。
+方案 U-01 改为本机源码集成核验：确认触发器合入 SHA 是 main 祖先，并在 B04 检出通过 B02 的定向测试。该证据满足迁移与等待集成的源码前置；不依赖上游正式发布。B04 将已有隔离检出前移到当前 main 后代，重走依赖与基线测试，不在旧 schema 上分配迁移号。U-02 用本机 Electron SQLite 临时库核验，U-03 用替身捕获实际适配器输出并核对策略。U-04 所描述的包安装和真实模型场景不是本计划任务或本机门禁。Python 机制实验不抵扣应用级用例。
 
 ### 检出与文档版本
 
@@ -66,13 +65,10 @@ B01 先用 `git worktree list --porcelain` 定位检出，再用 `git -C "$impl_
 | T06 | T05 |
 | T07 | T06 |
 | T08 | T07 |
-| E04 | T08, E01 |
-| E02 | E04 |
-| E03 | T08, E02 |
 
 ## 3. 任务登记【机｜人工可跳过】
 
-除标明外部的 E04/E02/E03 外均为本机任务，由实现者执行，阶段出口由复核者核查。E01 是上游源码集成与定向测试证据，不再要求正式发布；E04/E02/E03 属独立候选与发布流程，不进入本轮目标、源码门禁或合入 `main` 的完成判据。每行只有一个进度标记；关闭时附源码 SHA、测试名/命令、结果及证据位置。建议用 `docs/plan/evidence/cross-session-message/<任务ID>.md` 保存脱敏摘要，大日志留在临时目录；不要记录正文、密钥或令牌。
+除明确写为外部的项目基线核验外，本计划任务均可在本机完成，由实现者执行、阶段出口由复核者核查。E01 是上游源码集成与定向测试证据，不要求正式发布。打包、正式版本与对外发布不属于本计划，不是源码门禁或合入 `main` 的前置。每行只有一个进度标记；关闭时附源码 SHA、测试名/命令、结果及证据位置。建议用 `docs/plan/evidence/cross-session-message/<任务ID>.md` 保存脱敏摘要，大日志留在临时目录；不要记录正文、密钥或令牌。
 
 下表 `vt <路径>` 代表 `npm exec vitest run <路径>`，从 B01 记录的检出根运行；B04 完成后，以 B04 记录的 main 后代实施检出根为准；同阶段路径合并运行。标“拟”的测试文件须在对应任务落地时建立，若采用现有测试文件替代，在证据中更新实际命令。授权屏障在相应实现前写具名用例；若记录 RED，必须以同一命令复跑 GREEN，且 RED 只接受目标行为缺失，环境/既有失败单记。涉及事务的用例使用真实 SQLite；策略、故障、时钟和模型可注入，不替换被测裁决器。
 
@@ -93,32 +89,29 @@ B01 先用 `git worktree list --porcelain` 定位检出，再用 `git -C "$impl_
 | - [x] S07 实现撤回 CAS 并验证竞争 | `electron/database/operations.ts`、`electron/sessionStorage/`；撤回写口与存储状态机用例 | `npm exec vitest run electron/database/agentSessionMessageStore.test.ts electron/database/operations.queueScope.test.ts`：2 个文件、30 项通过；撤回先胜/领取先胜、重复撤回/删除、已领不可撤回；固定种子 `0x5a17c0de` 运行 36 次状态操作并关闭重开 SQLite，settlement/终态无复活。Electron/shared 类型与存储边界通过；证据见 `docs/plan/evidence/cross-session-message/S07.md`。CAS 实现见 S04，领取屏障见 S06。V-05/08/09d（AC-07/08/12/14/15/16/17，存储子集）。 |
 | - [x] S08 关闭 P1 并提交 | P1 测试、数据库临时样本、阶段提交 | S01～S07 证据齐备；8 个文件、176 项存储/队列回归通过，新增 Electron 文件库 v123→当前 schema 应用入口对拍并重开验证旧回执；storage、cleanup、message-fact、Electron SQLite 探针、增量构建、shared/Electron 类型门禁通过。证据见 `docs/plan/evidence/cross-session-message/S08.md`。仅关闭 V-02/03/05/07/08/09a/d 已实现存储子集（AC-04/08/09/15～17/19），不标记后续端到端通过。 |
 | - [x] A01 封装可信发送和撤回事实服务 | `electron/capabilities/sessionMessageService.ts`、`electron/capabilities/handlers/session.ts`、`electron/database/operations.ts`、`electron/sessionStorage/`、`electron/outbound/`；写入事实、幂等与桌面 FIFO 接线 | `npm exec vitest run electron/capabilities/handlers/session.test.ts electron/capabilities/toolkitTool.test.ts electron/database/agentSessionMessageStore.test.ts electron/sessionStorage/public/ports.test.ts electron/outbound/outboundAcceptor.test.ts electron/outbound/outboundDrainer.test.ts`：6 文件、125 项通过；覆盖所有权上下文、可见性/lane、持久接纳、唤醒失败、请求冲突与重复、目标删除墓碑重放、撤回/领取胜序、FIFO 与无批准拒领。`npx tsc -p tsconfig.electron.json --noEmit`、`npm run typecheck:shared`、`git diff --check` 通过。证据 `docs/plan/evidence/cross-session-message/A01.md`。A01 仅关闭已持久接纳与发送方撤回；不声称执行批准或 provider 已接通，后者属于 A02/A04～A07。V-01/02/05（AC-01～04/08/09/11/15～18，服务子集）。 |
-| - [～] A02 接入写策略和排队批准刷新 | `electron/capabilities/handlers/session.ts`、现有 toolkit 策略/审计与宿主批准适配；具名决策轨迹 | 新增 RED→GREEN 覆盖 stale approval 不能接受新策略轨迹、CAS 更新后 source 保持不变；owner 同 request ID 重新经过 host policy + 用户确认后可刷新批准，目标最终唤醒发生在新批准落库之后。`agentSessionExecutionAuthorization.test.ts`、`handlers/session.test.ts` 共 25 项，`appIpc.file.test.ts` 61 项通过；Electron tsc、registry 门禁通过。完整 provider/dispatcher 零调用与全生命周期竞态仍待 A09/T06 集成核验；目标 generation 改变 fail closed。V-01/09a（AC-03/11/18/19）。证据见 `docs/plan/evidence/cross-session-message/A02.md`。 |
+| - [x] A02 接入写策略和排队批准刷新 | `electron/capabilities/handlers/session.ts`、现有 toolkit 策略/审计与宿主批准适配；具名决策轨迹 | RED→GREEN 覆盖 stale approval 不可沿用新策略轨迹、CAS 更新保留原 source；owner 同 request ID 重走 host policy + 用户确认后刷新批准，持久化新批准后才唤醒。`agentSessionExecutionAuthorization.test.ts` 与 `handlers/session.test.ts` 25 项、`appIpc.file.test.ts` 公开 dispatcher / 直接 IPC 屏障、Hosted provider 集成和目标 generation 关闭重开拒领通过。A09 逐入口记录 provider/source/execute 调用计数和 Turn 终态。Electron tsc、SYS registry 门禁通过。V-01/09a（AC-03/11/18/19）。证据见 `docs/plan/evidence/cross-session-message/A02.md`、`A09.md`。 |
 | - [x] A03 接入工具发现与结构化读取 | `electron/capabilities/handlers/session.ts`、工具注册及共享 DTO、错误资源；测试装配 | `vt electron/capabilities/handlers/session.test.ts`；发现/调用两个写工具，验证回执和稳定错误；read 截断保留 source，纯消息导入不升权。V-01/03（AC-01/02/04/11/18/19）。`action.session.message.send/revoke` 注册、发现与 owner schema、来源读取投影（含截断保留）已完成；2 文件 25 项、Electron tsc 通过。证据 `docs/plan/evidence/cross-session-message/A03.md`；source 伪造/导入边界引用 S02。 |
 | - [x] A04 实现持久接纳核验与 TurnRuntime 守卫 | `electron/turnRuntime.ts`、coordinator、宿主存储读取及装配端口 | `vt electron/turnRuntime.test.ts`；双 execute 入口在执行或 source callback 前强制核验，缺端口拒绝，匹配原凭据的 UUID 不因来源撤权被重批；损坏、材料不一致零调用并终结原 Turn，普通和触发器门禁保持。V-09b/c/d（AC-19/20）。两个 execute 入口在 source 前验证持久 admission；SQLite 核验区分 ordinary/admitted/invalid，缺损终结原 Turn 且零 source 调用；SYS-AGENTINPUT-001 已登记。4 文件 139 项、缺 verifier 端口零调用、tsc、registry 门禁通过。证据 `docs/plan/evidence/cross-session-message/A04.md`。 |
-| - [～] A05 封闭直接 prepare/execute IPC | `electron/ipc/agentProtocolIpc.ts`、`electron/main.ts`；专用领取与所有公开执行入口 | `appIpc.file.test.ts` 覆盖公开 prepare 不可伪造/省略 source；新增专用 dispatcher atomic final-check 失败保持 queued、无 Turn、零 `executeTurn` 调用。配合 A02 的同 request ID 新授权 CAS 刷新后唤醒。3 个定向文件 87 项通过；SYS registry、Electron tsc 通过。renderer 持有既有 Turn 凭据时撤权/损坏材料直接 execute 与完整伪造矩阵仍未完成。V-04/09a/b/c（AC-05/07/19）。证据见 `docs/plan/evidence/cross-session-message/A05.md`。 |
-| - [～] A06 封闭直接模型入口并构造来源材料 | `electron/claudeStreamHandlers.ts`、宿主历史适配；实际 provider 输入捕获 | Hosted 集成测试使用真实临时 SQLite + host claim + 替身模型，确认 provider 收到来源 session/request 标记及“不代表用户批准”包装；`source_json=NULL` 与领取后篡改正文均 fail closed，provider 调用数不增加。来源丢失单测先 RED 后 GREEN；上下文、存储、旧 History 回归 133 项通过，Hosted 捕获 1 项通过；Electron tsc、SYS-AGENTINPUT-001 registry 通过。压缩/continuation/recovery provider 捕获与完整伪造字段矩阵仍待完成。V-03/09b/c（AC-02/04/19/20）。证据见 `docs/plan/evidence/cross-session-message/A06.md`。 |
-| - [～] A07 接入桌面排水与唤醒 | `electron/outbound/`、`electron/main.ts`；排水入口与释放后补唤醒 | agent-session 只走专用宿主路径并对 waiting 停止自旋；全局槽位在 claim 前以 `CallAdmissionGate` 票据预留，执行器复用该票据；容量释放及启动恢复先做来源分类/目标恢复再补扫。新增 IPC→drainer busy 集成断言：全局容量满时 receipt 留 queued 且无 Turn。7 个定向文件共 173 项通过（含 `appIpc.file.test.ts` 全文件）、Electron tsc、SYS-AGENTINPUT-001 registry 门禁和 `git diff --check` 通过。更广的手动/触发器/IM 竞争、通知等待与完整 V-04/09 矩阵仍未完成。V-04/09（AC-05/06/07/09/12/18/19）。 |
-| - [～] A08 接入启动与继续执行恢复 | `electron/main.ts`、会话恢复、排水和 hosted 执行装配；重开库屏障证据 | main 启动与全局名额释放时，先运行目标会话已有恢复适配，再按 desktop 队首 source 分类唤醒 agent-session；blocked/active-owner 不进入排水。`desktopAgentSessionWake.test.ts` 两项 RED→GREEN；真实 SQLite 临时库关闭/重开后，原 claimed source 仍校验为 admitted，恢复只将原 Turn 终结一次，settlement 指向原 Turn 且不回 queued/复制（`agentSessionMessageStore.test.ts` 1 项）。2 文件 28 项通过，Electron tsc 通过。queued 旧 generation 重新批准、损坏材料零 source/provider、完整启动时序和 V-04/07/09b/c/d 矩阵仍未完成。V-04/07/09b/c/d（AC-05/08/12/19/20）。 |
-| - [ ] A09 验证授权与副作用全入口 | 上述集成测试；B-01 入口与屏障证据矩阵 | 合跑 A02、A04～A08 测试；按入口标明 V-09a～d 适用性与证据，核对真实调用计数、现有 Turn 终态、目标目录不借全局切换、日志不含正文。通知结算留给 T06。V-01/03/04/09（AC-01～07/11/12/18/19/20）。 |
-| - [ ] A10 关闭 P2 并提交 | P2 阶段证据及提交 | 引用 A01～A09 与 S08；合并运行 P1 受影响回归与 §4 P2 门禁，复核 B-01 授权用例已覆盖桌面路径，未注册生产新能力。V-01/03/04/09（AC-01～07/11/12/18/19/20）。 |
+| - [x] A05 封闭直接 prepare/execute IPC | `electron/ipc/agentProtocolIpc.ts`、`electron/main.ts`；专用领取与所有公开执行入口 | `appIpc.file.test.ts` 覆盖公开 prepare source 防伪/省略、claim final-check 零 Turn/零 execute，以及 dispatcher 捕获的既有 Turn 凭据在直接 IPC 遇到 source JSON、payload 摘要、approval policy revision、admission inputEventDigest 损坏时 source 零调用、原 Turn 终结。正文改写 provider 零调用由 A06 Hosted 集成覆盖。3 文件、91 项通过；SYS registry、Electron tsc 通过。证据 `docs/plan/evidence/cross-session-message/A05.md`。V-04/09a/b/c（AC-05/07/19）。 |
+| - [x] A06 封闭直接模型入口并构造来源材料 | `electron/claudeStreamHandlers.ts`、宿主历史适配；实际 provider 输入捕获 | Hosted 集成真实临时 SQLite + host claim + 替身 provider；确认来源标记、不代表用户批准的包装及正文。重启后恢复原 Turn，provider 仍收到已核验来源；continuation authoritative context 保留来源包装。source 缺失/正文篡改 fail closed 且 provider 无额外调用。RED→GREEN 来源缺失；合跑 Hosted、context、IPC、触发器和存储 6 文件 276 项通过；Electron tsc、SYS registry、diff check 通过。证据 `docs/plan/evidence/cross-session-message/A06.md`。V-03/09b/c（AC-02/04/19/20）。 |
+| - [x] A07 接入桌面排水与唤醒 | `electron/outbound/`、`electron/main.ts`；排水入口与释放后补唤醒 | agent-session 只走专用宿主路径且 waiting 不自旋；全局槽位在 claim 前以 `CallAdmissionGate` 票据预留并由执行器复用；容量释放与启动恢复按来源分类、先恢复目标再排水。IPC→drainer 容量满断言保持 queued 且无 Turn；drainer、共享 admission 多 lane 回归、wake 专项与全量测试通过。7 个定向文件 173 项、Electron tsc、SYS-AGENTINPUT-001 registry 门禁及 `git diff --check` 通过。V-04/09（AC-05/06/07/09/12/18/19）。证据见 `A07.md`、`A09.md`、T06 追溯表。 |
+| - [x] A08 接入启动与继续执行恢复 | `electron/main.ts`、会话恢复、排水和 hosted 执行装配；重开库屏障证据 | main 启动/名额释放按 desktop 队首来源分类；目标恢复返回 blocked/active-owner 时不排水。来源重启后 Hosted provider 收到原包络；原 claimed Turn 只恢复结算一次，queued 旧 generation 重开后拒领，source/admission 损坏时 source/provider 零调用并终结原 Turn。`desktopAgentSessionWake.test.ts`、Hosted 集成与 SQLite store 定向用例通过，Electron tsc 通过。V-04/07/09b/c/d（AC-05/08/12/19/20）。证据见 `A08.md`、`A09.md`、T06 追溯表。 |
+| - [x] A09 验证授权与副作用全入口 | 上述集成测试；B-01 入口与屏障证据矩阵 | 合跑 A02、A04～A08；按入口核对 V-09a～d、真实 source/provider/dispatcher 调用计数、Turn 终态、目标代次及无正文日志。桌面排水与触发器通知结算证据另由 T06 闭合。V-01/03/04/09（AC-01～07/11/12/18/19/20）。证据见 `A09.md`。 |
+| - [x] A10 关闭 P2 并提交 | P2 阶段证据及提交 | A01～A09 与 S08 证据齐备；P1 受影响回归、§4 P2 门禁及 B-01 授权入口复核通过；生产注册边界符合计划。代码阶段提交已完成。V-01/03/04/09（AC-01～07/11/12/18/19/20）。证据见 `A10.md`。 |
 | - [x] T01 解析等待条件及登记权限 | `src/shared/domainTypes.ts`、`electron/triggers/protocol.ts`、`hostService.ts`、注册 handler；条件与 owner 事实校验 | `npm exec vitest run electron/triggers/protocol.test.ts electron/triggers/hostService.test.ts`：2 文件、16 项通过。RED→GREEN 覆盖精确 request 条件、只登记 owner 自己的可见会话、必须存在该 owner 的来源 request、owner active Turn 不阻止登记、未知字段/版本拒绝；既有条件回归。Electron/shared typecheck 通过。证据 `docs/plan/evidence/cross-session-message/T01.md`。V-06/07（AC-10/13/14/19～21，登记子集）。 |
-| - [～] T02 以持久事实匹配等待 | `electron/triggers/sources.ts`、`recovery.ts`、主进程结算适配；终态时间与 revision CAS | 五个定向文件 97 项通过：精确 owner/request settlement；快速终态在登记后首次 scan 即重对账；Turn `updated_at`、四种 terminal outcome、五种未执行原因、source-gap、queued/claimed、到期及 body-free event；重复 scan 复用同一通知 receipt。`npm run check:system-invariant-registry`、Electron/shared typecheck 通过。完整取消/restart/CAS 矩阵仍待 T06。证据 `docs/plan/evidence/cross-session-message/T02.md`。V-06/07（AC-10/13/14/20/21）。 |
+| - [x] T02 以持久事实匹配等待 | `electron/triggers/sources.ts`、`recovery.ts`、主进程结算适配；终态时间与 revision CAS | 五个定向文件 97 项通过：精确 owner/request settlement；快速终态在登记后首次 scan 即重对账；Turn `updated_at`、四种 terminal outcome、五种未执行原因、source-gap、queued/claimed、到期及 body-free event；重复 scan 复用同一通知 receipt。新增真实 SQLite 撤回竞态两种顺序，scanner 均匹配精确 `sender-revoked` 结算且不泄露正文；另覆盖 stale trigger revision CAS。来源事件与登记回归、registry/typecheck/diff 通过。V-06/07（AC-10/13/14/20/21）。证据见 `T02.md`。 |
 | - [x] T03 复用一次性通知投递 | `electron/triggers/` delivery、receiverStarter；固定请求键与结果更新 | 固定 request key 的 queue receipt 覆盖 CAS 崩溃重试及 SQLite close/reopen recovery scan；scanner 由 receipt 补回 trigger.messageId，不重复 enqueue；busy/cancel/receiver Turn completed 与失败 outcome 分开记录；owner 不可用无 receipt；T02 覆盖 source-gap 与目标删除前后通知 owner。`npm exec -- vitest run electron/triggers/delivery.test.ts electron/triggers/receiverStarter.test.ts electron/triggers/recovery.test.ts electron/triggers/processSource.test.ts`：4 文件、37 项通过；T02 五文件 97 项通过。证据 `docs/plan/evidence/cross-session-message/T03.md`。V-06/07（AC-10/14/20/21）。 |
 | - [x] T04 封闭目标删除后的授权链 | `electron/triggers/` hostService、authorization、sourceContext、runtimeMaterials 与 delivery；共享 owner 事实授权适配 | hostService 验证精确 owner/request、错误 receiver、跨 owner；T02 recovery 用真实 SQLite 覆盖目标删除前/后登记并 body-free 通知 owner；processSource 覆盖 owner 不可见时无 receipt，runtimeMaterials 覆盖 agent settlement 仍经 trigger sourceContext/admission，hostAuthorization/authorization 覆盖 payload、policy generation 与 final-check。8 文件、52 项通过；T02 source suite 97 项通过。证据 `docs/plan/evidence/cross-session-message/T04.md`。V-06/09（AC-10/14/19/20/21）。 |
 | - [x] T05 跑完整固定种子状态机 | `electron/triggers/invariants.test.ts` 及来信存储、排水集成 fixture；种子及最小失败序列 | V-08 固定种子组合模型覆盖 accept/claim/revoke/delete/settle/register/cancel/restart/dispatch-fail；逐步断言 owner/request 接纳唯一、active Turn ≤1、通知 ≤1、终态不复活及 scope 隔离。另有 24 个组合随机 lifecycle + 300 步 trigger 随机序列、36 个 message storage 序列。`npm exec -- vitest run electron/triggers/invariants.test.ts electron/database/agentSessionMessageStore.test.ts`：2 文件、28 项通过；Electron tsc、diff check 通过。证据 `docs/plan/evidence/cross-session-message/T05.md`。V-08（AC-07/08/12/14/16/20）。 |
-| - [ ] T06 合跑端到端矩阵 | `electron/claudeStreamHandlers.hostedIntegration.test.ts`、触发器及存储集成 fixture；完整追溯表 | 用真实临时库、替身模型和渠道 spy 联通工具→排水→执行→通知；合跑 S/A/T 相关定向命令。逐条对照方案 §13 的 V-01～09、AC-01～21；包含 V-09c 的原 Turn 失败通知、删除目标端到端与通知授权屏障，记录实际通过用例，不能用单层通过代替。 |
-| - [ ] T07 演练本机关闭和整库回退 | 方案 §11、临时应用库与旧版源码/构建产物；演练记录 | 在本机停止 writer，验证备份、升级、故障回滚、升级后恢复原整库及旧应用重开；对拍旧行/FK、无新增收据遗留，记录备份后写入丢失边界。验证未注册时不能产生新格式业务数据；不对用户库演练。V-07（AC-08/14/19/20）。 |
-| - [ ] T08 关闭源码阶段并提交 | 最终构建/测试记录、P3 阶段提交 | 核对 T01～T07、A10 的证据与方案全量映射；执行 §4 最终门禁；记录外部缺项和发布状态，不把它们计入源码失败。V-01～09（AC-01～21，本机范围）。 |
-| - [ ] E04 产出并交接可验收候选包 | **候选打包，发布负责人或现有打包流程**；基于 T08 的隔离候选提交、平台包与清单 | 候选接通已批的新工具和等待条件，供隔离账号/临时数据目录验收，不对用户分发。记录 T08 SHA、B04 main 基线 SHA、候选 SHA、接线差异、各平台打包命令（`npm run pack:mac` / `npm run pack:win` 或现有等效流程）、产物路径、SHA-256、版本、隔离启动方式及烟测结果。若 main 基线或接线以外代码变化，先核对合同并完成受影响复验，再重建和交接；E02 只接收完成复验的这批包。准备 V-03/04/07/09（AC-05/08/19）。 |
-| - [ ] E02 验证候选包与真实模型 | **外部，发布验收人**；E04 清单、对应 macOS/Windows 候选包、真实模型账号 | 按清单验证 SHA-256、平台、版本及新能力已接线，按 U-04 在隔离配置中记录安装/重启、无窗口启动、真实模型来源识别、审批边界及关闭/恢复证据。V-03/04/07/09（AC-05/08/19）；缺项只标相应发布场景未验。 |
-| - [ ] E03 审核发布并按已批合同启用 | **外部，发布负责人**；发布记录、备份及回退定位 | 核对待发布包与 E02 已验包一致；产物或接线发生变化，回到 E04/E02 复验受影响项。引用 T07 演练与 T08 源码验收，核验备份及旧版本可用，再面向用户启用。V-07（AC-08/14/19/20）。 |
+| - [x] T06 合跑端到端矩阵 | Hosted provider、桌面排水、SQLite store 与 trigger recovery 集成 fixture；V/AC 追溯表 | 用真实临时 SQLite 与替身 provider 验证来源从 claim→restart→Hosted provider；用持久 settlement→trigger recovery→owner 队列 receipt 验证准确通知，覆盖原 Turn 失败、目标删除和通知 owner 授权边界。A09 屏障矩阵、S/A/T 定向回归及完整映射见 `T06.md`。V-01～09（AC-01～21，本机范围）；真实平台 IM 外发明确不在验收范围。 |
+| - [x] T07 演练本机关闭和整库回退 | 方案 §11、临时应用库；演练记录 | 在临时文件库停止 writer、备份、升级、整库恢复及应用重开；对拍旧 receipt/FK、无遗留新收据，记录备份后写入随快照恢复丢弃边界。不访问用户数据。V-07（AC-08/14/19/20）。证据见 `T07.md`。 |
+| - [x] T08 关闭源码阶段并提交 | 最终构建/测试记录、P3 阶段提交 | 核对 T01～T07、A10 证据和方案 V/AC 映射；全量测试与生产构建通过；代码与文档分开提交，阶段提交合入本地 `main`。正式版本、候选包、真实平台 IM 不属于源码关闭。V-01～09（AC-01～21，本机范围）。证据见 `T08.md`。 |
 
 ## 4. 本机阶段门禁与证据【机｜人工可跳过】
 
 - **S08（证据生产者 S01～S07）**：合并执行相关 Vitest 命令，并运行 `npm run check:session-storage-boundary`、`npm run check:session-storage-cleanup-boundary`、`npm run check:message-fact-ownership`。用 B01 已验证的 Electron 运行时跑迁移样本，保存生产迁移入口、旧行对拍与回滚输出；Vitest 记录和附录 B 不能替代 Electron 对拍。
 - **A10（S08、A01～A09）**：合并 P2 与受影响 P1 回归，运行 `npm run build:electron:incremental` 一次、`npm run typecheck:shared`、`npm run check:agent-sdk`、`npm run typecheck:agent-sdk`、`npm run check:system-invariant-registry`。涉及错误资源时运行 `npm run i18n:generate-types`、`npm run i18n:check`；涉及渲染类型时运行 `npm run typecheck:renderer`。安全记录列 facts / policy / final-check / invariant 阶段、实际 rule ID 与 failure case、边界测试命令。
-- **T08（A10、T01～T07）**：从本地依赖运行 `npm test`、`npm run build`，复核受影响门禁与完整覆盖表，附 T07 回退证据。阶段收尾只提交本阶段改动；先记测试所用源码 SHA，提交后核对差异并关联阶段提交。本功能候选打包、真机和真实模型验收不进入本段门禁；上游 main 合入 SHA 和本机集成测试由 E01/B04 核验。
+- **T08（A10、T01～T07）**：从本地依赖运行 `npm test`、`npm run build`，复核受影响门禁与完整覆盖表，附 T07 回退证据。阶段收尾只提交本阶段改动；先记测试所用源码 SHA，提交后核对差异并关联阶段提交。本机合入 `main` 即源码交付完成，不要求生成正式版本或发布包；真实平台 IM 不在本期验收范围。
 
 ## 5. 执行中的规格偏差【机｜人工可跳过】
 
@@ -126,4 +119,6 @@ B01 先用 `git worktree list --porcelain` 定位检出，再用 `git -C "$impl_
 
 ## 6. 本轮评审修订索引【人机共读】
 
-对照 2026-11-05 计划修订：负责人确认合入 main 并通过本机集成测试足以作为源码基线；移除上游正式发版作为实施前置，E01 改为 main 集成核验，B04 前移到当前 main 并重跑基线。E04→E02→E03 仍分别负责本功能候选包、验收与正式启用。
+对照 2026-11-05 计划修订：负责人确认合入 main 并通过本机集成测试足以作为源码基线；移除上游正式发版作为实施前置，E01 改为 main 集成核验，B04 前移到当前 main 并重跑基线。
+
+本轮执行修订：用户明确源码交付以合入本地 `main` 为准，不要求正式发布。原候选包/发布验收/正式启用任务自本执行计划删除，避免将独立发布流程作为源码交付步骤。A06 依据重启后的真实 provider 捕获与 continuation authoritative-context 证据关闭；T02 补入撤回/登记两种时序和 trigger revision CAS 证据。
