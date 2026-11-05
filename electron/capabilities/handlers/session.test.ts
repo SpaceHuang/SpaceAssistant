@@ -178,7 +178,11 @@ describe('action.session.message', () => {
       authorizationGeneration: 'auth-generation', runtimeGeneration: 'runtime-generation' }
     const result = await send.handler({ targetSessionId: target, requestId: 'approval-handoff', content: 'payload' },
       ctx({ sessionId: owner, sessionMessages: service, sessionMessageAuthorization: authorization })) as { accepted: { source: { requestId: string } } }
-    expect(storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target, requestId: result.accepted.source.requestId })?.approval)
+    const persisted = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target, requestId: result.accepted.source.requestId })
+    expect(persisted?.source.authorizationBinding).toMatchObject({ decisionTraceRef: 'gate-decision', permitRef: 'human-receipt',
+      ownerSessionId: owner, targetSessionId: target, targetGeneration: expect.any(String), queueScope: 'desktop',
+      payloadDigest: expect.any(String), policyRevision: '4', authorizationGeneration: 'auth-generation', runtimeGeneration: 'runtime-generation' })
+    expect(persisted?.approval)
       .toMatchObject({ decisionTraceRef: 'gate-decision', permitRef: 'human-receipt', ownerSessionId: owner, targetSessionId: target,
         authorizationGeneration: 'auth-generation', runtimeGeneration: 'runtime-generation' })
   })

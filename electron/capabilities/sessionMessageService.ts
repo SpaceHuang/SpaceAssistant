@@ -14,11 +14,23 @@ export function createSessionMessageService(input: {
     async send(request) {
       if (!request.ownerSessionId || !request.requestId || !request.content.trim()) throw new Error('SESSION_MESSAGE_INPUT_INVALID')
       const target = input.storage.queries.readSession(request.targetSessionId)
+      const payloadDigest = createHash('sha256').update(request.content, 'utf8').digest('hex')
+      const authorization = request.authorization
+      const authorized = authorization?.answerer === 'user' && Boolean(authorization.receipt?.trim()) &&
+        authorization.decision.verdict === 'require-confirm' && authorization.decision.ruleIds.includes('toolkit-act-ask') &&
+        Boolean(authorization.decision.decisionId.trim() && authorization.decision.dependencyFingerprint.trim() &&
+          authorization.authorizationGeneration.trim() && authorization.runtimeGeneration.trim())
+      const authorizationBinding = authorized && target ? {
+        decisionTraceRef: authorization.decision.decisionId, permitRef: authorization.receipt!,
+        ownerSessionId: request.ownerSessionId, targetSessionId: target.id, targetGeneration: target.generation,
+        queueScope: 'desktop', payloadDigest, policyRevision: String(authorization.decision.policyRevision),
+        authorizationGeneration: authorization.authorizationGeneration, runtimeGeneration: authorization.runtimeGeneration
+      } : {}
       let accepted: ReturnType<SessionStorage['commands']['agentSessionMessages']['accept']> | undefined
       if (!target || target.ownership === 'internal' || target.visibility === 'hidden') {
         const prior = input.storage.commands.agentSessionMessages.readAcceptance({ ownerSessionId: request.ownerSessionId,
           requestId: request.requestId, targetSessionId: request.targetSessionId,
-          payloadSha256: createHash('sha256').update(request.content, 'utf8').digest('hex') })
+          payloadSha256: payloadDigest })
         if (!prior) throw new Error('SESSION_MESSAGE_TARGET_UNAVAILABLE')
         accepted = prior
       }
@@ -26,7 +38,7 @@ export function createSessionMessageService(input: {
         try {
           accepted = input.storage.commands.agentSessionMessages.accept({
             ownerSessionId: request.ownerSessionId, targetSessionId: target!.id, requestId: request.requestId,
-            content: request.content, authorizationBinding: {}
+            content: request.content, authorizationBinding
           })
         } catch (error) {
           if (error instanceof Error && error.message === 'AGENT_SESSION_REQUEST_CONFLICT') throw new Error('SESSION_MESSAGE_REQUEST_CONFLICT')

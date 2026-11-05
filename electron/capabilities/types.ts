@@ -27,7 +27,10 @@ export interface RuntimeTriggerCapabilityPort {
 
 /** Narrow trusted session-message service; owner identity comes from the current invocation. */
 export interface SessionMessageCapabilityPort {
-  send(input: { ownerSessionId: string; targetSessionId: string; requestId: string; content: string }): Promise<Readonly<{
+  send(input: { ownerSessionId: string; targetSessionId: string; requestId: string; content: string; authorization?: Readonly<{
+    decision: { decisionId: string; ruleIds: readonly string[]; dependencyFingerprint: string; verdict: string; policyRevision: number }
+    receipt?: string; answerer?: 'user' | 'agent'; authorizationGeneration: string; runtimeGeneration: string
+  }> }): Promise<Readonly<{
     accepted: AgentSessionMessageAcceptance
     wake: 'requested' | 'retry-pending'
   }>>
