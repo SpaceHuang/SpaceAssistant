@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { App as AntdApp, Button } from 'antd'
 import { useAppDispatch, useTypedSelector } from './hooks'
-import { setSessions, upsertSession } from './store/sessionSlice'
+import { upsertSession } from './store/sessionSlice'
 import { setSession, setScrollToMessageId } from './store/chatSlice'
 import { setConfig, setSettingsOpen, setAboutOpen, setUsageStatsOpen, openSettings } from './store/configSlice'
 import { createLazyChatView } from './components/Chat/lazyChatView'
@@ -18,7 +18,7 @@ import { initTurnDisplayBridge } from './services/turnDisplayStore'
 import { turnDisplayReconciliation } from './services/turnDisplayReconciliation'
 import { initRemoteSessionSwitchBridge } from './services/remoteSessionSwitchService'
 import { initConfirmStores } from './services/confirmStoresInit'
-import { navigateToPendingConfirmation } from './services/notificationNavigation'
+import { NotificationNavigationStartup } from './services/notificationNavigationStartup'
 import { initToolExposure } from './services/toolExposureService'
 import { createLazySessionListPane } from './components/SessionList/lazySessionListPane'
 import { SearchProvider } from './components/Search/SearchProvider'
@@ -209,14 +209,15 @@ function AppShellInner() {
 
   useEffect(() => {
     initConfirmStores()
+    const notificationNavigationStartup = new NotificationNavigationStartup()
     const offToolExposure = initToolExposure()
     void measureStartupRequest('renderer.session-list', () => window.api.sessionList())
       .then((list) => {
-        dispatch(setSessions(list))
-        if (list[0]) dispatch(setSession(list[0].id))
+        void notificationNavigationStartup.completeInitialSessionLoad(list).catch(() => {})
       })
       .catch((e) => {
         message.error(formatUserFacingError(e instanceof Error ? e.message : t('appShell.loadSessionsFailed')))
+        void notificationNavigationStartup.completeInitialSessionLoad(null).catch(() => {})
       })
     void measureStartupRequest('renderer.config-get', () => window.api.configGet()).then((c) => {
       dispatch(setConfig(c))
@@ -244,7 +245,7 @@ function AppShellInner() {
     const recoveryTimer = window.setInterval(reconcileTurnState, 5000)
     const offRemoteSessionSwitch = initRemoteSessionSwitchBridge()
     const offNotificationNavigate = window.api.onNotificationNavigateSession((payload) => {
-      void navigateToPendingConfirmation(payload).catch(() => {})
+      void notificationNavigationStartup.receive(payload).catch(() => {})
     })
     return () => {
       off1()
@@ -259,6 +260,7 @@ function AppShellInner() {
       window.clearInterval(recoveryTimer)
       offRemoteSessionSwitch()
       offNotificationNavigate()
+      notificationNavigationStartup.dispose()
       offToolExposure()
     }
   }, [dispatch])
