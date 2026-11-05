@@ -32,6 +32,7 @@ export type AgentSessionExecutionApproval = Readonly<{
   ownerSessionId: string
   targetSessionId: string
   targetGeneration: string
+  workDirProfileId: string
   requestId: string
   messageId: string
   queueScope: 'desktop'

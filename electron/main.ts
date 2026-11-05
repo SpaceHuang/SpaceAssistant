@@ -792,9 +792,17 @@ app.whenReady().then(async () => {
   })
   const sessionStorage = sessionStorageHost.storage
   let requestDesktopDrain: SessionMessageDrain = () => { throw new Error('SESSION_MESSAGE_DRAIN_UNAVAILABLE') }
+  const resolveSessionWorkDirProfileId = (sessionId: string): string | undefined => {
+    const session = sessionStorage.queries.readSession(sessionId)
+    if (!session) return undefined
+    if (session.fixedWorkDir) return `fixed:${path.resolve(session.fixedWorkDir)}`
+    return session.workDirProfileId ?? workDirManager?.getActiveProfileId()
+  }
   const sessionMessages = createSessionMessageService({ storage: sessionStorage,
-    requestDesktopDrain: (sessionId) => requestDesktopDrain(sessionId) })
+    requestDesktopDrain: (sessionId) => requestDesktopDrain(sessionId),
+    resolveWorkDirProfileId: resolveSessionWorkDirProfileId })
   const agentSessionExecutionAuthorization = createAgentSessionExecutionAuthorization({ storage: sessionStorage,
+    resolveWorkDirProfileId: resolveSessionWorkDirProfileId,
     readCurrentAuthority: () => {
       try {
         const conn = getDbConnection(db)

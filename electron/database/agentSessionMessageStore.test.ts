@@ -30,7 +30,7 @@ function approveAgentInput(db: ReturnType<typeof createMemoryAppDb>, ownerSessio
   if (!snapshot) throw new Error('test approval snapshot missing')
   const approval = {
     version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: `decision:${requestId}`, permitRef: `permit:${requestId}`,
-    ownerSessionId, targetSessionId: target.id, targetGeneration: target.generation, requestId, messageId, queueScope: 'desktop' as const,
+    ownerSessionId, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), requestId, messageId, queueScope: 'desktop' as const,
     payloadDigest: snapshot.source.payloadSha256, policyRevision: 'policy-current', authorizationGeneration: 'auth-current',
     runtimeGeneration: 'runtime-current', approvedAt: 500
   }
@@ -408,7 +408,7 @@ describe('agent session message acceptance persistence', () => {
       .toBe(snapshot.originDigest)
     const approval = {
       version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision-trace-1', permitRef: 'permit-1',
-      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"),
       requestId: 'approval-request', messageId: accepted.source.messageId, queueScope: 'desktop' as const,
       payloadDigest: accepted.source.payloadSha256, policyRevision: 'policy-1', authorizationGeneration: 'auth-1',
       runtimeGeneration: 'runtime-1', approvedAt: 123
@@ -453,7 +453,7 @@ describe('agent session message acceptance persistence', () => {
     const snapshot = commands.readApprovalSnapshot({ sessionId: target.id, requestId: 'approval-guard-request' })!
     const approval = {
       version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision', permitRef: 'permit',
-      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"),
       requestId: 'approval-guard-request', messageId: accepted.source.messageId, queueScope: 'desktop' as const,
       payloadDigest: accepted.source.payloadSha256, policyRevision: 'policy', authorizationGeneration: 'auth', runtimeGeneration: 'runtime', approvedAt: 1
     }

@@ -1217,6 +1217,25 @@ export function readAgentInputApprovalSnapshot(
   return { source, originDigest, approval, approvalDigest: agentSessionExecutionApprovalDigest(approval) }
 }
 
+export function readAgentInputSourceIdentity(db: AppDatabase, input: { ownerSessionId: string; requestId: string }): {
+  targetSessionId: string; messageId: string; payloadDigest: string; originDigest: string
+} | undefined {
+  const conn = getDbConnection(db)
+  const rows = conn.prepare(`SELECT session_id,queued_message_id,source_json FROM queue_input_requests
+    WHERE request_id=? AND queue_scope='desktop' AND source_json IS NOT NULL`).all(input.requestId) as
+    Array<{ session_id: string; queued_message_id: string | null; source_json: string }>
+  const matches = rows.flatMap((row) => {
+    const source = decodeAgentSessionInputSource(row.source_json)
+    return source && source.ownerSessionId === input.ownerSessionId && source.requestId === input.requestId &&
+      source.targetSessionId === row.session_id && source.messageId === row.queued_message_id && row.queued_message_id
+      ? [{ row, source }] : []
+  })
+  if (matches.length !== 1) return undefined
+  const { row, source } = matches[0]!
+  return { targetSessionId: source.targetSessionId, messageId: source.messageId,
+    payloadDigest: source.payloadSha256, originDigest: agentSessionOriginDigest(source) }
+}
+
 export function refreshAgentInputExecutionApproval(
   db: AppDatabase,
   input: {

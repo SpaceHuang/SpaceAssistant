@@ -161,7 +161,7 @@ describe('action.session.message', () => {
     const owner = await seedSession('approval owner')
     const target = await seedSession('approval target')
     const acceptance = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner, targetSessionId: target,
-      requestId: 'approval-send', content: 'approved body', authorizationBinding: {} })
+      requestId: 'approval-send', content: 'approved body', authorizationBinding: { workDirProfileId: 'default' } })
     const service = createSessionMessageService({ storage, requestDesktopDrain: vi.fn() })
     const prepare = service as typeof service & { prepareExecutionApproval?: (input: unknown) => boolean }
     expect(prepare.prepareExecutionApproval).toBeTypeOf('function')

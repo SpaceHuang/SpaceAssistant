@@ -387,7 +387,7 @@ describe('file IPC handlers', () => {
     const accepted = databaseOperations.enqueueAgentSessionMessageInScope(ctx.db, {
       ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'agent-direct-prepare', content: 'trusted body',
       authorizationBinding: { decisionTraceRef: 'decision', permitRef: 'permit', ownerSessionId: owner.id,
-        targetSessionId: target.id, targetGeneration: target.generation, queueScope: 'desktop', payloadDigest: 'digest',
+        targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), queueScope: 'desktop', payloadDigest: 'digest',
         policyRevision: 'policy', authorizationGeneration: 'authorization', runtimeGeneration: 'runtime' }
     })
 
@@ -507,7 +507,7 @@ describe('file IPC handlers', () => {
       content: `trusted-${damage}-body`, authorizationBinding: {} })
     const snapshot = commands.readApprovalSnapshot({ sessionId: target.id, requestId })!
     const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: `decision:${requestId}`,
-      permitRef: `permit:${requestId}`, ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      permitRef: `permit:${requestId}`, ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"),
       requestId, messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: snapshot.source.payloadSha256,
       policyRevision: 'policy-1', authorizationGeneration: 'authorization-1', runtimeGeneration: 'runtime-1', approvedAt: Date.now() }
     expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId, expectedOriginDigest: snapshot.originDigest,

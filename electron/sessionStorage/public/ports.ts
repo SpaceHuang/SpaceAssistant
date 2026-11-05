@@ -76,6 +76,7 @@ export interface SessionCommands {
     markNotExecuted(input: { sessionId: string; requestId: string; reason: AgentInputNotExecutedReason }): boolean
     revoke(input: { ownerSessionId: string; requestId: string }): Readonly<{ kind: 'revoked' | 'already-revoked' | 'claimed' | 'not-found' | 'not-revocable'; settlement?: AgentInputSettlement }>
     readSettlement(input: { ownerSessionId: string; requestId: string }): AgentInputSettlement | undefined
+    readSourceIdentity?(input: { ownerSessionId: string; requestId: string }): Readonly<{ targetSessionId: string; messageId: string; payloadDigest: string; originDigest: string }> | undefined
     readApprovalSnapshot(input: { sessionId: string; requestId: string }): AgentSessionApprovalSnapshot | null
     refreshExecutionApproval(input: { sessionId: string; requestId: string; expectedOriginDigest: string; expectedApprovalDigest: string | null; approval: AgentSessionExecutionApproval }): { originDigest: string; approvalDigest: string } | null
     readAcceptance(input: { ownerSessionId: string; requestId: string; targetSessionId: string; payloadSha256: string }): AgentSessionMessageAcceptance | undefined

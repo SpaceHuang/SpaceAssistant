@@ -9,6 +9,7 @@ export type SessionMessageDrain = (sessionId: string) => void | Promise<void>
 export function createSessionMessageService(input: {
   storage: Pick<SessionStorage, 'queries' | 'commands'>
   requestDesktopDrain: SessionMessageDrain
+  resolveWorkDirProfileId?: (sessionId: string) => string | undefined
 }): SessionMessageCapabilityPort {
   return {
     async send(request) {
@@ -16,6 +17,8 @@ export function createSessionMessageService(input: {
       const target = input.storage.queries.readSession(request.targetSessionId)
       const payloadDigest = createHash('sha256').update(request.content, 'utf8').digest('hex')
       const owner = input.storage.queries.readSession(request.ownerSessionId)
+      const ownerProfileId = owner && (input.resolveWorkDirProfileId ? input.resolveWorkDirProfileId(owner.id) : owner.workDirProfileId ?? 'default')
+      const targetProfileId = target && (input.resolveWorkDirProfileId ? input.resolveWorkDirProfileId(target.id) : target.workDirProfileId ?? 'default')
       const desktopVisible = (session: typeof target) => Boolean(session && session.ownership === 'user' && session.visibility !== 'hidden')
       if (!desktopVisible(owner)) throw new Error('SESSION_MESSAGE_CALLER_UNAVAILABLE')
       const authorization = request.authorization
@@ -25,12 +28,12 @@ export function createSessionMessageService(input: {
           authorization.authorizationGeneration.trim() && authorization.runtimeGeneration.trim())
       const authorizationBinding = authorized && target ? {
         decisionTraceRef: authorization.decision.decisionId, permitRef: authorization.receipt!,
-        ownerSessionId: request.ownerSessionId, targetSessionId: target.id, targetGeneration: target.generation,
+        ownerSessionId: request.ownerSessionId, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: targetProfileId,
         queueScope: 'desktop', payloadDigest, policyRevision: String(authorization.decision.policyRevision),
         authorizationGeneration: authorization.authorizationGeneration, runtimeGeneration: authorization.runtimeGeneration
       } : {}
       let accepted: ReturnType<SessionStorage['commands']['agentSessionMessages']['accept']> | undefined
-      if (!target || !desktopVisible(target) || owner!.workDirProfileId !== target.workDirProfileId) {
+      if (!target || !desktopVisible(target) || !ownerProfileId || !targetProfileId || ownerProfileId !== targetProfileId) {
         const prior = input.storage.commands.agentSessionMessages.readAcceptance({ ownerSessionId: request.ownerSessionId,
           requestId: request.requestId, targetSessionId: request.targetSessionId,
           payloadSha256: payloadDigest })
@@ -75,12 +78,16 @@ export function createSessionMessageService(input: {
       const snapshot = input.storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: request.targetSessionId, requestId: request.requestId })
       const target = input.storage.queries.readSession(request.targetSessionId)
       const owner = input.storage.queries.readSession(request.ownerSessionId)
+      const ownerProfileId = owner && (input.resolveWorkDirProfileId ? input.resolveWorkDirProfileId(owner.id) : owner.workDirProfileId ?? 'default')
+      const targetProfileId = target && (input.resolveWorkDirProfileId ? input.resolveWorkDirProfileId(target.id) : target.workDirProfileId ?? 'default')
       if (!snapshot || snapshot.source.ownerSessionId !== request.ownerSessionId || !owner || owner.ownership !== 'user' || owner.visibility === 'hidden' ||
-        !target || target.ownership !== 'user' || target.visibility === 'hidden' || owner.workDirProfileId !== target.workDirProfileId) return false
+        !target || target.ownership !== 'user' || target.visibility === 'hidden' || !ownerProfileId || !targetProfileId || ownerProfileId !== targetProfileId ||
+        snapshot.source.authorizationBinding.workDirProfileId !== targetProfileId) return false
       const approval: AgentSessionExecutionApproval = {
         version: 1, originDigest: snapshot.originDigest, decisionTraceRef: request.decision.decisionId,
         permitRef: request.receipt, ownerSessionId: snapshot.source.ownerSessionId, targetSessionId: request.targetSessionId,
-        targetGeneration: target.generation, requestId: snapshot.source.requestId, messageId: snapshot.source.messageId,
+        targetGeneration: target.generation, workDirProfileId: targetProfileId,
+        requestId: snapshot.source.requestId, messageId: snapshot.source.messageId,
         queueScope: 'desktop', payloadDigest: snapshot.source.payloadSha256, policyRevision: String(request.decision.policyRevision),
         authorizationGeneration: request.authorizationGeneration, runtimeGeneration: request.runtimeGeneration, approvedAt: Date.now()
       }

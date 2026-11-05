@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
+import { getDbConnection } from '../database/sqliteStore'
 import { appendMessage, createPersistedTurn, createSession, enqueueAgentSessionMessageInScope, getPersistedTurn, revokeAgentSessionMessage, updatePersistedTurnState } from '../database/operations'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerHostService } from './hostService'
@@ -100,8 +101,27 @@ describe('runtime trigger host capability adapter', () => {
         condition: { type: 'agent_session_message', requestId: accepted.receipt.requestId } }
 
       await expect(service.register({ ownerSessionId: owner.id, params })).resolves.toMatchObject({
-        trigger: { state: 'waiting', receiverSessionId: owner.id, definition: { condition: params.condition } }
+        trigger: { state: 'waiting', receiverSessionId: owner.id, definition: { condition: params.condition,
+          sourceBaseline: { kind: 'agent-session-source', ownerSessionId: owner.id, receiverSessionId: owner.id,
+            requestId: accepted.receipt.requestId, targetSessionId: target.id, messageId: accepted.receipt.queuedMessageId } } }
       })
+      const trigger = commands.runtimeTriggers.findByClientKey(owner.id, params.clientKey)!
+      getDbConnection(db).prepare('DELETE FROM queue_input_requests WHERE session_id=? AND request_id=? AND queue_scope=?')
+        .run(target.id, accepted.receipt.requestId, 'desktop')
+      const sourceGap = { type: 'agent_session_message', occurredAt: Date.now(), requestId: accepted.receipt.requestId, status: 'source-gap' }
+      expect(service.authorizeSource(owner.id, owner.id, params.condition, trigger.definition.sourceBaseline, sourceGap)).toMatchObject({ allowed: true })
+      const enqueue = vi.fn(() => ({ receipt: { queuedMessageId: 'source-gap-marker' }, persisted: { message: { id: 'source-gap-marker', content: `运行时事件待处理：${trigger.id}` } } }))
+      const delivery = createRuntimeTriggerDelivery({ read: (id) => commands.runtimeTriggers.read(id),
+        update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch), expire: vi.fn(),
+        authorize: (record, queueScope) => service.authorizeSource(record.ownerSessionId, record.receiverSessionId,
+          record.definition.condition, record.definition.sourceBaseline, record.event).allowed
+          ? { bindingVersion: 1, requestId: `runtime-trigger:${record.id}`, ownerSessionId: record.ownerSessionId,
+            receiverSessionId: record.receiverSessionId, queueScope, sourceIdentity: record.definition.condition,
+            payloadDigest: 'source-gap', policyRevision: 'p', authorizationGeneration: 'a', runtimeGeneration: 'r' } : null,
+        queueScope: () => ({ kind: 'desktop' }), enqueue })
+      commands.runtimeTriggers.update(trigger.id, trigger.revision, { state: 'matched', matchedAt: Date.now(), event: sourceGap, updatedAt: Date.now() })
+      expect(delivery(trigger.id)).toMatchObject({ kind: 'enqueued', messageId: 'source-gap-marker' })
+      expect(enqueue).toHaveBeenCalledTimes(1)
       await expect(service.register({ ownerSessionId: owner.id, params: { ...params, clientKey: 'unknown-request',
         condition: { ...params.condition, requestId: `${owner.id}:unknown` } } }))
         .rejects.toMatchObject({ failure: { code: 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' } })

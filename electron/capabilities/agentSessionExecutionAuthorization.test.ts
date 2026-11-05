@@ -16,13 +16,13 @@ describe('agent-session execution authorization', () => {
     const storage = createSqliteSessionStorage(db)
     const requestId = 'approval-current-request'
     const decision = { decisionTraceRef: 'decision-current', permitRef: 'permit-current', ownerSessionId: owner.id,
-      targetSessionId: target.id, targetGeneration: target.generation, queueScope: 'desktop', payloadDigest: createHash('sha256').update('message body').digest('hex'),
+      targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), queueScope: 'desktop', payloadDigest: createHash('sha256').update('message body').digest('hex'),
       policyRevision: '7', authorizationGeneration: 'auth-current', runtimeGeneration: 'runtime-current' }
     const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
       requestId, content: 'message body', authorizationBinding: decision })
     const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
     const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: decision.decisionTraceRef,
-      permitRef: decision.permitRef, ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      permitRef: decision.permitRef, ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"),
       requestId, messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
       policyRevision: decision.policyRevision, authorizationGeneration: decision.authorizationGeneration,
       runtimeGeneration: decision.runtimeGeneration, approvedAt: Date.now() }
@@ -47,7 +47,7 @@ describe('agent-session execution authorization', () => {
     expect(resolved.finalCheck({ source: persisted.source, approval: persisted.approval!, originDigest: persisted.originDigest,
       approvalDigest: persisted.approvalDigest!, targetGeneration: target.generation })).toBe(false)
     expect(createAgentSessionExecutionAuthorization({ storage, readCurrentAuthority: () => authority })
-      .resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId })).toEqual({ kind: 'waiting', reason: 'approval-stale' })
+      .resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId })).toEqual({ kind: 'waiting', reason: 'source-mismatch' })
     expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId })).toMatchObject({ kind: 'queued' })
     expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
   })
@@ -61,12 +61,12 @@ describe('agent-session execution authorization', () => {
     const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
       requestId, content: 'same immutable message', authorizationBinding: {
         decisionTraceRef: 'old-decision', permitRef: 'old-permit', ownerSessionId: owner.id, targetSessionId: target.id,
-        targetGeneration: target.generation, queueScope: 'desktop', payloadDigest: createHash('sha256').update('same immutable message').digest('hex'),
+        targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), queueScope: 'desktop', payloadDigest: createHash('sha256').update('same immutable message').digest('hex'),
         policyRevision: '7', authorizationGeneration: 'auth-old', runtimeGeneration: 'runtime-old'
       } })
     const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
     const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'new-decision', permitRef: 'new-user-permit',
-      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, requestId,
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), requestId,
       messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
       policyRevision: '8', authorizationGeneration: 'auth-new', runtimeGeneration: 'runtime-new', approvedAt: Date.now() }
     expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
@@ -93,7 +93,7 @@ describe('agent-session execution authorization', () => {
       requestId, content: 'scope bound', authorizationBinding: {} })
     const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
     const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision', permitRef: 'permit',
-      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, requestId,
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), requestId,
       messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
       policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: '1', approvedAt: Date.now() }
     storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
@@ -108,6 +108,30 @@ describe('agent-session execution authorization', () => {
     expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
   })
 
+  it('does not resolve an old approval after the target changes work-directory profile before resolution', () => {
+    const db = createMemoryAppDb(); dbs.push(db)
+    const owner = createSession(db, { name: 'profile-change-owner', workDirProfileId: 'profile-a' })
+    const target = createSession(db, { name: 'profile-change-target', workDirProfileId: 'profile-a' })
+    const storage = createSqliteSessionStorage(db)
+    const requestId = 'profile-change-before-resolution'
+    const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId, content: 'approval bound to profile a', authorizationBinding: { ownerSessionId: owner.id, targetSessionId: target.id,
+        targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), queueScope: 'desktop', payloadDigest: createHash('sha256').update('approval bound to profile a').digest('hex'),
+        profileId: 'profile-a' } })
+    const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision', permitRef: 'permit',
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: 'profile-a', requestId, messageId: accepted.source.messageId,
+      queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256, policyRevision: '1', authorizationGeneration: '1',
+      runtimeGeneration: '1', approvedAt: Date.now() }
+    storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })
+    updateSession(db, target.id, { workDirProfileId: 'profile-b' })
+    const resolved = createAgentSessionExecutionAuthorization({ storage, readCurrentAuthority: () => ({ policyRevision: '1',
+      authorizationGeneration: '1', runtimeGeneration: '1' }) }).resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId })
+    expect(resolved).toMatchObject({ kind: 'waiting', reason: 'source-mismatch' })
+    expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
+  })
+
   it.each(['before-resolution', 'after-resolution'] as const)('keeps the approved source executable when its sender is deleted %s', (deleteTiming) => {
     const db = createMemoryAppDb(); dbs.push(db)
     const owner = createSession(db, { name: `deleted-owner-${deleteTiming}`, workDirProfileId: 'profile-a' })
@@ -117,10 +141,10 @@ describe('agent-session execution authorization', () => {
     const payloadDigest = createHash('sha256').update('approved before sender deletion').digest('hex')
     const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
       requestId, content: 'approved before sender deletion', authorizationBinding: { ownerSessionId: owner.id,
-        targetSessionId: target.id, targetGeneration: target.generation, queueScope: 'desktop', payloadDigest, profileId: 'profile-a' } })
+        targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), queueScope: 'desktop', payloadDigest } })
     const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
     const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision', permitRef: 'permit',
-      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, requestId,
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), requestId,
       messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
       policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: '1', approvedAt: Date.now() }
     storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,

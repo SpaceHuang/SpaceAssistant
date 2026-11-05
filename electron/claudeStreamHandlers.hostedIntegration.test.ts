@@ -281,12 +281,12 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const storage = createSqliteSessionStorage(db)
     const accepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id, requestId, content: body,
       authorizationBinding: { decisionTraceRef: 'provider-input-decision', permitRef: 'provider-input-permit', ownerSessionId: owner.id,
-        targetSessionId: target.id, targetGeneration: target.generation, queueScope: 'desktop',
+        targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), queueScope: 'desktop',
         payloadDigest: createHash('sha256').update(body, 'utf8').digest('hex'), policyRevision: '1',
         authorizationGeneration: 'provider-input-auth', runtimeGeneration: 'provider-input-runtime' } })
     const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
     const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'provider-input-decision',
-      permitRef: 'provider-input-permit', ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      permitRef: 'provider-input-permit', ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"),
       requestId, messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
       policyRevision: '1', authorizationGeneration: 'provider-input-auth', runtimeGeneration: 'provider-input-runtime', approvedAt: 1 }
     expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
@@ -324,7 +324,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       requestId: damagedRequestId, content: damagedBody, authorizationBinding: {} })
     const damagedSnapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: damagedTarget.id, requestId: damagedRequestId })!
     const damagedApproval = { ...approval, originDigest: damagedSnapshot.originDigest, requestId: damagedRequestId,
-      targetSessionId: damagedTarget.id, targetGeneration: damagedTarget.generation,
+      targetSessionId: damagedTarget.id, targetGeneration: damagedTarget.generation, workDirProfileId: (damagedTarget.workDirProfileId || "default"),
       messageId: damagedAccepted.source.messageId, payloadDigest: damagedAccepted.source.payloadSha256, approvedAt: 2 }
     expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: damagedTarget.id, requestId: damagedRequestId,
       expectedOriginDigest: damagedSnapshot.originDigest, expectedApprovalDigest: null, approval: damagedApproval })).not.toBeNull()
@@ -345,7 +345,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       requestId: forgedRequestId, content: 'original signed envelope', authorizationBinding: {} })
     const forgedSnapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: forgedTarget.id, requestId: forgedRequestId })!
     const forgedApproval = { ...approval, originDigest: forgedSnapshot.originDigest, targetSessionId: forgedTarget.id,
-      targetGeneration: forgedTarget.generation, requestId: forgedRequestId, messageId: forgedAccepted.source.messageId,
+      targetGeneration: forgedTarget.generation, workDirProfileId: (forgedTarget.workDirProfileId || "default"), requestId: forgedRequestId, messageId: forgedAccepted.source.messageId,
       payloadDigest: forgedAccepted.source.payloadSha256, approvedAt: 3 }
     expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: forgedTarget.id, requestId: forgedRequestId,
       expectedOriginDigest: forgedSnapshot.originDigest, expectedApprovalDigest: null, approval: forgedApproval })).not.toBeNull()
@@ -395,7 +395,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       requestId, content: body, authorizationBinding: {} })
     const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
     const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: `decision:${requestId}`,
-      permitRef: `permit:${requestId}`, ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      permitRef: `permit:${requestId}`, ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"),
       requestId, messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: snapshot.source.payloadSha256,
       policyRevision: 'policy-recovery', authorizationGeneration: 'authorization-recovery',
       runtimeGeneration: 'runtime-recovery', approvedAt: Date.now() }

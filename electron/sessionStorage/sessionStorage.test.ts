@@ -2147,7 +2147,7 @@ describe('SQLite session storage execution boundary', () => {
     const approvals = createSqliteSessionStorage(db).commands.agentSessionMessages
     const snapshot = approvals.readApprovalSnapshot({ sessionId: target.id, requestId: accepted.receipt.requestId })!
     const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'prepare-decision',
-      permitRef: 'prepare-permit', ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+      permitRef: 'prepare-permit', ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"),
       requestId: accepted.receipt.requestId, messageId: accepted.source.messageId, queueScope: 'desktop' as const,
       payloadDigest: accepted.source.payloadSha256, policyRevision: 'policy', authorizationGeneration: 'authorization',
       runtimeGeneration: 'runtime', approvedAt: 1 }

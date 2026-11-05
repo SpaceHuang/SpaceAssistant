@@ -15,7 +15,7 @@ const AGENT_SOURCE_KEYS = new Set([
 ])
 const AGENT_APPROVAL_KEYS = new Set([
   'version', 'originDigest', 'decisionTraceRef', 'permitRef', 'ownerSessionId', 'targetSessionId',
-  'targetGeneration', 'requestId', 'messageId', 'queueScope', 'payloadDigest', 'policyRevision',
+  'targetGeneration', 'workDirProfileId', 'requestId', 'messageId', 'queueScope', 'payloadDigest', 'policyRevision',
   'authorizationGeneration', 'runtimeGeneration', 'approvedAt'
 ])
 
@@ -68,6 +68,7 @@ export function decodeAgentSessionExecutionApproval(value: unknown): AgentSessio
     'messageId', 'policyRevision', 'authorizationGeneration', 'runtimeGeneration'] as const) {
     if (typeof value[key] !== 'string' || !value[key]) return undefined
   }
+  if (typeof value.workDirProfileId !== 'string' || !value.workDirProfileId) return undefined
   return value as unknown as AgentSessionExecutionApproval
 }
 

@@ -24,6 +24,7 @@ export type AgentSessionExecutionAuthorizationPort = Readonly<{
 export function createAgentSessionExecutionAuthorization(input: {
   storage: Pick<SessionStorage, 'queries' | 'commands'>
   readCurrentAuthority: () => AgentSessionExecutionAuthority | undefined
+  resolveWorkDirProfileId?: (sessionId: string) => string | undefined
 }): AgentSessionExecutionAuthorizationPort {
   return {
     resolve(inputRequest: { sessionId: string; requestId: string; messageId: string }): AgentSessionExecutionApprovalResolution {
@@ -33,11 +34,13 @@ export function createAgentSessionExecutionAuthorization(input: {
       if (!snapshot?.approval) return { kind: 'waiting', reason: 'approval-missing' }
       const { source, approval, originDigest, approvalDigest } = snapshot
       const target = input.storage.queries.readSession(inputRequest.sessionId)
+      const currentProfileId = target && (input.resolveWorkDirProfileId ? input.resolveWorkDirProfileId(target.id) : target.workDirProfileId ?? 'default')
       if (!target || source.kind !== 'agent-session' || source.targetSessionId !== inputRequest.sessionId ||
         source.requestId !== inputRequest.requestId || source.messageId !== inputRequest.messageId ||
         !target.id || target.ownership !== 'user' || target.visibility === 'hidden' ||
         approval.originDigest !== originDigest || approval.ownerSessionId !== source.ownerSessionId ||
         approval.targetSessionId !== source.targetSessionId || approval.targetGeneration !== target.generation ||
+        approval.workDirProfileId !== currentProfileId ||
         approval.requestId !== source.requestId || approval.messageId !== source.messageId || approval.queueScope !== 'desktop' ||
         approval.payloadDigest !== source.payloadSha256) {
         return { kind: 'waiting', reason: 'source-mismatch' }
@@ -46,7 +49,7 @@ export function createAgentSessionExecutionAuthorization(input: {
       // The source binding records the original send authorization and remains immutable. A queued
       // message may receive a newer user-confirmed approval after policy changes; CAS storage binds
       // that approval to this same source, and current authority below validates the new trace.
-      if (binding.ownerSessionId !== source.ownerSessionId ||
+      if (binding.ownerSessionId !== source.ownerSessionId || binding.workDirProfileId !== approval.workDirProfileId ||
         binding.targetSessionId !== source.targetSessionId || binding.targetGeneration !== target.generation ||
         binding.queueScope !== 'desktop' || binding.payloadDigest !== source.payloadSha256) {
         return { kind: 'waiting', reason: 'source-mismatch' }
@@ -57,20 +60,22 @@ export function createAgentSessionExecutionAuthorization(input: {
         return { kind: 'waiting', reason: 'approval-stale' }
       }
       const authority = { ...currentAuthority }
-      const targetWorkDirProfileId = target.workDirProfileId
+      const targetWorkDirProfileId = approval.workDirProfileId
       return {
         kind: 'approved',
         finalCheck: (facts) => {
           const current = input.readCurrentAuthority()
           const currentTarget = input.storage.queries.readSession(inputRequest.sessionId)
+          const currentProfileId = currentTarget && (input.resolveWorkDirProfileId ? input.resolveWorkDirProfileId(currentTarget.id) : currentTarget.workDirProfileId ?? 'default')
           return Boolean(current && current.policyRevision === authority.policyRevision &&
             current.authorizationGeneration === authority.authorizationGeneration && current.runtimeGeneration === authority.runtimeGeneration &&
             currentTarget?.ownership === 'user' && currentTarget.visibility !== 'hidden' && currentTarget.generation === target.generation &&
-            currentTarget.workDirProfileId === targetWorkDirProfileId &&
+            currentProfileId === targetWorkDirProfileId &&
             facts.originDigest === originDigest && facts.approvalDigest === approvalDigest &&
             facts.targetGeneration === target.generation && facts.source.ownerSessionId === source.ownerSessionId &&
             facts.source.targetSessionId === source.targetSessionId && facts.source.requestId === source.requestId &&
             facts.source.messageId === source.messageId && facts.approval.decisionTraceRef === approval.decisionTraceRef &&
+            facts.source.authorizationBinding.workDirProfileId === approval.workDirProfileId &&
             facts.approval.permitRef === approval.permitRef && facts.approval.policyRevision === approval.policyRevision &&
             facts.approval.authorizationGeneration === approval.authorizationGeneration && facts.approval.runtimeGeneration === approval.runtimeGeneration)
         }

@@ -177,7 +177,7 @@ describe('runtime trigger durable invariants under deterministic operation seque
       const snapshot = commands.agentSessionMessages.readApprovalSnapshot({ sessionId: targetSession.id, requestId })!
       const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: `decision:${requestId}`,
         permitRef: `permit:${requestId}`, ownerSessionId: ownerSession.id, targetSessionId: targetSession.id,
-        targetGeneration: targetSession.generation, requestId, messageId: snapshot.source.messageId, queueScope: 'desktop' as const,
+        targetGeneration: targetSession.generation, workDirProfileId: (targetSession.workDirProfileId || "default"), requestId, messageId: snapshot.source.messageId, queueScope: 'desktop' as const,
         payloadDigest: snapshot.source.payloadSha256, policyRevision: `policy-${seed}`, authorizationGeneration: `auth-${seed}`,
         runtimeGeneration: `runtime-${seed}`, approvedAt: now }
       expect(commands.agentSessionMessages.refreshExecutionApproval({ sessionId: targetSession.id, requestId,
