@@ -316,6 +316,25 @@ describe('AssistantFactAggregator：agent 裁决路径标记（H1）', () => {
     expect(result.toolCalls?.[0]?.scriptPathHint).toBe('路径分析未覆盖：custom_accessor')
   })
 
+  it('confirm-requested 将脚本 findings 和总数投影到工具记录', () => {
+    const finding = {
+      pattern: 'process-create:subprocess.Popen', class: 'process-creation' as const,
+      range: { startLine: 2, startCol: 1, endLine: 2, endCol: 19 },
+      snippet: "subprocess.Popen(['echo'])",
+      evidence: { kind: 'process-create' as const, module: 'subprocess', attr: 'Popen', argvLiteral: "['echo']" }
+    }
+    const findings = Array.from({ length: 4 }, (_, index) => ({
+      ...finding,
+      pattern: `${finding.pattern}:${index + 1}`,
+      range: { ...finding.range, startLine: index + 1, endLine: index + 1 }
+    }))
+    const result = apply([
+      { type: 'tool-use', id: 't-script-findings', toolName: 'run_script', input: {} },
+      { type: 'confirm-requested', id: 't-script-findings', riskLevel: 'high', scriptFindings: findings, scriptFindingTotalCount: 4 } as never
+    ])
+    expect(result.toolCalls?.[0]).toMatchObject({ scriptFindings: findings, scriptFindingTotalCount: 4 })
+  })
+
   it('confirm-requested 带 autoAnswerer 时写入 tool record（渲染端据此出只读「自动审批中」卡）', () => {
     const result = apply([
       { type: 'tool-use', id: 't-auto', toolName: 'run_shell', input: { command: 'ls' } },

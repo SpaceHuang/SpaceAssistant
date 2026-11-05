@@ -26,6 +26,17 @@ import {
 import type { IrExpr, IrModule } from './types'
 
 function adapt(source: string): IrModule {
+  const ir = adaptWithLocations(source)
+  const strip = (value: unknown): void => {
+    if (!value || typeof value !== 'object') return
+    delete (value as { range?: unknown }).range
+    for (const child of Object.values(value)) strip(child)
+  }
+  strip(ir)
+  return ir
+}
+
+function adaptWithLocations(source: string): IrModule {
   const outcome = scriptParserService.parse('python', source)
   if (!outcome.ok) throw new Error(`setup: parse failed (${outcome.reason}) for ${JSON.stringify(source)}`)
   const ir = adaptPythonModule(outcome.tree)
@@ -296,6 +307,38 @@ describe('pythonAdapter：未知构造反向用例（④ 抛 IrCoverageError）'
     ['泛型类型注解（扩展形态）', 'def f(x: list[int] = []) -> None:\n    pass\n']
   ])('%s → parsePythonModule 抛 IrCoverageError', (_name, code) => {
     expect(() => adapt(code)).toThrow(IrCoverageError)
+  })
+})
+
+describe('pythonAdapter：源码位置贯通', () => {
+  it('根、语句与嵌套表达式均保留 1-based 起止行列', () => {
+    const ir = adaptWithLocations('if ready:\n    open(target, "w")\n')
+    expect(ir.range).toEqual({ startLine: 1, startCol: 1, endLine: 3, endCol: 1 })
+    const statement = ir.body[0]
+    expect(statement).toMatchObject({ range: { startLine: 1, startCol: 1, endLine: 2, endCol: 22 } })
+    if (statement?.kind !== 'if') throw new Error('expected if statement')
+    const call = statement.body[0]
+    expect(call).toMatchObject({ range: { startLine: 2, startCol: 5, endLine: 2, endCol: 22 } })
+    if (call?.kind !== 'expr' || call.value.kind !== 'call') throw new Error('expected call expression')
+    expect(call.value).toMatchObject({ range: { startLine: 2, startCol: 5, endLine: 2, endCol: 22 } })
+    expect(call.value.args[0]).toMatchObject({ range: { startLine: 2, startCol: 10, endLine: 2, endCol: 16 } })
+  })
+
+  it('结构穿透、定义体、f-string 插值与推导式中的每个 IR 节点都有位置', () => {
+    const ir = adaptWithLocations([
+      'def run(path):',
+      '    if path:',
+      '        message = f"target={path!r}"',
+      '        values = [open(item, "w") for item in paths if item]',
+      '        return message',
+      ''
+    ].join('\n'))
+    const visit = (value: unknown): void => {
+      if (!value || typeof value !== 'object') return
+      if ('kind' in value) expect((value as { range?: unknown }).range).toBeDefined()
+      for (const child of Object.values(value)) visit(child)
+    }
+    visit(ir)
   })
 })
 

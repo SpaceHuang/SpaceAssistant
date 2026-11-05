@@ -715,6 +715,10 @@ export interface ToolCallRecord {
   shellSecurityHints?: ShellSecurityHints
   /** run_script 路径分析未覆盖时的原因提示。 */
   scriptPathHint?: string
+  /** 本次 run_script 确认所对应的逐条脚本发现；仅在确认卡消费侧展示。 */
+  scriptFindings?: import('./confirmation/types').ScriptFinding[]
+  /** 发现总数；即使消费端折叠列表仍保留完整总数。 */
+  scriptFindingTotalCount?: number
   /** 文件 auto 模式回落 diff 时的原因 */
   autoApproveFallback?: AutoApproveFallback
   /**

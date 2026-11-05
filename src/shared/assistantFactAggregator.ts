@@ -95,6 +95,8 @@ type AssistantFactEventPayload =
       confirmDiff?: ToolCallRecord['confirmDiff']
       shellSecurityHints?: ToolCallRecord['shellSecurityHints']
       scriptPathHint?: ToolCallRecord['scriptPathHint']
+      scriptFindings?: ToolCallRecord['scriptFindings']
+      scriptFindingTotalCount?: ToolCallRecord['scriptFindingTotalCount']
       autoApproveFallback?: ToolCallRecord['autoApproveFallback']
       currentPageUrl?: ToolCallRecord['currentPageUrl']
       dangerInfo?: ToolCallRecord['dangerInfo']
@@ -284,6 +286,8 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
           ...(event.confirmDiff ? { confirmDiff: event.confirmDiff } : {}),
           ...(event.shellSecurityHints ? { shellSecurityHints: event.shellSecurityHints } : {}),
           ...(event.scriptPathHint ? { scriptPathHint: event.scriptPathHint } : {}),
+          ...(event.scriptFindings !== undefined ? { scriptFindings: event.scriptFindings } : {}),
+          ...(event.scriptFindingTotalCount !== undefined ? { scriptFindingTotalCount: event.scriptFindingTotalCount } : {}),
           ...(event.autoApproveFallback ? { autoApproveFallback: event.autoApproveFallback } : {}),
           ...(event.currentPageUrl ? { currentPageUrl: event.currentPageUrl } : {}),
           ...(event.dangerInfo ? { dangerInfo: event.dangerInfo } : {}),

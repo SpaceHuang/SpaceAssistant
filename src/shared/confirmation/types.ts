@@ -93,6 +93,72 @@ export interface ConfirmSummary {
   sections?: ConfirmSummarySection[]
 }
 
+export interface ScriptSourceRange {
+  startLine: number
+  startCol: number
+  endLine: number
+  endCol: number
+}
+
+export type ScriptFindingClass =
+  | 'process-creation' | 'destructive-fs' | 'dynamic-execution' | 'dynamic-import'
+  | 'native-code-load' | 'network-api' | 'file-write' | 'cwd-change'
+  | 'reflection' | 'alias-resolution' | 'decode-then-exec' | 'dynamic-dispatch'
+
+export type ScriptFindingEvidence =
+  | { kind: 'process-create'; module: string; attr: string; argvLiteral?: string }
+  | { kind: 'fs-destructive'; operation: string; rawPath: string | null; pathClass: 'absolute' | 'dotdot' | 'relative' | 'unresolved' }
+  | { kind: 'dynamic-exec'; entry: string; boundName?: string }
+  | { kind: 'dynamic-import'; moduleName: string | null; boundName?: string }
+  | { kind: 'native-code'; module: 'ctypes' | 'cffi'; symbol?: string }
+  | { kind: 'network'; module: string; attr: string; host?: string }
+  | { kind: 'write-path'; call: string; mode: string | null; rawPath: string | null; pathClass: 'absolute' | 'dotdot' | 'relative' | 'unresolved' }
+  | { kind: 'cwd-change'; rawPath: string | null; pathClass: 'absolute' | 'dotdot' | 'relative' | 'unresolved' }
+  | { kind: 'reflection'; target: string; resolvedChain?: string }
+  | { kind: 'alias'; alias: string; resolved: string }
+  | { kind: 'decode-exec'; decodeFn: string; boundName: string; stmtDistance: number }
+  | { kind: 'dynamic-dispatch'; unresolvableReason: string }
+
+export interface ScriptFinding {
+  pattern: string
+  class: ScriptFindingClass
+  range: ScriptSourceRange
+  snippet: string
+  evidence: ScriptFindingEvidence
+}
+
+/** Transient facts passed to the audit writer; raw snippets must never be serialized. */
+export interface ScriptAuditInput {
+  turnId: string
+  contentDigest: string
+  totalCount: number
+  findings: Array<Pick<ScriptFinding, 'pattern' | 'class' | 'range' | 'snippet'>>
+}
+
+export interface ScriptAuditFinding {
+  pattern: string
+  class: ScriptFindingClass
+  range: ScriptSourceRange
+  /** Structure-only projection; string/number literals and comments are masked. */
+  skeleton: string
+  /** SHA-256 of the normalized raw snippet before projection and truncation. */
+  snippetSha256: string
+}
+
+export interface ScriptAuditRef {
+  sessionId: string
+  turnId: string
+  contentDigest: string
+  totalCount: number
+  truncated: boolean
+  findings: ScriptAuditFinding[]
+}
+
+export type ScriptPathDynamicKind =
+  | 'dynamic-code-execution' | 'unresolved-write-target' | 'unresolved-read-target'
+  | 'unresolved-destructive-target' | 'unresolved-transfer-target'
+  | 'binding-chain-broken' | 'path-analysis-unavailable'
+
 export type FactSignal =
   | { kind: 'command-sequence'; commands: CommandFact[]; persistable?: boolean }
   | { kind: 'path-target'; path: string; zone: PathZone }
@@ -107,6 +173,10 @@ export type FactSignal =
       dynamicAccess: boolean
       /** Present only when incomplete analysis was classified; absent stays fail-closed. */
       unknownReason?: 'dynamic-execution' | 'unmodeled-call' | null
+      /** Bounded path-analysis categories; source provenance is not included unless complete. */
+      dynamicKinds?: ScriptPathDynamicKind[]
+      sourceEvidenceComplete?: boolean
+      /** Absent/unknown categories remain fail-closed for legacy or malformed producers. */
       /** SHA-256 of exact run_script code; used only for session-scoped trust. */
       contentDigest?: string
       /** Opaque SHA-256 of the active work directory; scopes script trust to its filesystem boundary. */
@@ -157,10 +227,15 @@ export type FactSignal =
   | { kind: 'policy-tier'; tier: 'loose' | 'standard' | 'strict' | 'custom' }
   | { kind: 'outbound-content'; inspectionCoverage: 'complete' | 'partial' | 'unavailable'; evidenceKinds: readonly string[] }
   | { kind: 'network-egress'; domains: string[] }
-  | { kind: 'outbound-target'; channel: string; recipient?: string; domains?: string[] }
-  | { kind: 'script-analysis'; signal: 'clean' | 'suspicious' | 'dangerous'; patterns: string[] }
-  /** 脚本专属的网络命中信号（与通用 network-egress 区分，见 §5.2 规则）。 */
+  /** Network-capable script syntax; policy owns its disposition by lane. */
   | { kind: 'script-network'; patterns: string[] }
+  | { kind: 'outbound-target'; channel: string; recipient?: string; domains?: string[] }
+  | {
+      kind: 'script-analysis'
+      findings: ScriptFinding[]
+      coverage: 'complete' | 'partial' | 'failed'
+      totalCount: number
+    }
   /** Complete, static HTTP target facts for the isolated standard IM script review candidate. */
   | { kind: 'im-script-network-review-candidate'; status: 'complete'; host: string; method: 'GET' | 'HEAD'; url: string }
   | { kind: 'approval-review-materials'; status: 'complete' | 'incomplete' }
@@ -303,6 +378,28 @@ export interface ConfirmRequest {
   reviewScopeCandidate?: ReviewScopeApprovalCandidate
 }
 
+/** Bounded, in-memory script evidence shown to the approval model for this invocation. */
+export interface ApprovalScriptEvidenceFinding {
+  pattern: string
+  class: ScriptFindingClass
+  range: ScriptSourceRange
+  /** Original script text, or null when the bounded material is insufficient; never an audit projection. */
+  snippet: string | null
+  evidence: ScriptFindingEvidence
+  status: 'complete' | 'insufficient'
+}
+
+/** Evidence contract for independent script review; it carries facts and never a policy action. */
+export interface ApprovalScriptEvidence {
+  coverage: 'complete' | 'partial' | 'failed'
+  totalCount: number
+  truncated: boolean
+  /** SHA-256 of the exact script under review, identical to scriptApprovalBinding.sha256. */
+  contentDigest: string
+  sufficiency: 'sufficient' | 'undetermined'
+  findings: ApprovalScriptEvidenceFinding[]
+}
+
 export interface ReviewScopeApprovalCandidate {
   readonly scopeCandidateDigest: string
   readonly toolName: 'edit_file' | 'write_file' | 'grep'
@@ -391,6 +488,8 @@ export interface ApprovalCluePack {
   grepQuery?: string
   /** Host-computed digests binding the exact script and parameters reviewed for this invocation. */
   scriptApprovalBinding?: { sha256: string; parametersSha256: string; environmentSha256: string; certifier: string }
+  /** Optional, bounded raw script findings for independent review during this invocation. */
+  scriptEvidence?: ApprovalScriptEvidence
   /** Provenance of the exact facts reviewed by policy and approval; contains no raw input. */
   factsProvenance?: { factId: string; extractorVersion: string; completeness: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale'; factsRevision: number; policyVersion: string }
   /** Untrusted model-provided explanation attached to this invocation. */
@@ -622,6 +721,10 @@ export interface SecurityAuditEvent {
   /** settings.* 事件的新旧值（JSON 序列化文本，写入前脱敏）。 */
   before?: string
   after?: string
+  /** Transient raw script findings. SecurityAuditLog projects these and omits this property on disk. */
+  scriptAuditInput?: ScriptAuditInput
+  /** Persisted script audit reference; generated only by the audit writer. */
+  scriptAudit?: ScriptAuditRef
   actor: 'user' | 'system' | 'migration' | 'agent'
   /**
    * 确认结束原因（仅 confirm.outcome 等有裁决的事件携带；与 outcome 联动，

@@ -1,21 +1,8 @@
 {
   "id": "a22-compile",
   "group": "legacy-parseable",
-  "legacyParsed": true,
-  "verdict": "ask",
-  "patterns": [
+  "patternIds": [
     "A3"
   ],
-  "signals": [
-    {
-      "kind": "script-analysis",
-      "signal": "suspicious",
-      "patterns": [
-        "A3"
-      ]
-    },
-    {
-      "kind": "script-uncertified"
-    }
-  ]
+  "coverage": "complete"
 }

@@ -8,7 +8,7 @@ import { createImAttachmentFacts } from '../../src/shared/confirmation/imAttachm
 import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { resolveImPolicyFloorForVersion, validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
 import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
-import { analyzeScriptContent, parsePythonModule, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
+import { parsePythonModule } from '../shell/scriptContentSecurity'
 import type { IrModule } from '../shell/scriptIr/types'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import type {
@@ -310,8 +310,6 @@ export interface ToolCallGateResult {
   fileAutoApproved?: boolean
   /** MCP 条目回传（确认卡片载荷）。 */
   mcpEntry?: McpToolSnapshotEntry
-  /** run_script 原始分析（拒绝消息桥接 / 日志 patterns）。 */
-  rawScriptAnalysis?: ScriptAnalysisResult
   /** run_script 路径分析未覆盖时的用户提示。 */
   scriptPathHint?: string
   /** R2：结构化诊断（deny / require-confirm 与 decision 成对出现；auto-allow 不产）。 */
@@ -679,7 +677,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       : 'unknown'
     const scriptPaths: ScriptPathFacts = pythonLanguage
       ? preParsedIr ? extractScriptPathFacts(code, 'python', preParsedIr) : {
-        paths: [], completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', unknownEvidence: []
+        paths: [], completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', dynamicKinds: ['path-analysis-unavailable'], unknownEvidence: []
       }
       : extractScriptPathFacts(code, language)
     const pythonSignals = pythonLanguage ? extractScriptSignals(code, env, preParsedIr) : undefined
@@ -708,6 +706,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       ...(scriptPaths.completeness === 'unknown'
         ? { unknownReason: scriptPaths.unknownReason ?? 'dynamic-execution' }
         : {}),
+      dynamicKinds: scriptPaths.dynamicKinds,
+      sourceEvidenceComplete: false,
       contentDigest: createHash('sha256').update(code, 'utf8').digest('hex'),
       workdirDigest: createHash('sha256').update(path.resolve(args.workDir), 'utf8').digest('hex'),
       parametersDigest: createHash('sha256').update(JSON.stringify({ ...args.toolInput, code }), 'utf8').digest('hex'),
@@ -730,8 +730,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
     if (pythonLanguage && scriptPaths.declaration) {
       const consistent = scriptPaths.dynamicAccess === false
-        && !signals.some((signal) => signal.kind === 'script-network')
-        && !signals.some((signal) => signal.kind === 'script-analysis' && signal.signal !== 'clean')
+        && scriptPaths.completeness === 'complete'
+        && !signals.some((signal) => signal.kind === 'script-analysis' && signal.findings.length > 0)
         && !signals.some((signal) => signal.kind === 'path-target' && signal.zone !== 'workdir-normal')
         && !signals.some((signal) => signal.kind === 'extraction-failed')
       signals.push({ kind: 'script-path-declaration', scope: scriptPaths.declaration, consistent })
@@ -744,9 +744,6 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       summary
     }
     result.scriptPathHint = scriptPathHint
-    result.rawScriptAnalysis = pythonLanguage
-      ? analyzeScriptContent(code, { remote: lane !== 'desktop' }, preParsedIr)
-      : { verdict: 'ask', patterns: ['script-language-analysis-unverified'], reason: '该脚本语言尚未接入完整内容安全分析' }
   } else if (args.toolName === 'write_file' || args.toolName === 'edit_file') {
     const descriptor = getBuiltinToolMetadata(args.toolName)
     const rawPath = extractPathField(args.toolInput)
@@ -1585,6 +1582,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     })
   }
   const invariantId = SYSTEM_INVARIANT_ID_BY_GATE_RULE[decision.ruleId]
+  const scriptAnalysisSignal = facts.signals.find((signal) => signal.kind === 'script-analysis')
+  const scriptContentDigest = facts.signals.find((signal) => signal.kind === 'script-path-extraction')?.contentDigest
   audit.record({
     ts: Date.now(),
     event: 'policy.decision',
@@ -1616,6 +1615,16 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     riskLevel: facts.baseRiskLevel,
     factsSummary: args.toolName === 'run_shell' ? 'run_shell 路径及命令影响事实已检查' : facts.summary.text,
     signals: facts.signals.map((s) => s.kind),
+    ...(args.toolName === 'run_script' && scriptAnalysisSignal?.kind === 'script-analysis' && scriptContentDigest
+      ? { scriptAuditInput: {
+        turnId: args.requestId ?? args.toolUseId ?? args.sessionId,
+        contentDigest: scriptContentDigest,
+        totalCount: scriptAnalysisSignal.totalCount,
+        findings: scriptAnalysisSignal.findings.map(({ pattern, class: findingClass, range, snippet }) => ({
+          pattern, class: findingClass, range, snippet
+        }))
+      } }
+      : {}),
     ...(selectedDirectoryGrant ? { directoryGrantId: selectedDirectoryGrant.grantId, directoryGrantSource: selectedDirectoryGrant.source } : {}),
     pathZones: [...new Set(facts.signals.flatMap((s) => s.kind === 'path-target' ? [s.zone] : s.kind === 'wechat-media-target' && s.zone ? [s.zone] : []))],
     decision: decision.type,

@@ -12,6 +12,7 @@ import type {
 } from '../confirmation/types'
 import { memoryTierLabel } from '../confirmation/labels'
 import { deriveMemoryEligibility } from './memoryEligibility'
+import { getScriptClassDisposition } from './scriptClassDisposition'
 
 export interface InvocationPolicyConstraints {
   readonly mandatoryConfirmationRuleId?: string
@@ -30,9 +31,15 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
   for (const signal of facts.signals) {
     switch (signal.kind) {
       case 'script-analysis':
-        // 把 script-analysis 的子档位（clean/suspicious/dangerous）作为独立 token 暴露，
-        // 使规则能用 `signals:['clean']` / `['dangerous']` 匹配。
-        tokens.add(signal.signal)
+        tokens.add(`script-analysis:${signal.coverage}`)
+        for (const finding of signal.findings ?? []) {
+          tokens.add(`script-finding:${finding.class}`)
+          const pathClass = 'pathClass' in finding.evidence ? finding.evidence.pathClass : undefined
+          if (pathClass) tokens.add(`script-finding:${finding.class}:${pathClass}`)
+          const action = getScriptClassDisposition(finding.class, pathClass).action
+          if (action !== 'allow') tokens.add('script-finding:non-allow')
+          if (action === 'deny') tokens.add('script-finding:deny')
+        }
         break
       case 'path-target':
         tokens.add(signal.kind)
@@ -143,8 +150,35 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`script-path-extraction:${signal.completeness}`)
         if (signal.dynamicAccess) tokens.add('script-dynamic-access')
-        if (signal.unknownReason) tokens.add(`script-path-extraction:${signal.unknownReason}`)
-        else if (signal.completeness === 'unknown') tokens.add('script-path-extraction:unclassified')
+        if (signal.unknownReason) {
+          if (signal.unknownReason !== 'dynamic-execution' || !signal.dynamicKinds?.length) {
+            tokens.add(`script-path-extraction:${signal.unknownReason}`)
+          }
+        } else if (signal.completeness === 'unknown') tokens.add('script-path-extraction:unclassified')
+        {
+          const knownKinds = new Set([
+            'dynamic-code-execution', 'unresolved-write-target', 'unresolved-read-target',
+            'unresolved-destructive-target', 'unresolved-transfer-target', 'binding-chain-broken',
+            'path-analysis-unavailable'
+          ])
+          const hasExplicitKinds = Array.isArray(signal.dynamicKinds) && signal.dynamicKinds.length > 0
+          const kinds = new Set((signal.dynamicKinds ?? []).filter((kind) => knownKinds.has(kind)))
+          if (signal.completeness === 'unknown' && kinds.size === 0 && signal.unknownReason !== 'unmodeled-call') {
+            kinds.add('path-analysis-unavailable')
+          }
+          for (const kind of kinds) tokens.add(`script-path-extraction:${kind}`)
+          if (kinds.has('dynamic-code-execution')) tokens.add('script-path-extraction:dynamic-execution')
+          else if (signal.unknownReason === 'dynamic-execution' && !signal.dynamicKinds?.length) tokens.add('script-path-extraction:dynamic-execution')
+          // policy stage: F35 D-5 keeps every explicit non-write path class on the locked human floor.
+          // A pure unresolved write remains eligible for its dedicated review rule; unmodeled calls remain a separate fact.
+          const unmodeledPathReadCandidate = signal.unknownReason === 'unmodeled-call'
+            && !signal.dynamicAccess && kinds.size === 1 && kinds.has('path-analysis-unavailable')
+          if (kinds.size > 0 && !unmodeledPathReadCandidate
+            && !(kinds.size === 1 && kinds.has('unresolved-write-target'))) {
+            tokens.add('script-path-extraction:locked-path-review')
+          }
+          if (hasExplicitKinds && kinds.size === 1 && kinds.has('unresolved-write-target')) tokens.add('script-path-extraction:write-target-only')
+        }
         break
       case 'im-script-network-review-candidate':
         tokens.add(signal.kind)
@@ -292,9 +326,8 @@ export function deriveCacheKeys(
 
 /**
  * 依据候选缓存键生成确认界面的记忆档位（默认最窄可用档）。
- * run_script 记忆封顶（§5.3）：携带 script-network / script-uncertified 信号的调用
- * 强制"仅此一次"、不开放任何记忆档位——这两条规则非 locked 且位于缓存检查之后，
- * 开放记忆会让"记住"绕过网络命中确认与未认证降级，属安全松动。
+ * run_script 记忆封顶（§5.3）：含 network-api finding 或 script-uncertified 的调用
+ * 强制"仅此一次"、不开放任何记忆档位，防止记忆绕过网络复核与未认证降级。
  */
 export function buildMemoryTiers(
   facts: ContentFacts,

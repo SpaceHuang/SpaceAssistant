@@ -182,7 +182,7 @@ describe('JavaScript grep fallback', () => {
     const root = fixture({ 'hostile.txt': `${'a'.repeat(30_000)}!` })
     let calls = 0
     const now = (): number => (++calls > 4 ? 100_000 : 0)
-    const out = await grepFallbackJs(root, root, '(a+)+$', args(), new AbortController().signal, () => {}, 40, undefined, { now })
+    const out = await grepFallbackJs(root, root, '(a+)+$', args(), new AbortController().signal, () => {}, 1, undefined, { now })
     expect(out).toContain('No matches found')
     expect(out).toMatch(/搜索超时/)
     expect(out).toContain('[边界摘要]')

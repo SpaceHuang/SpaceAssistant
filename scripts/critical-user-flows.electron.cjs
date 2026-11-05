@@ -381,7 +381,16 @@ async function runRestartResume(win) {
   const sessionId = process.env.CRITICAL_FLOW_SESSION_ID
   const session = sessions.find((item) => item.id === sessionId)
   assert(session, `session from pre-restart profile is missing: ${sessionId || 'session id unavailable'}`)
-  const selected = await execute(win, `(() => { const row=[...document.querySelectorAll('.session-item-select')].find((button)=>button.getAttribute('data-session-id')===${JSON.stringify(session.id)}); if(!row || row.disabled) return false; row.click(); return true })()`)
+  const selected = await waitFor('pre-restart conversation rendered and selectable in the session list', () => execute(win, `(() => { const row=[...document.querySelectorAll('.session-item-select')].find((button)=>button.getAttribute('data-session-id')===${JSON.stringify(session.id)}); if(!row || row.disabled) return false; row.click(); return true })()`), 15_000).catch(async (error) => {
+    stage('restart-session-list-diagnostics', {
+      expectedSessionId: sessionId,
+      expectedSessionName: session.name || '',
+      renderedSessionIds: await execute(win, `[...document.querySelectorAll('.session-item-select')].map((node)=>node.getAttribute('data-session-id'))`),
+      renderedSessionNames: await execute(win, `[...document.querySelectorAll('.session-item-name')].map((node)=>node.innerText.replace(/\\s+/g,' ').trim())`),
+      sessionListCount: sessions.length
+    })
+    throw error
+  })
   assert(selected, 'pre-restart conversation could not be reopened from the real session list')
   await waitFor('restarted session list selection committed in the renderer', () => execute(win, `Boolean([...document.querySelectorAll('.session-item-select[aria-current="true"]')].find((button)=>button.getAttribute('data-session-id')===${JSON.stringify(session.id)}))`))
   await execute(win, 'new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))')

@@ -5,6 +5,7 @@ import type { IrExpr, IrModule, IrStmt } from '../../shell/scriptIr/types'
 import { scriptParserService } from '../../shell/scriptParserService'
 import type * as ts from 'typescript'
 import { createLazyRuntimeModule } from '../../lazyRuntimeModule'
+import type { ScriptPathDynamicKind } from '../../../src/shared/confirmation/types'
 
 const getTypeScript = createLazyRuntimeModule(() => require('typescript') as typeof ts)
 
@@ -18,6 +19,8 @@ export type ScriptPathFacts = {
   dynamicAccess: boolean
   /** P1-1:unknown 分类(方案 §5);complete 时为 null。dynamicAccess ⇔ unknownReason === 'dynamic-execution'。 */
   unknownReason: ScriptPathUnknownReason
+  /** Facts-stage categories only; policy decisions are derived downstream. */
+  dynamicKinds: ScriptPathDynamicKind[]
   /** P2-1:unknown 证据(去重封顶);complete/fail-closed 时为空数组。 */
   unknownEvidence: ScriptPathEvidence[]
   /** P2-3:脚本首部 `# @path-scope <scope>` 声明(仅识别 workdir-readonly);未声明为 undefined。 */
@@ -57,7 +60,7 @@ const PS_FILE_APIS = new Set(['get-content', 'set-content', 'add-content', 'out-
 const PS_SAFE_CALLS = new Set(['write-output', 'write-host', 'write-warning', 'write-error', 'get-date', 'get-location', 'set-location', 'where-object', 'foreach-object', 'sort-object', 'select-object', 'measure-object'])
 
 function emptyUnknown(): ScriptPathFacts {
-  return { paths: [], completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', unknownEvidence: [] }
+  return { paths: [], completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', dynamicKinds: ['path-analysis-unavailable'], unknownEvidence: [] }
 }
 
 function newScope(): IrScope { return { modules: new Map(), attrs: new Map() } }
@@ -102,6 +105,20 @@ interface WalkState {
   dynamicExecution: boolean
   unmodeledCall: boolean
   evidence: ScriptPathEvidence[]
+  dynamicKinds: Set<ScriptPathDynamicKind>
+}
+
+function classifyFileDynamicKind(chain: string, args: IrExpr[], kwargs: Array<{ name: string; value: IrExpr }>, env: WalkEnv): ScriptPathDynamicKind {
+  if (/^(?:os\.(?:remove|unlink)|shutil\.rmtree|pathlib\.Path\.unlink)$/.test(chain)) return 'unresolved-destructive-target'
+  if (/^(?:os\.(?:rename|replace)|shutil\.(?:copy|copy2|move))$/.test(chain)) return 'unresolved-transfer-target'
+  if (/^(?:pathlib\.Path\.write_text|pathlib\.Path\.write_bytes|os\.(?:mkdir|makedirs))$/.test(chain)) return 'unresolved-write-target'
+  if (/^pathlib\.Path\.(?:read_text|read_bytes)$/.test(chain)) return 'unresolved-read-target'
+  if (chain === 'open' || chain === 'builtins.open' || chain === 'io.open' || chain === 'pathlib.Path.open') {
+    const mode = kwargs.find((kw) => kw.name === 'mode')?.value ?? args[1]
+    const folded = mode ? foldStringIr(mode) : 'r'
+    return folded !== null && /[wax+]/.test(folded) ? 'unresolved-write-target' : 'unresolved-read-target'
+  }
+  return 'path-analysis-unavailable'
 }
 
 function recordEvidence(state: WalkState, call: string | null, reason: Exclude<ScriptPathUnknownReason, null>): void {
@@ -275,7 +292,7 @@ function invalidateTargetText(text: string, env: WalkEnv, state: WalkState): voi
       env.consts.delete(t)
       env.pure.delete(t)
       env.handles.delete(t)
-      if (env.defs.delete(t)) state.dynamicExecution = true
+      if (env.defs.delete(t)) { state.dynamicExecution = true; state.dynamicKinds.add('binding-chain-broken') }
     }
     return
   }
@@ -312,7 +329,7 @@ function isPathCtorChain(chain: string | null | undefined): boolean {
 function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkState, conditionallyEvaluated: boolean): void {
   if (expr.kind === 'call') {
     const chain = normalizeChain(resolveIrChain(expr.callee, env.scope).fullName)
-    if (chain && PROCESS_CALLS.has(chain)) { state.dynamicExecution = true; recordEvidence(state, chain, 'dynamic-execution') }
+    if (chain && PROCESS_CALLS.has(chain)) { state.dynamicExecution = true; state.dynamicKinds.add('dynamic-code-execution'); recordEvidence(state, chain, 'dynamic-execution') }
     const pathMethod = expr.callee.kind === 'attr' ? expr.callee.attr : ''
     const receiver = expr.callee.kind === 'attr' ? expr.callee.base : undefined
     const receiverConstructor = receiver?.kind === 'call' ? normalizeChain(resolveIrChain(receiver.callee, env.scope).fullName) : undefined
@@ -320,17 +337,22 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
     const receiverConst = receiver?.kind === 'name' ? env.consts.get(receiver.id) ?? null : null
     const isPathMethod = Boolean(
       (receiverConstructor && isPathCtorChain(receiverConstructor)) || receiverConst !== null
-    ) && ['open', 'read_text', 'read_bytes', 'write_text', 'write_bytes'].includes(pathMethod)
+    ) && ['open', 'read_text', 'read_bytes', 'write_text', 'write_bytes', 'unlink'].includes(pathMethod)
     if (isPathMethod) {
       const value = receiver?.kind === 'call'
         ? (receiver.args.length === 1 ? staticString(receiver.args[0], env) : null)
         : receiverConst
-      if (value === null) { state.dynamicExecution = true; recordEvidence(state, chain, 'dynamic-execution') }
+      if (value === null) {
+        state.dynamicExecution = true
+        state.dynamicKinds.add(pathMethod === 'unlink' ? 'unresolved-destructive-target' : pathMethod.startsWith('write') ? 'unresolved-write-target' : pathMethod === 'open' ? classifyFileDynamicKind('pathlib.Path.open', expr.args, expr.kwargs, env) : 'unresolved-read-target')
+        recordEvidence(state, chain, 'dynamic-execution')
+      }
       else paths.add(value)
     } else if (chain && FILE_CALLS.has(chain)) {
       const count = chain === 'os.rename' || chain === 'os.replace' || chain === 'shutil.copy' || chain === 'shutil.copy2' || chain === 'shutil.move' ? 2 : 1
       if (expr.args.length < count || expr.args.slice(0, count).some((arg) => staticString(arg, env) === null)) {
         state.dynamicExecution = true
+        state.dynamicKinds.add(classifyFileDynamicKind(chain, expr.args, expr.kwargs, env))
         recordEvidence(state, chain, 'dynamic-execution')
       }
       for (const arg of expr.args.slice(0, count)) {
@@ -341,7 +363,7 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
       for (const kw of expr.kwargs) {
         if (['file', 'path', 'src', 'dst', 'source', 'destination'].includes(kw.name)) {
           const value = staticString(kw.value, env)
-          if (value === null) { state.dynamicExecution = true; recordEvidence(state, chain, 'dynamic-execution') }
+          if (value === null) { state.dynamicExecution = true; state.dynamicKinds.add(classifyFileDynamicKind(chain, expr.args, expr.kwargs, env)); recordEvidence(state, chain, 'dynamic-execution') }
           else paths.add(value)
         }
       }
@@ -356,7 +378,7 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
     if (
       !(chain && (FILE_CALLS.has(chain) || PROCESS_CALLS.has(chain) || isPureCallChain(chain))) &&
       !isPathMethod && !isPathConstructor && !receiverTyped && !isLocalDefCall
-    ) { state.unmodeledCall = true; recordEvidence(state, chain, 'unmodeled-call') }
+    ) { state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable'); recordEvidence(state, chain, 'unmodeled-call') }
     walkExpr(expr.callee, env, paths, state, conditionallyEvaluated)
     expr.args.forEach((arg) => walkExpr(arg, env, paths, state, conditionallyEvaluated))
     expr.kwargs.forEach((kw) => walkExpr(kw.value, env, paths, state, conditionallyEvaluated))
@@ -412,7 +434,7 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
         else if (isHandleValueExpr(expr.value, env)) env.handles.add(expr.target)
       }
       break
-    case 'f_string': if (expr.interpolations.length) state.unmodeledCall = true; expr.interpolations.forEach((v) => walkExpr(v, env, paths, state, conditionallyEvaluated)); break
+    case 'f_string': if (expr.interpolations.length) { state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable') }; expr.interpolations.forEach((v) => walkExpr(v, env, paths, state, conditionallyEvaluated)); break
   }
 }
 
@@ -427,7 +449,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         const folded = foldPathIr(stmt.value, blockEnv)
         walkExpr(stmt.value, blockEnv, paths, state, false)
         for (const name of stmt.targets) {
-          if (scope.modules.has(name) || scope.attrs.has(name)) state.dynamicExecution = true
+          if (scope.modules.has(name) || scope.attrs.has(name)) { state.dynamicExecution = true; state.dynamicKinds.add('binding-chain-broken') }
           invalidateTargetText(name, blockEnv, state)
           // P0-2:仅顶层单次赋值绑定常量;分支/循环/try/with/函数体内(bindable=false)不绑定,
           // 只失效——分支可能不执行,绑定值不确定(§10-2 拍板:保守优先)。
@@ -441,7 +463,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
       case 'aug_assign':
         // P0-4:aug_assign 不再无条件 unknown(f14);但 IR 丢失运算符,无法证明「+= 后仍静态」——
         // 一律失效(N3:p += os.environ["X"] 不得误判可静态确定)。仅 import 名重绑定保持 unknown。
-        if (scope.modules.has(stmt.target) || scope.attrs.has(stmt.target)) state.dynamicExecution = true
+        if (scope.modules.has(stmt.target) || scope.attrs.has(stmt.target)) { state.dynamicExecution = true; state.dynamicKinds.add('binding-chain-broken') }
         walkExpr(stmt.value, blockEnv, paths, state, false)
         invalidateTargetText(stmt.target, blockEnv, state)
         break
@@ -461,7 +483,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
           walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
           walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
         } else {
-          state.unmodeledCall = true
+          state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable')
           walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
         }
         walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
@@ -473,7 +495,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
           walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
           walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
         } else {
-          state.unmodeledCall = true
+          state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable')
           walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
         }
         walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
@@ -524,7 +546,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         // P0-2:del 精确失效目标名;del import 名视同重绑定(保持 unknown);非 name 形态(下标/属性)忽略
         for (const target of stmt.targets) {
           if (target.kind === 'name') {
-            if (scope.modules.has(target.id) || scope.attrs.has(target.id)) state.dynamicExecution = true
+            if (scope.modules.has(target.id) || scope.attrs.has(target.id)) { state.dynamicExecution = true; state.dynamicKinds.add('binding-chain-broken') }
             invalidateTargetText(target.id, blockEnv, state)
           }
           walkExpr(target, blockEnv, paths, state, false)
@@ -533,7 +555,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
       // 评审 N1:global/nonlocal 可改写外层绑定(含模块级常量),函数体 env 看不到外层
       // consts——影响面无法精确判定,恢复基线强度归 dynamic-execution(locked、禁记忆)。
       // v4 obs3:模块级 global 是语义空操作,不置标志(不误伤);函数/类体内维持 N1 语义。
-      case 'global_nonlocal': if (!env.moduleScope) state.dynamicExecution = true; break
+      case 'global_nonlocal': if (!env.moduleScope) { state.dynamicExecution = true; state.dynamicKinds.add('binding-chain-broken') }; break
       case 'pass': case 'break': case 'continue': break
     }
   }
@@ -553,14 +575,14 @@ function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'type
   const modules = new Map<string, string>()
   const namedImports = new Map<string, { module: string; name: string }>()
   const paths = new Set<string>()
-  const state = { unknown: false }
+  const state = { unknown: false, dynamicKinds: new Set<ScriptPathDynamicKind>() }
   const bindModule = (name: string, module: string) => { modules.set(name, module.replace(/^node:/, '')) }
 
   const moduleFromExpr = (expr: ts.Expression): string | undefined => {
     if (compiler.isIdentifier(expr)) return modules.get(expr.text)
     if (compiler.isCallExpression(expr) && compiler.isIdentifier(expr.expression) && expr.expression.text === 'require') {
       const moduleName = staticTsString(expr.arguments[0], compiler)
-      if (!moduleName) state.unknown = true
+    if (!moduleName) { state.unknown = true; state.dynamicKinds.add('path-analysis-unavailable') }
       return moduleName?.replace(/^node:/, '')
     }
     return undefined
@@ -589,7 +611,7 @@ function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'type
   }
 
   const visit = (node: ts.Node): void => {
-    if (compiler.isFunctionDeclaration(node) || compiler.isFunctionExpression(node) || compiler.isArrowFunction(node) || compiler.isClassDeclaration(node) || compiler.isImportEqualsDeclaration(node)) state.unknown = true
+    if (compiler.isFunctionDeclaration(node) || compiler.isFunctionExpression(node) || compiler.isArrowFunction(node) || compiler.isClassDeclaration(node) || compiler.isImportEqualsDeclaration(node)) { state.unknown = true; state.dynamicKinds.add('path-analysis-unavailable') }
     if (compiler.isVariableDeclaration(node) && node.initializer && compiler.isIdentifier(node.name)) {
       const module = moduleFromExpr(node.initializer)
       if (module) bindModule(node.name.text, module)
@@ -599,36 +621,44 @@ function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'type
       const staticRequire = compiler.isIdentifier(node.expression) && node.expression.text === 'require'
       const moduleName = resolved?.module.replace(/^node:/, '')
       const callName = resolved?.name.split('.').at(-1) ?? ''
-      if (moduleName === 'child_process' || moduleName === 'worker_threads') state.unknown = true
+      if (moduleName === 'child_process' || moduleName === 'worker_threads') { state.unknown = true; state.dynamicKinds.add('dynamic-code-execution') }
       else if (moduleName === 'fs' || moduleName === 'fs/promises') {
-        if (!JS_FILE_APIS.has(callName)) state.unknown = true
+        if (!JS_FILE_APIS.has(callName)) { state.unknown = true; state.dynamicKinds.add('path-analysis-unavailable') }
         else {
           const count = ['rename', 'renameSync', 'copyFile', 'copyFileSync'].includes(callName) ? 2 : 1
           const targets = node.arguments.slice(0, count)
-          if (targets.length < count) state.unknown = true
+          if (targets.length < count) { state.unknown = true; state.dynamicKinds.add('path-analysis-unavailable') }
           for (const target of targets) {
             const value = staticTsString(target, compiler)
-            if (value === undefined) state.unknown = true
+            if (value === undefined) {
+              state.unknown = true
+              const kind: ScriptPathDynamicKind = ['rename', 'renameSync', 'copyFile', 'copyFileSync'].includes(callName) ? 'unresolved-transfer-target'
+                : ['rm', 'rmSync', 'rmdir', 'rmdirSync', 'unlink', 'unlinkSync'].includes(callName) ? 'unresolved-destructive-target'
+                  : ['writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'mkdir', 'mkdirSync', 'createWriteStream'].includes(callName) ? 'unresolved-write-target' : 'unresolved-read-target'
+              state.dynamicKinds.add(kind)
+            }
             else paths.add(value)
           }
         }
       } else if (staticRequire) {
         const required = staticTsString(node.arguments[0], compiler)?.replace(/^node:/, '')
+        if (required === 'child_process' || required === 'worker_threads') state.dynamicKinds.add('dynamic-code-execution')
+        else if (required !== 'fs' && required !== 'fs/promises') state.dynamicKinds.add('path-analysis-unavailable')
         if (required !== 'fs' && required !== 'fs/promises') state.unknown = true
       } else {
         const fullName = compiler.isPropertyAccessExpression(node.expression)
           ? `${node.expression.expression.getText(source)}.${node.expression.name.text}`
           : compiler.isIdentifier(node.expression) ? node.expression.text : ''
-        if (!JS_SAFE_CALLS.has(fullName)) state.unknown = true
+        if (!JS_SAFE_CALLS.has(fullName)) { state.unknown = true; state.dynamicKinds.add('path-analysis-unavailable') }
       }
       node.arguments.forEach(visit)
       return
     }
     if (compiler.isBinaryExpression(node) && node.operatorToken.kind >= compiler.SyntaxKind.FirstAssignment && node.operatorToken.kind <= compiler.SyntaxKind.LastAssignment) {
-      if (compiler.isIdentifier(node.left) && (modules.has(node.left.text) || namedImports.has(node.left.text))) state.unknown = true
+      if (compiler.isIdentifier(node.left) && (modules.has(node.left.text) || namedImports.has(node.left.text))) { state.unknown = true; state.dynamicKinds.add('binding-chain-broken') }
       if (compiler.isPropertyAccessExpression(node.left)) {
         const binding = resolveCall(node.left)
-        if (binding?.module === 'fs' || binding?.module === 'fs/promises') state.unknown = true
+        if (binding?.module === 'fs' || binding?.module === 'fs/promises') { state.unknown = true; state.dynamicKinds.add('binding-chain-broken') }
       }
     }
     node.forEachChild(visit)
@@ -640,7 +670,8 @@ function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'type
     completeness: state.unknown ? 'unknown' : 'complete',
     dynamicAccess: state.unknown,
     unknownReason: state.unknown ? 'dynamic-execution' : null,
-    unknownEvidence: []
+    unknownEvidence: [],
+    dynamicKinds: state.unknown ? [...state.dynamicKinds] : []
   }
 }
 
@@ -649,34 +680,38 @@ function extractPowerShellPathFacts(code: string): ScriptPathFacts {
   const facts = extractPowershellCommandFacts(code)
   if (!facts.ok) return emptyUnknown()
   const paths = new Set<string>()
-  let unknown = facts.unresolved.length > 0 || facts.substitutions.length > 0
+  let unknown = !facts.ok || facts.unresolved.length > 0 || facts.substitutions.length > 0
+  const dynamicKinds = new Set<ScriptPathDynamicKind>()
+  if (!facts.ok || facts.unresolved.length > 0 || facts.substitutions.length > 0) dynamicKinds.add('path-analysis-unavailable')
   for (const command of facts.commands) {
     const name = command.name.toLowerCase()
-    if (name === 'start-process' || name === 'iex' || name === 'invoke-expression' || name === '&') { unknown = true; continue }
+    if (name === 'start-process' || name === 'iex' || name === 'invoke-expression' || name === '&') { unknown = true; dynamicKinds.add('dynamic-code-execution'); continue }
     if (PS_FILE_APIS.has(name)) {
       const values: string[] = []
       for (let i = 0; i < command.args.length; i += 1) {
         const arg = command.args[i]!
         if (/^-(?:literalpath|path|destination|newname)$/i.test(arg)) {
           const next = command.args[i + 1]
-          if (!next || next.startsWith('-') || /[$(){}]/.test(next)) unknown = true
+          if (!next || next.startsWith('-') || /[$(){}]/.test(next)) { unknown = true; dynamicKinds.add(name === 'remove-item' ? 'unresolved-destructive-target' : ['copy-item', 'move-item', 'rename-item'].includes(name) ? 'unresolved-transfer-target' : ['set-content', 'add-content', 'out-file', 'new-item', 'clear-content'].includes(name) ? 'unresolved-write-target' : 'unresolved-read-target') }
           else values.push(next.replace(/^(?:"(.*)"|'(.*)')$/, (_m, d: string | undefined, s: string | undefined) => d ?? s ?? next))
           i += 1
         } else if (!arg.startsWith('-')) {
-          if (/[$(){}]/.test(arg)) unknown = true
+          if (/[$(){}]/.test(arg)) { unknown = true; dynamicKinds.add(name === 'remove-item' ? 'unresolved-destructive-target' : ['copy-item', 'move-item', 'rename-item'].includes(name) ? 'unresolved-transfer-target' : ['set-content', 'add-content', 'out-file', 'new-item', 'clear-content'].includes(name) ? 'unresolved-write-target' : 'unresolved-read-target') }
           else values.push(arg.replace(/^(?:"(.*)"|'(.*)')$/, (_m, d: string | undefined, s: string | undefined) => d ?? s ?? arg))
         }
       }
-      if (values.length === 0) unknown = true
+      if (values.length === 0) { unknown = true; dynamicKinds.add('path-analysis-unavailable') }
       values.forEach((value) => paths.add(value))
-    } else if (!PS_SAFE_CALLS.has(name)) unknown = true
+    } else if (!PS_SAFE_CALLS.has(name)) { unknown = true; dynamicKinds.add('path-analysis-unavailable') }
   }
+  if (unknown && dynamicKinds.size === 0) dynamicKinds.add('path-analysis-unavailable')
   // PowerShell 同 JS/TS:unknown 保守归 dynamic-execution
   return {
     paths: [...paths],
     completeness: unknown ? 'unknown' : 'complete',
     dynamicAccess: unknown,
     unknownReason: unknown ? 'dynamic-execution' : null,
+    dynamicKinds: [...dynamicKinds],
     unknownEvidence: []
   }
 }
@@ -713,10 +748,11 @@ export function extractScriptPathFacts(code: string, language: ScriptPathLanguag
   }
   if (!scriptParserService.getStatus().ready) return emptyUnknown()
   const paths = new Set<string>()
-  const state: WalkState = { dynamicExecution: false, unmodeledCall: false, evidence: [] }
+  const state: WalkState = { dynamicExecution: false, unmodeledCall: false, evidence: [], dynamicKinds: new Set() }
   const env: WalkEnv = { scope: newScope(), consts: new Map(), pure: new Set(), handles: new Set(), defs: new Set(), bindable: true, moduleScope: true }
   try { walkStatements(ir.body, env, paths, state, true) } catch { return emptyUnknown() }
   const unknown = state.dynamicExecution || state.unmodeledCall
+  if (unknown && state.dynamicKinds.size === 0) state.dynamicKinds.add('path-analysis-unavailable')
   const declaration = parseScriptPathDeclaration(code)
   return {
     paths: [...paths],
@@ -724,6 +760,7 @@ export function extractScriptPathFacts(code: string, language: ScriptPathLanguag
     dynamicAccess: state.dynamicExecution,
     // 双类并存时按强语义归 dynamic-execution
     unknownReason: !unknown ? null : state.dynamicExecution ? 'dynamic-execution' : 'unmodeled-call',
+    dynamicKinds: [...state.dynamicKinds],
     unknownEvidence: state.evidence,
     ...(declaration ? { declaration } : {})
   }

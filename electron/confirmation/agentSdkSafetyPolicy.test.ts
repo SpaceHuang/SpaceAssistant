@@ -183,7 +183,7 @@ describe('createAgentSdkSafetyPolicy', () => {
     const scriptFacts: ContentFacts = {
       toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
       signals: [
-        { kind: 'script-analysis', signal: 'clean', patterns: [] },
+        { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
         { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: key.digest }
       ], summary: { text: 'script' }
     }
