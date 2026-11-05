@@ -329,6 +329,25 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
     expect(record.result).toMatchObject({ receiverTurnId: 'receiver-turn' })
   })
 
+  it.each(['failed', 'cancelled', 'timed-out'] as const)('records receiver Turn outcome %s without confusing it with source settlement', async (outcome) => {
+    let record = matched({ messageId: 'marker-terminal' })
+    const update = vi.fn((_id: string, _revision: number, patch: Partial<RuntimeTriggerRecord>) => {
+      record = { ...record, ...patch, revision: record.revision + 1 }
+      return record
+    })
+    const recovery = createRuntimeTriggerRecovery({
+      listWaiting: () => [], listMatched: () => [record], read: () => record, evaluateWaiting: () => ({ kind: 'none' }),
+      match: vi.fn(), expire: vi.fn(), fail: vi.fn(), deliver: vi.fn(), update,
+      readReceipt: () => ({ queuedMessageId: 'marker-terminal', turnId: 'receiver-turn', state: 'claimed' }),
+      isSessionBusy: () => false, startReceiver: vi.fn(), readTurnTerminal: () => ({ kind: 'terminal', outcome }), now: () => 2_001
+    })
+
+    await recovery.scan()
+
+    expect(record).toMatchObject({ state: 'failed', result: { receiverTurnId: 'receiver-turn', detail: outcome, completedAt: 2_001 } })
+    expect(update).toHaveBeenCalledOnce()
+  })
+
   it('reports the original receiver startup error before recording a retryable delivery failure', async () => {
     const record = matched({ messageId: 'marker-1' })
     const startupError = new Error('PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH')
