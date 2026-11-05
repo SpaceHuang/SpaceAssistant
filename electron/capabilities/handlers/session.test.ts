@@ -202,6 +202,36 @@ describe('action.session.message', () => {
         authorizationGeneration: 'auth-generation', runtimeGeneration: 'runtime-generation' })
   })
 
+  it('refreshes a queued approval from a new owner confirmation before the final target wake', async () => {
+    const storage = createSqliteSessionStorage(db)
+    const owner = await seedSession('reauthorization handoff owner')
+    const target = await seedSession('reauthorization handoff target')
+    const observedApprovalTraces: Array<string | undefined> = []
+    const drain = vi.fn(async () => {
+      observedApprovalTraces.push(storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target,
+        requestId: `${owner}:reauthorization-handoff` })?.approval?.decisionTraceRef)
+    })
+    const service = createSessionMessageService({ storage, requestDesktopDrain: drain })
+    const send = findCap('action.session.message.send')
+    const authorization = (decisionId: string, receipt: string, policyRevision: number, generation: string) => ({
+      decision: { decisionId, ruleIds: ['toolkit-act-ask'], dependencyFingerprint: `deps-${generation}`,
+        verdict: 'require-confirm', policyRevision }, receipt, answerer: 'user' as const,
+      authorizationGeneration: `auth-${generation}`, runtimeGeneration: `runtime-${generation}`
+    })
+    await send.handler({ targetSessionId: target, requestId: 'reauthorization-handoff', content: 'same queued body' },
+      ctx({ sessionId: owner, sessionMessages: service, sessionMessageAuthorization: authorization('old-decision', 'old-receipt', 7, 'old') }))
+    const refreshed = await send.handler({ targetSessionId: target, requestId: 'reauthorization-handoff', content: 'same queued body' },
+      ctx({ sessionId: owner, sessionMessages: service, sessionMessageAuthorization: authorization('new-decision', 'new-receipt', 8, 'new') })) as {
+        accepted: { duplicate: boolean }; wake: string
+      }
+
+    expect(refreshed).toMatchObject({ accepted: { duplicate: true }, wake: 'requested' })
+    expect(observedApprovalTraces).toEqual([undefined, 'old-decision', 'old-decision', 'new-decision'])
+    const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target, requestId: `${owner}:reauthorization-handoff` })
+    expect(snapshot?.approval).toMatchObject({ decisionTraceRef: 'new-decision', permitRef: 'new-receipt', policyRevision: '8' })
+    expect(snapshot?.source.authorizationBinding).toMatchObject({ decisionTraceRef: 'old-decision', permitRef: 'old-receipt', policyRevision: '7' })
+  })
+
   it('discovers send/revoke as act capabilities and scopes writes to the authenticated session on desktop', async () => {
     const owner = await seedSession('消息发送者')
     const target = await seedSession('消息接收者')

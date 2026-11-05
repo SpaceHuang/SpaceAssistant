@@ -47,4 +47,35 @@ describe('agent-session execution authorization', () => {
     expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId })).toMatchObject({ kind: 'queued' })
     expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
   })
+
+  it('accepts a newly user-approved policy trace for the same immutable queued source', () => {
+    const db = createMemoryAppDb(); dbs.push(db)
+    const owner = createSession(db, { name: 'reauthorization owner' })
+    const target = createSession(db, { name: 'reauthorization target' })
+    const storage = createSqliteSessionStorage(db)
+    const requestId = 'reauthorization-request'
+    const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId, content: 'same immutable message', authorizationBinding: {
+        decisionTraceRef: 'old-decision', permitRef: 'old-permit', ownerSessionId: owner.id, targetSessionId: target.id,
+        targetGeneration: target.generation, queueScope: 'desktop', payloadDigest: createHash('sha256').update('same immutable message').digest('hex'),
+        policyRevision: '7', authorizationGeneration: 'auth-old', runtimeGeneration: 'runtime-old'
+      } })
+    const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'new-decision', permitRef: 'new-user-permit',
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, requestId,
+      messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
+      policyRevision: '8', authorizationGeneration: 'auth-new', runtimeGeneration: 'runtime-new', approvedAt: Date.now() }
+    expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })).not.toBeNull()
+    const refreshedAuthorization = createAgentSessionExecutionAuthorization({ storage, readCurrentAuthority: () => ({ policyRevision: '8',
+      authorizationGeneration: 'auth-new', runtimeGeneration: 'runtime-new' }) }).resolve({ sessionId: target.id, requestId,
+      messageId: accepted.source.messageId })
+    expect(refreshedAuthorization).toMatchObject({ kind: 'approved' })
+    if (refreshedAuthorization.kind !== 'approved') throw new Error('expected refreshed approval')
+    const refreshed = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    expect(refreshedAuthorization.finalCheck({ source: refreshed.source, approval: refreshed.approval!, originDigest: refreshed.originDigest,
+      approvalDigest: refreshed.approvalDigest!, targetGeneration: target.generation })).toBe(true)
+    expect(storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })?.source.authorizationBinding)
+      .toMatchObject({ decisionTraceRef: 'old-decision', permitRef: 'old-permit', policyRevision: '7' })
+  })
 })

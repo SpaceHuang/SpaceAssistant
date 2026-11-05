@@ -43,6 +43,8 @@ export interface SessionMessageCapabilityPort {
     ownerSessionId: string; requestId: string; targetSessionId: string; decision: { decisionId: string; ruleIds: readonly string[]; dependencyFingerprint: string; verdict: string; policyRevision: number }
     receipt?: string; answerer?: 'user' | 'agent'; authorizationGeneration: string; runtimeGeneration: string
   }): boolean
+  /** Re-schedules the target after a fresh approval has been durably persisted. */
+  wake?(targetSessionId: string): Promise<'requested' | 'retry-pending'>
 }
 
 /**

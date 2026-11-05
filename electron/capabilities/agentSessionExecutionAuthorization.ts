@@ -41,9 +41,10 @@ export function createAgentSessionExecutionAuthorization(input: {
         return { kind: 'waiting', reason: 'source-mismatch' }
       }
       const binding = source.authorizationBinding
-      if (approval.decisionTraceRef !== binding.decisionTraceRef || approval.permitRef !== binding.permitRef ||
-        approval.policyRevision !== binding.policyRevision || approval.authorizationGeneration !== binding.authorizationGeneration ||
-        approval.runtimeGeneration !== binding.runtimeGeneration || binding.ownerSessionId !== source.ownerSessionId ||
+      // The source binding records the original send authorization and remains immutable. A queued
+      // message may receive a newer user-confirmed approval after policy changes; CAS storage binds
+      // that approval to this same source, and current authority below validates the new trace.
+      if (binding.ownerSessionId !== source.ownerSessionId ||
         binding.targetSessionId !== source.targetSessionId || binding.targetGeneration !== target.generation ||
         binding.queueScope !== 'desktop' || binding.payloadDigest !== source.payloadSha256) {
         return { kind: 'waiting', reason: 'source-mismatch' }

@@ -73,6 +73,14 @@ export function createSessionMessageService(input: {
       }
       return Boolean(input.storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: request.targetSessionId,
         requestId: request.requestId, expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: snapshot.approvalDigest ?? null, approval }))
+    },
+    async wake(targetSessionId) {
+      try {
+        await input.requestDesktopDrain(targetSessionId)
+        return 'requested'
+      } catch {
+        return 'retry-pending'
+      }
     }
   }
 }
