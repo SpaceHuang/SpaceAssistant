@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto'
-import type { AgentSessionInputSource, Message, MessageStatus, Session } from '../../src/shared/domainTypes'
+import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionInputSource, Message, MessageStatus, Session } from '../../src/shared/domainTypes'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
 import type { SessionOwnership, SessionVisibility } from '../../src/shared/sessionOwnership'
 import { normalizeOwnership, normalizeVisibility } from '../../src/shared/sessionOwnership'
@@ -33,7 +33,7 @@ import { parseQueueScope, serializeQueueScope, type QueueScope } from '../../src
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
 import { deleteSpillReferenceOwnerInTransaction, spillHistoryOwnerKey, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
-import { classifyQueueInputSource, encodeAgentSessionMessageEnvelope, type QueueInputSource } from './queueInputSource'
+import { classifyQueueInputSource, decodeAgentSessionInputSource, encodeAgentSessionMessageEnvelope, type QueueInputSource } from './queueInputSource'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
@@ -415,6 +415,16 @@ export function deleteSession(db: AppDatabase, sessionId: string, options?: { fl
     const activeTurn = conn.prepare(`SELECT 1 FROM turns WHERE session_id=? AND ${sqlActiveTurnPredicate()} LIMIT 1`).get(sessionId)
     if (session && activeTurn) throw new Error('cannot delete a session with an active turn')
     if (session) {
+      const queuedAgentInputs = conn.prepare(`SELECT request_id FROM queue_input_requests
+        WHERE session_id=? AND source_json IS NOT NULL AND state='queued' AND turn_id IS NULL`).all(sessionId) as Array<{ request_id: string }>
+      for (const { request_id } of queuedAgentInputs) {
+        if (!markAgentInputNotExecutedInScope(db, { sessionId, requestId: request_id, reason: 'target-unavailable' })) {
+          throw new Error('AGENT_SESSION_TARGET_DELETE_TERMINALIZATION_FAILED')
+        }
+      }
+      // v124 removed the session cascade for durable Agent tombstones; ordinary receipts retain
+      // their historical cleanup behavior and must be deleted explicitly.
+      conn.prepare('DELETE FROM queue_input_requests WHERE session_id=? AND source_json IS NULL').run(sessionId)
       // Explicit whole-session deletion owns removal of its canonical History too.
       // Remove the cleanup fence and ledger in this transaction before deleting History;
       // any later failure rolls this state change back with the rest of deletion.
@@ -926,7 +936,7 @@ export function updateQueueInputReceiptStateInScope(
   db: AppDatabase, sessionId: string, requestId: string, state: string, queueScope: QueueScope
 ): boolean {
   const result = getDbConnection(db).prepare(`UPDATE queue_input_requests SET state=?,updated_at=?
-    WHERE session_id=? AND request_id=? AND queue_scope=?`)
+    WHERE session_id=? AND request_id=? AND queue_scope=? AND source_json IS NULL`)
     .run(state, Date.now(), sessionId, requestId, serializeQueueScope(queueScope))
   const changed = changesToNumber(result.changes) === 1
   if (changed) db.save()
@@ -1044,6 +1054,70 @@ export function enqueueAgentSessionMessageInScope(
     }
     return { receipt, source, persisted, duplicate: false }
   })
+}
+
+export function markAgentInputNotExecutedInScope(
+  db: AppDatabase,
+  input: { sessionId: string; requestId: string; reason: AgentInputNotExecutedReason }
+): boolean {
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const row = conn.prepare(`SELECT queued_message_id,turn_id,state,source_json FROM queue_input_requests
+      WHERE session_id=? AND request_id=? AND queue_scope='desktop' AND source_json IS NOT NULL`)
+      .get(input.sessionId, input.requestId) as { queued_message_id: string | null; turn_id: string | null; state: string; source_json: string } | undefined
+    const source = decodeAgentSessionInputSource(row?.source_json ?? null)
+    if (!row || row.state !== 'queued' || row.turn_id !== null || !row.queued_message_id ||
+      !source || source.requestId !== input.requestId || source.targetSessionId !== input.sessionId || source.messageId !== row.queued_message_id ||
+      classifyQueueInputSource(db, { sessionId: input.sessionId, queueScope: DESKTOP_QUEUE_SCOPE, requestId: input.requestId, queuedMessageId: row.queued_message_id }) !== 'agent-session') return false
+    const now = Date.now()
+    const changed = conn.prepare(`UPDATE queue_input_requests SET state=?,updated_at=?
+      WHERE session_id=? AND request_id=? AND queue_scope='desktop' AND state='queued' AND turn_id IS NULL AND source_json=?`)
+      .run(`not-executed:${input.reason}`, now, input.sessionId, input.requestId, row.source_json)
+    if (changesToNumber(changed.changes) !== 1) return false
+    const messageChanged = conn.prepare("UPDATE messages SET status='cancelled' WHERE id=? AND session_id=? AND queue_scope='desktop' AND role='user' AND status='queued'")
+      .run(row.queued_message_id, input.sessionId)
+    if (changesToNumber(messageChanged.changes) !== 1) throw new Error('AGENT_SESSION_TERMINAL_MESSAGE_CAS_FAILED')
+    db.save()
+    return true
+  })
+}
+
+export function readAgentInputSettlement(
+  db: AppDatabase,
+  input: { ownerSessionId: string; requestId: string }
+): AgentInputSettlement | undefined {
+  const conn = getDbConnection(db)
+  const row = conn.prepare(`SELECT session_id,request_id,queued_message_id,turn_id,state,updated_at,source_json
+    FROM queue_input_requests WHERE request_id=? AND source_json IS NOT NULL
+      AND json_extract(source_json,'$.ownerSessionId')=?`)
+    .get(input.requestId, input.ownerSessionId) as {
+      session_id: string; request_id: string; queued_message_id: string | null; turn_id: string | null
+      state: string; updated_at: number; source_json: string
+    } | undefined
+  if (!row) return undefined
+  const source = decodeAgentSessionInputSource(row.source_json)
+  if (!source || source.ownerSessionId !== input.ownerSessionId || source.requestId !== row.request_id || source.targetSessionId !== row.session_id ||
+    (row.queued_message_id !== null && source.messageId !== row.queued_message_id)) return { kind: 'source-gap' }
+
+  const notExecuted = /^not-executed:(sender-revoked|authorized-cancel|target-unavailable|policy-rejected|start-failed)$/.exec(row.state)
+  if (notExecuted) {
+    if (row.turn_id !== null || !Number.isSafeInteger(row.updated_at)) return { kind: 'source-gap' }
+    return { kind: 'not-executed', reason: notExecuted[1] as AgentInputNotExecutedReason, occurredAt: row.updated_at }
+  }
+  if (row.state === 'queued') {
+    if (!row.queued_message_id || row.turn_id !== null || classifyQueueInputSource(db, {
+      sessionId: row.session_id, queueScope: DESKTOP_QUEUE_SCOPE, requestId: row.request_id, queuedMessageId: row.queued_message_id
+    }) !== 'agent-session') return { kind: 'source-gap' }
+    return { kind: 'queued', targetSessionId: row.session_id, messageId: row.queued_message_id }
+  }
+  if (row.state !== 'claimed' || !row.turn_id) return { kind: 'source-gap' }
+  const turn = conn.prepare(`SELECT turn_id,session_id,request_id,user_message_id,state,outcome FROM turns WHERE turn_id=?`)
+    .get(row.turn_id) as { turn_id: string; session_id: string; request_id: string; user_message_id: string | null; state: string; outcome: string | null } | undefined
+  if (!turn || turn.session_id !== row.session_id || turn.request_id !== row.request_id || turn.user_message_id !== source.messageId) return { kind: 'source-gap' }
+  if (['terminal', 'completed', 'failed', 'cancelled', 'interrupted'].includes(turn.state)) {
+    return typeof turn.outcome === 'string' ? { kind: 'turn-terminal', turnId: turn.turn_id, outcome: turn.outcome } : { kind: 'source-gap' }
+  }
+  return { kind: 'claimed', turnId: turn.turn_id, turnState: turn.state }
 }
 
 export function enqueueQueuedUserMessage(
@@ -1343,7 +1417,7 @@ export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantM
       Date.now(), turnId
     )
     if (changesToNumber(result.changes) !== 1) return false
-    conn.prepare(`UPDATE queue_input_requests SET state=?,updated_at=? WHERE turn_id=? AND state='claimed'
+    conn.prepare(`UPDATE queue_input_requests SET state=?,updated_at=? WHERE turn_id=? AND state='claimed' AND source_json IS NULL
       AND queue_scope=(SELECT messages.queue_scope FROM turns JOIN messages ON messages.id=turns.user_message_id WHERE turns.turn_id=?)`)
       .run(outcome, Date.now(), turnId, turnId)
     return true
@@ -1974,8 +2048,15 @@ export function deleteQueuedUserMessageInScope(
         throw new Error('QUEUED_PREVIEW_SOURCE_CHANGED')
       }
     }
-    const receipt = conn.prepare('SELECT session_id, request_id FROM queue_input_requests WHERE queued_message_id = ? AND queue_scope = ?').get(messageId, serializedScope) as { session_id: string; request_id: string } | undefined
-    if (receipt) updateQueueInputReceiptStateInScope(db, receipt.session_id, receipt.request_id, 'cancelled', queueScope)
+    const receipt = conn.prepare('SELECT session_id, request_id, source_json FROM queue_input_requests WHERE queued_message_id = ? AND queue_scope = ?')
+      .get(messageId, serializedScope) as { session_id: string; request_id: string; source_json: string | null } | undefined
+    if (receipt && receipt.source_json !== null) {
+      if (!markAgentInputNotExecutedInScope(db, { sessionId: receipt.session_id, requestId: receipt.request_id, reason: 'authorized-cancel' })) {
+        return { ok: false, error: 'message_not_queued' }
+      }
+    } else if (receipt) {
+      updateQueueInputReceiptStateInScope(db, receipt.session_id, receipt.request_id, 'cancelled', queueScope)
+    }
     conn.prepare('DELETE FROM messages WHERE id = ?').run(messageId)
 
     const lastId = (conn.prepare('SELECT id FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1')
@@ -2022,7 +2103,7 @@ export function updateQueuedUserMessageContentInScope(
     if (!content) return { ok: false, error: 'empty_content' }
     const updated = updateMessageContentImpl(db, input.messageId, { content }, true)
     if (!updated) return { ok: false, error: 'message_not_queued' }
-    conn.prepare('UPDATE queue_input_requests SET fingerprint = ?, updated_at = ? WHERE queued_message_id = ? AND session_id = ? AND queue_scope = ?')
+    conn.prepare('UPDATE queue_input_requests SET fingerprint = ?, updated_at = ? WHERE queued_message_id = ? AND session_id = ? AND queue_scope = ? AND source_json IS NULL')
       .run(queueInputFingerprint({ text: content, attachments: updated.message.attachments }), Date.now(), input.messageId, input.sessionId, serializedScope)
     const last = conn.prepare('SELECT id FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1').get(input.sessionId) as { id?: string } | undefined
     if (last?.id === input.messageId) updateSession(db, input.sessionId, { preview: content.slice(0, 120) })

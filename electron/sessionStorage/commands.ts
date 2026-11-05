@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database/sqliteStore'
-import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, deleteQueuedUserMessageInScope, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getQueueInputReceiptInScope, getSession, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage, updateMessageContentIfStreaming } from '../database/operations'
+import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, deleteQueuedUserMessageInScope, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getQueueInputReceiptInScope, getSession, markAgentInputNotExecutedInScope, readAgentInputSettlement, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage, updateMessageContentIfStreaming } from '../database/operations'
 import { updateMessageContent } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
@@ -103,7 +103,9 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
   }
   const commands: SessionCommands = {
     agentSessionMessages: {
-      accept: (input) => enqueueAgentSessionMessageInScope(db, input)
+      accept: (input) => enqueueAgentSessionMessageInScope(db, input),
+      markNotExecuted: (input) => markAgentInputNotExecutedInScope(db, input),
+      readSettlement: (input) => readAgentInputSettlement(db, input)
     },
     scopedQueue: {
       enqueue: (input) => enqueueQueuedUserMessageInScope(db, input),
@@ -116,7 +118,7 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
         const conn = getDbConnection(db)
         return runInTransaction(conn, () => {
           const receipt = getQueueInputReceiptInScope(db, sessionId, requestId, queueScope)
-          if (!receipt?.queuedMessageId || receipt.state !== 'queued' || !['runtime-trigger', 'ordinary-desktop', 'platform-im'].includes(expectedSource)) return false
+          if (!receipt?.queuedMessageId || receipt.state !== 'queued' || !['runtime-trigger', 'ordinary-desktop', 'platform-im', 'agent-session'].includes(expectedSource)) return false
           if (classifyQueueInputSource(db, { sessionId, queueScope, requestId, queuedMessageId: receipt.queuedMessageId }) !== expectedSource) return false
           const deleted = deleteQueuedUserMessageInScope(db, receipt.queuedMessageId, queueScope)
           return deleted.ok
@@ -163,7 +165,7 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
           conn.prepare("UPDATE messages SET status='cancelled' WHERE id=? AND session_id=? AND role='assistant' AND status='streaming'")
             .run(turn.assistant_message_id, sessionId)
           const receiptChanged = conn.prepare(`UPDATE queue_input_requests SET state='cancelled',updated_at=?
-            WHERE session_id=? AND request_id=? AND queued_message_id=? AND turn_id=? AND queue_scope=? AND state='claimed'`)
+            WHERE session_id=? AND request_id=? AND queued_message_id=? AND turn_id=? AND queue_scope=? AND state='claimed' AND source_json IS NULL`)
             .run(Date.now(), sessionId, requestId, receipt.queuedMessageId, receipt.turnId, scope)
           return Number(receiptChanged.changes) === 1
         })

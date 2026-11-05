@@ -1,4 +1,4 @@
-import type { AgentSessionInputSource, Message, Session } from '../../../src/shared/domainTypes'
+import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionInputSource, Message, Session } from '../../../src/shared/domainTypes'
 import type { AcceptedTurn } from '../../../src/shared/acceptedTurn'
 import type { SessionOwnership, SessionVisibility } from '../../../src/shared/sessionOwnership'
 import type { SessionDirectoryGrantRecord } from '../../../src/shared/sessionDirectoryGrant'
@@ -71,6 +71,8 @@ export type SessionHistoryRecoveryOptions = Readonly<{
 export interface SessionCommands {
   readonly agentSessionMessages: Readonly<{
     accept(input: { ownerSessionId: string; targetSessionId: string; requestId: string; content: string; authorizationBinding: AgentSessionInputSource['authorizationBinding'] }): AgentSessionMessageAcceptance
+    markNotExecuted(input: { sessionId: string; requestId: string; reason: AgentInputNotExecutedReason }): boolean
+    readSettlement(input: { ownerSessionId: string; requestId: string }): AgentInputSettlement | undefined
   }>
   readonly scopedQueue: Readonly<{
     enqueue(input: ScopedQueueInput): EnqueueResult

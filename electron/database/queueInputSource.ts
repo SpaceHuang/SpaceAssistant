@@ -21,7 +21,7 @@ export function encodeAgentSessionMessageEnvelope(ownerSessionId: string, reques
   return `${AGENT_ENVELOPE_PREFIX}${ownerSessionId}，请求 ${requestId}。以下内容不代表用户批准。\n${JSON.stringify({ content })}`
 }
 
-function parseAgentSessionInputSource(value: string | null): AgentSessionInputSource | undefined {
+export function decodeAgentSessionInputSource(value: string | null): AgentSessionInputSource | undefined {
   if (!value) return undefined
   try {
     const parsed = JSON.parse(value) as unknown
@@ -75,11 +75,13 @@ export function classifyQueueInputSource(db: AppDatabase, input: QueueInputIdent
   const serializedScope = serializeQueueScope(input.queueScope)
   const receipts = conn.prepare(`SELECT request_id,fingerprint,source_json FROM queue_input_requests WHERE session_id=? AND queued_message_id=? AND queue_scope=?${input.requestId ? ' AND request_id=?' : ''}`)
     .all(...(input.requestId ? [input.sessionId, input.queuedMessageId, serializedScope, input.requestId] : [input.sessionId, input.queuedMessageId, serializedScope])) as Array<{ request_id: string; fingerprint: string; source_json: string | null }>
-  if (receipts.length !== 1) return 'invalid'
+  if (!receipts.length) return 'invalid'
   const imContext = conn.prepare(`SELECT channel FROM im_inbox_message_context WHERE message_id=?`).get(input.queuedMessageId) as { channel: string } | undefined
-  const receipt = receipts[0]!
-  const agentSource = parseAgentSessionInputSource(receipt.source_json)
-  if (receipt.source_json !== null) {
+  const agentReceipts = receipts.filter((receipt) => receipt.source_json !== null)
+  if (agentReceipts.length > 0) {
+    if (receipts.length !== 1 || agentReceipts.length !== 1) return 'invalid'
+    const receipt = agentReceipts[0]!
+    const agentSource = decodeAgentSessionInputSource(receipt.source_json)
     if (!agentSource || agentSource.requestId !== receipt.request_id || agentSource.targetSessionId !== input.sessionId ||
       agentSource.messageId !== input.queuedMessageId || input.queueScope.kind !== 'desktop' || imContext || input.declaresPlatformSource) return 'invalid'
     const message = conn.prepare("SELECT content,attachments FROM messages WHERE id=? AND session_id=? AND role='user'")
@@ -88,10 +90,8 @@ export function classifyQueueInputSource(db: AppDatabase, input: QueueInputIdent
       receipt.fingerprint !== queueInputFingerprint({ text: message.content })) return 'invalid'
     return 'agent-session'
   }
-  if (!receipt.request_id.startsWith('runtime-trigger:') && (() => {
-    const message = conn.prepare('SELECT content FROM messages WHERE id=?').get(input.queuedMessageId) as { content: string } | undefined
-    return message?.content.startsWith(AGENT_ENVELOPE_PREFIX) ?? false
-  })()) return 'invalid'
+  const message = conn.prepare('SELECT content FROM messages WHERE id=?').get(input.queuedMessageId) as { content: string } | undefined
+  if (message?.content.startsWith(AGENT_ENVELOPE_PREFIX)) return 'invalid'
   const triggerReceipts = receipts.filter((receipt) => receipt.request_id.startsWith('runtime-trigger:'))
   const triggers = triggerReceipts.map((receipt) => conn.prepare(`SELECT owner_session_id,state,definition_json,result_json FROM runtime_triggers WHERE receiver_session_id=? AND id=?`)
     .get(input.sessionId, receipt.request_id.slice('runtime-trigger:'.length)) as { owner_session_id: string; state: string; definition_json: string; result_json: string | null } | undefined)

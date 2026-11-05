@@ -24,6 +24,13 @@ export type AgentSessionInputSource = Readonly<{
   executionApproval?: Readonly<Record<string, unknown>>
   admission?: Readonly<Record<string, unknown>>
 }>
+export type AgentInputNotExecutedReason = 'sender-revoked' | 'authorized-cancel' | 'target-unavailable' | 'policy-rejected' | 'start-failed'
+export type AgentInputSettlement =
+  | Readonly<{ kind: 'queued'; targetSessionId: string; messageId: string }>
+  | Readonly<{ kind: 'claimed'; turnId: string; turnState: string }>
+  | Readonly<{ kind: 'turn-terminal'; turnId: string; outcome: string }>
+  | Readonly<{ kind: 'not-executed'; reason: AgentInputNotExecutedReason; occurredAt: number }>
+  | Readonly<{ kind: 'source-gap' }>
 
 export type ToolRiskLevel = 'low' | 'medium' | 'high'
 

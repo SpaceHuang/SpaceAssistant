@@ -320,7 +320,7 @@ export function parkImInboxMessageForClarification(db: AppDatabase, input: ParkI
       .run(message.messageId, serializeQueueScope(input.queueScope))
     const parked = conn.prepare('SELECT status FROM messages WHERE id=?').get(message.messageId) as { status: string } | undefined
     if (!parked || (Number(changed.changes) !== 1 && parked.status !== 'parked')) throw new Error('IM_INBOX_CLARIFICATION_PARK_FAILED')
-    conn.prepare("UPDATE queue_input_requests SET state='parked',updated_at=? WHERE session_id=? AND request_id=? AND queue_scope=? AND state='queued'")
+    conn.prepare("UPDATE queue_input_requests SET state='parked',updated_at=? WHERE session_id=? AND request_id=? AND queue_scope=? AND state='queued' AND source_json IS NULL")
       .run(now, input.sessionId, input.channelMessageId, serializeQueueScope(input.queueScope))
     conn.prepare('INSERT OR IGNORE INTO im_inbox_clarification_park(message_id,clarification_id,created_at) VALUES(?,?,?)')
       .run(message.messageId, input.clarificationId, now)
@@ -378,7 +378,7 @@ export function resumeClarificationInboxMessage(db: AppDatabase, input: {
       conn.prepare(`UPDATE im_inbox_message_context SET clarification_work_id=? WHERE message_id=? AND clarification_work_id IS NULL`)
         .run(row.work_id, row.parked_input_ref)
       const movedReceipt = conn.prepare(`UPDATE queue_input_requests SET session_id=?,queue_scope=?,state='consumed',updated_at=?
-        WHERE session_id=? AND request_id=? AND queue_scope=? AND state='parked'`)
+        WHERE session_id=? AND request_id=? AND queue_scope=? AND state='parked' AND source_json IS NULL`)
         .run(row.session_id, targetQueueScope, input.now ?? Date.now(), row.message_session_id, row.source_message_id, row.message_queue_scope)
       if (Number(movedReceipt.changes) !== 1) throw new Error('IM_INBOX_CLARIFICATION_RECEIPT_MOVE_FAILED')
       db.save()

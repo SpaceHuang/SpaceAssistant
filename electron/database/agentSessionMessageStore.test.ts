@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { classifyQueueInputSource } from './queueInputSource'
-import { createSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, updateQueuedUserMessageContentInScope } from './operations'
+import { claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, readAgentInputSettlement, updateQueueInputReceiptStateInScope, updateQueuedUserMessageContentInScope } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { queueInputFingerprint } from '../queueInputFingerprint'
@@ -131,6 +131,79 @@ describe('agent session message acceptance persistence', () => {
     })).toThrow('injected receipt failure')
     expect(conn.prepare("SELECT COUNT(*) AS count FROM messages WHERE session_id=? AND role='user'").get(target.id)).toEqual({ count: 0 })
     expect(conn.prepare("SELECT COUNT(*) AS count FROM queue_input_requests WHERE session_id=? AND request_id='failed-request'").get(target.id)).toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('freezes all five not-executed terminal reasons and does not depend on the message body', () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'terminal-owner' })
+    const target = createSession(db, { name: 'terminal-target' })
+    const commands = createSessionCommands(db).agentSessionMessages
+    const reasons = ['sender-revoked', 'authorized-cancel', 'target-unavailable', 'policy-rejected', 'start-failed'] as const
+    for (const reason of reasons) {
+      const requestId = `reason-${reason}`
+      const accepted = enqueueAgentSessionMessageInScope(db, {
+        ownerSessionId: owner.id, targetSessionId: target.id, requestId, content: reason, authorizationBinding: {}
+      })
+      expect(commands.markNotExecuted({ sessionId: target.id, requestId, reason })).toBe(true)
+      getDbConnection(db).prepare("UPDATE messages SET content='' WHERE id=?").run(accepted.receipt.queuedMessageId)
+      const first = commands.readSettlement({ ownerSessionId: owner.id, requestId })
+      expect(first).toMatchObject({ kind: 'not-executed', reason })
+      const timestamp = (first as { occurredAt: number }).occurredAt
+      expect(updateQueueInputReceiptStateInScope(db, target.id, requestId, 'cancelled', { kind: 'desktop' })).toBe(false)
+      expect(commands.markNotExecuted({ sessionId: target.id, requestId, reason: 'start-failed' })).toBe(false)
+      expect(commands.readSettlement({ ownerSessionId: owner.id, requestId })).toMatchObject({ kind: 'not-executed', reason, occurredAt: timestamp })
+      expect(accepted.receipt.queuedMessageId).toBeTruthy()
+    }
+    db.close()
+  })
+
+  it('turns queued deletion into a retained tombstone and derives claimed settlement from its exact turn', () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'settlement-owner' })
+    const target = createSession(db, { name: 'settlement-target' })
+    const queued = enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'delete-request', content: 'delete me', authorizationBinding: {}
+    })
+    expect(deleteQueuedUserMessageInScope(db, queued.receipt.queuedMessageId!, { kind: 'desktop' })).toMatchObject({ ok: true })
+    expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'delete-request' })).toMatchObject({ kind: 'not-executed', reason: 'authorized-cancel' })
+    expect(readAgentInputSettlement(db, { ownerSessionId: 'someone-else', requestId: 'delete-request' })).toBeUndefined()
+
+    const claimed = enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'claimed-request', content: 'claimed body', authorizationBinding: {}
+    })
+    claimQueuedTurnAtomicallyInScope(db, {
+      sessionId: target.id, userMessageId: claimed.receipt.queuedMessageId!, turnId: 'exact-agent-turn',
+      assistantMessageId: 'exact-agent-assistant', requestId: 'claimed-request', queueScope: { kind: 'desktop' }, source: 'agent-session'
+    })
+    expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'claimed-request' })).toMatchObject({ kind: 'claimed', turnId: 'exact-agent-turn' })
+    getDbConnection(db).prepare("UPDATE turns SET state='terminal',outcome='failed',updated_at=123 WHERE turn_id=?").run('exact-agent-turn')
+    expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'claimed-request' }))
+      .toMatchObject({ kind: 'turn-terminal', turnId: 'exact-agent-turn', outcome: 'failed' })
+    expect(getDbConnection(db).prepare('SELECT state FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, 'claimed-request'))
+      .toEqual({ state: 'claimed' })
+    getDbConnection(db).prepare("UPDATE queue_input_requests SET state='not-executed:unknown-reason' WHERE session_id=? AND request_id=?")
+      .run(target.id, 'claimed-request')
+    expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'claimed-request' })).toEqual({ kind: 'source-gap' })
+    db.close()
+  })
+
+  it('preserves target-unavailable tombstones while cleaning ordinary receipts on session deletion', () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'delete-owner' })
+    const target = createSession(db, { name: 'delete-target' })
+    const ordinary = enqueueQueuedUserMessage(db, { sessionId: target.id, requestId: 'ordinary-delete', content: 'old input' })
+    enqueueAgentSessionMessageInScope(db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'target-delete', content: 'agent input', authorizationBinding: {}
+    })
+
+    deleteSession(db, target.id)
+    expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'target-delete' }))
+      .toMatchObject({ kind: 'not-executed', reason: 'target-unavailable' })
+    expect(getDbConnection(db).prepare('SELECT request_id FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, 'ordinary-delete')).toBeUndefined()
+    expect(getDbConnection(db).prepare('SELECT state,queued_message_id FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, 'target-delete'))
+      .toMatchObject({ state: 'not-executed:target-unavailable', queued_message_id: null })
+    expect(ordinary.receipt.queuedMessageId).toBeTruthy()
     db.close()
   })
 })
