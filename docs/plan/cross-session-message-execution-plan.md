@@ -8,6 +8,8 @@
 
 其他平台、候选安装包和真实模型账号只用于本功能发布验收，不阻断本机开发、测试或源码关闭。上游触发器代码合入 main 并通过本计划 B02 定向测试，即满足源码集成基线；不要求先正式发布上游安装包。正式发布只属于发布验收，不作为迁移、等待集成或源码关闭的前置。真实 IM 发送不在本期验收范围；本机用调用计数核对没有平台外发。排查入口、构造样本、设计竞态和恢复测试由执行者负责。
 
+**本轮执行终点：**T08 本机源码门禁通过，阶段提交合并进 `main`。E04/E02/E03 是独立的候选包与发布验收流程，不属于本轮实现完成条件；它们不阻断 T08、源码关闭或合入 `main`，也不要求产出正式版本。
+
 ## 1. 阶段交付与回退【人机共读】
 
 | 阶段 | 输入与交付 | 允许改动与隔离 | 回退及兼容 |
@@ -15,8 +17,8 @@
 | 准备 | 核对本机工具链、现有触发器源码和已批规格；记入口与测试基线 | 本计划及证据；不安装到用户数据目录、不改生产代码 | 无数据改动 |
 | P1 存储与来源 | 交付迁移、可信来源、请求与撤回、批准刷新和最终接纳事务 | 存储、数据库、共享类型及就近测试；不注册新工具/条件 | 按方案 §11 回退阶段提交或恢复升级前整库；保留旧格式读取，仅替换指定删除关系 |
 | P2 桌面能力 | 交付服务、策略、排水、模型材料、全部执行与恢复核验 | 工具、排水、IPC 内部处理、运行时、历史和装配；新工具仅在本机测试装配暴露 | 阶段提交可回退；已接纳事实不得清除；不移除旧触发器或普通输入门禁 |
-| P3 等待与源码关闭 | 交付准确等待、一次通知、全链回归和本机关闭演练 | 原触发器、装配与测试；使用临时库完成完整功能接线，候选发布前保持方案 §11 的未启用安排 | 回退阶段提交或恢复整库；不移除旧条件、旧通知授权或引入永久开关 |
-| 发布验收 | 记录正式版本和目标平台证据；按已批准合同启用 | 正式发布与启用由发布负责人执行 | 对应旧版本及整库备份；发布关闭与源码关闭分别记录 |
+| P3 等待与源码关闭 | 交付准确等待、一次通知、全链回归、本机关闭演练；T08 通过后将源码阶段提交合并进 `main` | 原触发器、装配与测试；使用临时库完成完整功能接线 | 回退阶段提交或恢复整库；不移除旧条件、旧通知授权或引入永久开关 |
+| 独立发布验收（不属于本轮） | 由发布负责人另行决定是否产出候选包、进行外部验收及启用 | E04/E02/E03；不作为源码关闭或合入 `main` 的前置 | 按发布流程使用对应旧版本及整库备份；与源码关闭分别记录 |
 
 方案 U-01 改为本机源码集成核验：确认触发器合入 SHA 是 main 祖先，并在 B04 检出通过 B02 的定向测试。该证据满足正式迁移与等待集成的源码前置；不依赖上游正式发布。B04 将已有隔离检出前移到当前 main 后代，重走依赖与基线测试，不在旧 schema 上分配迁移号。U-02 用本机 Electron SQLite 临时库核验，U-03 用替身捕获实际适配器输出并核对策略，U-04 留给本功能候选包和真机发布验收。Python 机制实验不抵扣应用级用例。
 
@@ -70,7 +72,7 @@ B01 先用 `git worktree list --porcelain` 定位检出，再用 `git -C "$impl_
 
 ## 3. 任务登记【机｜人工可跳过】
 
-除标明外部的 E04/E02/E03 外均为本机任务，由实现者执行，阶段出口由复核者核查。E01 是上游源码集成与定向测试证据，不再要求正式发布；E04/E02/E03 属本功能候选与发布流程，不进入源码门禁。每行只有一个进度标记；关闭时附源码 SHA、测试名/命令、结果及证据位置。建议用 `docs/plan/evidence/cross-session-message/<任务ID>.md` 保存脱敏摘要，大日志留在临时目录；不要记录正文、密钥或令牌。
+除标明外部的 E04/E02/E03 外均为本机任务，由实现者执行，阶段出口由复核者核查。E01 是上游源码集成与定向测试证据，不再要求正式发布；E04/E02/E03 属独立候选与发布流程，不进入本轮目标、源码门禁或合入 `main` 的完成判据。每行只有一个进度标记；关闭时附源码 SHA、测试名/命令、结果及证据位置。建议用 `docs/plan/evidence/cross-session-message/<任务ID>.md` 保存脱敏摘要，大日志留在临时目录；不要记录正文、密钥或令牌。
 
 下表 `vt <路径>` 代表 `npm exec vitest run <路径>`，从 B01 记录的检出根运行；B04 完成后，以 B04 记录的 main 后代实施检出根为准；同阶段路径合并运行。标“拟”的测试文件须在对应任务落地时建立，若采用现有测试文件替代，在证据中更新实际命令。授权屏障在相应实现前写具名用例；若记录 RED，必须以同一命令复跑 GREEN，且 RED 只接受目标行为缺失，环境/既有失败单记。涉及事务的用例使用真实 SQLite；策略、故障、时钟和模型可注入，不替换被测裁决器。
 
@@ -94,9 +96,9 @@ B01 先用 `git worktree list --porcelain` 定位检出，再用 `git -C "$impl_
 | - [～] A02 接入写策略和排队批准刷新 | `electron/capabilities/handlers/session.ts`、现有 toolkit 策略/审计与宿主批准适配；具名决策轨迹 | `vt electron/capabilities/handlers/session.test.ts electron/capabilities/sessionMessageService.test.ts`；各档位确认/拒绝/允许，记录实际 rule ID 与 trace；新批准经策略，final-check 只核验；接纳前撤权、策略或目标代次变化时，拒绝或按方案刷新，拒绝零 dispatch。V-01/09a（AC-03/11/18/19）。当前已完成 host gate 轨迹接线、来源绑定与审批 CAS、普通 drain fail-closed；queued 代次过期后的原策略刷新及专用 claim 接线仍未完成。证据见 `docs/plan/evidence/cross-session-message/A02.md`。 |
 | - [x] A03 接入工具发现与结构化读取 | `electron/capabilities/handlers/session.ts`、工具注册及共享 DTO、错误资源；测试装配 | `vt electron/capabilities/handlers/session.test.ts`；发现/调用两个写工具，验证回执和稳定错误；read 截断保留 source，纯消息导入不升权。V-01/03（AC-01/02/04/11/18/19）。`action.session.message.send/revoke` 注册、发现与 owner schema、来源读取投影（含截断保留）已完成；2 文件 25 项、Electron tsc 通过。证据 `docs/plan/evidence/cross-session-message/A03.md`；source 伪造/导入边界引用 S02。 |
 | - [x] A04 实现持久接纳核验与 TurnRuntime 守卫 | `electron/turnRuntime.ts`、coordinator、宿主存储读取及装配端口 | `vt electron/turnRuntime.test.ts`；双 execute 入口在执行或 source callback 前强制核验，缺端口拒绝，匹配原凭据的 UUID 不因来源撤权被重批；损坏、材料不一致零调用并终结原 Turn，普通和触发器门禁保持。V-09b/c/d（AC-19/20）。两个 execute 入口在 source 前验证持久 admission；SQLite 核验区分 ordinary/admitted/invalid，缺损终结原 Turn 且零 source 调用；SYS-AGENTINPUT-001 已登记。4 文件 139 项、缺 verifier 端口零调用、tsc、registry 门禁通过。证据 `docs/plan/evidence/cross-session-message/A04.md`。 |
-| - [ ] A05 封闭直接 prepare/execute IPC | `electron/ipc/agentProtocolIpc.ts`、`electron/main.ts`、拟 `electron/ipc/agentProtocolIpc.agentSessionAdmission.test.ts` | `vt` 拟测试；直接 prepare 从可信来源刷新并领取，拒绝客户端伪造；直接 execute 经 A04；验证无效 token/租约、合法接纳后撤权和损坏凭据。V-04/09a/b/c（AC-05/07/19）。 |
-| - [ ] A06 封闭直接模型入口并构造来源材料 | `electron/claudeStreamHandlers.ts`、宿主历史适配；实际 provider 输入捕获 | `vt electron/claudeStreamHandlers.callerContract.test.ts electron/claudeStreamHandlers.hostedIntegration.test.ts`；直接入口缺材料零 provider/handoff；捕获上下文、压缩/恢复、正文伪造输入，验证来源不变为用户批准，旧 SDK 历史仍可读；不把批准放进执行配置。V-03/09b/c（AC-02/04/19/20）。 |
-| - [ ] A07 接入桌面排水与唤醒 | `electron/outbound/`、`electron/main.ts`；排水入口与释放后补唤醒 | `vt electron/outbound/outboundDrainer.test.ts`；无窗口启动、忙/确认只排队、租约释放补扫、桌面顺序及与手动/触发器/IM 竞争、斜杠正文不执行；首轮加三次、busy 不计失败、存储恢复、零 IM 消费和出站。V-04/09（AC-05/06/07/09/12/18/19）。 |
+| - [～] A05 封闭直接 prepare/execute IPC | `electron/ipc/agentProtocolIpc.ts`、`electron/main.ts`、拟 `electron/ipc/agentProtocolIpc.agentSessionAdmission.test.ts` | `electron/appIpc.file.test.ts` 58 项曾通过；公开 prepare 拒绝 renderer 自报 queueScope/source，真实 agent-session 不能通过普通 prepare 冒领；host-only prepare 与专用 claim 已接线。queued 授权刷新和直接 execute 撤权/损坏凭据覆盖仍未完成，不能关闭。V-04/09a/b/c（AC-05/07/19）。 |
+| - [～] A06 封闭直接模型入口并构造来源材料 | `electron/claudeStreamHandlers.ts`、宿主历史适配；实际 provider 输入捕获 | `electron/claudeStreamHandlers.context.test.ts` 15 项通过；新增测试先 RED（来源 admission 失效仍返回上下文），再 GREEN（agent-session source 存在时必须核验 admitted，否则在读取 provider 上下文前 fail closed）；普通、旧版和既有 History 行为回归通过，Electron tsc 通过。真实 agent-session provider 输入捕获、压缩/恢复与正文伪造材料矩阵仍未完成。V-03/09b/c（AC-02/04/19/20）。 |
+| - [～] A07 接入桌面排水与唤醒 | `electron/outbound/`、`electron/main.ts`；排水入口与释放后补唤醒 | `electron/outbound/outboundDrainer.test.ts` 覆盖 agent-session 走专用宿主路径并对 waiting 停止自旋；全局槽位在 claim 前以 `CallAdmissionGate` 票据预留，执行器复用该票据，容量释放扫描桌面队列并补唤醒。`electron/runtime/callAdmission.test.ts`、`electron/claudeStreamHandlers.callerContract.test.ts`、`electron/claudeStreamHandlers.context.test.ts`、`electron/outbound/outboundDrainer.test.ts` 合计 84 项通过，Electron tsc 通过，SYS-AGENTINPUT-001 registry 门禁通过。启动恢复、忙/确认后的所有唤醒竞态和完整 V-04/09 矩阵仍未完成。V-04/09（AC-05/06/07/09/12/18/19）。 |
 | - [ ] A08 接入启动与继续执行恢复 | `electron/main.ts`、会话恢复、排水和 hosted 执行装配；重开库屏障证据 | `vt electron/sessionStorage/recovery.test.ts electron/outbound/outboundDrainer.test.ts electron/claudeStreamHandlers.hostedIntegration.test.ts`；queued 重新核验当前批准，claimed 查持久凭据或原准确 Turn orphan 终态；双重恢复不复制或退队，损坏零 source/provider，已接纳历史继续走原工具策略。V-04/07/09b/c/d（AC-05/08/12/19/20）。 |
 | - [ ] A09 验证授权与副作用全入口 | 上述集成测试；B-01 入口与屏障证据矩阵 | 合跑 A02、A04～A08 测试；按入口标明 V-09a～d 适用性与证据，核对真实调用计数、现有 Turn 终态、目标目录不借全局切换、日志不含正文。通知结算留给 T06。V-01/03/04/09（AC-01～07/11/12/18/19/20）。 |
 | - [ ] A10 关闭 P2 并提交 | P2 阶段证据及提交 | 引用 A01～A09 与 S08；合并运行 P1 受影响回归与 §4 P2 门禁，复核 B-01 授权用例已覆盖桌面路径，未注册生产新能力。V-01/03/04/09（AC-01～07/11/12/18/19/20）。 |
