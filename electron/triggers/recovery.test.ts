@@ -4,7 +4,7 @@ import { createRuntimeTriggerRecovery } from './recovery'
 import { beginManagedProcess, finishManagedProcess, resetManagedProcessSourceForTests } from './processSource'
 import { evaluateRuntimeTriggerSource } from './sources'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { createSession, enqueueAgentSessionMessageInScope } from '../database/operations'
+import { createSession, deleteSession, enqueueAgentSessionMessageInScope } from '../database/operations'
 import { getDbConnection } from '../database'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerService } from './service'
@@ -21,7 +21,7 @@ function matched(overrides: Partial<RuntimeTriggerRecord> = {}): RuntimeTriggerR
 describe('runtime trigger recovery and delivery lifecycle', () => {
   afterEach(() => { vi.useRealTimers() })
 
-  it('reconciles a fast exact agent-session terminal result before registration and delivers one owner marker', async () => {
+  it.each([true, false] as const)('reconciles a target-unavailable result when target deletion is before registration=%s and delivers one owner marker', async (registerBeforeDelete) => {
     const db = createMemoryAppDb()
     try {
       const commands = createSessionCommands(db)
@@ -30,12 +30,18 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
       const requestId = `${owner.id}:fast-agent-request`
       const body = 'private body must stay out of notification facts'
       enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id, requestId, content: body, authorizationBinding: {} })
-      expect(commands.agentSessionMessages.markNotExecuted({ sessionId: target.id, requestId, reason: 'sender-revoked' })).toBe(true)
+      let visibleSessions = [owner, target]
       const host = createRuntimeTriggerHostService({ commands,
-        queries: { listSessions: () => [owner, target], imAcceptedFacts: {} } as never,
+        queries: { listSessions: () => visibleSessions, imAcceptedFacts: {} } as never,
         execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: () => undefined } as never })
-      const registered = await host.register({ ownerSessionId: owner.id, params: { clientKey: 'fast-agent-wait', receiverSessionId: owner.id,
+      const register = () => host.register({ ownerSessionId: owner.id, params: { clientKey: 'fast-agent-wait', receiverSessionId: owner.id,
         expiresAt: Date.now() + 60_000, condition: { type: 'agent_session_message', requestId } } })
+      const registeredBeforeDelete = registerBeforeDelete ? await register() : undefined
+      deleteSession(db, target.id)
+      visibleSessions = [owner]
+      expect(commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId }))
+        .toMatchObject({ kind: 'not-executed', reason: 'target-unavailable' })
+      const registered = registeredBeforeDelete ?? await register()
       const triggerId = registered.trigger.triggerId
       let timestamp = Date.now()
       const scope = { kind: 'desktop' } as const
@@ -64,7 +70,7 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
       await recovery.scan()
       const matched = commands.runtimeTriggers.read(triggerId)
       expect(matched).toMatchObject({ state: 'matched', event: { type: 'agent_session_message', requestId,
-        status: 'not-executed', reason: 'sender-revoked' } })
+        status: 'not-executed', reason: 'target-unavailable' } })
       expect(JSON.stringify(matched?.event)).not.toContain(body)
       const firstReceipt = commands.scopedQueue.readReceipt({ sessionId: owner.id, requestId: `runtime-trigger:${triggerId}`, queueScope: scope })
       await recovery.scan()

@@ -13,6 +13,7 @@ describe('runtime trigger host capability adapter', () => {
     const db = createMemoryAppDb()
     try {
       const owner = createSession(db, { name: 'message wait owner', workDirProfileId: 'message-wait-profile' })
+      const foreignOwner = createSession(db, { name: 'foreign message wait owner', workDirProfileId: 'message-wait-profile' })
       const target = createSession(db, { name: 'message wait target', workDirProfileId: 'message-wait-profile' })
       const accepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
         requestId: `${owner.id}:message-wait-request`, content: 'not read by wait registration', authorizationBinding: {} })
@@ -21,7 +22,7 @@ describe('runtime trigger host capability adapter', () => {
         assistantMessageId: assistant.message.id, state: 'executing' })
       const commands = createSessionCommands(db)
       const service = createRuntimeTriggerHostService({ commands,
-        queries: { listSessions: () => [owner, target], imAcceptedFacts: {} } as never,
+        queries: { listSessions: () => [owner, foreignOwner, target], imAcceptedFacts: {} } as never,
         execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: ({ sessionId, turnId }: { sessionId: string; turnId: string }) => {
           const turn = getPersistedTurn(db, turnId)
           return turn?.sessionId === sessionId ? turn : undefined
@@ -36,6 +37,8 @@ describe('runtime trigger host capability adapter', () => {
         condition: { ...params.condition, requestId: `${owner.id}:unknown` } } }))
         .rejects.toMatchObject({ failure: { code: 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' } })
       await expect(service.register({ ownerSessionId: owner.id, params: { ...params, clientKey: 'wrong-receiver', receiverSessionId: target.id } }))
+        .rejects.toMatchObject({ failure: { code: 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' } })
+      await expect(service.register({ ownerSessionId: foreignOwner.id, params: { ...params, clientKey: 'cross-owner', receiverSessionId: foreignOwner.id } }))
         .rejects.toMatchObject({ failure: { code: 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' } })
     } finally { db.close() }
   })
