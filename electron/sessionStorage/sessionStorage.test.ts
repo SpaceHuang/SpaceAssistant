@@ -2072,6 +2072,22 @@ describe('SQLite session storage execution boundary', () => {
     db = undefined
   })
 
+  it('rejects Turn execution when the production admission query is missing', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'missing admission query', model: 'test' })
+    const completeStorage = createSqliteSessionStorage(db)
+    const storageWithoutVerifier = { ...completeStorage,
+      queries: { ...completeStorage.queries, verifyAgentSessionAdmission: undefined }
+    } as unknown as ReturnType<typeof createSqliteSessionStorage>
+    const source = vi.fn(async () => ({ outcome: 'completed' as const }))
+    let id = 0
+    const runtime = createSessionTurnRuntime(storageWithoutVerifier, { deps: { now: () => 1, id: () => `missing-admission-${++id}` }, source: source as never })
+    const turn = runtime.prepare({ mode: 'create-user', requestId: 'missing-admission', sessionId: session.id, input: { text: 'question' }, config: {} })
+    await expect(runtime.execute(turn.turnId, turn.startToken)).rejects.toThrow('AGENT_INPUT_ADMISSION_INVALID:verifier-failed')
+    expect(source).not.toHaveBeenCalled()
+    expect(runtime.getTurn(turn.turnId)?.assistantMessage.status).toBe('cancelled')
+  })
+
   it('prepares a turn atomically through the named execution method', () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'execution prepare', model: 'test' })
