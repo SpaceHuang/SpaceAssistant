@@ -665,7 +665,7 @@ export type OutboundDrainerDeps = {
   listActiveCount: (sessionId: string) => number
   getNextQueued: (sessionId: string) => { message: Message; sequence: number; requestId?: string; source?: import('../sessionStorage/public/model').QueueInputSource } | null
   /** Host-only path for receipt-bound cross-session inputs; never routes through submitOutbound. */
-  startAgentSession?: (input: { sessionId: string; requestId: string; messageId: string }) => Promise<'started' | 'busy' | 'waiting' | 'unavailable'>
+  startAgentSession?: (input: { sessionId: string; requestId: string; messageId: string }) => Promise<'started' | 'busy' | 'waiting' | 'unavailable' | 'rejected'>
   settleAgentSessionStartFailure?: (input: { sessionId: string; requestId: string }) => boolean
   /** 消费一条不可由主进程执行的排队条目(本地命令类),由实现层删除落库 */
   consumeQueued: (sessionId: string, messageId: string) => void
@@ -779,6 +779,7 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
           try {
             const result = await deps.startAgentSession({ sessionId, requestId: next.requestId, messageId: next.message.id })
             if (result === 'started') return true
+            if (result === 'rejected') continue
             if (result === 'busy' || result === 'waiting' || result === 'unavailable') {
               parkedAgentSessions.add(sessionId)
               deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: `AGENT_SESSION_${result.toUpperCase()}` })

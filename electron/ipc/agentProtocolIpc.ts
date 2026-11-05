@@ -1166,6 +1166,14 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const approval = ctx.agentSessionExecutionAuthorization?.resolve(input)
     if (!approval) return 'unavailable' as const
     if (approval.kind === 'waiting') return 'waiting' as const
+    if (approval.kind === 'rejected') {
+      const settled = sessionCommands.agentSessionMessages.markNotExecuted({ sessionId: input.sessionId,
+        requestId: input.requestId, reason: 'policy-rejected' })
+      if (!settled) return 'waiting' as const
+      logAgentEvent('warn', 'outbound.agent-session.policy-rejected' as AgentLogEventName,
+        { sessionId: input.sessionId, requestId: input.requestId, ruleId: approval.ruleId } as AgentLogFields)
+      return 'rejected' as const
+    }
     const admission = await getCallAdmissionGate().acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
       disposition: 'defer', requestId: input.requestId })
     if (!admission.ok) return 'busy' as const

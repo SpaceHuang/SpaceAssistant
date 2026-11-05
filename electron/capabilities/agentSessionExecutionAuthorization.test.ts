@@ -1,13 +1,24 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { claimAgentSessionTurnAtomically, createSession, deleteSession, updateSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
-import { createAgentSessionExecutionAuthorization } from './agentSessionExecutionAuthorization'
+import { createAgentSessionExecutionAuthorization, evaluateAgentSessionExecutionPolicy } from './agentSessionExecutionAuthorization'
+import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 
 describe('agent-session execution authorization', () => {
   const dbs: ReturnType<typeof createMemoryAppDb>[] = []
   afterEach(() => { for (const db of dbs.splice(0)) db.close() })
+
+  it('uses the current shared toolkit policy for reauthorization without exposing the queued body', () => {
+    const decision = evaluateAgentSessionExecutionPolicy({ sessionId: 'execution-target', rules: DEFAULT_POLICY_RULES, config: {} })
+    expect(decision).toEqual({ kind: 'require-confirm' })
+    const denied = evaluateAgentSessionExecutionPolicy({ sessionId: 'execution-target', config: {}, rules: [
+      { id: 'execution-target-deny', when: 'invocation', match: { lane: ['desktop'], toolName: 'toolkit.call', signals: ['toolkit-act'] },
+        action: 'deny', reason: 'execution denied by policy' }
+    ] })
+    expect(denied).toEqual({ kind: 'deny', ruleId: 'execution-target-deny' })
+  })
 
   it('allows only the persisted approval under the current authority and rechecks inside claim', () => {
     const db = createMemoryAppDb(); dbs.push(db)
@@ -129,6 +140,49 @@ describe('agent-session execution authorization', () => {
     const resolved = createAgentSessionExecutionAuthorization({ storage, readCurrentAuthority: () => ({ policyRevision: '1',
       authorizationGeneration: '1', runtimeGeneration: '1' }) }).resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId })
     expect(resolved).toMatchObject({ kind: 'waiting', reason: 'source-mismatch' })
+    expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
+  })
+
+  it('re-enters target execution policy after restart even when the sender session was deleted', () => {
+    const db = createMemoryAppDb(); dbs.push(db)
+    const owner = createSession(db, { name: 'restart-policy-owner', workDirProfileId: 'profile-a' })
+    const target = createSession(db, { name: 'restart-policy-target', workDirProfileId: 'profile-a' })
+    const storage = createSqliteSessionStorage(db)
+    const requestId = 'restart-policy-request'
+    const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId, content: 'persisted untrusted input', authorizationBinding: { ownerSessionId: owner.id, targetSessionId: target.id,
+        targetGeneration: target.generation, workDirProfileId: 'profile-a', queueScope: 'desktop',
+        payloadDigest: createHash('sha256').update('persisted untrusted input').digest('hex'),
+        policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: 'old-process' } })
+    const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision-old', permitRef: 'permit-old',
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: 'profile-a', requestId,
+      messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
+      policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: 'old-process', approvedAt: Date.now() }
+    storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })
+    deleteSession(db, owner.id)
+    const evaluateCurrentPolicy = vi.fn(() => ({ kind: 'deny' as const, ruleId: 'current-execution-deny' }))
+    const service = createAgentSessionExecutionAuthorization({ storage,
+      readCurrentAuthority: () => ({ policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: 'new-process' }),
+      resolveWorkDirProfileId: () => 'profile-a', evaluateCurrentPolicy })
+    const resolution = service.resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId })
+    expect(evaluateCurrentPolicy).toHaveBeenCalledWith(expect.objectContaining({ sessionId: target.id, requestId,
+      source: expect.objectContaining({ ownerSessionId: owner.id, messageId: accepted.source.messageId }) }))
+    expect(resolution).toMatchObject({ kind: 'rejected', reason: 'policy-rejected', ruleId: 'current-execution-deny' })
+    expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
+    expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId })).toMatchObject({ kind: 'queued' })
+    const requireConfirm = createAgentSessionExecutionAuthorization({ storage,
+      readCurrentAuthority: () => ({ policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: 'new-process' }),
+      resolveWorkDirProfileId: () => 'profile-a', evaluateCurrentPolicy: () => ({ kind: 'require-confirm' }) })
+    expect(requireConfirm.resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId }))
+      .toEqual({ kind: 'waiting', reason: 'approval-stale' })
+    expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
+    const allow = createAgentSessionExecutionAuthorization({ storage,
+      readCurrentAuthority: () => ({ policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: 'new-process' }),
+      resolveWorkDirProfileId: () => 'profile-a', evaluateCurrentPolicy: () => ({ kind: 'allow' }) })
+    expect(allow.resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId }))
+      .toEqual({ kind: 'waiting', reason: 'approval-stale' })
     expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
   })
 

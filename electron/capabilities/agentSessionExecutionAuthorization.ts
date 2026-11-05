@@ -1,4 +1,7 @@
 import type { AgentSessionExecutionFinalCheckFacts } from '../../src/shared/domainTypes'
+import { decide } from '../../src/shared/policy/policyEngine'
+import type { ContentFacts, ExecutionContext, PolicyRule } from '../../src/shared/confirmation/types'
+import type { ToolsConfig } from '../../src/shared/domainTypes'
 import type { SessionStorage } from '../sessionStorage/host/ports'
 
 export type AgentSessionExecutionAuthority = Readonly<{
@@ -10,6 +13,25 @@ export type AgentSessionExecutionAuthority = Readonly<{
 export type AgentSessionExecutionApprovalResolution =
   | Readonly<{ kind: 'approved'; finalCheck: (facts: AgentSessionExecutionFinalCheckFacts) => boolean }>
   | Readonly<{ kind: 'waiting'; reason: 'approval-missing' | 'approval-stale' | 'source-mismatch' }>
+  | Readonly<{ kind: 'rejected'; reason: 'policy-rejected'; ruleId: string }>
+
+export type AgentSessionExecutionPolicyEvaluation = Readonly<{ kind: 'allow' | 'require-confirm' }> |
+  Readonly<{ kind: 'deny'; ruleId: string }>
+
+/** Re-enter the shared toolkit policy with host-derived target identity and no message body. */
+export function evaluateAgentSessionExecutionPolicy(input: {
+  sessionId: string
+  rules: PolicyRule[]
+  config: ToolsConfig
+}): AgentSessionExecutionPolicyEvaluation {
+  const facts: ContentFacts = { toolName: 'toolkit.call', actionClass: 'execute', baseRiskLevel: 'medium',
+    signals: [{ kind: 'toolkit-capability', capabilityId: 'action.session.message.send', risk: 'act' }],
+    summary: { text: '跨会话来信执行权限重审' } }
+  const context: ExecutionContext = { lane: 'desktop', origin: { kind: 'direct-owner' }, sessionId: input.sessionId }
+  const decision = decide(facts, context, input.rules, { cache: { lookup: () => null }, config: { ...input.config }, migrationComplete: true })
+  return decision.type === 'deny' ? { kind: 'deny', ruleId: decision.ruleId }
+    : decision.type === 'require-confirm' ? { kind: 'require-confirm' } : { kind: 'allow' }
+}
 
 export type AgentSessionExecutionAuthorizationPort = Readonly<{
   resolve(inputRequest: { sessionId: string; requestId: string; messageId: string }): AgentSessionExecutionApprovalResolution
@@ -19,12 +41,14 @@ export type AgentSessionExecutionAuthorizationPort = Readonly<{
  * facts/final-check: resolve the persisted user approval before prepare, then re-read authority
  * inside the atomic claim callback. The protected source keeps historical sender identity after
  * sender deletion; target ownership and the approved target object remain live final-check facts.
- * This never recalculates policy; a stale approval remains queued.
+ * A stale approval re-enters current target policy; explicit deny settles, while confirmation stays queued.
  */
 export function createAgentSessionExecutionAuthorization(input: {
   storage: Pick<SessionStorage, 'queries' | 'commands'>
   readCurrentAuthority: () => AgentSessionExecutionAuthority | undefined
   resolveWorkDirProfileId?: (sessionId: string) => string | undefined
+  evaluateCurrentPolicy?: (input: { sessionId: string; requestId: string; messageId: string;
+    source: import('../../src/shared/domainTypes').AgentSessionInputSource }) => AgentSessionExecutionPolicyEvaluation | undefined
 }): AgentSessionExecutionAuthorizationPort {
   return {
     resolve(inputRequest: { sessionId: string; requestId: string; messageId: string }): AgentSessionExecutionApprovalResolution {
@@ -57,6 +81,12 @@ export function createAgentSessionExecutionAuthorization(input: {
       const currentAuthority = input.readCurrentAuthority()
       if (!currentAuthority || currentAuthority.policyRevision !== approval.policyRevision ||
         currentAuthority.authorizationGeneration !== approval.authorizationGeneration || currentAuthority.runtimeGeneration !== approval.runtimeGeneration) {
+        const reevaluated = input.evaluateCurrentPolicy?.({ sessionId: inputRequest.sessionId,
+          requestId: inputRequest.requestId, messageId: inputRequest.messageId, source })
+        if (reevaluated?.kind === 'deny' && reevaluated.ruleId.trim()) {
+          return { kind: 'rejected', reason: 'policy-rejected', ruleId: reevaluated.ruleId }
+        }
+        // A policy allow is not a fresh execution approval. Never stamp the old permit with new generations.
         return { kind: 'waiting', reason: 'approval-stale' }
       }
       const authority = { ...currentAuthority }

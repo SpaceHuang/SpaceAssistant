@@ -5,7 +5,7 @@ import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import type { StorageProfileCoordinator } from './storageProfile/storageProfileCoordinator'
-import { CONFIG_KEYS } from './ipc/ipcShared'
+import { CONFIG_KEYS, readToolsConfig } from './ipc/ipcShared'
 import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
@@ -57,7 +57,7 @@ import { createSecuritySettingsStorage } from './confirmation/securitySettingsSt
 import { readPolicyBehaviorSnapshot } from './confirmation/imPolicyStore'
 import { readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from './confirmation/policyRulesRuntime'
 import { createSessionMessageService, type SessionMessageDrain } from './capabilities/sessionMessageService'
-import { createAgentSessionExecutionAuthorization } from './capabilities/agentSessionExecutionAuthorization'
+import { createAgentSessionExecutionAuthorization, evaluateAgentSessionExecutionPolicy } from './capabilities/agentSessionExecutionAuthorization'
 import { readImPolicySnapshot } from './confirmation/imPolicyStore'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { readImPolicyAuthorizationRevision } from './remote/imInboundGuard'
@@ -803,6 +803,8 @@ app.whenReady().then(async () => {
     resolveWorkDirProfileId: resolveSessionWorkDirProfileId })
   const agentSessionExecutionAuthorization = createAgentSessionExecutionAuthorization({ storage: sessionStorage,
     resolveWorkDirProfileId: resolveSessionWorkDirProfileId,
+    evaluateCurrentPolicy: ({ sessionId }) => evaluateAgentSessionExecutionPolicy({ sessionId,
+      rules: resolveEffectivePolicyRulesWithOrigin(db, 'desktop').rules, config: readToolsConfig(db) }),
     readCurrentAuthority: () => {
       try {
         const conn = getDbConnection(db)

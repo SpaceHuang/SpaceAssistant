@@ -413,6 +413,30 @@ describe('createOutboundDrainer（排水不变量）', () => {
     expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('agent-specialized-queued')
   })
 
+  it('current execution policy denial settles the agent-session head and continues FIFO without ordinary-dispatching it', async () => {
+    const session = createSession(db, { name: 'agent-policy-denied-target' })
+    const owner = createSession(db, { name: 'agent-policy-denied-owner' })
+    const storage = createSqliteSessionStorage(db)
+    const denied = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'agent-policy-denied', content: 'denied by current execution policy', authorizationBinding: {} })
+    enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'after-policy-denial', content: 'next ordinary input' })
+    const submitOutbound = vi.fn(async (intent: OutboundSubmitIntent) => ({ accepted: 'turn-started' as const,
+      sessionId: intent.sessionId!, turnId: 'after-denial-turn', assistantMessage: { id: 'assistant-after-denial' } as unknown as Message }))
+    const startAgentSession = vi.fn(async () => {
+      storage.commands.agentSessionMessages.markNotExecuted({ sessionId: session.id,
+        requestId: denied.receipt.requestId, reason: 'policy-rejected' })
+      return 'rejected' as const
+    })
+    const drainer = createOutboundDrainer({ submitOutbound, startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined, audit: vi.fn() })
+    await drainer.drain(session.id)
+    expect(startAgentSession).toHaveBeenCalledTimes(1)
+    expect(submitOutbound).toHaveBeenCalledTimes(1)
+    expect(submitOutbound.mock.calls[0]?.[0].contextIntent).toMatchObject({ kind: 'reuse-user', requestId: 'after-policy-denial' })
+    expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId: denied.receipt.requestId }))
+      .toMatchObject({ kind: 'not-executed', reason: 'policy-rejected' })
+  })
+
   it('会话仍有 active turn → 不驱动（不并发双驱）', async () => {
     const h = makeDrainerHarness()
     enqueueQueuedUserMessage(db, { sessionId: h.session.id, requestId: 'q-req-2', content: 'next' })
