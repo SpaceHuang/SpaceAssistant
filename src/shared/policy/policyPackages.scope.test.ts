@@ -184,7 +184,7 @@ describe('S1 判定集合（diff 留档：strict 与原宽严档等价；loose �
   it('desktop strict：clean 脚本需确认（scope-strict 取代自动放行）', () => {
     const rules = resolvePolicyRules({ lane: 'desktop', packages: { desktop: 'strict' }, rules: DEFAULT_POLICY_RULES })
     const d = decide(
-      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', signal: 'clean', patterns: [] }], 'high'),
+      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }], 'high'),
       mkContext('desktop'),
       rules,
       deps()
@@ -216,7 +216,7 @@ describe('S1 判定集合（diff 留档：strict 与原宽严档等价；loose �
     expect(nav.type).toBe('auto-allow')
     expect(nav.type === 'auto-allow' && nav.ruleId).toBe('scope-loose-browser-navigate-ask-desktop')
     const script = decide(
-      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', signal: 'script-network', patterns: [] }], 'high'),
+      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'x', evidence: { kind: 'network', module: 'requests', attr: 'get' } }], coverage: 'complete', totalCount: 1 }], 'high'),
       mkContext('desktop'),
       rules,
       deps()
@@ -227,7 +227,7 @@ describe('S1 判定集合（diff 留档：strict 与原宽严档等价；loose �
 
   it('desktop standard：clean 脚本仍自动放行（standard 行为不变）', () => {
     const d = decide(
-      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', signal: 'clean', patterns: [] }], 'high'),
+      mkFacts('run_script', 'execute', [{ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }], 'high'),
       mkContext('desktop'),
       DEFAULT_POLICY_RULES,
       deps()

@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { SecurityAuditLog, auditLine, sanitizeAuditField } from './securityAuditLog'
 import { querySecurityAuditLog } from './securityAuditReader'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
+import { analyzeScriptContent } from '../shell/scriptContentSecurity'
+import { deriveClueExtras } from './agentChannel'
 
 const tmpDirs: string[] = []
 
@@ -88,6 +91,144 @@ describe('安全审计日志：脱敏', () => {
   it('JSON 形态打码不影响普通 JSON 数值与布尔', () => {
     const out = sanitizeAuditField('{"limit":20,"force":true,"name":"x"}') as string
     expect(out).toBe('{"limit":20,"force":true,"name":"x"}')
+  })
+})
+
+describe('脚本发现审计：结构投影与片段摘要', () => {
+  it.each([
+    ['同引号嵌套', 'eval(f"{dict(secret="same-private-value")}")', 'same-private-value'],
+    ['多层插值', 'eval(f"{dict(secret=f"{dict(token=\'nested-private-value\')}")}")', 'nested-private-value'],
+    ['不同引号组合', 'eval(f\'{dict(secret="mixed-private-value")}\')', 'mixed-private-value']
+  ])('真实分析器到最终 JSONL 不泄露%s中的字符串字面量', async (label, code, secret) => {
+    const analysis = analyzeScriptContent(code)
+    expect(analysis.coverage, label).toBe('complete')
+    expect(analysis.findings.length, label).toBeGreaterThan(0)
+    const dir = await tmpDir()
+    const log = new SecurityAuditLog({ logDir: dir })
+    log.record({
+      ...baseEvent(),
+      toolName: 'run_script',
+      scriptAuditInput: {
+        turnId: 'turn-fstring',
+        contentDigest: createHash('sha256').update(code).digest('hex'),
+        totalCount: analysis.totalCount,
+        findings: analysis.findings
+      }
+    } as SecurityAuditEvent)
+    await log.flush()
+    const files = await fs.readdir(dir)
+    const content = await fs.readFile(path.join(dir, files.find((file) => file.endsWith('.log'))!), 'utf8')
+    const persisted = JSON.parse(content.trim()) as { scriptAudit?: { findings: Array<{ skeleton: string }> } }
+    expect(content).not.toContain(secret)
+    expect(persisted.scriptAudit?.findings[0]?.skeleton).toBe('[unavailable]')
+  })
+
+  it('真实分析器的长片段在审批侧降级，审计摘要覆盖尾部变化', () => {
+    const prefix = `import subprocess\nsubprocess.run(["echo"],${' '.repeat(2100)}`
+    const firstCode = `${prefix}shell=True)`
+    const secondCode = `${prefix}shell=None)`
+    const first = analyzeScriptContent(firstCode)
+    const second = analyzeScriptContent(secondCode)
+    expect(first.coverage).toBe('complete')
+    expect(second.coverage).toBe('complete')
+    expect(first.findings[0]?.snippet).toContain('shell=True)')
+    expect(second.findings[0]?.snippet).toContain('shell=None)')
+    expect(first.findings[0]?.range).toEqual(second.findings[0]?.range)
+
+    const approval = (code: string, analysis: typeof first) => deriveClueExtras({
+      toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+      summary: { text: 'review script' },
+      signals: [
+        { kind: 'script-analysis', ...analysis },
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true,
+          contentDigest: createHash('sha256').update(code).digest('hex'), parametersDigest: 'b'.repeat(64), environmentDigest: 'c'.repeat(64) }
+      ]
+    }).scriptEvidence
+    expect(approval(firstCode, first)).toMatchObject({ sufficiency: 'undetermined', truncated: true })
+    expect(approval(secondCode, second)).toMatchObject({ sufficiency: 'undetermined', truncated: true })
+
+    const auditHash = (code: string, analysis: typeof first) => {
+      const line = auditLine({
+        ...baseEvent(), toolName: 'run_script',
+        scriptAuditInput: {
+          turnId: 'turn-long-snippet', contentDigest: createHash('sha256').update(code).digest('hex'),
+          totalCount: analysis.totalCount, findings: analysis.findings
+        }
+      } as SecurityAuditEvent)
+      return (JSON.parse(line) as { scriptAudit: { findings: Array<{ snippetSha256: string; skeleton: string }>; truncated: boolean } }).scriptAudit
+    }
+    const firstAudit = auditHash(firstCode, first)
+    const secondAudit = auditHash(secondCode, second)
+    expect(firstAudit.findings[0]?.snippetSha256).not.toBe(secondAudit.findings[0]?.snippetSha256)
+    expect(firstAudit.truncated).toBe(true)
+    expect(secondAudit.truncated).toBe(true)
+  })
+
+  it('从完整事件写入 JSONL：只保留投影骨架、摘要、引用与截断状态', async () => {
+    const dir = await tmpDir()
+    const source = [
+      `requests.get("https://host-secret.example", auth=("user", "plain-password"), headers={"X-API-Key": "sk-test-secret"})  # keep-this-comment-private`,
+      `payload = {"nested": ["nested-secret", 12.5]}`,
+      `open("report-private.txt", "w")`,
+      `value = "${'long-secret-'.repeat(210)}"`,
+      `print("unterminated-secret`
+    ].join('\r\n')
+    const snippets = source.split('\r\n')
+    const contentDigest = createHash('sha256').update(source.replace(/\r\n?/g, '\n'), 'utf8').digest('hex')
+    const scriptAuditInput = {
+      turnId: 'turn-script-audit',
+      contentDigest,
+      totalCount: 6,
+      findings: [
+        { pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: snippets[0]!.length + 1 }, snippet: snippets[0]! },
+        { pattern: 'B1', class: 'reflection', range: { startLine: 2, startCol: 1, endLine: 2, endCol: snippets[1]!.length + 1 }, snippet: snippets[1]! },
+        { pattern: 'A7', class: 'file-write', range: { startLine: 3, startCol: 1, endLine: 3, endCol: snippets[2]!.length + 1 }, snippet: snippets[2]! },
+        { pattern: 'A7', class: 'file-write', range: { startLine: 4, startCol: 1, endLine: 4, endCol: snippets[3]!.length + 1 }, snippet: snippets[3]! },
+        { pattern: 'A1', class: 'process-creation', range: { startLine: 5, startCol: 1, endLine: 5, endCol: snippets[4]!.length + 1 }, snippet: snippets[4]! }
+      ]
+    }
+    const log = new SecurityAuditLog({ logDir: dir })
+    log.record({ ...baseEvent(), toolName: 'run_script', scriptAuditInput } as SecurityAuditEvent)
+    await log.flush()
+
+    const files = await fs.readdir(dir)
+    const content = await fs.readFile(path.join(dir, files.find((file) => file.endsWith('.log'))!), 'utf8')
+    const persisted = JSON.parse(content.trim()) as { scriptAudit?: {
+      sessionId: string; turnId: string; contentDigest: string; totalCount: number; truncated: boolean
+      findings: Array<{ pattern: string; range: unknown; skeleton: string; snippetSha256: string }>
+    } }
+    expect(persisted.scriptAudit).toMatchObject({
+      sessionId: 's1', turnId: 'turn-script-audit', contentDigest, totalCount: 6, truncated: true
+    })
+    expect(persisted.scriptAudit?.findings).toHaveLength(5)
+    expect(persisted.scriptAudit?.findings[0]).toMatchObject({ pattern: 'A6', range: scriptAuditInput.findings[0]!.range })
+    expect(persisted.scriptAudit?.findings[0]?.skeleton).toContain('requests.get')
+    expect(persisted.scriptAudit?.findings[0]?.skeleton).toContain('auth=')
+    expect(persisted.scriptAudit?.findings[0]?.skeleton).toContain('"…"')
+    expect(persisted.scriptAudit?.findings[0]?.snippetSha256).toBe(
+      createHash('sha256').update(snippets[0]!, 'utf8').digest('hex')
+    )
+    expect(persisted.scriptAudit?.findings[3]?.skeleton.length).toBeLessThanOrEqual(2_000)
+    expect(persisted.scriptAudit?.findings[3]?.snippetSha256).toBe(
+      createHash('sha256').update(snippets[3]!, 'utf8').digest('hex')
+    )
+    expect(persisted.scriptAudit?.findings[4]?.skeleton).toBe('[unavailable]')
+    for (const secret of ['host-secret.example', 'plain-password', 'sk-test-secret', 'keep-this-comment-private', 'nested-secret', 'report-private.txt', 'long-secret', 'unterminated-secret']) {
+      expect(content).not.toContain(secret)
+    }
+    expect(content).not.toContain(source)
+  })
+
+  it('同定位键内容变更会改变摘要；同一原始片段可稳定复算', () => {
+    const makeLine = (snippet: string) => auditLine({ ...baseEvent(), scriptAuditInput: {
+      turnId: 'turn-hash', contentDigest: 'a'.repeat(64), totalCount: 1,
+      findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 20 }, snippet }]
+    } } as SecurityAuditEvent)
+    const first = JSON.parse(makeLine("requests.get('https://one.test')")) as { scriptAudit?: { findings: Array<{ snippetSha256: string }> } }
+    const second = JSON.parse(makeLine("requests.get('https://two.test')")) as { scriptAudit?: { findings: Array<{ snippetSha256: string }> } }
+    const replay = JSON.parse(makeLine("requests.get('https://one.test')")) as { scriptAudit?: { findings: Array<{ snippetSha256: string }> } }
+    expect(first.scriptAudit?.findings[0]?.snippetSha256).not.toBe(second.scriptAudit?.findings[0]?.snippetSha256)
+    expect(first.scriptAudit?.findings[0]?.snippetSha256).toBe(replay.scriptAudit?.findings[0]?.snippetSha256)
   })
 })
 

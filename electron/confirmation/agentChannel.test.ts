@@ -3,7 +3,7 @@
  * I3（不产生 memory）、I4（fail-closed cause 可区分）、I5（深度计数兜底）、审计五问（actor/actorRef/latencyMs）。
  */
 import { describe, expect, it, vi } from 'vitest'
-import { AgentChannel } from './agentChannel'
+import { AgentChannel, deriveClueExtras } from './agentChannel'
 import type { AuditSink } from './channels'
 import type {
   ApprovalInvocation,
@@ -468,19 +468,97 @@ describe('AgentChannel 任务声明透传（D：可信证据）', () => {
   })
 
   it('把 grep 查询参数与 run_script 主机计算 hash 放入审批线索', async () => {
-    const { ch, invokeApproval } = channel()
-    await ch.request(req({ facts: {
+    const facts: ConfirmRequest['facts'] = {
       toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
       signals: [
         { kind: 'grep-invocation', path: '/workspace/src', pattern: 'TODO', glob: '*.ts', outputMode: 'content', ignoreCase: false },
         { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
           contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'c'.repeat(64), authenticationVersion: 'script-certifier-v1' }
       ], summary: { text: 'review tool call' }
+    }
+    const extras = deriveClueExtras(facts)
+
+    expect(extras.grepQuery).toContain('path=/workspace/src; pattern=TODO; glob=*.ts; output_mode=content')
+    expect(extras.scriptApprovalBinding).toEqual({ sha256: 'a'.repeat(64), parametersSha256: 'b'.repeat(64), environmentSha256: 'c'.repeat(64), certifier: 'script-certifier-v1' })
+  })
+
+  it('把脚本逐条原文发现和结构化证据绑定到本次审批线索', async () => {
+    const finding = {
+      pattern: 'A6', class: 'network-api' as const,
+      range: { startLine: 3, startCol: 1, endLine: 3, endCol: 48 },
+      snippet: "requests.get('https://approved.example')",
+      evidence: { kind: 'network' as const, module: 'requests', attr: 'get', host: 'approved.example' }
+    }
+    const { ch, invokeApproval } = channel()
+    await ch.request(req({ facts: {
+      toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+      signals: [
+        { kind: 'script-analysis', findings: [finding], coverage: 'complete', totalCount: 1 },
+        { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
+          contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'c'.repeat(64), authenticationVersion: 'script-certifier-v1' }
+      ], summary: { text: 'review script' }
     } }))
     const inv = invokeApproval.mock.calls[0]![0] as ApprovalInvocation
+    expect(inv.clue.scriptEvidence).toEqual({
+      coverage: 'complete', totalCount: 1, truncated: false, contentDigest: 'a'.repeat(64), sufficiency: 'sufficient',
+      findings: [{ ...finding, status: 'complete' }]
+    })
+    expect(inv.clue.scriptEvidence?.contentDigest).toBe(inv.clue.scriptApprovalBinding?.sha256)
+  })
 
-    expect(inv.clue.grepQuery).toContain('path=/workspace/src; pattern=TODO; glob=*.ts; output_mode=content')
-    expect(inv.clue.scriptApprovalBinding).toEqual({ sha256: 'a'.repeat(64), parametersSha256: 'b'.repeat(64), environmentSha256: 'c'.repeat(64), certifier: 'script-certifier-v1' })
+  it('脚本发现预算超限时保留总数与截断标记，并确定性转人工，不调用审核 Agent', async () => {
+    const findings = Array.from({ length: 40 }, (_, index) => ({
+      pattern: `A${index + 1}`, class: 'network-api' as const,
+      range: { startLine: index + 1, startCol: 1, endLine: index + 1, endCol: 32 },
+      snippet: `requests.get('https://host-${index}.example')`,
+      evidence: { kind: 'network' as const, module: 'requests', attr: 'get', host: `host-${index}.example` }
+    }))
+    const facts: ConfirmRequest['facts'] = {
+      toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+      signals: [
+        { kind: 'script-analysis', findings, coverage: 'complete', totalCount: 47 },
+        { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
+          contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'c'.repeat(64), authenticationVersion: 'script-certifier-v1' }
+      ], summary: { text: 'review script' }
+    }
+    const evidence = deriveClueExtras(facts).scriptEvidence
+    expect(evidence).toMatchObject({ totalCount: 47, truncated: true, sufficiency: 'undetermined' })
+    expect(evidence?.findings.length).toBeLessThan(40)
+
+    const { ch, invokeApproval } = channel({ lane: 'desktop' })
+    const outcome = await ch.request(req({ facts }))
+    expect(outcome).toMatchObject({ kind: 'rejected', answererKind: 'agent', cause: 'agent-undetermined' })
+    expect(invokeApproval).not.toHaveBeenCalled()
+  })
+
+  it('run_script 缺少摘要绑定或发现材料时不调用审核 Agent，返回 undetermined', async () => {
+    const { ch, invokeApproval } = channel({ lane: 'desktop', toolName: 'run_script' })
+    const outcome = await ch.request(req({ facts: {
+      toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+      signals: [{ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }],
+      summary: { text: 'review script' }
+    } }))
+    expect(outcome).toMatchObject({ kind: 'rejected', answererKind: 'agent', cause: 'agent-undetermined' })
+    expect(invokeApproval).not.toHaveBeenCalled()
+  })
+
+  it('单条片段超预算或覆盖度不完整时置空该片段并确定性转人工', async () => {
+    const finding = {
+      pattern: 'A6', class: 'network-api' as const,
+      range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2201 },
+      snippet: 'x'.repeat(2_001),
+      evidence: { kind: 'network' as const, module: 'requests', attr: 'get', host: 'example.test' }
+    }
+    const extras = deriveClueExtras({
+      toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+      signals: [
+        { kind: 'script-analysis', findings: [finding], coverage: 'partial', totalCount: 1 },
+        { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
+          contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'c'.repeat(64) }
+      ], summary: { text: 'review script' }
+    })
+    expect(extras.scriptEvidence).toMatchObject({ coverage: 'partial', truncated: true, sufficiency: 'undetermined' })
+    expect(extras.scriptEvidence?.findings).toEqual([{ ...finding, snippet: null, status: 'insufficient' }])
   })
 
   it('缺省（无任务上下文调用方）→ clue.taskDigest undefined', async () => {

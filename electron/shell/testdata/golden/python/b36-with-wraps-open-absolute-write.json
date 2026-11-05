@@ -1,23 +1,8 @@
 {
   "id": "b36-with-wraps-open-absolute-write",
   "group": "previously-failed",
-  "legacyParsed": false,
-  "verdict": "ask",
-  "patterns": [
-    "A-fail"
+  "patternIds": [
+    "A7"
   ],
-  "reason": "parse_error",
-  "signals": [
-    {
-      "kind": "script-analysis",
-      "signal": "suspicious",
-      "patterns": [
-        "A-fail"
-      ]
-    },
-    {
-      "kind": "extraction-failed",
-      "reason": "parse_error"
-    }
-  ]
+  "coverage": "complete"
 }

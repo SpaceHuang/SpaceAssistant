@@ -33,15 +33,17 @@ export type RemoteSessionSwitchResult = {
 }
 
 export async function handleRemoteSessionSwitch(
-  sessionId: string
+  sessionId: string,
+  isOwnerCurrent: () => boolean = () => true
 ): Promise<RemoteSessionSwitchResult> {
   const token = ++latestSwitchToken
+  const isCurrent = () => isOwnerCurrent() && isLatestSwitch(token)
 
   const state = store.getState()
   const previousSessionId = state.chat.currentSessionId
   const session =
     state.session.list.find((s) => s.id === sessionId) ?? (await window.api.sessionGet(sessionId))
-  if (!isLatestSwitch(token)) {
+  if (!isCurrent()) {
     return { desktopSwitched: false, viewChanged: false }
   }
   if (!session) {
@@ -55,22 +57,22 @@ export async function handleRemoteSessionSwitch(
   const previousProfileId = activeWorkDirProfileId(config)
 
   const workDirResult = await enqueueWorkDirOp(async () => {
-    if (!isLatestSwitch(token)) {
+    if (!isCurrent()) {
       return { ok: true as const, switched: false, committed: false }
     }
     const latestConfig = store.getState().config.config ?? config
     const result = await ensureWorkDirForSession(session, latestConfig, store.dispatch, {
-      isCurrent: () => isLatestSwitch(token)
+      isCurrent
     })
     // 若在切换过程中被取代且已改动主进程 active，在让出队列前补偿回滚。
-    if (!isLatestSwitch(token) && result.ok && result.switched && previousProfileId) {
+    if (!isCurrent() && result.ok && result.switched && previousProfileId) {
       await rollbackWorkDirProfile(previousProfileId, store.dispatch)
       return { ok: true as const, switched: true, committed: false }
     }
     return result
   })
 
-  if (!isLatestSwitch(token)) {
+  if (!isCurrent()) {
     return { desktopSwitched: false, viewChanged: false }
   }
   if (!workDirResult.ok) {
@@ -78,13 +80,14 @@ export async function handleRemoteSessionSwitch(
   }
 
   const viewChanged = previousSessionId !== sessionId
+  if (!isCurrent()) return { desktopSwitched: false, viewChanged: false }
   store.dispatch(setSession(sessionId))
 
   let rows: Awaited<ReturnType<typeof window.api.chatGetMessages>>
   try {
     rows = await window.api.chatGetMessages({ sessionId })
   } catch {
-    if (isLatestSwitch(token)) {
+    if (isCurrent()) {
       store.dispatch(setSession(previousSessionId))
       if (workDirResult.switched) {
         await enqueueWorkDirOp(() => rollbackWorkDirProfile(previousProfileId, store.dispatch))
@@ -93,7 +96,7 @@ export async function handleRemoteSessionSwitch(
     return { desktopSwitched: false, viewChanged: false }
   }
 
-  if (!isLatestSwitch(token)) {
+  if (!isCurrent()) {
     return { desktopSwitched: true, viewChanged: false }
   }
 

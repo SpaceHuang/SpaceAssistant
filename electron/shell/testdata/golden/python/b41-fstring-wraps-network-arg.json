@@ -1,23 +1,8 @@
 {
   "id": "b41-fstring-wraps-network-arg",
   "group": "previously-failed",
-  "legacyParsed": false,
-  "verdict": "ask",
-  "patterns": [
-    "A-fail"
+  "patternIds": [
+    "A1"
   ],
-  "reason": "parse_error",
-  "signals": [
-    {
-      "kind": "script-analysis",
-      "signal": "suspicious",
-      "patterns": [
-        "A-fail"
-      ]
-    },
-    {
-      "kind": "extraction-failed",
-      "reason": "parse_error"
-    }
-  ]
+  "coverage": "complete"
 }

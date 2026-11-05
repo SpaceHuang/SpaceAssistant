@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { analyzeScriptContent } from './scriptContentSecurity'
 
-/** Residual known-bypass fixtures — must NOT include B1–B11 patterns. */
+/** Residual known-bypass fixtures — these must not be mistaken for listed B1–B11 hits. */
 const RESIDUAL_FIXTURES = {
   R1: "import os\nname = 'system'\ngetattr(os, name)('id')",
   R2: `import base64
@@ -19,98 +19,27 @@ types.FunctionType(code, globals())()`
 
 const B_PATTERN_IDS = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11']
 
-/**
- * WP3: additional known-bypass shapes that must never reach remote `allow`, even though the
- * desktop hit-based analyzer stays silent (allow) for them. These specifically target the
- * positive-allowlist gaps called out by the plan: getattr/variable aliasing of `__import__`,
- * `eval`/`exec`/`getattr` and other reflection builtins.
- */
-const REMOTE_ONLY_RESIDUAL_FIXTURES = {
-  RM1: "import os\nname = 'system'\ngetattr(os, name)('id')",
-  RM2: "imp = __import__\nimp('os')",
-  RM3: "g = getattr\ng(1, 2)",
-  RM4: "e = eval\ne('1+1')",
-  RM5: "import types\nimport marshal\ncode = marshal.loads(b'...')\ntypes.FunctionType(code, globals())()"
-}
-
-describe('scriptContentSecurity — List R (residual known bypass)', () => {
-  it('R1 — variable attr name getattr(os, name) → desktop allow (known bypass), remote must ask', () => {
-    const desktop = analyzeScriptContent(RESIDUAL_FIXTURES.R1, { remote: false })
-    expect(desktop.verdict).toBe('allow')
-    expect(desktop.patterns).not.toEqual(expect.arrayContaining(B_PATTERN_IDS))
-
-    const remote = analyzeScriptContent(RESIDUAL_FIXTURES.R1, { remote: true })
-    expect(remote.verdict).not.toBe('allow')
-    expect(remote.verdict).toBe('ask')
+describe('scriptContentSecurity — residual pattern facts', () => {
+  it('R1 — variable attr name is not reported as a listed B pattern', () => {
+    const result = analyzeScriptContent(RESIDUAL_FIXTURES.R1)
+    expect(result.findings.map((finding) => finding.pattern)).not.toEqual(expect.arrayContaining(B_PATTERN_IDS))
   })
 
-  it('R2 — multi-step decode beyond B11 window: no B11, but direct exec still A3 ask', () => {
-    // Past B11 adjacency window so B11 must not fire; bare exec() is still A3 (not residual).
-    const r = analyzeScriptContent(RESIDUAL_FIXTURES.R2, { remote: false })
-    expect(r.verdict).toBe('ask')
-    expect(r.patterns).toContain('A3')
-    expect(r.patterns).not.toContain('B11')
-    for (const b of B_PATTERN_IDS) {
-      expect(r.patterns).not.toContain(b)
-    }
-
-    const remote = analyzeScriptContent(RESIDUAL_FIXTURES.R2, { remote: true })
-    expect(remote.verdict).toBe('ask')
+  it('R2 — a distant decode does not create B11; direct exec still creates A3', () => {
+    const result = analyzeScriptContent(RESIDUAL_FIXTURES.R2)
+    const ids = result.findings.map((finding) => finding.pattern)
+    expect(ids).toContain('A3')
+    expect(ids).not.toContain('B11')
   })
 
-  it('R3 — marshal / FunctionType bytecode → desktop allow (known bypass), remote must ask', () => {
-    const desktop = analyzeScriptContent(RESIDUAL_FIXTURES.R3, { remote: false })
-    expect(desktop.verdict).toBe('allow')
-    for (const b of B_PATTERN_IDS) {
-      expect(desktop.patterns).not.toContain(b)
-    }
-
-    const remote = analyzeScriptContent(RESIDUAL_FIXTURES.R3, { remote: true })
-    expect(remote.verdict).not.toBe('allow')
-    expect(remote.verdict).toBe('ask')
+  it('R3 — FunctionType construction does not synthesize a listed B pattern', () => {
+    const result = analyzeScriptContent(RESIDUAL_FIXTURES.R3)
+    expect(result.findings.map((finding) => finding.pattern)).not.toEqual(expect.arrayContaining(B_PATTERN_IDS))
   })
 
-  it('WP3 — getattr / __import__ / eval variable aliases can never reach remote allow', () => {
-    for (const [key, code] of Object.entries(REMOTE_ONLY_RESIDUAL_FIXTURES)) {
-      const remote = analyzeScriptContent(code, { remote: true })
-      expect(remote.verdict, `${key}: ${code}`).not.toBe('allow')
-    }
-  })
-
-  it('WP3 — remote-skip-confirm switch does not resurrect allow for uncertified scripts', () => {
-    // shouldSkipRemoteScriptConfirmOnAllow is irrelevant here: these scripts must never
-    // produce verdict === 'allow' on remote in the first place, regardless of config.
-    for (const code of Object.values(REMOTE_ONLY_RESIDUAL_FIXTURES)) {
-      const remote = analyzeScriptContent(code, { remote: true })
-      expect(remote.verdict).not.toBe('allow')
-    }
-  })
-
-  it('residual fixtures must not be named or tagged as known-bypass for B patterns', () => {
-    const fixtureKeys = Object.keys(RESIDUAL_FIXTURES)
-    for (const key of fixtureKeys) {
-      expect(key.startsWith('R')).toBe(true)
-      expect(key).not.toMatch(/^B\d/)
-    }
-    for (const code of Object.values(RESIDUAL_FIXTURES)) {
-      for (const b of B_PATTERN_IDS) {
-        expect(code).not.toContain(`/* ${b} */`)
-        expect(code).not.toContain(`# ${b} known bypass`)
-      }
-    }
-  })
-
-  it('B-style examples are absent from residual file fixtures', () => {
-    const bShapes = [
-      "getattr(__import__('o'+'s'), 'sys'+'tem')",
-      'import os as o',
-      'from os import system as s',
-      "getattr(x, 'system')"
-    ]
-    for (const code of Object.values(RESIDUAL_FIXTURES)) {
-      for (const shape of bShapes) {
-        expect(code).not.toContain(shape)
-      }
-    }
+  it('findings are caller-independent; remote certification is emitted by its separate extractor', () => {
+    const result = analyzeScriptContent(RESIDUAL_FIXTURES.R1)
+    expect(result).toMatchObject({ coverage: 'complete' })
+    expect(result).not.toHaveProperty('verdict')
   })
 })

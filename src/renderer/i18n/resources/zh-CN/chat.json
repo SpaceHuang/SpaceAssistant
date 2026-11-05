@@ -239,7 +239,41 @@
     "script": {
       "actionSummary": "运行 Python 脚本",
       "allow": "确认运行",
-      "deny": "拒绝运行"
+      "deny": "拒绝运行",
+      "findings": {
+        "title": "脚本风险发现",
+        "expand": "另有 {{count}} 条",
+        "collapse": "收起发现",
+        "location": "第 {{line}} 行",
+        "classes": {
+          "processCreation": "进程创建",
+          "destructiveFs": "文件删除或移动",
+          "dynamicExecution": "动态执行",
+          "dynamicImport": "动态导入",
+          "nativeCodeLoad": "本机代码加载",
+          "networkApi": "网络访问",
+          "fileWrite": "文件写入",
+          "cwdChange": "更改工作目录",
+          "reflection": "反射调用",
+          "aliasResolution": "别名解析",
+          "decodeThenExec": "解码后执行",
+          "dynamicDispatch": "动态分派"
+        },
+        "evidence": {
+          "processCreate": "进程调用",
+          "fsDestructive": "文件删除或移动调用",
+          "dynamicExec": "动态代码执行调用",
+          "dynamicImport": "动态导入调用",
+          "nativeCode": "本机代码加载调用",
+          "network": "网络请求调用",
+          "writePath": "文件写入调用",
+          "cwdChange": "工作目录变更调用",
+          "reflection": "反射访问调用",
+          "alias": "动态别名解析",
+          "decodeExec": "解码后执行链",
+          "dynamicDispatch": "无法静态解析的动态分派"
+        }
+      }
     },
     "lark": {
       "allowWrite": "确认飞书写入",

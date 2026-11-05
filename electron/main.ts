@@ -1248,7 +1248,10 @@ app.whenReady().then(async () => {
   floatingManager = new FloatingNotificationManager(
     () => getMainWindow(),
     __dirname,
-    sessionStorage.queries
+    sessionStorage.queries,
+    process.platform,
+    createHostTranslator({ locale: readAppLocale(db) }),
+    () => createMainWindow()
   )
 
   const executeClaudeRequest = registerClaudeStreamHandlers(ipcMain, {

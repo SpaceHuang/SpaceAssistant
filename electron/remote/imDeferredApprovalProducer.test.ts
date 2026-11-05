@@ -518,7 +518,7 @@ describe('production IM deferred approval producer', () => {
   })
 
   it.each([
-    { label: 'sensitive script path', language: 'python', code: 'open("/etc/hosts", "r").read()', ruleId: 'script-system-dir-confirm' },
+    { label: 'sensitive script path', language: 'python', code: 'open("/etc/hosts", "r")', ruleId: 'script-system-dir-confirm' },
     { label: 'dynamic execution', language: 'python', code: 'exec("print(1)")', ruleId: 'script-dynamic-execution-confirm' }
   ])('closes the real assembler → human-required producer → trusted reply → fenced dispatcher path for $label', async ({ label, language, code, ruleId }) => {
     const db = createMemoryAppDb()
