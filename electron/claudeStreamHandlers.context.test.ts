@@ -109,7 +109,8 @@ describe('loadAuthoritativeTurnContext', () => {
     const storage = createSqliteSessionStorage(db)
     const verifyAdmission = vi.fn(() => ({ kind: 'invalid' as const, caseId: 'source-gap' }))
     const injected = { ...storage, queries: { ...storage.queries,
-      readAgentSessionMessageSource: vi.fn(() => ({ kind: 'agent-session' as const, ownerSessionId: 'owner', requestId: 'source-admission-request' })),
+      // Simulate a lost source row while the committed admission verifier still reports its anchor as damaged.
+      readAgentSessionMessageSource: vi.fn(() => undefined),
       verifyAgentSessionAdmission: verifyAdmission } }
 
     await expect(loadAuthoritativeTurnContext(db, 'source-admission-turn', session.id,

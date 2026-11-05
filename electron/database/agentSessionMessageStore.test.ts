@@ -517,6 +517,12 @@ describe('agent session message acceptance persistence', () => {
       .run(JSON.stringify({ ...source, executionApproval: undefined }), target.id, 'admission-request')
     expect(verifyAgentSessionAdmission(db, { sessionId: target.id, turnId: 'admission-turn', requestId: 'admission-request',
       userMessageId: accepted.source.messageId })).toEqual({ kind: 'invalid', caseId: 'agent-source-material-missing' })
+    conn.prepare('UPDATE queue_input_requests SET source_json=NULL WHERE session_id=? AND request_id=?')
+      .run(target.id, 'admission-request')
+    expect(verifyAgentSessionAdmission(db, { sessionId: target.id, turnId: 'admission-turn', requestId: 'admission-request',
+      userMessageId: accepted.source.messageId })).toEqual({ kind: 'invalid', caseId: 'agent-source-material-missing' })
+    conn.prepare('UPDATE queue_input_requests SET source_json=? WHERE session_id=? AND request_id=?')
+      .run(JSON.stringify(source), target.id, 'admission-request')
     expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'admission-request' })).toMatchObject({ kind: 'claimed', turnId: 'admission-turn' })
     db.close()
   })

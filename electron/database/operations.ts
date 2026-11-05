@@ -2104,7 +2104,12 @@ export function verifyAgentSessionAdmission(db: AppDatabase, input: { sessionId:
   const historyStream = conn.prepare('SELECT version,schema_version,session_id FROM agent_history_streams WHERE invocation_id=?')
     .get(input.turnId) as { version: number; schema_version: number; session_id: string } | undefined
   if (!historyRow) {
-    if (turn.accepted_input_history_version != null || receipt?.source_json != null) return { kind: 'invalid', caseId: 'source-gap' }
+    if (receipt?.source_json != null) return { kind: 'invalid', caseId: 'source-gap' }
+    if (turn.accepted_input_history_version != null && turn.accepted_input_history_version > 0) {
+      const legacyContext = conn.prepare(`SELECT kind FROM agent_history_events WHERE invocation_id=? AND sequence=?`)
+        .get(input.turnId, turn.accepted_input_history_version) as { kind: string } | undefined
+      if (legacyContext?.kind !== 'invocation-context-committed') return { kind: 'invalid', caseId: 'source-gap' }
+    }
     return { kind: 'ordinary' }
   }
   let payload: Record<string, unknown>

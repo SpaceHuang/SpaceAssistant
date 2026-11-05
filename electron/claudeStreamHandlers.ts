@@ -119,15 +119,14 @@ export async function loadAuthoritativeTurnContext(_db: AppDatabase, turnId: str
   }
   if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
   if (!persisted.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
-  const source = sessionStorage.queries.readAgentSessionMessageSource({ sessionId, messageId: persisted.userMessageId })
-  const inputAdmission = source
-    ? sessionStorage.queries.verifyAgentSessionAdmission({ sessionId, turnId, requestId, userMessageId: persisted.userMessageId })
-    : { kind: 'ordinary' as const }
-  if (source && inputAdmission.kind !== 'admitted') {
-    throw new Error(`TURN_INPUT_ADMISSION_INVALID:${inputAdmission.kind === 'invalid' ? inputAdmission.caseId : 'agent-source-not-admitted'}`)
-  }
-  const verifiedInputAdmission = inputAdmission.kind === 'admitted' ? inputAdmission : { kind: 'ordinary' as const }
   const messages = await sessionStorage.execution.loadAcceptedMessagesAsync({ sessionId, turnId })
+  // final-check: consult the committed input-history anchor even when the source row itself is missing;
+  // otherwise damaged agent-session input could silently degrade to an ordinary user message.
+  const inputAdmission = sessionStorage.queries.verifyAgentSessionAdmission({ sessionId, turnId, requestId, userMessageId: persisted.userMessageId })
+  if (inputAdmission.kind === 'invalid') throw new Error(`TURN_INPUT_ADMISSION_INVALID:${inputAdmission.caseId}`)
+  const source = sessionStorage.queries.readAgentSessionMessageSource({ sessionId, messageId: persisted.userMessageId })
+  if (source && inputAdmission.kind !== 'admitted') throw new Error('TURN_INPUT_ADMISSION_INVALID:agent-source-not-admitted')
+  const verifiedInputAdmission = inputAdmission.kind === 'admitted' ? inputAdmission : { kind: 'ordinary' as const }
   let continuationTranscript: ClaudeChatMessageWithContentBlocks[] | undefined
   if (persisted.executionConfig?.continuationSource) {
     continuationTranscript = sessionStorage.execution.loadAcceptedContinuationTranscript({ sessionId, turnId })
