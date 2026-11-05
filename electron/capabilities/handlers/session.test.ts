@@ -140,6 +140,49 @@ describe('action.session.status', () => {
 })
 
 describe('action.session.message', () => {
+  it('requires a real user confirmation receipt and policy decision before issuing execution approval', async () => {
+    const storage = createSqliteSessionStorage(db)
+    const owner = await seedSession('approval owner')
+    const target = await seedSession('approval target')
+    const acceptance = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner, targetSessionId: target,
+      requestId: 'approval-send', content: 'approved body', authorizationBinding: {} })
+    const service = createSessionMessageService({ storage, requestDesktopDrain: vi.fn() })
+    const prepare = service as typeof service & { prepareExecutionApproval?: (input: unknown) => boolean }
+    expect(prepare.prepareExecutionApproval).toBeTypeOf('function')
+    const base = { ownerSessionId: owner, requestId: acceptance.source.requestId, targetSessionId: target,
+      decision: { decisionId: 'decision-ok', ruleIds: ['toolkit-act-ask'], dependencyFingerprint: 'policy-fp', verdict: 'require-confirm', policyRevision: 7 },
+      receipt: 'user-receipt', answerer: 'user', authorizationGeneration: 'auth-1', runtimeGeneration: 'runtime-1' }
+    expect(prepare.prepareExecutionApproval!({ ...base, decision: null,
+      receipt: undefined, answerer: 'user' })).toBe(false)
+    expect(prepare.prepareExecutionApproval!({ ...base,
+      decision: { decisionId: 'decision-1', ruleIds: ['other-rule'], dependencyFingerprint: 'policy-fp', verdict: 'require-confirm' },
+      receipt: 'user-receipt', answerer: 'user' })).toBe(false)
+    expect(prepare.prepareExecutionApproval!({ ...base, answerer: 'agent' })).toBe(false)
+    expect(prepare.prepareExecutionApproval!({ ...base, ownerSessionId: 'wrong-owner' })).toBe(false)
+    expect(prepare.prepareExecutionApproval!({ ...base, targetSessionId: owner })).toBe(false)
+    expect(storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target, requestId: acceptance.source.requestId })?.approval).toBeUndefined()
+    expect(prepare.prepareExecutionApproval!(base)).toBe(true)
+    expect(storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target, requestId: acceptance.source.requestId })?.approval)
+      .toMatchObject({ decisionTraceRef: 'decision-ok', permitRef: 'user-receipt', policyRevision: '7', targetGeneration: expect.any(String) })
+    expect(acceptance.source.kind).toBe('agent-session')
+  })
+
+  it('persists approval from the host gate only after the source message is durably accepted', async () => {
+    const storage = createSqliteSessionStorage(db)
+    const owner = await seedSession('approval handoff owner')
+    const target = await seedSession('approval handoff target')
+    const service = createSessionMessageService({ storage, requestDesktopDrain: vi.fn() })
+    const send = findCap('action.session.message.send')
+    const authorization = { decision: { decisionId: 'gate-decision', ruleIds: ['toolkit-act-ask'], dependencyFingerprint: 'deps-1',
+      verdict: 'require-confirm', policyRevision: 4 }, receipt: 'human-receipt', answerer: 'user' as const,
+      authorizationGeneration: 'auth-generation', runtimeGeneration: 'runtime-generation' }
+    const result = await send.handler({ targetSessionId: target, requestId: 'approval-handoff', content: 'payload' },
+      ctx({ sessionId: owner, sessionMessages: service, sessionMessageAuthorization: authorization })) as { accepted: { source: { requestId: string } } }
+    expect(storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target, requestId: result.accepted.source.requestId })?.approval)
+      .toMatchObject({ decisionTraceRef: 'gate-decision', permitRef: 'human-receipt', ownerSessionId: owner, targetSessionId: target,
+        authorizationGeneration: 'auth-generation', runtimeGeneration: 'runtime-generation' })
+  })
+
   it('discovers send/revoke as act capabilities and scopes writes to the authenticated session on desktop', async () => {
     const owner = await seedSession('消息发送者')
     const target = await seedSession('消息接收者')

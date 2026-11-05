@@ -663,7 +663,7 @@ export async function computeContextPressureWarnings(
 export type OutboundDrainerDeps = {
   submitOutbound: (intent: OutboundSubmitIntent) => Promise<OutboundSubmitResult>
   listActiveCount: (sessionId: string) => number
-  getNextQueued: (sessionId: string) => { message: Message; sequence: number; requestId?: string } | null
+  getNextQueued: (sessionId: string) => { message: Message; sequence: number; requestId?: string; source?: import('../sessionStorage/public/model').QueueInputSource } | null
   /** 消费一条不可由主进程执行的排队条目(本地命令类),由实现层删除落库 */
   consumeQueued: (sessionId: string, messageId: string) => void
   audit: (event: string, data: Record<string, unknown>) => void
@@ -749,6 +749,10 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
         if (deps.listActiveCount(sessionId) > 0) return false
         const next = deps.getNextQueued(sessionId)
         if (!next || next.message.role !== 'user' || next.message.status !== 'queued' || !next.requestId) return false
+        if (next.source === 'agent-session') {
+          deps.audit('outbound.drain.rejected', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_SPECIALIZED_DISPATCH_REQUIRED' })
+          return false
+        }
         draining.add(sessionId)
         let result: OutboundSubmitResult
         try {

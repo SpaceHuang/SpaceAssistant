@@ -32,7 +32,13 @@ const sendMessageCapability: CapabilityDescriptor = {
   handler: async (rawParams, ctx) => {
     const { service, ownerSessionId } = requireMessageService(ctx)
     const params = rawParams as { targetSessionId: string; requestId: string; content: string }
-    return service.send({ ownerSessionId, ...params, requestId: `${ctx.sessionId}:${params.requestId}` })
+    const requestId = `${ctx.sessionId}:${params.requestId}`
+    const sent = await service.send({ ownerSessionId, ...params, requestId })
+    if (ctx.sessionMessageAuthorization && service.prepareExecutionApproval) {
+      service.prepareExecutionApproval({ ownerSessionId, requestId, targetSessionId: params.targetSessionId,
+        ...ctx.sessionMessageAuthorization })
+    }
+    return sent
   }
 }
 

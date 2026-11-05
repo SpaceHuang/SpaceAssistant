@@ -3,7 +3,7 @@ import { createOutboundAcceptor as createSessionStorageOutboundAcceptor, createO
 import type { OutboundSubmitIntent, OutboundSubmitResult } from '../../src/shared/outboundProtocol'
 import { DEFAULT_WIKI_CONFIG, type Message } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
-import { claimQueuedTurnAtomically, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getMessages, getNextQueuedMessage } from '../database/operations'
+import { claimQueuedTurnAtomically, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getMessages, getNextQueuedMessage, getNextDesktopQueueInput } from '../database/operations'
 import { createTempDatabase } from '../database/testHelpers'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
@@ -376,6 +376,21 @@ describe('createOutboundDrainer（排水不变量）', () => {
     expect(queuedCount(db, h.session.id)).toBe(0)
     await h.drainer.drain(h.session.id)
     expect(h.submits).toHaveLength(0)
+  })
+
+  it('agent-session 队首不进入普通 outbound 执行器', async () => {
+    const session = createSession(db, { name: 'agent-session-drain' })
+    const owner = createSession(db, { name: 'agent-session-owner' })
+    const storage = createSqliteSessionStorage(db)
+    storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'agent-queued', content: 'untrusted input', authorizationBinding: {} })
+    const submitOutbound = vi.fn(async () => ({ accepted: 'turn-started' as const, sessionId: session.id,
+      turnId: 'unexpected', assistantMessage: { id: 'assistant' } as unknown as Message }))
+    const drainer = createOutboundDrainer({ submitOutbound, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), audit: vi.fn() })
+    await drainer.drain(session.id)
+    expect(submitOutbound).not.toHaveBeenCalled()
+    expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('agent-queued')
   })
 
   it('会话仍有 active turn → 不驱动（不并发双驱）', async () => {

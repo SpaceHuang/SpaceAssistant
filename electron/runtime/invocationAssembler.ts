@@ -15,6 +15,7 @@ import { intersectPolicyRulesWithFloor } from '../../src/shared/policy/policyFlo
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { getDbConnection } from '../database'
+import { currentProcessGeneration } from '../database/processGeneration'
 import { readStoredModels } from '../llmServiceResolver'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { AppDatabase } from '../database'
@@ -921,6 +922,13 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
               : {})
           }
           registered.updateExecutionContext(call, (context) => Object.assign(context, metadata))
+          if (args.toolName === 'toolkit.call' && ['action.session.message.send', 'action.session.message.revoke'].includes(String(args.toolInput.id)) && result.policyDecision) {
+            registered.updateExecutionContext(call, (context) => Object.assign(context, {
+              sessionMessageGateDecision: result.policyDecision,
+              sessionMessageAuthorizationGeneration: binding.authorizationVersion,
+              sessionMessageRuntimeGeneration: `process:${process.pid}:${db ? currentProcessGeneration(getDbConnection(db)) : 0}`
+            }))
+          }
           if (result.reviewScopeCandidateScope && result.reviewScopeCandidateDigest) {
             registered.updateExecutionContext(call, (context) => {
               context.reviewScopeCache = getDefaultAgentRuntime().reviewScopeCache

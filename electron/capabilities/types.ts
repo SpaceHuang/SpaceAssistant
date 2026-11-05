@@ -36,6 +36,10 @@ export interface SessionMessageCapabilityPort {
     settlement?: AgentInputSettlement
   }>
   read(input: { ownerSessionId: string; requestId: string }): AgentInputSettlement | undefined
+  prepareExecutionApproval?(input: {
+    ownerSessionId: string; requestId: string; targetSessionId: string; decision: { decisionId: string; ruleIds: readonly string[]; dependencyFingerprint: string; verdict: string; policyRevision: number }
+    receipt?: string; answerer?: 'user' | 'agent'; authorizationGeneration: string; runtimeGeneration: string
+  }): boolean
 }
 
 /**
@@ -72,6 +76,8 @@ export interface CapabilityContext {
   mcpConfig?: McpCapabilityConfigPort
   runtimeTriggers?: RuntimeTriggerCapabilityPort
   sessionMessages?: SessionMessageCapabilityPort
+  /** Decision and receipt material copied from the host policy gate for this exact tool invocation. */
+  sessionMessageAuthorization?: Readonly<{ decision: { decisionId: string; ruleIds: readonly string[]; dependencyFingerprint: string; verdict: string; policyRevision: number }; receipt?: string; answerer?: 'user' | 'agent'; authorizationGeneration: string; runtimeGeneration: string }>
   /** Session reads are supplied by the invocation composition root. */
   sessionQueries?: SessionQueries
   ensureChatBodyV1?: (input: { sessionId: string; signal?: AbortSignal }) => Promise<unknown>

@@ -54,6 +54,7 @@ export function buildCapabilityContext(ctx: ToolExecutionContext): CapabilityCon
     ...(ctx.appDatabase ? { mcpConfig: createMcpCapabilityConfigPort(ctx.appDatabase) } : {}),
     ...(ctx.runtimeTriggers ? { runtimeTriggers: ctx.runtimeTriggers } : {}),
     ...(ctx.sessionMessages ? { sessionMessages: ctx.sessionMessages } : {}),
+    ...(ctx.sessionMessageAuthorization ? { sessionMessageAuthorization: ctx.sessionMessageAuthorization } : {}),
     sessionQueries: ctx.sessionQueries,
     ensureChatBodyV1: ctx.ensureChatBodyV1,
     workDirManager: ctx.workDirManager,

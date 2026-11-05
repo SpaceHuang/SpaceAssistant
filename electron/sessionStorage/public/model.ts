@@ -22,7 +22,7 @@ export type PreparedChatBodyView = Readonly<{
   statePayloadDigest: string
   stateValidatedRangeJson: string
 }>
-export type QueuedSessionMessage = Readonly<{ message: Message; sequence: number; requestId?: string }>
+export type QueuedSessionMessage = Readonly<{ message: Message; sequence: number; requestId?: string; source?: QueueInputSource }>
 export type ImAcceptedFactScope = Readonly<{ channel: 'feishu' | 'wechat'; accountId: string; conversationId: string }>
 export type ImAcceptedFactFrontier = Readonly<{ through: number; coverageRevision: number }>
 export type ImAcceptedFact = Readonly<{ messageId: string; acceptedSeq: number; channel: ImAcceptedFactScope['channel']; accountId: string; conversationId: string; senderId: string; platformMessageId: string; timestamp: number; isGroup?: boolean; contextToken?: string; trackId?: string; trackEventId?: string }>

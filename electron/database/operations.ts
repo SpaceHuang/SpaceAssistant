@@ -2029,6 +2029,7 @@ export type QueuedMessageEntry = {
   message: Message
   sequence: number
   requestId?: string
+  source?: QueueInputSource
 }
 
 export function listQueuedUserMessages(
@@ -2067,7 +2068,7 @@ export function getNextDesktopQueueInput(db: AppDatabase, sessionId: string): Qu
     const source = classifyQueueInputSource(db, { sessionId, queueScope: DESKTOP_QUEUE_SCOPE,
       requestId: row.queue_request_id, queuedMessageId: row.id })
     if (source === 'ordinary-desktop' || source === 'agent-session') {
-      return { message: rowToStoredMessage(row), sequence: row.sequence, requestId: row.queue_request_id }
+      return { message: rowToStoredMessage(row), sequence: row.sequence, requestId: row.queue_request_id, source }
     }
   }
   return null
