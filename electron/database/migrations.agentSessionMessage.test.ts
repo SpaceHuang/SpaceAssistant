@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { createSession, enqueueQueuedUserMessage } from './operations'
-import { createMemoryAppDb } from './testHelpers'
+import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { DatabaseUpgradeRequiredError, runMigrations } from './migrations'
 import { DB_SCHEMA_VERSION } from './schema'
+import { openDatabase } from './index'
 
 function restoreV123QueueInputRequests(db: ReturnType<typeof createMemoryAppDb>): void {
   const conn = getDbConnection(db)
@@ -30,6 +31,36 @@ function restoreV123QueueInputRequests(db: ReturnType<typeof createMemoryAppDb>)
 }
 
 describe('agent session message schema migration', () => {
+  it('upgrades a file-backed Electron SQLite database, preserves legacy receipts, and stays upgraded after reopen', () => {
+    const temp = createTempDatabase('agent-session-v123-file-')
+    let db = temp.db
+    try {
+      const target = createSession(db, { name: 'file legacy target' })
+      const queued = enqueueQueuedUserMessage(db, { sessionId: target.id, requestId: 'file-v123-receipt', content: 'old payload' })
+      restoreV123QueueInputRequests(db)
+      db.close()
+      db = openDatabase(temp.dbPath)
+      const conn = getDbConnection(db)
+      const migrated = conn.prepare(`SELECT session_id,request_id,fingerprint,queued_message_id,turn_id,state,source_json
+        FROM queue_input_requests WHERE session_id=? AND request_id=?`).get(target.id, 'file-v123-receipt')
+      expect(migrated).toMatchObject({ session_id: target.id, request_id: 'file-v123-receipt',
+        queued_message_id: queued.persisted.message.id, state: 'queued', source_json: null })
+      expect(conn.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+      const foreignKeys = conn.prepare('PRAGMA foreign_key_list(queue_input_requests)').all() as Array<{ table: string; on_delete: string }>
+      expect(foreignKeys).toEqual(expect.arrayContaining([
+        expect.objectContaining({ table: 'messages', on_delete: 'SET NULL' }),
+        expect.objectContaining({ table: 'turns', on_delete: 'SET NULL' })
+      ]))
+      db.close()
+      db = openDatabase(temp.dbPath)
+      expect(getDbConnection(db).prepare(`SELECT source_json,state,queued_message_id FROM queue_input_requests
+        WHERE session_id=? AND request_id=?`).get(target.id, 'file-v123-receipt'))
+        .toEqual({ source_json: null, state: 'queued', queued_message_id: queued.persisted.message.id })
+      expect(getDbConnection(db).prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get())
+        .toEqual({ value: String(DB_SCHEMA_VERSION) })
+    } finally { temp.cleanup(db) }
+  })
+
   it('adds only the nullable source column, preserves old receipts, and keeps the intended foreign keys', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
