@@ -82,6 +82,15 @@ export function createRuntimeTriggerRecovery(input: {
         input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', 'delivery-receipt-mismatch')
         return
       }
+      if (!trigger.messageId) {
+        const current = input.read(trigger.id)
+        if (!current || current.state !== 'matched') return
+        if (current.messageId && current.messageId !== receipt.queuedMessageId) {
+          input.fail(current.id, current.revision, 'TRIGGER_DELIVERY_FAILED', 'delivery-receipt-mismatch')
+          return
+        }
+        if (!current.messageId && !input.update(current.id, current.revision, { messageId: receipt.queuedMessageId, updatedAt: now() })) return
+      }
       if (receipt.turnId) {
         await settleFromTurn(trigger, receipt)
         return

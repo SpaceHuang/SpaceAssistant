@@ -150,6 +150,30 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
     recovery.stop()
   })
 
+  it('repairs a matched trigger messageId from its durable receipt after restart', async () => {
+    const trigger = matched({ id: 'receipt-repair', state: 'matched', messageId: undefined, revision: 3 })
+    let current = trigger
+    const update = vi.fn((_id: string, expectedRevision: number, patch: Partial<RuntimeTriggerRecord>) => {
+      if (current.revision !== expectedRevision) return null
+      current = { ...current, ...patch, revision: current.revision + 1 }
+      return current
+    })
+    const recovery = createRuntimeTriggerRecovery({
+      listWaiting: () => [], listMatched: () => [trigger], read: () => current,
+      evaluateWaiting: () => ({ kind: 'none' }), match: vi.fn(), expire: vi.fn(), fail: vi.fn(),
+      deliver: vi.fn(() => ({ kind: 'enqueued' as const, messageId: 'durable-message' })), update,
+      readReceipt: () => ({ queuedMessageId: 'durable-message', state: 'queued' }),
+      isSessionBusy: () => true, startReceiver: vi.fn(() => 'busy' as const),
+      readTurnTerminal: () => ({ kind: 'active' as const }), now: () => 10
+    })
+
+    await recovery.scan()
+
+    expect(update).toHaveBeenCalledWith(trigger.id, trigger.revision,
+      expect.objectContaining({ messageId: 'durable-message', updatedAt: 10 }))
+    expect(current.messageId).toBe('durable-message')
+  })
+
   it('advances matched recovery pages so legacy backlog cannot starve newer triggers', async () => {
     const rows = Array.from({ length: 4_097 }, (_, index) => matched({ id: `trigger-${String(index).padStart(4, '0')}`,
       createdAt: index + 1, updatedAt: index + 1 }))
