@@ -18,4 +18,4 @@
 
 ## 外部基线状态
 
-远端 Release 核验（2026-11-05）：最新发布为 [v0.3.1](https://github.com/SpaceHuang/SpaceAssistant/releases/tag/v0.3.1)，标签指向 `0d1897769485450ed02127eeed687f16b214661e`，发布时间 2026-10-29。该 SHA 不包含触发器合入 `28bec58e`（`git merge-base --is-ancestor 28bec58e v0.3.1` 返回 1）。Release workflow `40898471081` 成功，但同 SHA 的 CI workflow `40898458003` 失败；因此该发布不能证明包含触发器的正式版本及其验证。`gh release list` 未发现更新发布。E01 仍未满足，需触发器集成基线的发布/验证证明；本地合入和 v0.3.1 安装包不替代它。
+源码基线裁定（2026-11-05）：负责人指出“代码合入 main 并通过测试即可”，不应以正式发版绑住开发。已据此修订 U-01 和执行计划；核验 main SHA `ce1f382eab0d258f3e6a61e814bd31760cc341db` 是触发器合入 `28bec58e` 的后代，当前 main 后代检出 B02 测试 54 项通过。E01/B04 记录可复现证据。远端最新 release `v0.3.1` SHA `0d1897769485450ed02127eeed687f16b214661e` 不包含触发器；该发布不再作为源码阶段前置，正式发布留在 E04/E02/E03。
