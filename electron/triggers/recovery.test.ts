@@ -4,10 +4,12 @@ import { createRuntimeTriggerRecovery } from './recovery'
 import { beginManagedProcess, finishManagedProcess, resetManagedProcessSourceForTests } from './processSource'
 import { evaluateRuntimeTriggerSource } from './sources'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { createSession } from '../database/operations'
+import { createSession, enqueueAgentSessionMessageInScope } from '../database/operations'
+import { getDbConnection } from '../database'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerService } from './service'
 import { createRuntimeTriggerDelivery } from './delivery'
+import { createRuntimeTriggerHostService } from './hostService'
 
 function matched(overrides: Partial<RuntimeTriggerRecord> = {}): RuntimeTriggerRecord {
   return { id: 'trigger-1', ownerSessionId: 'owner', receiverSessionId: 'receiver', clientKey: 'key',
@@ -18,6 +20,63 @@ function matched(overrides: Partial<RuntimeTriggerRecord> = {}): RuntimeTriggerR
 
 describe('runtime trigger recovery and delivery lifecycle', () => {
   afterEach(() => { vi.useRealTimers() })
+
+  it('reconciles a fast exact agent-session terminal result before registration and delivers one owner marker', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const commands = createSessionCommands(db)
+      const owner = createSession(db, { name: 'agent wait owner', workDirProfileId: 'agent-wait-profile' })
+      const target = createSession(db, { name: 'agent wait target', workDirProfileId: 'agent-wait-profile' })
+      const requestId = `${owner.id}:fast-agent-request`
+      const body = 'private body must stay out of notification facts'
+      enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id, requestId, content: body, authorizationBinding: {} })
+      expect(commands.agentSessionMessages.markNotExecuted({ sessionId: target.id, requestId, reason: 'sender-revoked' })).toBe(true)
+      const host = createRuntimeTriggerHostService({ commands,
+        queries: { listSessions: () => [owner, target], imAcceptedFacts: {} } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: () => undefined } as never })
+      const registered = await host.register({ ownerSessionId: owner.id, params: { clientKey: 'fast-agent-wait', receiverSessionId: owner.id,
+        expiresAt: Date.now() + 60_000, condition: { type: 'agent_session_message', requestId } } })
+      const triggerId = registered.trigger.triggerId
+      let timestamp = Date.now()
+      const scope = { kind: 'desktop' } as const
+      const delivery = createRuntimeTriggerDelivery({ now: () => timestamp, read: (id) => commands.runtimeTriggers.read(id),
+        update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: timestamp }),
+        authorize: (trigger, queueScope) => ({ bindingVersion: 1, requestId: `runtime-trigger:${trigger.id}`, ownerSessionId: owner.id,
+          receiverSessionId: owner.id, queueScope, sourceIdentity: trigger.definition.condition, payloadDigest: 'event-digest',
+          policyRevision: 'policy', authorizationGeneration: 'auth', runtimeGeneration: 'runtime' }),
+        queueScope: () => scope, enqueue: (input) => commands.scopedQueue.enqueue(input),
+        readReceipt: (input) => commands.scopedQueue.readReceipt(input) })
+      const recovery = createRuntimeTriggerRecovery({
+        listWaiting: () => commands.runtimeTriggers.listByState('waiting', 100),
+        listMatched: (after) => commands.runtimeTriggers.listByState('matched', 100, after),
+        read: (id) => commands.runtimeTriggers.read(id),
+        evaluateWaiting: (trigger, now) => evaluateRuntimeTriggerSource(trigger, { now,
+          readAgentSettlement: (sourceOwnerId, sourceRequestId) => commands.agentSessionMessages.readSettlement({ ownerSessionId: sourceOwnerId, requestId: sourceRequestId }) }),
+        match: (id, revision, event) => commands.runtimeTriggers.update(id, revision, { state: 'matched', matchedAt: timestamp, event, updatedAt: timestamp }),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: timestamp }),
+        fail: (id, revision, code, caseId) => commands.runtimeTriggers.update(id, revision, { state: 'failed', result: { code, case: caseId }, updatedAt: timestamp }),
+        deliver: delivery, update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        readReceipt: (trigger) => commands.scopedQueue.readReceipt({ sessionId: owner.id, requestId: `runtime-trigger:${trigger.id}`, queueScope: scope }),
+        isSessionBusy: () => true, startReceiver: () => 'busy', readTurnTerminal: () => ({ kind: 'active' }), now: () => timestamp
+      })
+
+      await recovery.scan()
+      const matched = commands.runtimeTriggers.read(triggerId)
+      expect(matched).toMatchObject({ state: 'matched', event: { type: 'agent_session_message', requestId,
+        status: 'not-executed', reason: 'sender-revoked' } })
+      expect(JSON.stringify(matched?.event)).not.toContain(body)
+      const firstReceipt = commands.scopedQueue.readReceipt({ sessionId: owner.id, requestId: `runtime-trigger:${triggerId}`, queueScope: scope })
+      await recovery.scan()
+      timestamp += 1_000
+      await recovery.scan()
+      const replayReceipt = commands.scopedQueue.readReceipt({ sessionId: owner.id, requestId: `runtime-trigger:${triggerId}`, queueScope: scope })
+      expect(firstReceipt?.queuedMessageId).toBeTruthy()
+      expect(replayReceipt?.queuedMessageId).toBe(firstReceipt?.queuedMessageId)
+      expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM queue_input_requests WHERE request_id=?')
+        .get(`runtime-trigger:${triggerId}`)).toEqual({ count: 1 })
+    } finally { db.close() }
+  })
 
   it('recovers a pre-expiry time fact from SQLite and delivers it once after expiry', async () => {
     const db = createMemoryAppDb()

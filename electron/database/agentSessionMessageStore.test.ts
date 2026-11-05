@@ -330,7 +330,7 @@ describe('agent session message acceptance persistence', () => {
     expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'claimed-request' })).toMatchObject({ kind: 'claimed', turnId: 'exact-agent-turn' })
     getDbConnection(db).prepare("UPDATE turns SET state='terminal',outcome='failed',updated_at=123 WHERE turn_id=?").run('exact-agent-turn')
     expect(readAgentInputSettlement(db, { ownerSessionId: owner.id, requestId: 'claimed-request' }))
-      .toMatchObject({ kind: 'turn-terminal', turnId: 'exact-agent-turn', outcome: 'failed' })
+      .toMatchObject({ kind: 'turn-terminal', turnId: 'exact-agent-turn', outcome: 'failed', occurredAt: 123 })
     expect(getDbConnection(db).prepare('SELECT state FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, 'claimed-request'))
       .toEqual({ state: 'claimed' })
     getDbConnection(db).prepare("UPDATE queue_input_requests SET state='not-executed:unknown-reason' WHERE session_id=? AND request_id=?")

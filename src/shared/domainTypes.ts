@@ -52,7 +52,7 @@ export type AgentInputNotExecutedReason = 'sender-revoked' | 'authorized-cancel'
 export type AgentInputSettlement =
   | Readonly<{ kind: 'queued'; targetSessionId: string; messageId: string }>
   | Readonly<{ kind: 'claimed'; turnId: string; turnState: string }>
-  | Readonly<{ kind: 'turn-terminal'; turnId: string; outcome: string }>
+  | Readonly<{ kind: 'turn-terminal'; turnId: string; outcome: string; occurredAt: number }>
   | Readonly<{ kind: 'not-executed'; reason: AgentInputNotExecutedReason; occurredAt: number }>
   | Readonly<{ kind: 'source-gap' }>
 
@@ -1101,6 +1101,7 @@ export type RuntimeTriggerCondition =
   | Readonly<{ type: 'session_steps'; targetSessionId: string; origin: 'registration'; threshold: number; mode: 'sync'; pauseTimeoutMs: number; onPauseTimeout: 'continue' | 'fail' }>
   | Readonly<{ type: 'process_exit'; managedProcessId: string }>
   | Readonly<{ type: 'im_message'; channel: 'feishu' | 'wechat'; accountId: string; conversationId: string; senderIds?: readonly string[]; bodyContains?: string }>
+  | Readonly<{ type: 'agent_session_message'; requestId: string }>
   | Readonly<{ type: 'time'; at: string; taskPrompt: string }>
 export type RuntimeTriggerDefinitionV1 = Readonly<{ version: 1; condition: RuntimeTriggerCondition; sourceBaseline: Readonly<Record<string, unknown>> }>
 export type RuntimeTriggerFailure = Readonly<{

@@ -35,6 +35,11 @@ export function createRuntimeTriggerHostService(input: {
     const owner = visibleSessions().find((session) => session.id === ownerSessionId)
     if (!owner) return reject()
     if (condition.type === 'time') return { allowed: true as const }
+    if (condition.type === 'agent_session_message') {
+      if (ownerSessionId !== receiverSessionId) return reject()
+      const settlement = input.commands.agentSessionMessages.readSettlement({ ownerSessionId, requestId: condition.requestId })
+      return settlement ? { allowed: true as const } : reject()
+    }
     if (condition.type === 'process_exit') {
       if (!sourceEvent && listProcesses(ownerSessionId).some((target) => target.id === condition.managedProcessId)) return { allowed: true as const }
       const generation = sourceBaseline?.runtimeGeneration

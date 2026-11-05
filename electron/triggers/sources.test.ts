@@ -79,6 +79,52 @@ describe('runtime trigger History source facts', () => {
       .resolves.toMatchObject({ kind: 'candidate', event: { occurredAt: 499 } })
   })
 
+  it('matches only the exact agent-session settlement and preserves terminal time without message content', async () => {
+    const record = { ...trigger({ type: 'agent_session_message', requestId: 'owner:exact-request' }), createdAt: 200 }
+    const readAgentSettlement = vi.fn((ownerSessionId: string, requestId: string) => {
+      expect(ownerSessionId).toBe('owner')
+      expect(requestId).toBe('owner:exact-request')
+      return { kind: 'turn-terminal' as const, turnId: 'target-turn', outcome: 'failed', occurredAt: 450 }
+    })
+    await expect(evaluateRuntimeTriggerSource(record, { now: 500, readAgentSettlement }))
+      .resolves.toMatchObject({ kind: 'candidate', event: { type: 'agent_session_message', requestId: 'owner:exact-request',
+        status: 'turn-terminal', turnId: 'target-turn', outcome: 'failed', occurredAt: 450 } })
+    expect(JSON.stringify(await evaluateRuntimeTriggerSource(record, { now: 500, readAgentSettlement }))).not.toContain('message body')
+  })
+
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'] as const)(
+    'matches a terminal agent-session outcome %s for the exact request', async (outcome) => {
+      const record = trigger({ type: 'agent_session_message', requestId: 'owner:terminal-request' })
+      await expect(evaluateRuntimeTriggerSource(record, { now: 500, readAgentSettlement: () => ({
+        kind: 'turn-terminal', turnId: 'target-turn', outcome, occurredAt: 450
+      }) })).resolves.toMatchObject({ kind: 'candidate', event: { status: 'turn-terminal', outcome } })
+    }
+  )
+
+  it.each(['sender-revoked', 'authorized-cancel', 'target-unavailable', 'policy-rejected', 'start-failed'] as const)(
+    'matches a not-executed agent-session result %s', async (reason) => {
+      const record = trigger({ type: 'agent_session_message', requestId: 'owner:terminal-request' })
+      await expect(evaluateRuntimeTriggerSource(record, { now: 500, readAgentSettlement: () => ({
+        kind: 'not-executed', reason, occurredAt: 450
+      }) })).resolves.toMatchObject({ kind: 'candidate', event: { status: 'not-executed', reason, occurredAt: 450 } })
+    }
+  )
+
+  it('keeps queued and claimed agent-session inputs pending until expiry and surfaces source gaps without body text', async () => {
+    const record = trigger({ type: 'agent_session_message', requestId: 'owner:pending-request' }, 500)
+    await expect(evaluateRuntimeTriggerSource(record, { now: 499, readAgentSettlement: () => ({
+      kind: 'queued', targetSessionId: 'target', messageId: 'opaque-message'
+    }) })).resolves.toEqual({ kind: 'none' })
+    await expect(evaluateRuntimeTriggerSource(record, { now: 499, readAgentSettlement: () => ({
+      kind: 'claimed', turnId: 'target-turn', turnState: 'executing'
+    }) })).resolves.toEqual({ kind: 'none' })
+    await expect(evaluateRuntimeTriggerSource(record, { now: 500, readAgentSettlement: () => ({
+      kind: 'queued', targetSessionId: 'target', messageId: 'opaque-message'
+    }) })).resolves.toEqual({ kind: 'expired', case: 'source-expired' })
+    await expect(evaluateRuntimeTriggerSource(record, { now: 300, readAgentSettlement: () => ({ kind: 'source-gap' }) }))
+      .resolves.toMatchObject({ kind: 'candidate', event: { status: 'source-gap', requestId: 'owner:pending-request' } })
+  })
+
   it('resolves only managed process exits from the registration runtime generation', async () => {
     resetManagedProcessSourceForTests()
     const process = beginManagedProcess({ sessionId: 'owner', toolName: 'run_shell' })

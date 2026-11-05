@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { appendMessage, createPersistedTurn, createSession, getPersistedTurn, updatePersistedTurnState } from '../database/operations'
+import { appendMessage, createPersistedTurn, createSession, enqueueAgentSessionMessageInScope, getPersistedTurn, updatePersistedTurnState } from '../database/operations'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerHostService } from './hostService'
 import { evaluateImInboundGuard } from '../remote/imInboundGuard'
@@ -9,6 +9,37 @@ import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { authorizeRuntimeTriggerImSource } from './imSourceAuthorization'
 
 describe('runtime trigger host capability adapter', () => {
+  it('registers an exact outgoing agent-session request wait in the owner session, even during an active Turn', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'message wait owner', workDirProfileId: 'message-wait-profile' })
+      const target = createSession(db, { name: 'message wait target', workDirProfileId: 'message-wait-profile' })
+      const accepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+        requestId: `${owner.id}:message-wait-request`, content: 'not read by wait registration', authorizationBinding: {} })
+      const assistant = appendMessage(db, { id: 'message-wait-active-assistant', sessionId: owner.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+      createPersistedTurn(db, { turnId: 'message-wait-active-turn', requestId: 'message-wait-active-request', sessionId: owner.id,
+        assistantMessageId: assistant.message.id, state: 'executing' })
+      const commands = createSessionCommands(db)
+      const service = createRuntimeTriggerHostService({ commands,
+        queries: { listSessions: () => [owner, target], imAcceptedFacts: {} } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: ({ sessionId, turnId }: { sessionId: string; turnId: string }) => {
+          const turn = getPersistedTurn(db, turnId)
+          return turn?.sessionId === sessionId ? turn : undefined
+        } } as never })
+      const params = { clientKey: 'wait-for-agent-session-message', receiverSessionId: owner.id, expiresAt: Date.now() + 60_000,
+        condition: { type: 'agent_session_message', requestId: accepted.receipt.requestId } }
+
+      await expect(service.register({ ownerSessionId: owner.id, params })).resolves.toMatchObject({
+        trigger: { state: 'waiting', receiverSessionId: owner.id, definition: { condition: params.condition } }
+      })
+      await expect(service.register({ ownerSessionId: owner.id, params: { ...params, clientKey: 'unknown-request',
+        condition: { ...params.condition, requestId: `${owner.id}:unknown` } } }))
+        .rejects.toMatchObject({ failure: { code: 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' } })
+      await expect(service.register({ ownerSessionId: owner.id, params: { ...params, clientKey: 'wrong-receiver', receiverSessionId: target.id } }))
+        .rejects.toMatchObject({ failure: { code: 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' } })
+    } finally { db.close() }
+  })
+
   it('rejects stale or foreign Turn registrations but preserves a prior idempotent registration', async () => {
     const db = createMemoryAppDb()
     try {

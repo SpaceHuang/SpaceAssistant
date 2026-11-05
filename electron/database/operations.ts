@@ -1171,11 +1171,12 @@ export function readAgentInputSettlement(
     return { kind: 'queued', targetSessionId: row.session_id, messageId: row.queued_message_id }
   }
   if (row.state !== 'claimed' || !row.turn_id) return { kind: 'source-gap' }
-  const turn = conn.prepare(`SELECT turn_id,session_id,request_id,user_message_id,state,outcome FROM turns WHERE turn_id=?`)
-    .get(row.turn_id) as { turn_id: string; session_id: string; request_id: string; user_message_id: string | null; state: string; outcome: string | null } | undefined
+  const turn = conn.prepare(`SELECT turn_id,session_id,request_id,user_message_id,state,outcome,updated_at FROM turns WHERE turn_id=?`)
+    .get(row.turn_id) as { turn_id: string; session_id: string; request_id: string; user_message_id: string | null; state: string; outcome: string | null; updated_at: number } | undefined
   if (!turn || turn.session_id !== row.session_id || turn.request_id !== row.request_id || turn.user_message_id !== source.messageId) return { kind: 'source-gap' }
   if (['terminal', 'completed', 'failed', 'cancelled', 'interrupted'].includes(turn.state)) {
-    return typeof turn.outcome === 'string' ? { kind: 'turn-terminal', turnId: turn.turn_id, outcome: turn.outcome } : { kind: 'source-gap' }
+    return typeof turn.outcome === 'string' && Number.isSafeInteger(turn.updated_at)
+      ? { kind: 'turn-terminal', turnId: turn.turn_id, outcome: turn.outcome, occurredAt: turn.updated_at } : { kind: 'source-gap' }
   }
   return { kind: 'claimed', turnId: turn.turn_id, turnState: turn.state }
 }

@@ -1417,7 +1417,8 @@ app.whenReady().then(async () => {
         const outcome = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'cancelled' ? 'cancelled'
           : terminal.outcome === 'timed-out' || terminal.outcome === 'timed_out' ? 'timed-out' : 'failed'
         return { kind: 'terminal', sessionId: terminal.sessionId, turnId: terminal.turnId, outcome, occurredAt }
-      }
+      },
+      readAgentSettlement: (ownerSessionId, requestId) => sessionStorage.commands.agentSessionMessages.readSettlement({ ownerSessionId, requestId })
     }),
     match: (id, revision, event) => sessionStorage.commands.runtimeTriggers.update(id, revision,
       { state: 'matched', matchedAt: Date.now(), event, updatedAt: Date.now() }),
