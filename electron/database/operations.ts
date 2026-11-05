@@ -1934,6 +1934,9 @@ export function updateQueuedUserMessageContentInScope(
     const row = conn.prepare("SELECT * FROM messages WHERE id = ? AND session_id = ? AND queue_scope = ? AND role = 'user' AND status = 'queued'")
       .get(input.messageId, input.sessionId, serializedScope) as MessageRow | undefined
     if (!row) return { ok: false, error: 'message_not_queued' }
+    const hasTrustedSource = conn.prepare('SELECT 1 FROM queue_input_requests WHERE queued_message_id=? AND session_id=? AND queue_scope=? AND source_json IS NOT NULL LIMIT 1')
+      .get(input.messageId, input.sessionId, serializedScope)
+    if (hasTrustedSource) return { ok: false, error: 'message_not_queued' }
     const content = input.content.trim()
     if (!content) return { ok: false, error: 'empty_content' }
     const updated = updateMessageContentImpl(db, input.messageId, { content }, true)

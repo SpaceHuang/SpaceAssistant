@@ -11,6 +11,20 @@ export type MessageRole = 'user' | 'assistant' | 'system'
 
 export type MessageStatus = 'sending' | 'sent' | 'queued' | 'streaming' | 'completed' | 'failed' | 'cancelled'
 
+/** Host verified source identity for a persisted cross-session input; never inferred from message text. */
+export type AgentSessionInputSource = Readonly<{
+  version: 1
+  kind: 'agent-session'
+  ownerSessionId: string
+  requestId: string
+  targetSessionId: string
+  messageId: string
+  payloadSha256: string
+  authorizationBinding: Readonly<Record<string, unknown>>
+  executionApproval?: Readonly<Record<string, unknown>>
+  admission?: Readonly<Record<string, unknown>>
+}>
+
 export type ToolRiskLevel = 'low' | 'medium' | 'high'
 
 export type ToolCallStatus = 'calling' | 'confirming' | 'executing' | 'completed' | 'failed' | 'rejected'

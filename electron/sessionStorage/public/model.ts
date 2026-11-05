@@ -1,4 +1,4 @@
-import type { Message, Session } from '../../../src/shared/domainTypes'
+import type { AgentSessionInputSource, Message, Session } from '../../../src/shared/domainTypes'
 import type { RuntimeTriggerDefinitionV1, RuntimeTriggerState } from '../../../src/shared/domainTypes'
 import type { QueueScope } from '../../../src/shared/queueScope'
 import type { HistorySnapshot } from '../../../packages/agent-sdk/src/history'
@@ -41,7 +41,8 @@ export type RuntimeTriggerHistoryAdmission = Readonly<{
 export type RuntimeTriggerPatch = Readonly<Partial<Pick<RuntimeTriggerRecord, 'state' | 'matchedAt' | 'event' | 'messageId' | 'attempts' | 'nextAttemptAt' | 'result' | 'updatedAt'>>>
 export type QueueInputReceiptSnapshot = Readonly<{ sessionId: string; requestId: string; fingerprint: string; queuedMessageId?: string; turnId?: string; state: string }>
 export type ScopedQueueInput = Readonly<{ sessionId: string; requestId: string; content: string; attachments?: Message['attachments']; queueScope: QueueScope }>
-export type QueueInputSource = 'platform-im' | 'runtime-trigger' | 'ordinary-desktop' | 'invalid'
+export type QueueInputSource = 'platform-im' | 'runtime-trigger' | 'ordinary-desktop' | 'agent-session' | 'invalid'
+export type { AgentSessionInputSource }
 export type ApiContextBaseline = Readonly<{ sessionId: string; entries: readonly MessageEntry[] }>
 export type ChatMessagePage = Readonly<{ entries: readonly MessageEntry[]; oldestSequence: number | null; hasMoreBefore: boolean }>
 export type ExportPage = Readonly<{ rows: readonly MessageEntry[]; nextSequence: number }>
