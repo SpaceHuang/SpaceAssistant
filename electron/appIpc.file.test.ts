@@ -8,7 +8,8 @@ import * as databaseComposition from './database'
 import * as databaseOperations from './database/operations'
 import { getMainWindow } from './windowRef'
 import { BrowserWindow } from 'electron'
-import { getCallAdmissionGate } from './runtime/callAdmissionGate'
+import { CallAdmissionGate, getCallAdmissionGate, setCallAdmissionGate } from './runtime/callAdmissionGate'
+import { DEFAULT_ADMISSION_POLICY } from './runtime/callAdmission'
 import * as turnExecutionConfig from './turnExecutionConfig'
 import * as sessionStorageShadow from './sessionStorage/infrastructure/sqlite/sessionStorageShadow'
 import * as sessionStorageCutover from './sessionStorage/certification'
@@ -319,6 +320,7 @@ describe('file IPC handlers', () => {
 
   afterEach(() => {
     try { ctx?.db.close() } catch { /* real reopen tests close their database explicitly */ }
+    setCallAdmissionGate(null)
   })
 
   beforeEach(() => {
@@ -403,6 +405,28 @@ describe('file IPC handlers', () => {
     expect(publish).toHaveBeenCalledTimes(1)
     expect(publish.mock.calls[0]?.[0]).toBeTypeOf('function')
     await expect(publish.mock.calls[0]![0]('no-queued-session')).resolves.toBeUndefined()
+  })
+
+  it('全局桌面容量已满时 agent-session 保持 queued 且不创建 Turn', async () => {
+    const owner = databaseOperations.createSession(ctx.db, { name: 'capacity owner', model: 'test', workDirProfileId: 'default' })
+    const target = databaseOperations.createSession(ctx.db, { name: 'capacity target', model: 'test', workDirProfileId: 'default' })
+    const accepted = databaseOperations.enqueueAgentSessionMessageInScope(ctx.db, { ownerSessionId: owner.id,
+      targetSessionId: target.id, requestId: 'capacity-agent-request', content: 'queued while busy', authorizationBinding: {} })
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    setCallAdmissionGate(gate)
+    const blocker = await gate.acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level', disposition: 'defer', requestId: 'capacity-blocker' })
+    expect(blocker.ok).toBe(true)
+    const publish = vi.fn()
+    ctx.publishDesktopDrainRequester = publish
+    ctx.agentSessionExecutionAuthorization = { resolve: vi.fn(() => ({ kind: 'approved' as const, finalCheck: () => true })) }
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const drain = publish.mock.calls[0]![0]
+
+    await drain(target.id)
+
+    expect(databaseOperations.getMessage(ctx.db, accepted.source.messageId)?.status).toBe('queued')
+    expect(databaseOperations.getTurnByRequestId(ctx.db, target.id, accepted.receipt.requestId)).toBeUndefined()
+    if (blocker.ok) blocker.ticket.release()
   })
 
   it('session:list filters profile in its query and does not persist legacy metadata cleanup', () => {
