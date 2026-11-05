@@ -170,6 +170,7 @@ export interface AgentInvocationMaterials {
   /** Public session ports composed by the application root. */
   sessionStorage?: SessionStorage
   runtimeTriggers?: import('../capabilities/types').RuntimeTriggerCapabilityPort
+  sessionMessages?: import('../capabilities/types').SessionMessageCapabilityPort
   /** Optional canonical History adapter override for isolated host composition and non-SQLite lanes. */
   agentSdkHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
   /** Scoped SDK History capability supplied by the session-storage composition root. */
@@ -1028,6 +1029,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(db ? { appDatabase: db } : {}),
         ...(sessionStorage ? { sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1 } : {}),
         ...(materials.runtimeTriggers ? { runtimeTriggers: materials.runtimeTriggers } : {}),
+        ...(materials.sessionMessages ? { sessionMessages: materials.sessionMessages } : {}),
         ...(sessionStorage ? { sessionCommands: sessionStorage.commands } : {}),
         isSessionDirectoryGrantActive: (grant: Pick<SessionDirectoryGrantRecord, 'grantId' | 'sessionId' | 'realPath' | 'identity'>) => {
           const currentSession = sessionStorage?.queries.readSession(grant.sessionId)

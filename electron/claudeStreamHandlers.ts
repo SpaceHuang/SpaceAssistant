@@ -73,6 +73,7 @@ export type ClaudeStreamDeps = {
   turnRuntime?: TurnRuntime
   sessionStorage?: SessionStorage
   runtimeTriggers?: import('./capabilities/types').RuntimeTriggerCapabilityPort
+  sessionMessages?: import('./capabilities/types').SessionMessageCapabilityPort
   /** Trusted SQLite admission material for the first runtime-trigger source context. */
   runtimeTriggerAdmission?: (input: { sessionId: string; turnId: string; requestId: string }) => import('./sessionStorage/public/model').RuntimeTriggerHistoryAdmission | undefined
   /** Current-authorized source facts held only in memory until History commits the admission receipt. */
@@ -620,6 +621,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           appDb: deps.getAppDatabase(),
           sessionStorage,
           ...(deps.runtimeTriggers ? { runtimeTriggers: deps.runtimeTriggers } : {}),
+          ...(deps.sessionMessages ? { sessionMessages: deps.sessionMessages } : {}),
           historyForSession: (scopeSessionId: string) => {
             const admission = scopeSessionId === sessionId
               ? deps.runtimeTriggerAdmission?.({ sessionId, turnId, requestId }) : undefined

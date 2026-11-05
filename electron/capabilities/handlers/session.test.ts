@@ -13,6 +13,7 @@ import {
 } from '../../chatActiveStreams'
 import type { CapabilityContext } from '../types'
 import { createSqliteSessionStorage } from '../../sessionStorage/sqliteSessionStorage'
+import { createSessionMessageService } from '../sessionMessageService'
 
 let db: AppDatabase
 
@@ -135,6 +136,89 @@ describe('action.session.status', () => {
     const result = await callCapability(registry, 'action.session.status', {}, ctx())
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.code).toBe('invalid-params')
+  })
+})
+
+describe('action.session.message', () => {
+  it('discovers send/revoke as act capabilities and scopes writes to the authenticated session on desktop', async () => {
+    const owner = await seedSession('消息发送者')
+    const target = await seedSession('消息接收者')
+    const storage = createSqliteSessionStorage(db)
+    const drain = vi.fn()
+    const service = createSessionMessageService({ storage, requestDesktopDrain: drain })
+    const messageContext = ctx({ sessionId: owner, requestId: 'message-tool-turn', lane: 'desktop', sessionMessages: service })
+    const send = findCap('action.session.message.send')
+    const revoke = findCap('action.session.message.revoke')
+    expect(send.risk).toBe('act')
+    expect(revoke.risk).toBe('act')
+    const sent = await send.handler({ targetSessionId: target, requestId: 'send-key', content: 'hello' }, messageContext) as {
+      accepted: { receipt: { requestId: string; queuedMessageId: string }; duplicate: boolean }; wake: string
+    }
+    expect(sent).toMatchObject({ accepted: { receipt: { requestId: `${owner}:send-key`, queuedMessageId: expect.any(String) }, duplicate: false }, wake: 'requested' })
+    expect(drain).toHaveBeenCalledWith(target)
+    expect(storage.queries.readMessage({ sessionId: target, messageId: sent.accepted.receipt.queuedMessageId })?.content).toContain('hello')
+    await expect(send.handler({ targetSessionId: target, requestId: 'bad-key', content: 'forged owner' }, ctx({ ...messageContext, sessionId: undefined } as never)))
+      .rejects.toThrow('SESSION_MESSAGE_CALLER_UNAVAILABLE')
+    expect(drain).toHaveBeenCalledTimes(1)
+    const revoked = await revoke.handler({ requestId: 'send-key' }, messageContext) as { kind: string }
+    expect(revoked.kind).toBe('revoked')
+    await expect(send.handler({ targetSessionId: owner, requestId: 'send-key', content: 'different target' }, messageContext))
+      .rejects.toThrow('SESSION_MESSAGE_REQUEST_CONFLICT')
+    const duplicate = await send.handler({ targetSessionId: target, requestId: 'send-key', content: 'hello' }, messageContext) as {
+      accepted: { duplicate: boolean }
+    }
+    expect(duplicate.accepted.duplicate).toBe(true)
+  })
+
+  it('rejects hidden/internal targets and non-desktop lanes before persisting or waking', async () => {
+    const owner = await seedSession('权限 owner')
+    const hidden = createSession(db, { name: 'hidden target', ownership: 'user', visibility: 'hidden' })
+    const internal = createSession(db, { name: 'internal target', ownership: 'internal', visibility: 'visible' })
+    const drain = vi.fn()
+    const service = createSessionMessageService({ storage: createSqliteSessionStorage(db), requestDesktopDrain: drain })
+    const send = findCap('action.session.message.send')
+    const ctxFor = (targetSessionId: string, lane = 'desktop') => ctx({ sessionId: owner, requestId: `reject-${targetSessionId}`,
+      lane, sessionMessages: service })
+    for (const targetSessionId of [hidden.id, internal.id]) {
+      await expect(send.handler({ targetSessionId, requestId: `key-${targetSessionId}`, content: 'must not persist' }, ctxFor(targetSessionId)))
+        .rejects.toThrow('SESSION_MESSAGE_TARGET_UNAVAILABLE')
+    }
+    await expect(send.handler({ targetSessionId: owner, requestId: 'remote-key', content: 'must not persist' }, ctxFor(owner, 'wechat')))
+      .rejects.toThrow('SESSION_MESSAGE_DESKTOP_ONLY')
+    expect(drain).not.toHaveBeenCalled()
+    expect(createSqliteSessionStorage(db).queries.readMessages({ sessionId: owner })).toHaveLength(0)
+  })
+
+  it('keeps the durable receipt when drain wake fails', async () => {
+    const owner = await seedSession('wake owner')
+    const target = await seedSession('wake target')
+    const service = createSessionMessageService({ storage: createSqliteSessionStorage(db), requestDesktopDrain: () => { throw new Error('wake failed') } })
+    const result = await findCap('action.session.message.send').handler({ targetSessionId: target, requestId: 'wake-key', content: 'durable' },
+      ctx({ sessionId: owner, requestId: 'wake-tool-turn', lane: 'desktop', sessionMessages: service })) as { accepted: { receipt: { queuedMessageId: string } }; wake: string }
+    expect(result.wake).toBe('retry-pending')
+    expect(createSqliteSessionStorage(db).commands.agentSessionMessages.readSettlement({ ownerSessionId: owner, requestId: `${owner}:wake-key` }))
+      .toMatchObject({ kind: 'queued', targetSessionId: target, messageId: result.accepted.receipt.queuedMessageId })
+  })
+
+  it('replays the original acceptance after target deletion without restoring its message', async () => {
+    const owner = await seedSession('deleted-target owner')
+    const target = await seedSession('deleted target')
+    const storage = createSqliteSessionStorage(db)
+    const service = createSessionMessageService({ storage, requestDesktopDrain: vi.fn() })
+    const send = findCap('action.session.message.send')
+    const messageContext = ctx({ sessionId: owner, requestId: 'delete-replay-turn', lane: 'desktop', sessionMessages: service })
+    const first = await send.handler({ targetSessionId: target, requestId: 'delete-replay', content: 'original' }, messageContext) as {
+      accepted: { receipt: { queuedMessageId: string }; source: { payloadSha256: string } }
+    }
+    storage.commands.deleteSession(target)
+    const replay = await send.handler({ targetSessionId: target, requestId: 'delete-replay', content: 'original' }, messageContext) as {
+      accepted: { duplicate: boolean; receipt: { queuedMessageId?: string }; source: { payloadSha256: string } }
+    }
+    expect(replay.accepted.duplicate).toBe(true)
+    expect(replay.accepted.source.payloadSha256).toBe(first.accepted.source.payloadSha256)
+    expect(replay.accepted.receipt.queuedMessageId).toBeUndefined()
+    await expect(send.handler({ targetSessionId: target, requestId: 'delete-replay', content: 'changed' }, messageContext))
+      .rejects.toThrow('SESSION_MESSAGE_TARGET_UNAVAILABLE')
   })
 })
 

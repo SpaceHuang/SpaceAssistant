@@ -1,5 +1,6 @@
 import type { ZodType } from 'zod'
 import type { SessionQueries } from '../sessionStorage/public/ports'
+import type { AgentSessionMessageAcceptance, AgentInputSettlement } from '../sessionStorage/public/model'
 
 /** 能力家族：env=自我知觉（只读探测），action=产品功能执行 */
 export type CapabilityFamily = 'env' | 'action'
@@ -22,6 +23,19 @@ export interface RuntimeTriggerCapabilityPort {
   get(input: { ownerSessionId: string; triggerId: unknown }): unknown
   list(input: { ownerSessionId: string; params: unknown }): unknown
   cancel(input: { ownerSessionId: string; params: unknown }): unknown
+}
+
+/** Narrow trusted session-message service; owner identity comes from the current invocation. */
+export interface SessionMessageCapabilityPort {
+  send(input: { ownerSessionId: string; targetSessionId: string; requestId: string; content: string }): Promise<Readonly<{
+    accepted: AgentSessionMessageAcceptance
+    wake: 'requested' | 'retry-pending'
+  }>>
+  revoke(input: { ownerSessionId: string; requestId: string }): Readonly<{
+    kind: 'revoked' | 'already-revoked' | 'claimed' | 'not-found' | 'not-revocable'
+    settlement?: AgentInputSettlement
+  }>
+  read(input: { ownerSessionId: string; requestId: string }): AgentInputSettlement | undefined
 }
 
 /**
@@ -57,6 +71,7 @@ export interface CapabilityContext {
   /** MCP capability's narrow configuration port; no database handle crosses the capability boundary. */
   mcpConfig?: McpCapabilityConfigPort
   runtimeTriggers?: RuntimeTriggerCapabilityPort
+  sessionMessages?: SessionMessageCapabilityPort
   /** Session reads are supplied by the invocation composition root. */
   sessionQueries?: SessionQueries
   ensureChatBodyV1?: (input: { sessionId: string; signal?: AbortSignal }) => Promise<unknown>

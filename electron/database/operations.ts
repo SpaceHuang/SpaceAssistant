@@ -1082,6 +1082,66 @@ export function markAgentInputNotExecutedInScope(
   })
 }
 
+export function revokeAgentSessionMessage(
+  db: AppDatabase,
+  input: { ownerSessionId: string; requestId: string }
+): Readonly<{ kind: 'revoked' | 'already-revoked' | 'claimed' | 'not-found' | 'not-revocable'; settlement?: AgentInputSettlement }> {
+  // facts/invariant boundary: owner-scoped receipt, exact source binding, and queued/no-turn CAS guard; final-check never lives here.
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const row = conn.prepare(`SELECT session_id,state,turn_id,source_json FROM queue_input_requests WHERE request_id=?
+      AND source_json IS NOT NULL AND json_extract(source_json,'$.ownerSessionId')=?`)
+      .get(input.requestId, input.ownerSessionId) as { session_id: string; state: string; turn_id: string | null; source_json: string } | undefined
+    if (!row) return { kind: 'not-found' }
+    const source = decodeAgentSessionInputSource(row.source_json)
+    if (!source || source.ownerSessionId !== input.ownerSessionId || source.requestId !== input.requestId || source.targetSessionId !== row.session_id) {
+      return { kind: 'not-revocable', settlement: { kind: 'source-gap' } }
+    }
+    if (row.state === 'not-executed:sender-revoked' && row.turn_id === null) {
+      return { kind: 'already-revoked', settlement: readAgentInputSettlement(db, input) }
+    }
+    if (row.state === 'claimed' && row.turn_id) return { kind: 'claimed', settlement: readAgentInputSettlement(db, input) }
+    if (row.state !== 'queued' || row.turn_id !== null) return { kind: 'not-revocable', settlement: readAgentInputSettlement(db, input) }
+    if (!source.messageId || classifyQueueInputSource(db, { sessionId: row.session_id, queueScope: DESKTOP_QUEUE_SCOPE,
+      requestId: input.requestId, queuedMessageId: source.messageId }) !== 'agent-session') {
+      return { kind: 'not-revocable', settlement: { kind: 'source-gap' } }
+    }
+    const revoked = markAgentInputNotExecutedInScope(db, { sessionId: row.session_id, requestId: input.requestId, reason: 'sender-revoked' })
+    if (revoked) return { kind: 'revoked', settlement: readAgentInputSettlement(db, input) }
+    const after = conn.prepare('SELECT state,turn_id FROM queue_input_requests WHERE session_id=? AND request_id=?')
+      .get(row.session_id, input.requestId) as { state: string; turn_id: string | null } | undefined
+    if (after?.state === 'claimed' && after.turn_id) return { kind: 'claimed', settlement: readAgentInputSettlement(db, input) }
+    if (after?.state === 'not-executed:sender-revoked') return { kind: 'already-revoked', settlement: readAgentInputSettlement(db, input) }
+    return { kind: 'not-revocable', settlement: readAgentInputSettlement(db, input) }
+  })
+}
+
+export function readAgentSessionMessageAcceptance(
+  db: AppDatabase,
+  input: { ownerSessionId: string; requestId: string; targetSessionId: string; payloadSha256: string }
+) {
+  const row = getDbConnection(db).prepare(`SELECT session_id,request_id,fingerprint,queued_message_id,turn_id,state,source_json
+    FROM queue_input_requests WHERE request_id=? AND source_json IS NOT NULL AND json_extract(source_json,'$.ownerSessionId')=?`)
+    .get(input.requestId, input.ownerSessionId) as {
+      session_id: string; request_id: string; fingerprint: string; queued_message_id: string | null
+      turn_id: string | null; state: string; source_json: string
+    } | undefined
+  if (!row) return undefined
+  const source = decodeAgentSessionInputSource(row.source_json)
+  if (!source || source.ownerSessionId !== input.ownerSessionId || source.requestId !== row.request_id ||
+    source.targetSessionId !== row.session_id || source.targetSessionId !== input.targetSessionId || source.payloadSha256 !== input.payloadSha256 ||
+    (source.messageId !== row.queued_message_id && row.queued_message_id !== null)) return undefined
+  const message = row.queued_message_id ? getMessage(db, row.queued_message_id) : undefined
+  return {
+    receipt: { sessionId: row.session_id, requestId: row.request_id, fingerprint: row.fingerprint,
+      ...(row.queued_message_id ? { queuedMessageId: row.queued_message_id } : {}), ...(row.turn_id ? { turnId: row.turn_id } : {}),
+      state: row.state, queueScope: DESKTOP_QUEUE_SCOPE },
+    source,
+    ...(message ? { persisted: { message, sequence: getMessageSequence(db, row.session_id, message.id) ?? 0 } } : {}),
+    duplicate: true
+  }
+}
+
 export function readAgentInputSettlement(
   db: AppDatabase,
   input: { ownerSessionId: string; requestId: string }
@@ -1304,6 +1364,15 @@ export function claimQueuedTurnAtomically(
 ): { user: PersistedMessageEntry; assistant: PersistedMessageEntry; executionConfig?: TurnExecutionConfig } {
   if (input.queueScope) return claimQueuedTurnAtomicallyInScope(db, { ...input, queueScope: input.queueScope })
   return desktopQueueCompatibility.claim(db, input)
+}
+
+/** 主进程专用 agent-session 领取入口；终检回调不能来自 TurnIntent/IPC。 */
+export function claimAgentSessionTurnAtomically(
+  db: AppDatabase,
+  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig },
+  finalCheck: (facts: AgentSessionExecutionFinalCheckFacts) => boolean
+): { user: PersistedMessageEntry; assistant: PersistedMessageEntry; executionConfig?: TurnExecutionConfig } {
+  return claimQueuedTurnAtomicallyInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE, source: 'agent-session', agentSessionFinalCheck: finalCheck })
 }
 
 export type PersistedTurn = {
@@ -1983,6 +2052,25 @@ export function listQueuedUserMessages(
 
 export function getNextQueuedMessageInScope(db: AppDatabase, sessionId: string, queueScope: QueueScope, source?: QueueInputSource): QueuedMessageEntry | null {
   return listQueuedUserMessages(db, { sessionId, queueScope, source })[0] ?? null
+}
+
+/** The desktop drainer arbitrates ordinary and trusted Agent input by one persisted FIFO. */
+export function getNextDesktopQueueInput(db: AppDatabase, sessionId: string): QueuedMessageEntry | null {
+  const conn = getDbConnection(db)
+  const rows = conn.prepare(`SELECT messages.*,
+      (SELECT request_id FROM queue_input_requests WHERE queue_input_requests.queued_message_id=messages.id
+        AND queue_input_requests.queue_scope=messages.queue_scope ORDER BY created_at ASC LIMIT 1) AS queue_request_id
+    FROM messages WHERE messages.session_id=? AND messages.queue_scope='desktop' AND messages.status='queued' AND messages.role='user'
+    ORDER BY messages.sequence ASC,messages.id ASC`).all(sessionId) as Array<MessageRow & { queue_request_id?: string }>
+  for (const row of rows) {
+    if (!row.queue_request_id) continue
+    const source = classifyQueueInputSource(db, { sessionId, queueScope: DESKTOP_QUEUE_SCOPE,
+      requestId: row.queue_request_id, queuedMessageId: row.id })
+    if (source === 'ordinary-desktop' || source === 'agent-session') {
+      return { message: rowToStoredMessage(row), sequence: row.sequence, requestId: row.queue_request_id }
+    }
+  }
+  return null
 }
 
 export function reorderQueuedUserMessagesInScope(
@@ -2936,6 +3024,7 @@ export const desktopQueueCompatibility = Object.freeze({
     reorderQueuedUserMessagesInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE }),
   getNext: (db: AppDatabase, sessionId: string) =>
     getNextQueuedMessageInScope(db, sessionId, DESKTOP_QUEUE_SCOPE),
+  getNextInput: (db: AppDatabase, sessionId: string) => getNextDesktopQueueInput(db, sessionId),
   delete: (db: AppDatabase, messageId: string, previewCandidate?: { messageId: string; content: string; source: { sessionGeneration: string; messageRevision: number; sequence: number; role: string; timestamp: number; status: string } }) =>
     deleteQueuedUserMessageInScope(db, messageId, DESKTOP_QUEUE_SCOPE, previewCandidate),
   updateContent: (db: AppDatabase, input: { sessionId: string; messageId: string; content: string }) =>

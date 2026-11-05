@@ -1146,7 +1146,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   const outboundDrainer = createOutboundDrainer({
     submitOutbound: outboundAcceptor.submitOutbound,
     listActiveCount: (sessionId) => turnRuntime.listActive(sessionId).length,
-    getNextQueued: (sessionId) => sessionStorage.execution.getNextQueuedMessage(sessionId),
+    getNextQueued: (sessionId) => sessionStorage.execution.getNextDesktopQueueInput(sessionId),
     consumeQueued: (_sessionId, messageId) => {
       // B5:排队的渲染端本地命令(如 /test-cards)主进程无法执行,消费落库避免卡队
       sessionCommands.deleteQueuedMessage(messageId)

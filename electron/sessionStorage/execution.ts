@@ -1,7 +1,7 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import { Buffer } from 'node:buffer'
 import type { PersistedTurn } from '../database/operations'
-import { enqueueQueuedUserMessage, getMessageSkeleton, getNextQueuedMessage, getPersistedTurn, getTurnByRequestId, hasActiveTurn, listPersistedTurns, setPersistedTurnExecutionConfig, failConfiguringTurn } from '../database/operations'
+import { enqueueQueuedUserMessage, getMessageSkeleton, getNextDesktopQueueInput, getNextQueuedMessage, getPersistedTurn, getTurnByRequestId, hasActiveTurn, listPersistedTurns, setPersistedTurnExecutionConfig, failConfiguringTurn } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { createHash } from 'node:crypto'
 import { appendMessage } from '../database/operations'
@@ -144,6 +144,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
         .map((tool) => ({ turnId, toolUseId: tool.id, pid: tool.processPid!,
           ...(tool.processGroupId ? { processGroupId: tool.processGroupId } : {}), ownerToken: tool.processOwnerToken! }))),
     getNextQueuedMessage: (sessionId) => getNextQueuedMessage(db, sessionId),
+    getNextDesktopQueueInput: (sessionId) => getNextDesktopQueueInput(db, sessionId),
     readAccepted: ({ sessionId, requestId }) => readAcceptedTurn(db, sessionId, requestId),
     readTranscriptState: (sessionId) => {
       const { sessionId: targetSessionId, version, lastTurnId, status } = readSessionTranscriptControl(db, sessionId)

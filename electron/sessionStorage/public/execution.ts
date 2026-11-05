@@ -77,6 +77,7 @@ export interface SessionExecutionStore {
   listStartupOrphanTurns(sessionId?: string): readonly Readonly<{ turnId: string; state: string; assistantMessageId: string }>[]
   listOrphanProcessIdentities(sessionId: string): readonly Readonly<{ turnId: string; toolUseId: string; pid: number; processGroupId?: number; ownerToken: string }>[]
   getNextQueuedMessage(sessionId: string): import('./model').QueuedSessionMessage | null
+  getNextDesktopQueueInput(sessionId: string): import('./model').QueuedSessionMessage | null
   readAccepted(input: Readonly<{ sessionId: string; requestId: string }>): AcceptedTurn | undefined
   readTranscriptState(sessionId: string): Readonly<{ sessionId: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked' }>
   readHostedTranscript(sessionId: string): HostedTranscriptSnapshot

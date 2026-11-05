@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { agentSessionInputEventDigest, agentSessionOriginDigest, classifyQueueInputSource } from './queueInputSource'
-import { claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, readAgentInputSettlement, updateQueueInputReceiptStateInScope, updateQueuedUserMessageContentInScope } from './operations'
+import { claimAgentSessionTurnAtomically, claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, getNextDesktopQueueInput, readAgentInputSettlement, updateQueueInputReceiptStateInScope, updateQueuedUserMessageContentInScope } from './operations'
 import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { openDatabase } from './index'
 import { getDbConnection } from './sqliteStore'
@@ -41,6 +41,22 @@ function approveAgentInput(db: ReturnType<typeof createMemoryAppDb>, ownerSessio
 }
 
 describe('agent session message source classification', () => {
+  it('arbitrates desktop FIFO across ordinary and agent messages while excluding IM rows', () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'fifo-owner' })
+    const target = createSession(db, { name: 'fifo-target' })
+    const ordinary = enqueueQueuedUserMessage(db, { sessionId: target.id, requestId: 'ordinary-first', content: 'ordinary' })
+    const agent = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId: 'agent-second', content: 'agent', authorizationBinding: {} })
+    expect(getNextDesktopQueueInput(db, target.id)?.requestId).toBe('ordinary-first')
+    getDbConnection(db).prepare(`UPDATE messages SET status='sent' WHERE id=?`).run(ordinary.persisted.message.id)
+    expect(getNextDesktopQueueInput(db, target.id)?.requestId).toBe('agent-second')
+    expect(() => claimAgentSessionTurnAtomically(db, { sessionId: target.id, userMessageId: agent.source.messageId,
+      turnId: 'agent-claim-no-approval', assistantMessageId: 'agent-assistant-no-approval', requestId: 'agent-second' }, () => true))
+      .toThrow('AGENT_SESSION_EXECUTION_APPROVAL_MISSING')
+    db.close()
+  })
+
   it('classifies only a receipt-bound source and envelope; forged envelope stays invalid', () => {
     const db = createMemoryAppDb()
     const target = createSession(db, { name: 'target' })
@@ -95,6 +111,28 @@ describe('agent session message source classification', () => {
 })
 
 describe('agent session message acceptance persistence', () => {
+  it('revokes by trusted owner and returns accurate claimed, terminal, and unknown outcomes', () => {
+    const db = createMemoryAppDb()
+    const owner = createSession(db, { name: 'revoke-owner' })
+    const other = createSession(db, { name: 'revoke-other' })
+    const target = createSession(db, { name: 'revoke-target' })
+    const commands = createSessionCommands(db).agentSessionMessages
+    const revoked = commands.accept({ ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'service-revoke', content: 'pending', authorizationBinding: {} })
+    expect(commands.revoke({ ownerSessionId: other.id, requestId: 'service-revoke' })).toEqual({ kind: 'not-found' })
+    expect(commands.revoke({ ownerSessionId: owner.id, requestId: 'service-revoke' })).toMatchObject({ kind: 'revoked', settlement: { kind: 'not-executed', reason: 'sender-revoked' } })
+    expect(commands.revoke({ ownerSessionId: owner.id, requestId: 'service-revoke' })).toMatchObject({ kind: 'already-revoked' })
+
+    const acceptedClaim = commands.accept({ ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'service-claimed', content: 'claimed', authorizationBinding: {} })
+    approveAgentInput(db, owner.id, target, 'service-claimed', acceptedClaim.source.messageId)
+    claimQueuedTurnAtomicallyInScope(db, { sessionId: target.id, userMessageId: acceptedClaim.source.messageId,
+      turnId: 'service-claimed-turn', assistantMessageId: 'service-claimed-assistant', requestId: 'service-claimed',
+      queueScope: { kind: 'desktop' }, source: 'agent-session', agentSessionFinalCheck: () => true })
+    expect(commands.revoke({ ownerSessionId: owner.id, requestId: 'service-claimed' })).toMatchObject({ kind: 'claimed', settlement: { kind: 'claimed', turnId: 'service-claimed-turn' } })
+    expect(commands.revoke({ ownerSessionId: owner.id, requestId: 'missing-revoke' })).toEqual({ kind: 'not-found' })
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(revoked.source.messageId)).toEqual({ status: 'cancelled' })
+    db.close()
+  })
+
   it('lets sender revocation and claim race with exactly one durable winner', () => {
     const db = createMemoryAppDb()
     const owner = createSession(db, { name: 'race-owner' })
