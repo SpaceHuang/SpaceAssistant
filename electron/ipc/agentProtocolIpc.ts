@@ -979,7 +979,14 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     return prepared
   }
 
-  ipcMain.handle('chat:prepare-turn', (_e, intent: TurnIntent) => prepareTurnInternal(intent))
+  ipcMain.handle('chat:prepare-turn', async (_e, intent: TurnIntent) => {
+    // facts / trust boundary: renderer input describes user intent only. Queue scope and source
+    // are host-owned provenance and are supplied only by internal trigger starters below.
+    if (intent && typeof intent === 'object' && ('queueScope' in intent || 'queueInputSource' in intent)) {
+      throw new Error('UNTRUSTED_QUEUE_INPUT_METADATA')
+    }
+    return await prepareTurnInternal(intent)
+  })
   // Phase 1b：execute 编排抽为内部函数——chat:execute-turn 与出站受理端口共用。
   // sender 为 null 表示主进程内部驱动源（排水器/受理端口）发起，事件出口不依赖 sender。
 

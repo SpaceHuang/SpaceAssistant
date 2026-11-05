@@ -280,6 +280,7 @@ function makeCtx(db = createMemoryAppDb()): AppIpcContext {
     searchMessages: ({ query, activeProfileId, limit }) => sessionTranscriptProjection.searchProjectedMessages(ctx.db, query, activeProfileId, limit),
     readRetryTarget: ({ sessionId, failedAssistantMessageId }) =>
       sessionTranscriptProjection.resolveProjectedRetryContext(ctx.db, sessionId, failedAssistantMessageId),
+    verifyAgentSessionAdmission: (input) => databaseOperations.verifyAgentSessionAdmission(ctx.db, input),
     listTurnErrorsByAssistantMessageIds: (ids) => database.listTurnErrorsByAssistantMessageIds(ctx.db, ids),
     readMessageSequence: ({ sessionId, messageId }) => database.getMessageSequence(ctx.db, sessionId, messageId)
   }
@@ -356,6 +357,22 @@ describe('file IPC handlers', () => {
     ipc = mockIpcMain()
     ctx = makeCtx()
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+  })
+
+  it('公开 prepare IPC 拒绝客户端自报队列来源与范围，且不认领队列消息', async () => {
+    const session = databaseOperations.createSession(ctx.db, { name: 'untrusted queue metadata', model: 'test', workDirProfileId: 'default' })
+    const queued = databaseOperations.enqueueQueuedUserMessage(ctx.db, {
+      sessionId: session.id, requestId: 'forged-source-request', content: 'must remain queued'
+    })
+
+    await expect(ipc.getHandler('chat:prepare-turn')!({}, {
+      mode: 'reuse-user', requestId: 'forged-source-request', sessionId: session.id,
+      userMessageId: queued.persisted.message.id, excludeMessageIds: [], config: {},
+      queueScope: { kind: 'im', channel: 'wechat', sessionId: session.id }, queueInputSource: 'platform-im'
+    })).rejects.toThrow('UNTRUSTED_QUEUE_INPUT_METADATA')
+
+    expect(databaseOperations.getTurnByRequestId(ctx.db, session.id, 'forged-source-request')).toBeUndefined()
+    expect(databaseOperations.getMessage(ctx.db, queued.persisted.message.id)?.status).toBe('queued')
   })
 
   it('session:list filters profile in its query and does not persist legacy metadata cleanup', () => {
@@ -662,6 +679,8 @@ describe('file IPC handlers', () => {
     const skillScope = scope.scope as ReturnType<typeof createSkillTurnScope>
     const finish = vi.spyOn(skillScope, 'close')
     const validPayload = { requestId: prepared.requestId, turnId: prepared.turnId, turnStartToken: prepared.startToken, sessionId: prepared.sessionId }
+    expect(ctx.sessionStorage!.queries.verifyAgentSessionAdmission({ sessionId: session.id, turnId: prepared.turnId,
+      requestId: prepared.requestId })).toEqual({ kind: 'ordinary' })
     await expect(execute({ sender: {} }, { ...validPayload, turnStartToken: 'wrong-token' })).resolves.toMatchObject({ accepted: true })
     await vi.waitFor(() => expect(finish).not.toHaveBeenCalled())
     // 错误凭证先到后，准备记录仍可被合法凭证认领，且共享目录读取仍有效。
