@@ -67,10 +67,10 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
   },
   {
     id: 'SYS-AGENTINPUT-001', owner: 'electron/ipc + electron/sessionStorage + electron/turnRuntime', stage: 'final-check', category: 'integrity',
-    rationale: 'Queue provenance is host-owned: renderer intents cannot supply source scope, and a Turn carrying agent-session input must match its persisted source, approved execution material, target generation, and committed input-history anchor before any model source runs. Global admission is reserved before claim and released capacity wakes queued desktop agent-session inputs.',
-    effect: 'validate', scope: 'electron/ipc/agentProtocolIpc.ts:chat:prepare-turn;electron/database/operations.ts:verifyAgentSessionAdmission;electron/turnRuntime.ts:assertPersistedInputAdmission;electron/claudeStreamHandlers.ts:loadAuthoritativeTurnContext;electron/runtime/callAdmissionGate.ts:release',
+    rationale: 'Queue provenance is host-owned: renderer intents cannot supply source scope, and a Turn carrying agent-session input must match its persisted source, approved execution material, target generation, and committed input-history anchor before any model source runs. Global admission is reserved before claim and released capacity/startup wake only queued desktop agent-session inputs.',
+    effect: 'validate', scope: 'electron/ipc/agentProtocolIpc.ts:chat:prepare-turn;electron/database/operations.ts:verifyAgentSessionAdmission;electron/turnRuntime.ts:assertPersistedInputAdmission;electron/claudeStreamHandlers.ts:loadAuthoritativeTurnContext;electron/runtime/callAdmissionGate.ts:release;electron/outbound/desktopAgentSessionWake.ts:wakeQueuedAgentSessions',
     audit: 'Renderer provenance injection fails with UNTRUSTED_QUEUE_INPUT_METADATA; invalid persisted material cancels the exact Turn with AGENT_INPUT_ADMISSION_INVALID and a stable case ID before ModelSource or executeWithSource callback entry.',
-    tests: ['electron/appIpc.file.test.ts', 'electron/database/agentSessionMessageStore.test.ts', 'electron/turnRuntime.test.ts', 'electron/sessionStorage/sessionStorage.test.ts', 'electron/claudeStreamHandlers.context.test.ts', 'electron/claudeStreamHandlers.callerContract.test.ts', 'electron/runtime/callAdmission.test.ts'],
+    tests: ['electron/appIpc.file.test.ts', 'electron/database/agentSessionMessageStore.test.ts', 'electron/turnRuntime.test.ts', 'electron/sessionStorage/sessionStorage.test.ts', 'electron/claudeStreamHandlers.context.test.ts', 'electron/claudeStreamHandlers.callerContract.test.ts', 'electron/runtime/callAdmission.test.ts', 'electron/outbound/desktopAgentSessionWake.test.ts'],
     overrideability: 'none'
   },
   {

@@ -130,6 +130,7 @@ import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
 import { getDefaultAgentRuntime, setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { createDesktopAgentRuntime } from './runtime/desktopAgentRuntime'
 import { CallAdmissionGate, getCallAdmissionGate, setCallAdmissionGate } from './runtime/callAdmissionGate'
+import { wakeQueuedAgentSessions } from './outbound/desktopAgentSessionWake'
 import { resetActiveAdmissionOnStartup } from './storage/callAdmissionStore'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { initWeChatCliLogger } from './wechat/weChatCliLogger'
@@ -1456,20 +1457,19 @@ app.whenReady().then(async () => {
   // 顺序纪律(P1-1,评审):先清零 DB 活跃段、再构造门——门构造即 loadAdmissionState,
   // 反序会把上一进程的幻影票据读进内存且永无 release,并发上限被永久蚕食
   resetActiveAdmissionOnStartup(db, Date.now())
+  const wakeAgentSessionQueue = () => wakeQueuedAgentSessions({
+    sessionIds: () => sessionStorage.queries.listSessions({ view: 'all' }).map((session) => session.id),
+    getNextQueued: (sessionId) => sessionStorage.execution.getNextDesktopQueueInput(sessionId),
+    drain: (sessionId) => requestDesktopDrain(sessionId),
+    onError: (_sessionId, error) => console.warn('[session-message] desktop queue wake failed:',
+      error instanceof Error ? error.message : String(error))
+  })
   setCallAdmissionGate(new CallAdmissionGate({ db, onReleased: () => {
-    // facts-only scan: global capacity release may unblock an agent-session queue in any
-    // desktop session. Only request IDs/session IDs are inspected; message bodies and IM lanes stay untouched.
-    for (const session of sessionStorage.queries.listSessions({ view: 'all' })) {
-      try {
-        if (sessionStorage.execution.getNextDesktopQueueInput(session.id)?.source !== 'agent-session') continue
-        void Promise.resolve(requestDesktopDrain(session.id)).catch((error: unknown) => {
-          console.warn('[session-message] admission-release wake failed:', error instanceof Error ? error.message : String(error))
-        })
-      } catch (error) {
-        console.warn('[session-message] admission-release scan failed:', error instanceof Error ? error.message : String(error))
-      }
-    }
+    // facts-only scan: global capacity release wakes persisted agent-session inputs across desktop sessions.
+    wakeAgentSessionQueue()
   } }))
+  // Startup recovery only wakes durable queued work; approval and atomic claim are rechecked by the drainer.
+  wakeAgentSessionQueue()
   // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
   // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
   // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。
