@@ -8,6 +8,7 @@ import { getDbConnection, openDatabase } from '../database'
 import { createRuntimeTriggerHostService } from './hostService'
 import { createRuntimeTriggerDelivery } from './delivery'
 import { createRuntimeTriggerAuthorizationBinding } from './hostAuthorization'
+import { createRuntimeTriggerRecovery } from './recovery'
 
 describe('managed process trigger facts', () => {
   it('tracks opaque IDs and emits one settled exit with code, signal and bounded output reference', () => {
@@ -134,7 +135,20 @@ describe('managed process trigger facts', () => {
         enqueue: (request) => afterCrashCommands.scopedQueue.enqueue(request),
         readReceipt: (request) => afterCrashCommands.scopedQueue.readReceipt(request)
       })
-      expect(afterCrashDelivery(registered.trigger.triggerId)).toMatchObject({ kind: 'enqueued', messageId: durableReceipt!.queuedMessageId })
+      const recoveryDelivery = vi.fn(afterCrashDelivery)
+      const recovery = createRuntimeTriggerRecovery({
+        listWaiting: () => [], listMatched: () => afterCrashCommands.runtimeTriggers.listByState('matched', 100),
+        read: (id) => afterCrashCommands.runtimeTriggers.read(id), evaluateWaiting: () => ({ kind: 'none' }),
+        match: vi.fn(), expire: vi.fn(), fail: (id, revision, code, caseId) => afterCrashCommands.runtimeTriggers.update(id, revision,
+          { state: 'failed', result: { code, case: caseId }, updatedAt: Date.now() }),
+        deliver: recoveryDelivery, update: (id, revision, patch) => afterCrashCommands.runtimeTriggers.update(id, revision, patch),
+        readReceipt: (trigger) => afterCrashCommands.scopedQueue.readReceipt({ sessionId: receiver,
+          requestId: `runtime-trigger:${trigger.id}`, queueScope: scopeForReceiver }),
+        isSessionBusy: () => false, startReceiver: () => 'busy', readTurnTerminal: () => ({ kind: 'active' })
+      })
+      await recovery.scan()
+      expect(recoveryDelivery).not.toHaveBeenCalled()
+      expect(afterCrashCommands.runtimeTriggers.read(registered.trigger.triggerId)?.messageId).toBe(durableReceipt!.queuedMessageId)
       expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM queue_input_requests WHERE request_id=?').get(requestId))
         .toEqual({ count: 1 })
       const matched = afterCrashCommands.runtimeTriggers.read(registered.trigger.triggerId)!
