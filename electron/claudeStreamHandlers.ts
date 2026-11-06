@@ -595,6 +595,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         )
         const needsToolWorkDir = builtinCandidates.length > 0 || mayBuildMcpToolSnapshot(listProfiles(db))
         const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId, requestId, turnId) : ''
+        const pinnedAgentSessionWorkDir = authoritative.inputAdmission.kind === 'admitted' && sessionWorkDir ? sessionWorkDir : undefined
         const currentApprovalTaskMessage = authoritative.messages.find((message) =>
           message.id === authoritative.currentUserMessageId && message.role === 'user')
         const approvalTaskEvidence = buildApprovalTaskEvidence(currentApprovalTaskMessage?.content ?? '')
@@ -666,6 +667,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           ...(approvalReviewScopeEvidenceComplete ? { approvalReviewScopeEvidenceComplete: true } : {}),
           ...(approvalConversationContext ? { approvalConversationContext } : {}),
           workDir: sessionWorkDir,
+          ...(pinnedAgentSessionWorkDir ? { pinnedWorkDir: pinnedAgentSessionWorkDir } : {}),
           ...(deps.getWorkDirManager ? { workDirManager: deps.getWorkDirManager() } : {}),
           userDataDir,
           getApiKey,

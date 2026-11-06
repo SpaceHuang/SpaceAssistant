@@ -25,6 +25,7 @@ import { createSession, getUsageStepFactsForTurn as readUsageStepFactsForTurn, u
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '../browser/browserSessionTrust'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { createWorkDirManager } from '../workDirManager'
 import { createImOrchestrationToolRegistry } from '../remote/imOrchestrationTools'
 import { ImChannel } from '../confirmation/imChannel'
 import { getToolCache, saveProfiles, saveToolCache } from '../mcp/mcpConfigStore'
@@ -1210,6 +1211,42 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     expect(args.decisionCache).toBeDefined()
     expect(args.shellPrecheck).toBeDefined()
     expect(supplement).toHaveBeenCalledWith({ binding, toolName: 'probe-tool', toolInput: { value: 7 } })
+  })
+
+  it('keeps a cross-session approved workdir pinned across workspace refreshes in one turn', async () => {
+    const db = createMemoryAppDb('cross-session-pinned-workdir')
+    const directoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cross-session-pinned-workdir-'))
+    const workDirA = path.join(directoryRoot, 'A')
+    const workDirB = path.join(directoryRoot, 'B')
+    await fs.mkdir(workDirA)
+    await fs.mkdir(workDirB)
+      const canonicalWorkDirA = await fs.realpath(workDirA)
+    try {
+      const storage = createSqliteSessionStorage(db)
+      let activeWorkDir = workDirA
+      const manager = createWorkDirManager({ db, sessionQueries: storage.queries,
+        getWorkDir: () => activeWorkDir, setWorkDir: (value) => { activeWorkDir = value } })
+      const profile = manager.addProfile({ name: 'Pinned source', path: workDirA }).profile!
+      const session = createSession(db, { name: 'cross-session-pinned-target', workDirProfileId: profile.id })
+      const { agentSdk, ports } = assembleInvocation({ requestId: 'cross-session-pinned-workdir', sessionId: session.id,
+        model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+        workDir: workDirA, pinnedWorkDir: canonicalWorkDirA, workDirManager: manager, appDb: db, sessionStorage: storage,
+        userDataDir: directoryRoot, getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+      expect((ports.workspace.snapshot() as { rootPath: string }).rootPath).toBe(canonicalWorkDirA)
+
+      expect(manager.updateProfile(profile.id, { path: workDirB }).success).toBe(true)
+      expect((ports.workspace.refresh() as { rootPath: string }).rootPath).toBe(canonicalWorkDirA)
+      const binding = { requestId: 'cross-session-pinned-workdir', turnId: 'cross-session-pinned-workdir',
+        invocationId: 'cross-session-pinned-workdir', toolCallId: 'pinned-tool-call', capabilityId: 'probe-tool',
+        inputSnapshotHash: 'input-hash', planDigest: 'plan-digest', factsDigest: 'facts-digest',
+        authorizationVersion: 'authorization-version', phase: 'initial-compat' as const }
+      const gateArgs = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId,
+        toolCallId: binding.toolCallId, toolName: 'probe-tool', input: {} })
+      expect(gateArgs.workDir).toBe(canonicalWorkDirA)
+    } finally {
+      db.close()
+      await fs.rm(directoryRoot, { recursive: true, force: true })
+    }
   })
 
   it('passes the registered action class for a discovered Wiki tool into the security gate', async () => {

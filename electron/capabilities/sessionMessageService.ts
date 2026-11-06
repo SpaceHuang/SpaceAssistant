@@ -11,6 +11,32 @@ export function createSessionMessageService(input: {
   requestDesktopDrain: SessionMessageDrain
   resolveWorkDirProfileId?: (sessionId: string) => string | undefined
 }): SessionMessageCapabilityPort {
+  const prepareExecutionApproval = (request: Parameters<NonNullable<SessionMessageCapabilityPort['prepareExecutionApproval']>>[0]): boolean => {
+    if (request.answerer !== 'user' || !request.receipt?.trim() || request.decision.verdict !== 'require-confirm' ||
+      !request.decision.ruleIds.includes('toolkit-act-ask') || !request.decision.decisionId.trim() ||
+      !request.decision.dependencyFingerprint.trim() || !request.authorizationGeneration.trim() || !request.runtimeGeneration.trim()) return false
+    const settlement = input.storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: request.ownerSessionId, requestId: request.requestId })
+    if (!settlement || settlement.kind !== 'queued' || settlement.targetSessionId !== request.targetSessionId) return false
+    const snapshot = input.storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: request.targetSessionId, requestId: request.requestId })
+    const target = input.storage.queries.readSession(request.targetSessionId)
+    const owner = input.storage.queries.readSession(request.ownerSessionId)
+    const ownerProfileId = owner && (input.resolveWorkDirProfileId ? input.resolveWorkDirProfileId(owner.id) : owner.workDirProfileId ?? 'default')
+    const targetProfileId = target && (input.resolveWorkDirProfileId ? input.resolveWorkDirProfileId(target.id) : target.workDirProfileId ?? 'default')
+    if (!snapshot || snapshot.source.ownerSessionId !== request.ownerSessionId || !owner || owner.ownership !== 'user' || owner.visibility === 'hidden' ||
+      !target || target.ownership !== 'user' || target.visibility === 'hidden' || !ownerProfileId || !targetProfileId || ownerProfileId !== targetProfileId ||
+      snapshot.source.authorizationBinding.workDirProfileId !== targetProfileId) return false
+    const approval: AgentSessionExecutionApproval = {
+      version: 1, originDigest: snapshot.originDigest, decisionTraceRef: request.decision.decisionId,
+      permitRef: request.receipt, ownerSessionId: snapshot.source.ownerSessionId, targetSessionId: request.targetSessionId,
+      targetGeneration: target.generation, workDirProfileId: targetProfileId,
+      requestId: snapshot.source.requestId, messageId: snapshot.source.messageId,
+      queueScope: 'desktop', payloadDigest: snapshot.source.payloadSha256, policyRevision: String(request.decision.policyRevision),
+      authorizationGeneration: request.authorizationGeneration, runtimeGeneration: request.runtimeGeneration, approvedAt: Date.now()
+    }
+    return Boolean(input.storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: request.targetSessionId,
+      requestId: request.requestId, expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: snapshot.approvalDigest ?? null, approval }))
+  }
+
   return {
     async send(request) {
       if (!request.ownerSessionId || !request.requestId || request.requestId.length > 200 || !request.content.trim()) throw new Error('SESSION_MESSAGE_INPUT_INVALID')
@@ -52,6 +78,10 @@ export function createSessionMessageService(input: {
         }
       }
       if (accepted.receipt.state !== 'queued') return { accepted, wake: 'requested' as const }
+      // Persist the initial execution approval before the first drain can attempt recovery
+      // confirmation. This keeps one user confirmation from becoming two prompts.
+      if (request.authorization) prepareExecutionApproval({ ownerSessionId: request.ownerSessionId, requestId: request.requestId,
+        targetSessionId: request.targetSessionId, ...request.authorization })
       try {
         await input.requestDesktopDrain(accepted.source.targetSessionId)
         return { accepted, wake: 'requested' as const }
@@ -69,31 +99,7 @@ export function createSessionMessageService(input: {
       return result
     },
     read: (request) => input.storage.commands.agentSessionMessages.readSettlement(request),
-    prepareExecutionApproval(request) {
-      if (request.answerer !== 'user' || !request.receipt?.trim() || request.decision.verdict !== 'require-confirm' ||
-        !request.decision.ruleIds.includes('toolkit-act-ask') || !request.decision.decisionId.trim() ||
-        !request.decision.dependencyFingerprint.trim() || !request.authorizationGeneration.trim() || !request.runtimeGeneration.trim()) return false
-      const settlement = input.storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: request.ownerSessionId, requestId: request.requestId })
-      if (!settlement || settlement.kind !== 'queued' || settlement.targetSessionId !== request.targetSessionId) return false
-      const snapshot = input.storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: request.targetSessionId, requestId: request.requestId })
-      const target = input.storage.queries.readSession(request.targetSessionId)
-      const owner = input.storage.queries.readSession(request.ownerSessionId)
-      const ownerProfileId = owner && (input.resolveWorkDirProfileId ? input.resolveWorkDirProfileId(owner.id) : owner.workDirProfileId ?? 'default')
-      const targetProfileId = target && (input.resolveWorkDirProfileId ? input.resolveWorkDirProfileId(target.id) : target.workDirProfileId ?? 'default')
-      if (!snapshot || snapshot.source.ownerSessionId !== request.ownerSessionId || !owner || owner.ownership !== 'user' || owner.visibility === 'hidden' ||
-        !target || target.ownership !== 'user' || target.visibility === 'hidden' || !ownerProfileId || !targetProfileId || ownerProfileId !== targetProfileId ||
-        snapshot.source.authorizationBinding.workDirProfileId !== targetProfileId) return false
-      const approval: AgentSessionExecutionApproval = {
-        version: 1, originDigest: snapshot.originDigest, decisionTraceRef: request.decision.decisionId,
-        permitRef: request.receipt, ownerSessionId: snapshot.source.ownerSessionId, targetSessionId: request.targetSessionId,
-        targetGeneration: target.generation, workDirProfileId: targetProfileId,
-        requestId: snapshot.source.requestId, messageId: snapshot.source.messageId,
-        queueScope: 'desktop', payloadDigest: snapshot.source.payloadSha256, policyRevision: String(request.decision.policyRevision),
-        authorizationGeneration: request.authorizationGeneration, runtimeGeneration: request.runtimeGeneration, approvedAt: Date.now()
-      }
-      return Boolean(input.storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: request.targetSessionId,
-        requestId: request.requestId, expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: snapshot.approvalDigest ?? null, approval }))
-    },
+    prepareExecutionApproval,
     async wake(targetSessionId) {
       try {
         await input.requestDesktopDrain(targetSessionId)

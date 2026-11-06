@@ -154,6 +154,8 @@ export interface AgentInvocationMaterials {
   /** Generic remote activity signal; generated answer text remains staged until terminal acceptance. */
   onRemoteTextActivity?: (text: string) => void
   workDir: string
+  /** Immutable target directory approved for an admitted cross-session input. */
+  pinnedWorkDir?: string
   /** Trusted task root set from the immutable automation run snapshot. */
   taskWorkDirs?: readonly string[]
   /** Access permissions copied from the immutable automation run snapshot. */
@@ -237,11 +239,12 @@ function mergeImOrchestrationFixtureRegistry(
 
 /** R1：会话工作目录单一事实源——装配期解析快照，调用边界经 refresh() 跟随绑定变更。 */
 function buildWorkspacePorts(materials: AgentInvocationMaterials, sessionQueries: import('../sessionStorage/public/ports').SessionQueries | undefined): AgentHostPorts['workspace'] {
+  const pinnedWorkDir = materials.pinnedWorkDir
   const tracker = createWorkspaceSnapshotTracker({
-    sessionQueries,
+    sessionQueries: pinnedWorkDir ? undefined : sessionQueries,
     sessionId: materials.sessionId,
-    workDirManager: materials.workDirManager as import('../workDirManager').WorkDirManager | undefined,
-    fallbackWorkDir: () => materials.resolveWorkDir?.() ?? materials.workDir,
+    workDirManager: pinnedWorkDir ? undefined : materials.workDirManager as import('../workDirManager').WorkDirManager | undefined,
+    fallbackWorkDir: () => pinnedWorkDir ?? materials.resolveWorkDir?.() ?? materials.workDir,
     onRebound: (e) => {
       getSecurityAuditLog().record({
         ts: Date.now(),
@@ -259,7 +262,7 @@ function buildWorkspacePorts(materials: AgentInvocationMaterials, sessionQueries
     snapshot: () => tracker.snapshot(),
     refresh: () => tracker.refresh(),
     ...(materials.workDirManager !== undefined ? { workDirManager: materials.workDirManager } : {}),
-    ...(materials.resolveWorkDir !== undefined ? { resolveWorkDir: materials.resolveWorkDir } : {}),
+    ...(pinnedWorkDir ? { resolveWorkDir: () => pinnedWorkDir } : materials.resolveWorkDir !== undefined ? { resolveWorkDir: materials.resolveWorkDir } : {}),
     userDataDir: materials.userDataDir
   }
 }
@@ -838,7 +841,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       invocationId: binding.invocationId,
       toolUseId: binding.toolCallId,
       sessionId: materials.sessionId,
-      workDir: resolveToolCallWorkDir(call, materials.resolveWorkDir?.() ?? materials.workDir),
+      workDir: resolveToolCallWorkDir(call, materials.pinnedWorkDir ?? materials.resolveWorkDir?.() ?? materials.workDir),
       ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
       ...(materials.taskAccessPermissions !== undefined ? { taskAccessPermissions: materials.taskAccessPermissions } : {}),
       ...(materials.taskOutputBindings ? { taskOutputBindings: materials.taskOutputBindings } : {}),
@@ -999,7 +1002,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const turnId = runtimeTurnId
       const fileStateCache = new FileStateCache()
       const createExecutionContext = input.createExecutionContext ?? ((call) => ({
-        workDir: resolveToolCallWorkDir(call, (workspacePorts.snapshot() as { rootPath?: string }).rootPath || materials.resolveWorkDir?.() || materials.workDir),
+        workDir: resolveToolCallWorkDir(call, (workspacePorts.snapshot() as { rootPath?: string }).rootPath || materials.pinnedWorkDir || materials.resolveWorkDir?.() || materials.workDir),
         userDataDir: materials.userDataDir,
         requestId: materials.requestId,
         toolUseId: call.toolCallId,
@@ -1061,7 +1064,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const refreshExecutionContext = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: { confirmation?: { receipt: string } }, current: Record<string, unknown>) => {
         const requestMetadata = (stage as { requestMetadata?: Record<string, unknown> }).requestMetadata
         const currentWorkspace = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
-        const currentWorkDir = path.resolve(currentWorkspace.rootPath ?? materials.resolveWorkDir?.() ?? materials.workDir)
+        const currentWorkDir = path.resolve(currentWorkspace.rootPath ?? materials.pinnedWorkDir ?? materials.resolveWorkDir?.() ?? materials.workDir)
         const sourceWorkspace = requestMetadata?.workspaceBinding as { workDir?: unknown; profileId?: unknown; key?: unknown; revision?: unknown } | undefined
         const sourceWorkDir = typeof sourceWorkspace?.workDir === 'string' && sourceWorkspace.workDir.length > 0
           ? path.resolve(sourceWorkspace.workDir)
@@ -1107,7 +1110,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         currentAuthorizationVersion: () => resolveCurrentAuthorization().authorizationVersion,
         resolveRegisteredToolName: input.resolveRegisteredToolName ?? resolveAgentSdkToolName,
         workspaceRoot: materials.workDir,
-        resolveWorkspaceRoot: materials.resolveWorkDir ?? (() => materials.workDir),
+            resolveWorkspaceRoot: materials.pinnedWorkDir ? () => materials.pinnedWorkDir ?? materials.workDir : materials.resolveWorkDir ?? (() => materials.workDir),
         toolRevocations: {
           getRegisteredTool: (name) => runtime.builtinRegistry.get(name),
           isToolRevoked: runtime.toolRevocations.isToolRevoked.bind(runtime.toolRevocations),
@@ -1139,15 +1142,15 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             ...(materials.historyForSession ? { historyForSession: materials.historyForSession } : {}),
             policyRuleFloor: resolveCurrentAuthorization().effectiveRules,
             resolvePolicyRuleFloor: () => resolveCurrentAuthorization().effectiveRules,
-            workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+            workDir: materials.pinnedWorkDir ?? materials.resolveWorkDir?.() ?? materials.workDir,
             ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
             ...(materials.taskAccessPermissions !== undefined ? { taskAccessPermissions: materials.taskAccessPermissions } : {}),
             userDataDir: materials.userDataDir,
             getToolsConfig: () => materials.toolsConfig,
             ...(materials.shellConfig !== undefined ? { getShellConfig: () => materials.shellConfig ?? null } : {}),
             ...((materials.resolveBrowserConfig || materials.browserConfig) ? { getBrowserConfig: () => materials.resolveBrowserConfig?.() ?? materials.browserConfig! } : {}),
-            getWorkDir: () => materials.resolveWorkDir?.() ?? materials.workDir,
-            resolveWorkDirForSession: () => materials.resolveWorkDir?.() ?? materials.workDir,
+            getWorkDir: () => materials.pinnedWorkDir ?? materials.resolveWorkDir?.() ?? materials.workDir,
+            resolveWorkDirForSession: () => materials.pinnedWorkDir ?? materials.resolveWorkDir?.() ?? materials.workDir,
             maxAuthorization: materialsLane === 'automation' ? 'low' : 'high',
             model: materials.model,
             ...(materials.baseUrl ? { baseUrl: materials.baseUrl } : {}),
@@ -1275,7 +1278,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         })
         try {
           const confirmDiff = await buildConfirmationDiff(
-            materials.resolveWorkDir?.() ?? materials.workDir,
+            materials.pinnedWorkDir ?? materials.resolveWorkDir?.() ?? materials.workDir,
             call.toolName,
             call.input
           )
@@ -1469,7 +1472,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(materials.sessionEventLocation ? { sessionLedgerForToolResult: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, execution: { output: unknown; auditOutput?: unknown; isError?: boolean; auditRef?: string; executionOutcome?: string; executorEntry?: string; errorCode?: string; invocationDisposition?: string }) => {
           const isError = execution.isError ?? false
           const result = projectCanonicalToolResultForSessionLedger({
-            rawResult: execution.auditOutput ?? execution.output, isError, toolName: call.toolName, workspaceRoot: materials.resolveWorkDir?.() ?? materials.workDir,
+            rawResult: execution.auditOutput ?? execution.output, isError, toolName: call.toolName, workspaceRoot: materials.pinnedWorkDir ?? materials.resolveWorkDir?.() ?? materials.workDir,
             ...(execution.auditRef ? { auditRef: execution.auditRef } : {}),
             ...(execution.executionOutcome ? { executionOutcome: execution.executionOutcome as import('../../src/shared/domainTypes').ToolCallResultPersisted['executionOutcome'] } : {}),
             ...(execution.executorEntry ? { executorEntry: execution.executorEntry as import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry'] } : {}),
@@ -1609,7 +1612,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           try {
             if (stage.kind === 'recheck') {
               const currentWorkspace = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
-              const currentWorkDir = path.resolve(currentWorkspace.rootPath ?? materials.resolveWorkDir?.() ?? materials.workDir)
+              const currentWorkDir = path.resolve(currentWorkspace.rootPath ?? materials.pinnedWorkDir ?? materials.resolveWorkDir?.() ?? materials.workDir)
               const sourceWorkspace = stage.requestMetadata?.workspaceBinding as { workDir?: unknown; profileId?: unknown; key?: unknown; revision?: unknown } | undefined
               const sourceWorkDir = typeof sourceWorkspace?.workDir === 'string' && sourceWorkspace.workDir.length > 0
                 ? path.resolve(sourceWorkspace.workDir)
@@ -1828,7 +1831,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       contextCompactionTriggerRatio: materials.contextCompactionTriggerRatio,
       getWorkDirSnapshot: () => {
         const snapshot = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
-        return { workDir: snapshot.rootPath ?? materials.workDir, profileId: snapshot.profileId ?? '', key: snapshot.key ?? '', revision: snapshot.revision ?? 0 }
+        return { workDir: materials.pinnedWorkDir ?? snapshot.rootPath ?? materials.workDir, profileId: snapshot.profileId ?? '', key: snapshot.key ?? '', revision: snapshot.revision ?? 0 }
       },
       windowId: materials.windowId,
       ...(materials.sessionEventLocation ? { sessionEventLocation: materials.sessionEventLocation } : {}),
@@ -1893,7 +1896,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           ...(typeof record?.executorEntry === 'string' ? { executorEntry: record.executorEntry as import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry'] } : {}),
           ...(typeof record?.executionErrorCode === 'string' ? { executionErrorCode: record.executionErrorCode } : {}),
           ...(typeof record?.invocationDisposition === 'string' ? { invocationDisposition: record.invocationDisposition as import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition'] } : {})
-        }, { workspaceRoot: materials.workDir, ...(materials.taskWorkDirs !== undefined ? { workspaceRoots: materials.taskWorkDirs } : {}), processTool: isProcessToolName(call.toolName) })
+        }, { workspaceRoot: materials.pinnedWorkDir ?? materials.workDir, ...(materials.taskWorkDirs !== undefined ? { workspaceRoots: materials.taskWorkDirs } : {}), processTool: isProcessToolName(call.toolName) })
         if (projected.success && projected.autoApprovedWrite) {
           logAgentEvent('info', 'file.auto_approve', { requestId: materials.requestId, sessionId: materials.sessionId,
             toolUseId: call.toolCallId, tool: call.toolName, relPath: projected.autoApprovedWrite.path,

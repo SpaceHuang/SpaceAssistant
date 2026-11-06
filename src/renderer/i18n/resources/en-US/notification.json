@@ -14,5 +14,11 @@
   "approvalFallbackReasonUnavailable": "Service unavailable",
   "approvalFallbackReasonTimeout": "Timed out",
   "desktopButlerTitle": "SpaceAssistant Butler",
+  "sessionMessageConfirmTitle": "Confirm cross-session message execution",
+  "sessionMessageConfirmMessage": "Session “{{session}}” received a cross-session message that needs approval before execution.",
+  "sessionMessageConfirmDetail": "Policy rule: {{ruleId}}\n\nMessage content:\n{{content}}",
+  "sessionMessageConfirmApprove": "Approve once",
+  "sessionMessageConfirmReject": "Reject message",
+  "sessionMessageConfirmDefer": "Not now",
   "approvalFallbackReasonUndetermined": "Approval agent could not decide; user confirmation required"
 }

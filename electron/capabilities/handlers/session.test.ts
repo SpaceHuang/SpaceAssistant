@@ -227,7 +227,7 @@ describe('action.session.message', () => {
       }
 
     expect(refreshed).toMatchObject({ accepted: { duplicate: true }, wake: 'requested' })
-    expect(observedApprovalTraces).toEqual([undefined, 'old-decision', 'old-decision', 'new-decision'])
+    expect(observedApprovalTraces).toEqual(['old-decision', 'new-decision'])
     const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target, requestId: `${owner}:reauthorization-handoff` })
     expect(snapshot?.approval).toMatchObject({ decisionTraceRef: 'new-decision', permitRef: 'new-receipt', policyRevision: '8' })
     expect(snapshot?.source.authorizationBinding).toMatchObject({ decisionTraceRef: 'old-decision', permitRef: 'old-receipt', policyRevision: '7' })

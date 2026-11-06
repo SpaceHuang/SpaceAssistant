@@ -98,14 +98,14 @@ export function createRuntimeTriggerRecovery(input: {
     let receipt = input.readReceipt(trigger)
     if (receipt?.queuedMessageId) {
       if (trigger.messageId && trigger.messageId !== receipt.queuedMessageId) {
-        input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', 'delivery-receipt-mismatch')
+        failDelivery(trigger, 'delivery-receipt-mismatch')
         return
       }
       if (!trigger.messageId) {
         const current = input.read(trigger.id)
         if (!current || current.state !== 'matched') return
         if (current.messageId && current.messageId !== receipt.queuedMessageId) {
-          input.fail(current.id, current.revision, 'TRIGGER_DELIVERY_FAILED', 'delivery-receipt-mismatch')
+          failDelivery(current, 'delivery-receipt-mismatch')
           return
         }
         if (!current.messageId && !input.update(current.id, current.revision, { messageId: receipt.queuedMessageId, updatedAt: now() })) return
@@ -116,7 +116,7 @@ export function createRuntimeTriggerRecovery(input: {
       }
     } else {
       if (trigger.messageId) {
-        input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', 'delivery-receipt-missing')
+        failDelivery(trigger, 'delivery-receipt-missing')
         return
       }
       const delivered = input.deliver(trigger.id)
@@ -144,7 +144,7 @@ export function createRuntimeTriggerRecovery(input: {
     if (start === 'busy') return
     if (start === 'unavailable') {
       const current = input.read(trigger.id)
-      if (current?.state === 'matched') input.fail(current.id, current.revision, 'TRIGGER_DELIVERY_FAILED', 'receiver-unavailable')
+      if (current?.state === 'matched') failDelivery(current, 'receiver-unavailable')
       return
     }
     const current = input.read(trigger.id)

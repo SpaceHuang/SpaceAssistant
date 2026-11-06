@@ -810,11 +810,11 @@ app.whenReady().then(async () => {
     resolveWorkDirSnapshot: (sessionId) => workDirAuthorizationSnapshot(resolveSessionWorkDir(sessionId)),
     evaluateCurrentPolicy: ({ sessionId }) => evaluateAgentSessionExecutionPolicy({ sessionId,
       rules: resolveEffectivePolicyRulesWithOrigin(db, 'desktop').rules, config: readToolsConfig(db) }),
-    requestUserConfirmation: async ({ sessionId, requestId, messageId, ruleId, decisionTraceRef, source }) => {
+    requestUserConfirmation: async ({ sessionId, requestId, messageId, ruleId, decisionTraceRef }) => {
       const target = sessionStorage.queries.readSession(sessionId)
-      const message = sessionStorage.queries.readMessage({ sessionId, messageId })
-      if (!target || target.ownership !== 'user' || target.visibility === 'hidden' || !message || typeof message.content !== 'string' ||
-        createHash('sha256').update(message.content, 'utf8').digest('hex') !== source.payloadSha256) return 'waiting'
+      const messageContent = sessionStorage.queries.readAgentSessionMessageContent({ sessionId, messageId })
+      if (!target || target.ownership !== 'user' || target.visibility === 'hidden' || messageContent === undefined) return 'waiting'
+      const translate = createHostTranslator({ locale: readAppLocale(db) })
       const audit = getSecurityAuditLog()
       const auditBase = { lane: 'desktop' as const, sessionId, requestId, toolUseId: messageId, toolName: 'toolkit.call',
         actionClass: 'execute' as const, riskLevel: 'medium' as const, factsSummary: '跨会话来信执行权限重审',
@@ -825,15 +825,18 @@ app.whenReady().then(async () => {
       let result: 'approved' | 'rejected' | 'waiting' = 'waiting'
       try {
         const parent = getMainWindow()
+        const options = {
+          type: 'warning' as const,
+          title: translate({ key: 'notification.sessionMessageConfirmTitle' }),
+          message: translate({ key: 'notification.sessionMessageConfirmMessage', params: { session: target.name } }),
+          detail: translate({ key: 'notification.sessionMessageConfirmDetail', params: { ruleId, content: messageContent } }),
+          buttons: [translate({ key: 'notification.sessionMessageConfirmApprove' }), translate({ key: 'notification.sessionMessageConfirmReject' }),
+            translate({ key: 'notification.sessionMessageConfirmDefer' })],
+          defaultId: 2, cancelId: 2, noLink: true
+        }
         const response = await (parent
-          ? dialog.showMessageBox(parent, { type: 'warning', title: '确认执行跨会话来信',
-              message: `会话“${target.name}”收到一条需要确认后才能执行的跨会话来信。`,
-              detail: `策略规则：${ruleId}\n\n来信内容：\n${message.content}`,
-              buttons: ['批准执行一次', '拒绝此来信', '暂不处理'], defaultId: 2, cancelId: 2, noLink: true })
-          : dialog.showMessageBox({ type: 'warning', title: '确认执行跨会话来信',
-              message: `会话“${target.name}”收到一条需要确认后才能执行的跨会话来信。`,
-              detail: `策略规则：${ruleId}\n\n来信内容：\n${message.content}`,
-              buttons: ['批准执行一次', '拒绝此来信', '暂不处理'], defaultId: 2, cancelId: 2, noLink: true }))
+          ? dialog.showMessageBox(parent, options)
+          : dialog.showMessageBox(options))
         result = response.response === 0 ? 'approved' : response.response === 1 ? 'rejected' : 'waiting'
       } catch { result = 'waiting' }
       audit.record({ ...auditBase, ts: Date.now(), event: 'confirm.outcome', actor: result === 'waiting' ? 'system' : 'user',

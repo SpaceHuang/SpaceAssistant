@@ -110,6 +110,11 @@ function parseAgentEnvelope(content: string, source: AgentSessionInputSource): s
   }
 }
 
+/** Return the original body only after validating its canonical envelope and source digest. */
+export function decodeAgentSessionMessageEnvelope(content: string, source: AgentSessionInputSource): string | undefined {
+  return parseAgentEnvelope(content, source)
+}
+
 export type QueueInputIdentity = Readonly<{
   sessionId: string
   queueScope: QueueScope

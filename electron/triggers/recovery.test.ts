@@ -84,6 +84,49 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
     } finally { db.close() }
   })
 
+  it.each([
+    { name: 'receiver-unavailable', messageId: undefined, receipt: { queuedMessageId: 'delivered-notice', state: 'queued' } },
+    { name: 'notification-receipt-missing', messageId: 'missing-notice', receipt: undefined },
+    { name: 'notification-receipt-mismatch', messageId: 'expected-notice', receipt: { queuedMessageId: 'other-notice', state: 'queued' } }
+  ])('preserves source-gap when delivery terminates with $name', async ({ name, messageId, receipt }) => {
+    const db = createMemoryAppDb()
+    try {
+      const commands = createSessionCommands(db)
+      const owner = createSession(db, { name: `source-gap-${name}-owner` }).id
+      const timestamp = Date.now()
+      const service = createRuntimeTriggerService(commands, { now: () => timestamp, authorize: () => true, authorizeTarget: () => true })
+      const registered = await service.register({ ownerSessionId: owner, params: { clientKey: `source-gap-${name}`,
+        receiverSessionId: owner, expiresAt: timestamp + 60_000,
+        condition: { type: 'time', at: new Date(timestamp).toISOString(), taskPrompt: 'notify owner' } } })
+      const triggerId = registered.trigger.triggerId
+      const event = { type: 'agent_session_message' as const, requestId: 'missing-source', occurredAt: timestamp,
+        status: 'source-gap' as const, case: 'agent-message-settlement-missing' }
+      const recovery = createRuntimeTriggerRecovery({
+        listWaiting: () => commands.runtimeTriggers.listByState('waiting', 20),
+        listMatched: (after) => commands.runtimeTriggers.listByState('matched', 20, after),
+        read: (id) => commands.runtimeTriggers.read(id), evaluateWaiting: () => ({ kind: 'none' }), match: vi.fn(),
+        expire: vi.fn(), fail: (id, revision, code, caseId) => commands.runtimeTriggers.update(id, revision,
+          { state: 'failed', result: { code, case: caseId }, updatedAt: timestamp }),
+        deliver: () => ({ kind: 'delivered', messageId: 'delivered-notice' }) as never,
+        update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch), readReceipt: () => receipt,
+        isSessionBusy: () => false, startReceiver: () => 'unavailable',
+        readTurnTerminal: () => ({ kind: 'active' }), now: () => timestamp
+      })
+
+      expect(commands.runtimeTriggers.update(triggerId, registered.trigger.revision, { state: 'matched', matchedAt: timestamp,
+        ...(messageId ? { messageId } : {}), event, result: { code: 'TRIGGER_SOURCE_GAP', case: 'agent-message-settlement-missing' },
+        updatedAt: timestamp })).not.toBeNull()
+
+      await recovery.scan()
+      expect(service.get({ ownerSessionId: owner, triggerId }).trigger).toMatchObject({ state: 'failed', failure: {
+        code: 'TRIGGER_SOURCE_GAP', case: 'agent-message-settlement-missing'
+      } })
+      expect(commands.runtimeTriggers.read(triggerId)?.result).toMatchObject({ code: 'TRIGGER_SOURCE_GAP',
+        case: 'agent-message-settlement-missing', notificationFailure: { code: 'TRIGGER_DELIVERY_FAILED',
+          case: name === 'receiver-unavailable' ? 'receiver-unavailable' : name === 'notification-receipt-missing' ? 'delivery-receipt-missing' : 'delivery-receipt-mismatch' } })
+    } finally { db.close() }
+  })
+
   it.each([true, false] as const)('reconciles a target-unavailable result when target deletion is before registration=%s and delivers one owner marker', async (registerBeforeDelete) => {
     const db = createMemoryAppDb()
     try {

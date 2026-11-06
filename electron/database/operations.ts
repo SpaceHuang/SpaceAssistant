@@ -34,7 +34,7 @@ import { parseQueueScope, serializeQueueScope, type QueueScope } from '../../src
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
 import { deleteSpillReferenceOwnerInTransaction, spillHistoryOwnerKey, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
-import { agentSessionExecutionApprovalDigest, agentSessionInputEventDigest, agentSessionOriginDigest, classifyQueueInputSource, decodeAgentSessionExecutionApproval, decodeAgentSessionInputSource, encodeAgentSessionMessageEnvelope, type QueueInputSource } from './queueInputSource'
+import { agentSessionExecutionApprovalDigest, agentSessionInputEventDigest, agentSessionOriginDigest, classifyQueueInputSource, decodeAgentSessionExecutionApproval, decodeAgentSessionInputSource, decodeAgentSessionMessageEnvelope, encodeAgentSessionMessageEnvelope, type QueueInputSource } from './queueInputSource'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
@@ -2110,6 +2110,19 @@ export function readAgentSessionMessageSource(db: AppDatabase, input: { sessionI
     WHERE session_id=? AND request_id=? AND queue_scope='desktop' AND queued_message_id=?`).get(input.sessionId, row[0]!.request_id, input.messageId) as { source_json?: string } | undefined
   const decoded = decodeAgentSessionInputSource(source?.source_json ?? null)
   return decoded ? { kind: 'agent-session', ownerSessionId: decoded.ownerSessionId, requestId: decoded.requestId } : undefined
+}
+
+/** Read the original untrusted body only when its stored source/envelope/digest still agree. */
+export function readAgentSessionMessageContent(db: AppDatabase, input: { sessionId: string; messageId: string }): string | undefined {
+  const rows = getDbConnection(db).prepare(`SELECT request_id,source_json FROM queue_input_requests
+    WHERE session_id=? AND queued_message_id=? AND queue_scope='desktop' LIMIT 2`).all(input.sessionId, input.messageId) as
+      Array<{ request_id: string; source_json: string | null }>
+  if (rows.length !== 1 || classifyQueueInputSource(db, { sessionId: input.sessionId, queueScope: DESKTOP_QUEUE_SCOPE,
+    requestId: rows[0]!.request_id, queuedMessageId: input.messageId }) !== 'agent-session') return undefined
+  const source = decodeAgentSessionInputSource(rows[0]!.source_json)
+  const message = getMessage(db, input.messageId)
+  if (!source || source.targetSessionId !== input.sessionId || source.messageId !== input.messageId || !message || message.sessionId !== input.sessionId) return undefined
+  return decodeAgentSessionMessageEnvelope(message.content, source)
 }
 
 export function verifyAgentSessionAdmission(db: AppDatabase, input: { sessionId: string; turnId: string; requestId: string; userMessageId?: string }):

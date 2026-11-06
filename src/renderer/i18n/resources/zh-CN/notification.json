@@ -14,5 +14,11 @@
   "approvalFallbackReasonUnavailable": "服务暂不可用",
   "approvalFallbackReasonTimeout": "等待超时",
   "desktopButlerTitle": "SpaceAssistant 管家",
+  "sessionMessageConfirmTitle": "确认执行跨会话来信",
+  "sessionMessageConfirmMessage": "会话“{{session}}”收到一条需要确认后才能执行的跨会话来信。",
+  "sessionMessageConfirmDetail": "策略规则：{{ruleId}}\n\n来信内容：\n{{content}}",
+  "sessionMessageConfirmApprove": "批准执行一次",
+  "sessionMessageConfirmReject": "拒绝此来信",
+  "sessionMessageConfirmDefer": "暂不处理",
   "approvalFallbackReasonUndetermined": "审批无法判定，需人工确认"
 }

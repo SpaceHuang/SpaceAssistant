@@ -159,6 +159,8 @@ export interface SessionQueries {
   listSessions(options?: { view?: 'all' | 'user-visible'; workDirProfileId?: string }): Session[]
   readMessage(ref: MessageRef): Message | undefined
   readAgentSessionMessageSource(ref: MessageRef): AgentSessionMessageSourceSummary | undefined
+  /** Original body only when the persisted agent-session envelope and source digest validate. */
+  readAgentSessionMessageContent(ref: MessageRef): string | undefined
   verifyAgentSessionAdmission(input: { sessionId: string; turnId: string; requestId: string; userMessageId?: string }): PersistedInputAdmissionVerdict
   /** Read control metadata without materializing message content. */
   readMessageSkeleton(ref: MessageRef): MessageSkeleton | undefined

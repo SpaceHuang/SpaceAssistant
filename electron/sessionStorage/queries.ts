@@ -14,6 +14,7 @@ import {
   readAgentSessionMessageSource,
   verifyAgentSessionAdmission,
   getMessage,
+  readAgentSessionMessageContent,
   getMessageSkeleton,
   getLatestMessageSkeleton,
   getChatMessagePage,
@@ -192,6 +193,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       return message?.sessionId === sessionId ? message : undefined
     },
     readAgentSessionMessageSource: ({ sessionId, messageId }) => readAgentSessionMessageSource(db, { sessionId, messageId }),
+    readAgentSessionMessageContent: ({ sessionId, messageId }) => readAgentSessionMessageContent(db, { sessionId, messageId }),
     verifyAgentSessionAdmission: (input) => verifyAgentSessionAdmission(db, input),
     readMessageSkeleton: ({ sessionId, messageId }: MessageRef): MessageSkeleton | undefined => {
       const skeleton = getMessageSkeleton(db, messageId)
