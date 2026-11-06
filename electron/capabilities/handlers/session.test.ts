@@ -14,6 +14,7 @@ import {
 import type { CapabilityContext } from '../types'
 import { createSqliteSessionStorage } from '../../sessionStorage/sqliteSessionStorage'
 import { createSessionMessageService } from '../sessionMessageService'
+import { createOutboundDrainer } from '../../outbound/outboundAcceptor'
 import { CapabilityRegistry } from '../registry'
 import { createToolkitFindExecutor } from '../toolkitTool'
 
@@ -314,6 +315,67 @@ describe('action.session.message', () => {
     expect(result.wake).toBe('retry-pending')
     expect(createSqliteSessionStorage(db).commands.agentSessionMessages.readSettlement({ ownerSessionId: owner, requestId: `${owner}:wake-key` }))
       .toMatchObject({ kind: 'queued', targetSessionId: target, messageId: result.accepted.receipt.queuedMessageId })
+  })
+
+  it('returns a new acceptance receipt while the existing queue head is waiting for confirmation', async () => {
+    const owner = await seedSession('blocked queue owner')
+    const target = await seedSession('blocked queue target')
+    const storage = createSqliteSessionStorage(db)
+    storage.commands.agentSessionMessages.accept({ ownerSessionId: owner, targetSessionId: target,
+      requestId: `${owner}:old-head`, content: 'old queue head', authorizationBinding: {} })
+    let releaseStart!: (result: 'waiting') => void
+    const heldStart = new Promise<'waiting'>((resolve) => { releaseStart = resolve })
+    const drainer = createOutboundDrainer({
+      submitOutbound: vi.fn(async () => ({ accepted: 'turn-started' as const })),
+      listActiveCount: () => 0,
+      getNextQueued: (sessionId) => storage.execution.getNextDesktopQueueInput(sessionId),
+      startAgentSession: () => heldStart,
+      consumeQueued: vi.fn(), audit: vi.fn()
+    })
+    const service = createSessionMessageService({ storage, requestDesktopDrain: (sessionId) => drainer.drain(sessionId) })
+    const sending = service.send({ ownerSessionId: owner, targetSessionId: target, requestId: `${owner}:new-message`, content: 'new message' })
+    const result = await Promise.race([
+      sending.then((value) => ({ kind: 'accepted' as const, value })),
+      new Promise<{ kind: 'blocked' }>((resolve) => setTimeout(() => resolve({ kind: 'blocked' }), 20))
+    ])
+    releaseStart('waiting')
+    await sending
+
+    expect(result.kind).toBe('accepted')
+    if (result.kind === 'accepted') expect(result.value.accepted.receipt.queuedMessageId).toBeTruthy()
+    expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner, requestId: `${owner}:new-message` }))
+      .toMatchObject({ kind: 'queued', targetSessionId: target })
+  })
+
+  it('returns the durable acceptance and schedules recovery when initial approval persistence fails', async () => {
+    const owner = await seedSession('approval write failure owner')
+    const target = await seedSession('approval write failure target')
+    const storage = createSqliteSessionStorage(db)
+    getDbConnection(db).exec(`CREATE TRIGGER reject_agent_source_update BEFORE UPDATE OF source_json ON queue_input_requests
+      WHEN OLD.request_id='${owner}:approval-write-failure' BEGIN SELECT RAISE(ABORT, 'injected approval persistence failure'); END`)
+    const drain = vi.fn()
+    const recoveryIssues = vi.fn()
+    const service = createSessionMessageService({ storage, requestDesktopDrain: drain, onRecoveryIssue: recoveryIssues })
+    const send = findCap('action.session.message.send')
+    const authorization = { decision: { decisionId: 'decision-failure', ruleIds: ['toolkit-act-ask'], dependencyFingerprint: 'deps-failure',
+      verdict: 'require-confirm', policyRevision: 9 }, receipt: 'receipt-failure', answerer: 'user' as const,
+      authorizationGeneration: 'auth-failure', runtimeGeneration: 'runtime-failure' }
+    const message = { targetSessionId: target, requestId: 'approval-write-failure', content: 'durable despite approval write failure' }
+
+    const first = await send.handler(message, ctx({ sessionId: owner, lane: 'desktop', sessionMessages: service,
+      sessionMessageAuthorization: authorization })) as { accepted: { duplicate: boolean; receipt: { queuedMessageId: string } }; wake: string }
+    expect(first).toMatchObject({ accepted: { duplicate: false, receipt: { queuedMessageId: expect.any(String) } }, wake: 'retry-pending' })
+    expect(drain).toHaveBeenCalledWith(target)
+    expect(recoveryIssues).toHaveBeenCalledWith({ sessionId: target, requestId: `${owner}:approval-write-failure`, stage: 'approval-persistence' })
+    expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner, requestId: `${owner}:approval-write-failure` }))
+      .toMatchObject({ kind: 'queued', messageId: first.accepted.receipt.queuedMessageId })
+
+    getDbConnection(db).exec('DROP TRIGGER reject_agent_source_update')
+    const retry = await send.handler(message, ctx({ sessionId: owner, lane: 'desktop', sessionMessages: service,
+      sessionMessageAuthorization: authorization })) as { accepted: { duplicate: boolean; receipt: { queuedMessageId: string } } }
+    expect(retry.accepted).toMatchObject({ duplicate: true, receipt: { queuedMessageId: first.accepted.receipt.queuedMessageId } })
+    expect(storage.queries.readMessages({ sessionId: target })).toHaveLength(1)
+    expect(drain).toHaveBeenCalledTimes(2)
   })
 
   it('replays the original acceptance after target deletion without restoring its message', async () => {

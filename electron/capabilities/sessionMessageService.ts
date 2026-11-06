@@ -4,13 +4,28 @@ import { createHash } from 'node:crypto'
 import type { AgentSessionExecutionApproval } from '../../src/shared/domainTypes'
 
 export type SessionMessageDrain = (sessionId: string) => void | Promise<void>
+export type SessionMessageRecoveryIssue = (input: { sessionId: string; requestId: string; stage: 'approval-persistence' | 'drain' }) => void
 
 /** facts phase: resolve a user-visible target and persist an untrusted source; policy/permit remains A02. */
 export function createSessionMessageService(input: {
   storage: Pick<SessionStorage, 'queries' | 'commands'>
   requestDesktopDrain: SessionMessageDrain
+  onRecoveryIssue?: SessionMessageRecoveryIssue
   resolveWorkDirProfileId?: (sessionId: string) => string | undefined
 }): SessionMessageCapabilityPort {
+  const reportRecoveryIssue = (sessionId: string, requestId: string, stage: 'approval-persistence' | 'drain'): void => {
+    try { input.onRecoveryIssue?.({ sessionId, requestId, stage }) } catch { /* logging must not alter the durable receipt */ }
+  }
+  const scheduleDrain = (sessionId: string, requestId: string): 'requested' | 'retry-pending' => {
+    try {
+      void Promise.resolve(input.requestDesktopDrain(sessionId)).catch(() => reportRecoveryIssue(sessionId, requestId, 'drain'))
+      return 'requested'
+    } catch {
+      reportRecoveryIssue(sessionId, requestId, 'drain')
+      return 'retry-pending'
+    }
+  }
+
   const prepareExecutionApproval = (request: Parameters<NonNullable<SessionMessageCapabilityPort['prepareExecutionApproval']>>[0]): boolean => {
     if (request.answerer !== 'user' || !request.receipt?.trim() || request.decision.verdict !== 'require-confirm' ||
       !request.decision.ruleIds.includes('toolkit-act-ask') || !request.decision.decisionId.trim() ||
@@ -80,33 +95,29 @@ export function createSessionMessageService(input: {
       if (accepted.receipt.state !== 'queued') return { accepted, wake: 'requested' as const }
       // Persist the initial execution approval before the first drain can attempt recovery
       // confirmation. This keeps one user confirmation from becoming two prompts.
-      if (request.authorization) prepareExecutionApproval({ ownerSessionId: request.ownerSessionId, requestId: request.requestId,
-        targetSessionId: request.targetSessionId, ...request.authorization })
-      try {
-        await input.requestDesktopDrain(accepted.source.targetSessionId)
-        return { accepted, wake: 'requested' as const }
-      } catch {
-        return { accepted, wake: 'retry-pending' as const }
+      let approvalPending = false
+      if (request.authorization) {
+        try {
+          prepareExecutionApproval({ ownerSessionId: request.ownerSessionId, requestId: request.requestId,
+            targetSessionId: request.targetSessionId, ...request.authorization })
+        } catch {
+          approvalPending = true
+          reportRecoveryIssue(accepted.source.targetSessionId, request.requestId, 'approval-persistence')
+        }
       }
+      const wake = scheduleDrain(accepted.source.targetSessionId, request.requestId)
+      return { accepted, wake: approvalPending ? 'retry-pending' as const : wake }
     },
     revoke(request) {
       const before = input.storage.commands.agentSessionMessages.readSettlement(request)
       const result = input.storage.commands.agentSessionMessages.revoke(request)
       if (result.kind === 'revoked' && before?.kind === 'queued') {
-        try { void Promise.resolve(input.requestDesktopDrain(before.targetSessionId)).catch(() => undefined) }
-        catch { /* revoke remains durable; a later lifecycle wake retries drain */ }
+        scheduleDrain(before.targetSessionId, request.requestId)
       }
       return result
     },
     read: (request) => input.storage.commands.agentSessionMessages.readSettlement(request),
     prepareExecutionApproval,
-    async wake(targetSessionId) {
-      try {
-        await input.requestDesktopDrain(targetSessionId)
-        return 'requested'
-      } catch {
-        return 'retry-pending'
-      }
-    }
+    async wake(targetSessionId) { return scheduleDrain(targetSessionId, 'session-message-wake') }
   }
 }

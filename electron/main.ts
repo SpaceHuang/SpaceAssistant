@@ -804,6 +804,7 @@ app.whenReady().then(async () => {
   }
   const sessionMessages = createSessionMessageService({ storage: sessionStorage,
     requestDesktopDrain: (sessionId) => requestDesktopDrain(sessionId),
+    onRecoveryIssue: ({ sessionId, requestId, stage }) => logAgentEvent('warn', 'session.message.recovery.pending', { sessionId, requestId, stage }),
     resolveWorkDirProfileId: resolveSessionWorkDirProfileId })
   const agentSessionExecutionAuthorization = createAgentSessionExecutionAuthorization({ storage: sessionStorage,
     resolveWorkDirProfileId: resolveSessionWorkDirProfileId,
