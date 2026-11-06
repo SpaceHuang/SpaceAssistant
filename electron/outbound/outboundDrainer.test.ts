@@ -6,6 +6,7 @@ import type { AppDatabase } from '../database'
 import { claimQueuedTurnAtomically, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getMessages, getNextQueuedMessage, getNextDesktopQueueInput } from '../database/operations'
 import { createTempDatabase } from '../database/testHelpers'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { isSessionContextCompactionLocked, onSessionContextCompactionRelease, withSessionContextCompactionLock } from '../sessionCompactionLock'
 
 function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
   const storage = createSqliteSessionStorage(deps.db)
@@ -715,6 +716,82 @@ describe('createOutboundDrainer（排水不变量）', () => {
     expect(submitOutbound).toHaveBeenCalledTimes(1)
     expect(submitOutbound.mock.calls[0]?.[0].contextIntent).toMatchObject({ kind: 'reuse-user', requestId: 'after-agent' })
     expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('after-agent')
+  })
+
+  it('撤回旧队首后把启动失败预算归属旧请求，允许新队首完成第四次启动', async () => {
+    const session = createSession(db, { name: 'retry-budget-head-change' })
+    const owner = createSession(db, { name: 'retry-budget-head-change-owner' })
+    const storage = createSqliteSessionStorage(db)
+    const old = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'retry-old-head', content: 'old head', authorizationBinding: {} })
+    storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'retry-new-head', content: 'new head', authorizationBinding: {} })
+    let releaseOldStart!: () => void
+    const oldStartGate = new Promise<void>((resolve) => { releaseOldStart = resolve })
+    let newHeadAttempts = 0
+    const startAgentSession = vi.fn(async ({ requestId }: { requestId: string }) => {
+      if (requestId === old.receipt.requestId) {
+        await oldStartGate
+        throw new Error('old request startup failed after revoke')
+      }
+      newHeadAttempts += 1
+      if (newHeadAttempts < 4) throw new Error(`new request startup failure ${newHeadAttempts}`)
+      return 'started' as const
+    })
+    const drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined,
+      settleAgentSessionStartFailure: ({ sessionId, requestId }) => storage.commands.agentSessionMessages.markNotExecuted({ sessionId, requestId, reason: 'start-failed' }),
+      audit: vi.fn() })
+
+    const firstDrain = drainer.drain(session.id)
+    await vi.waitFor(() => expect(startAgentSession).toHaveBeenCalledOnce())
+    expect(storage.commands.agentSessionMessages.revoke({ ownerSessionId: owner.id, requestId: old.receipt.requestId }).kind).toBe('revoked')
+    releaseOldStart()
+    await firstDrain
+    for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(startAgentSession.mock.calls.filter(([input]) => input.requestId === 'retry-new-head')).toHaveLength(4)
+    expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId: 'retry-new-head' }))
+      .toMatchObject({ kind: 'queued' })
+  })
+
+  it('在压缩锁持有期间忽略自触发的票据释放唤醒，解锁后只重新尝试一次', async () => {
+    const session = createSession(db, { name: 'compaction-wake-loop' })
+    const owner = createSession(db, { name: 'compaction-wake-loop-owner' })
+    const storage = createSqliteSessionStorage(db)
+    storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'compaction-wake-head', content: 'wait for compaction lock', authorizationBinding: {} })
+    let releaseCompaction!: () => void
+    let announceCompaction!: () => void
+    const compactionStarted = new Promise<void>((resolve) => { announceCompaction = resolve })
+    const compactionGate = new Promise<void>((resolve) => { releaseCompaction = resolve })
+    const compaction = withSessionContextCompactionLock(session.id, async () => {
+      announceCompaction()
+      await compactionGate
+    })
+    await compactionStarted
+    let drainer!: ReturnType<typeof createOutboundDrainer>
+    let ticketReleaseCount = 0
+    const startAgentSession = vi.fn(async () => {
+      if (isSessionContextCompactionLocked(session.id)) {
+        ticketReleaseCount += 1
+        if (ticketReleaseCount <= 7) void drainer.drain(session.id)
+        return 'compaction-busy' as const
+      }
+      return 'started' as const
+    })
+    drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined, audit: vi.fn(),
+      onCompactionRelease: (sessionId, callback) => onSessionContextCompactionRelease(sessionId, callback) })
+
+    await drainer.drain(session.id)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(startAgentSession).toHaveBeenCalledTimes(1)
+    expect(ticketReleaseCount).toBe(1)
+
+    releaseCompaction()
+    await compaction
+    await vi.waitFor(() => expect(startAgentSession).toHaveBeenCalledTimes(2))
   })
 
   it('停泊返回时消费排水期间收到的撤回唤醒并驱动新队首', async () => {

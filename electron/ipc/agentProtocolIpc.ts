@@ -30,6 +30,7 @@ import { detectLegacyWikiRoots, migrateLegacyWikis } from '../wiki/wikiMigration
 import { renameWikiRoot } from '../wiki/wikiInit'
 import { createAnthropicClient } from '../anthropicClientFactory'
 import { createOutboundAcceptor, createOutboundDrainer, computeContextPressureWarnings } from '../outbound/outboundAcceptor'
+import { classifyAgentSessionStartFailure } from '../outbound/agentSessionStartFailure'
 import { createSkillHintSystemMessage } from '../../src/shared/skillHintRecords'
 import { createSkillManager } from '../skills/skillManager'
 import type { SkillTurnScope } from '../skills/skillTurnScope'
@@ -76,7 +77,7 @@ import { buildSnapshotFromDb } from '../mcp/mcpToolRegistry'
 import { listProfiles } from '../mcp/mcpConfigStore'
 import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
-import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
+import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, onSessionContextCompactionRelease, withSessionTurnAdmission } from '../sessionCompactionLock'
 import type { ContinuationIntentAcceptance, ContinuationSourceRef, PreparedChatBodyView } from '../sessionStorage/public/model'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import { createSessionSwitchRequestSequence } from './sessionSwitchTraceSequence'
@@ -1208,10 +1209,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     } catch (error) {
       if (ticketPrimed && admissionRef) clearPrimedClaudeAdmission(admissionRef)
       else admission.ticket.release()
-      const code = error instanceof Error ? error.message : String(error)
-      if (['SESSION_TURN_BUSY', 'SESSION_CONTEXT_COMPACTION_BUSY', 'SESSION_EXECUTION_ACTIVE',
-        'SESSION_EXECUTION_ACTIVE_OWNER'].includes(code)) return 'busy' as const
-      if (code.startsWith('AGENT_SESSION_EXECUTION_APPROVAL_')) return 'waiting' as const
+      const failure = classifyAgentSessionStartFailure(input.sessionId, error)
+      if (failure) return failure
       throw error
     }
   }
@@ -1222,6 +1221,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     getNextQueued: (sessionId) => sessionStorage.execution.getNextDesktopQueueInput(sessionId),
     startAgentSession,
     settleAgentSessionStartFailure: ({ sessionId, requestId }) => sessionCommands.agentSessionMessages.markNotExecuted({ sessionId, requestId, reason: 'start-failed' }),
+    onCompactionRelease: onSessionContextCompactionRelease,
     consumeQueued: (_sessionId, messageId) => {
       // B5:排队的渲染端本地命令(如 /test-cards)主进程无法执行,消费落库避免卡队
       sessionCommands.deleteQueuedMessage(messageId)

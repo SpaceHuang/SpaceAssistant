@@ -665,8 +665,9 @@ export type OutboundDrainerDeps = {
   listActiveCount: (sessionId: string) => number
   getNextQueued: (sessionId: string) => { message: Message; sequence: number; requestId?: string; source?: import('../sessionStorage/public/model').QueueInputSource } | null
   /** Host-only path for receipt-bound cross-session inputs; never routes through submitOutbound. */
-  startAgentSession?: (input: { sessionId: string; requestId: string; messageId: string }) => Promise<'started' | 'busy' | 'waiting' | 'unavailable' | 'rejected'>
+  startAgentSession?: (input: { sessionId: string; requestId: string; messageId: string }) => Promise<'started' | 'busy' | 'compaction-busy' | 'waiting' | 'unavailable' | 'rejected'>
   settleAgentSessionStartFailure?: (input: { sessionId: string; requestId: string }) => boolean
+  onCompactionRelease?: (sessionId: string, callback: () => void) => () => void
   /** 消费一条不可由主进程执行的排队条目(本地命令类),由实现层删除落库 */
   consumeQueued: (sessionId: string, messageId: string) => void
   audit: (event: string, data: Record<string, unknown>) => void
@@ -684,15 +685,26 @@ const MAX_DRAIN_RETRIES = 3
  *    微任务自动重排(上限 MAX_DRAIN_RETRIES,成功发起即重置),configuring 失败不再导致队列停摆。
  */
 export function createOutboundDrainer(deps: OutboundDrainerDeps) {
+  type DrainAttempt = { kind: 'started' | 'idle' } | { kind: 'parked' | 'compaction-busy' | 'retryable-failure'; requestId: string }
   const draining = new Set<string>()
   const retryAttempts = new Map<string, number>()
   const parkedAgentSessions = new Set<string>()
+  const compactionBlockedSessions = new Set<string>()
   /** drain 进行中到达(被挡)的终态触发:B6——结束后必须补扫,否则丢触发导致队列停摆 */
   const suppressedTriggers = new Set<string>()
 
-  function scheduleRetry(sessionId: string): void {
+  function clearSessionRetries(sessionId: string): void {
+    for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
+  }
+
+  function scheduleRetry(sessionId: string, failedRequestId: string): void {
     const head = deps.getNextQueued(sessionId)
-    const retryKey = `${sessionId}\u0000${head?.requestId ?? ''}`
+    if (head?.requestId !== failedRequestId) {
+      clearSessionRetries(sessionId)
+      queueMicrotask(() => { void drain(sessionId) })
+      return
+    }
+    const retryKey = `${sessionId}\u0000${failedRequestId}`
     for (const key of retryAttempts.keys()) {
       if (key.startsWith(`${sessionId}\u0000`) && key !== retryKey) retryAttempts.delete(key)
     }
@@ -704,7 +716,8 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
         attempts: n,
         requestId: head?.requestId
       })
-      if (head?.source === 'agent-session' && head.requestId && deps.settleAgentSessionStartFailure?.({ sessionId, requestId: head.requestId })) {
+      if (head?.source === 'agent-session' && head.requestId === failedRequestId &&
+        deps.settleAgentSessionStartFailure?.({ sessionId, requestId: failedRequestId })) {
         retryAttempts.delete(retryKey)
         queueMicrotask(() => { void drain(sessionId) })
       }
@@ -716,80 +729,108 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
   }
 
   async function drain(sessionId: string): Promise<void> {
+    if (compactionBlockedSessions.has(sessionId)) return
     if (draining.has(sessionId)) {
       suppressedTriggers.add(sessionId)
       return
     }
-    let started = false
+    let attempt: DrainAttempt = { kind: 'idle' }
     try {
-      started = await drainOnce(sessionId)
+      attempt = await drainOnce(sessionId)
     } finally {
       if (draining.has(sessionId)) draining.delete(sessionId)
     }
-    if (started) {
+    if (attempt.kind === 'started') {
       // 已成功发起:后续丢触发由新 turn 的终态投影接管(turn-started 必有 active)
       for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
       // 但 submitOutbound await 期间可能有终态被挡(如 configuring 立即失败)——仍需补扫一次
       if (suppressedTriggers.has(sessionId)) {
         suppressedTriggers.delete(sessionId)
         if (deps.listActiveCount(sessionId) === 0 && deps.getNextQueued(sessionId)?.message.status === 'queued') {
-          scheduleRetry(sessionId)
+          queueMicrotask(() => { void drain(sessionId) })
         }
       }
       return
     }
+    if (attempt.kind === 'compaction-busy') {
+      compactionBlockedSessions.add(sessionId)
+      // The failed dispatch releases a global ticket, whose synchronous wake is not an
+      // external capacity change. All wakes received under this lock are subsumed by
+      // the unlock callback, which rechecks persistent authorization before dispatch.
+      suppressedTriggers.delete(sessionId)
+      deps.onCompactionRelease?.(sessionId, () => {
+        compactionBlockedSessions.delete(sessionId)
+        queueMicrotask(() => { void drain(sessionId) })
+      })
+      return
+    }
     if (parkedAgentSessions.delete(sessionId)) {
-      for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
+      clearSessionRetries(sessionId)
       // A wake arriving while startAgentSession was pending is an external state change
       // (revoke, admission release, or a replacement queue head); rescan once without spending retry budget.
       if (suppressedTriggers.delete(sessionId)) queueMicrotask(() => { void drain(sessionId) })
       return
     }
+    if (attempt.kind === 'retryable-failure') {
+      if (suppressedTriggers.delete(sessionId)) {
+        const head = deps.getNextQueued(sessionId)
+        if (head?.requestId !== attempt.requestId) {
+          clearSessionRetries(sessionId)
+          queueMicrotask(() => { void drain(sessionId) })
+          return
+        }
+      }
+      scheduleRetry(sessionId, attempt.requestId)
+      return
+    }
     if (suppressedTriggers.has(sessionId)) {
-      // B6:被挡的终态触发必须补扫(有限次,防自旋)
+      // A wake without a failed attempt is a fresh observation, not a retry-budget cost.
       suppressedTriggers.delete(sessionId)
-      scheduleRetry(sessionId)
+      queueMicrotask(() => { void drain(sessionId) })
       return
     }
     if (deps.listActiveCount(sessionId) > 0) {
-      for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
+      clearSessionRetries(sessionId)
       return
     }
-    if (deps.getNextQueued(sessionId)?.message.status === 'queued') {
-      scheduleRetry(sessionId)
-    }
+    // A queued head with no attempted failure waits for a lifecycle wake. Never invent
+    // a failure against whichever item happens to be at the head after this scan.
   }
 
-  /** 单轮排水:返回 true 表示成功发起了新 turn */
-  async function drainOnce(sessionId: string): Promise<boolean> {
-    if (draining.has(sessionId)) return false
+  /** A result carries the request identity and reason from this exact dispatch attempt. */
+  async function drainOnce(sessionId: string): Promise<DrainAttempt> {
+    if (draining.has(sessionId)) return { kind: 'idle' }
     try {
       // 单轮循环:驱动一条 turn 后停(等它的终态再触发);本地命令类消费后继续(队列收敛)
       for (;;) {
-        if (deps.listActiveCount(sessionId) > 0) return false
+        if (deps.listActiveCount(sessionId) > 0) return { kind: 'idle' }
         const next = deps.getNextQueued(sessionId)
-        if (!next || next.message.role !== 'user' || next.message.status !== 'queued' || !next.requestId) return false
+        if (!next || next.message.role !== 'user' || next.message.status !== 'queued' || !next.requestId) return { kind: 'idle' }
         if (next.source === 'agent-session') {
           if (!deps.startAgentSession) {
             parkedAgentSessions.add(sessionId)
             deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_DISPATCH_UNAVAILABLE' })
-            return false
+            return { kind: 'parked', requestId: next.requestId }
           }
           draining.add(sessionId)
           try {
             const result = await deps.startAgentSession({ sessionId, requestId: next.requestId, messageId: next.message.id })
-            if (result === 'started') return true
+            if (result === 'started') return { kind: 'started' }
             if (result === 'rejected') continue
+            if (result === 'compaction-busy') {
+              deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_COMPACTION_BUSY' })
+              return { kind: 'compaction-busy', requestId: next.requestId }
+            }
             if (result === 'busy' || result === 'waiting' || result === 'unavailable') {
               parkedAgentSessions.add(sessionId)
               deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: `AGENT_SESSION_${result.toUpperCase()}` })
-              return false
+              return { kind: 'parked', requestId: next.requestId }
             }
-            return false
+            return { kind: 'idle' }
           } catch (error) {
             deps.audit('outbound.drain.failed', { sessionId, requestId: next.requestId,
               error: error instanceof Error ? error.message : String(error) })
-            return false
+            return { kind: 'retryable-failure', requestId: next.requestId }
           } finally {
             draining.delete(sessionId)
           }
@@ -812,16 +853,16 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
             requestId: next.requestId,
             error: error instanceof Error ? error.message : String(error)
           })
-          return false
+          return { kind: 'retryable-failure', requestId: next.requestId }
         } finally {
           draining.delete(sessionId)
         }
         if ('rejected' in result) {
           deps.audit('outbound.drain.rejected', { sessionId, requestId: next.requestId, reason: result.rejected.reason })
-          return false
+          return { kind: 'retryable-failure', requestId: next.requestId }
         }
         if (result.accepted === 'turn-started') {
-          return true
+          return { kind: 'started' }
         }
         if (result.accepted === 'local-command') {
           // B5:主进程无法执行渲染端本地命令(如排队的 /test-cards)——审计 + 消费该条目,继续驱动后续
@@ -835,7 +876,7 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
         }
         // queued(理论不可达:reuse-user 排队语义)——审计防静默,跳出等下一次触发
         deps.audit('outbound.drain.unexpected_queued', { sessionId, requestId: next.requestId })
-        return false
+        return { kind: 'retryable-failure', requestId: next.requestId }
       }
     } finally {
       if (draining.has(sessionId)) draining.delete(sessionId)
