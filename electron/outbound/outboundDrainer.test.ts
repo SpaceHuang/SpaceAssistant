@@ -3,13 +3,15 @@ import { createOutboundAcceptor as createSessionStorageOutboundAcceptor, createO
 import type { OutboundSubmitIntent, OutboundSubmitResult } from '../../src/shared/outboundProtocol'
 import { DEFAULT_WIKI_CONFIG, type Message } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
-import { claimQueuedTurnAtomically, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getMessages, getNextQueuedMessage, getNextDesktopQueueInput } from '../database/operations'
+import { claimQueuedTurnAtomically, claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getMessages, getNextQueuedMessage, getNextDesktopQueueInput } from '../database/operations'
 import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { CallAdmissionGate } from '../runtime/callAdmissionGate'
 import { DEFAULT_ADMISSION_POLICY } from '../runtime/callAdmission'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { isSessionContextCompactionLocked, onSessionContextCompactionRelease, withSessionContextCompactionLock } from '../sessionCompactionLock'
+import { insertRuntimeTrigger } from '../triggers/store'
+import { classifyAgentSessionStartFailure } from './agentSessionStartFailure'
 
 function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
   const storage = createSqliteSessionStorage(deps.db)
@@ -947,6 +949,88 @@ describe('createOutboundDrainer（排水不变量）', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('更早的真实 runtime-trigger 队首等待清除时不消耗已批准来信启动预算', async () => {
+    const target = createSession(db, { name: 'trigger-before-agent-target' })
+    const owner = createSession(db, { name: 'trigger-before-agent-owner' })
+    const storage = createSqliteSessionStorage(db)
+    const triggerId = 'trigger-before-agent'
+    const queueScope = { kind: 'desktop' } as const
+    const triggerRequestId = `runtime-trigger:${triggerId}`
+    const authorization = { bindingVersion: 1, requestId: triggerRequestId, ownerSessionId: owner.id,
+      receiverSessionId: target.id, queueScope, sourceIdentity: { kind: 'test-source' }, payloadDigest: 'trigger-payload',
+      policyRevision: 'policy-1', authorizationGeneration: 'auth-1', runtimeGeneration: 'runtime-1' }
+    insertRuntimeTrigger(storage.commands, { id: triggerId, ownerSessionId: owner.id, receiverSessionId: target.id,
+      clientKey: 'trigger-before-agent-key', definition: { version: 1, condition: { type: 'turn_completed', targetSessionId: owner.id,
+        turnId: 'source-turn' }, sourceBaseline: {} }, state: 'matched', result: { authorization }, createdAt: 1,
+      expiresAt: Date.now() + 60_000, attempts: 0, revision: 1, updatedAt: 1 })
+    const notification = enqueueQueuedUserMessageInScope(db, { sessionId: target.id, requestId: triggerRequestId,
+      content: `运行时事件待处理：${triggerId}`, queueScope })
+    const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId: 'approved-behind-trigger', content: 'approved content', authorizationBinding: {} })
+    const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id,
+      requestId: accepted.receipt.requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision:approved-behind-trigger',
+      permitRef: 'permit:approved-behind-trigger', ownerSessionId: owner.id, targetSessionId: target.id,
+      targetGeneration: target.generation, workDirProfileId: target.workDirProfileId || 'default',
+      requestId: accepted.receipt.requestId, messageId: snapshot.source.messageId, queueScope: 'desktop' as const,
+      payloadDigest: snapshot.source.payloadSha256, policyRevision: 'policy-1', authorizationGeneration: 'auth-1',
+      runtimeGeneration: 'runtime-1', approvedAt: Date.now() }
+    expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id,
+      requestId: accepted.receipt.requestId, expectedOriginDigest: snapshot.originDigest,
+      expectedApprovalDigest: snapshot.approvalDigest ?? null, approval })).not.toBeNull()
+    expect(getNextDesktopQueueInput(db, target.id)?.requestId).toBe(accepted.receipt.requestId)
+    expect(getNextDesktopQueueInput(db, target.id)?.requestId).not.toBe(notification.receipt.requestId)
+
+    let triggerTurnActive = false
+    let agentTurnActive = false
+    const startAgentSession = vi.fn(async ({ sessionId, requestId, messageId }: { sessionId: string; requestId: string; messageId: string }) => {
+      try {
+        claimQueuedTurnAtomicallyInScope(db, { sessionId, userMessageId: messageId, turnId: `turn:${requestId}`,
+          assistantMessageId: `assistant:${requestId}`, requestId, queueScope, source: 'agent-session',
+          agentSessionFinalCheck: () => true })
+        agentTurnActive = true
+        return 'started' as const
+      } catch (error) {
+        const failure = classifyAgentSessionStartFailure(sessionId, error)
+        if (failure) return failure
+        throw error
+      }
+    })
+    const drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession,
+      listActiveCount: () => Number(triggerTurnActive || agentTurnActive),
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined, audit: vi.fn(),
+      settleAgentSessionStartFailure: ({ sessionId, requestId }) => storage.commands.agentSessionMessages.markNotExecuted({ sessionId, requestId, reason: 'start-failed' }) })
+
+    await drainer.drain(target.id)
+    for (let tick = 0; tick < 8; tick += 1) await Promise.resolve()
+    expect(startAgentSession).toHaveBeenCalledTimes(1)
+    expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId: accepted.receipt.requestId }))
+      .toMatchObject({ kind: 'queued' })
+    expect(getDbConnection(db).prepare('SELECT state FROM queue_input_requests WHERE session_id=? AND request_id=?')
+      .get(target.id, accepted.receipt.requestId)).toEqual({ state: 'queued' })
+
+    claimQueuedTurnAtomicallyInScope(db, { sessionId: target.id, userMessageId: notification.persisted.message.id,
+      turnId: 'trigger-notification-turn', assistantMessageId: 'trigger-notification-assistant', requestId: triggerRequestId,
+      queueScope, source: 'runtime-trigger' })
+    triggerTurnActive = true
+    expect(storage.commands.runtimeTriggers.read(triggerId)?.state).toBe('matched')
+    getDbConnection(db).prepare("UPDATE turns SET state='terminal',outcome='completed',updated_at=? WHERE turn_id='trigger-notification-turn'")
+      .run(Date.now())
+    triggerTurnActive = false
+    expect(getNextDesktopQueueInput(db, target.id)?.requestId).toBe(accepted.receipt.requestId)
+    await drainer.drain(target.id)
+
+    expect(startAgentSession).toHaveBeenCalledTimes(2)
+    expect(await Promise.all(startAgentSession.mock.results.map((result) => result.value))).toEqual(['waiting', 'started'])
+    expect(startAgentSession.mock.calls.map(([input]) => input.requestId)).toEqual([
+      accepted.receipt.requestId, accepted.receipt.requestId
+    ])
+    expect(getDbConnection(db).prepare('SELECT state FROM queue_input_requests WHERE session_id=? AND request_id=?')
+      .get(target.id, accepted.receipt.requestId)).toEqual({ state: 'claimed' })
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(accepted.source.messageId))
+      .toEqual({ status: 'sent' })
   })
 
   it('停泊返回时消费排水期间收到的撤回唤醒并驱动新队首', async () => {
