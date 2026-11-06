@@ -692,9 +692,11 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
   const compactionBlockedSessions = new Set<string>()
   /** drain 进行中到达(被挡)的终态触发:B6——结束后必须补扫,否则丢触发导致队列停摆 */
   const suppressedTriggers = new Set<string>()
-  const settlementRetries = new Map<string, number>()
+  const admissionPersistenceRetries = new Map<string, number>()
+  const settlementPersistenceRetries = new Map<string, number>()
   const persistenceRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const settlementPending = new Set<string>()
+  const settlementWork = new Map<string, () => boolean>()
   const MAX_PERSISTENCE_RETRIES = 8
 
   function cancelPersistenceRetry(sessionId: string, requestId?: string): void {
@@ -703,19 +705,27 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       if (key.startsWith(prefix) && (!requestId || key === `${prefix}${requestId}`)) {
         clearTimeout(timer)
         persistenceRetryTimers.delete(key)
-        settlementRetries.delete(key)
+        admissionPersistenceRetries.delete(key)
+        settlementPersistenceRetries.delete(key)
       }
     }
     if (!requestId) {
-      for (const key of settlementPending) if (key.startsWith(prefix)) settlementPending.delete(key)
-    } else settlementPending.delete(`${prefix}${requestId}`)
+      for (const key of settlementPending) if (key.startsWith(prefix)) {
+        settlementPending.delete(key)
+        settlementWork.delete(key)
+      }
+    } else {
+      const key = `${prefix}${requestId}`
+      settlementPending.delete(key)
+      settlementWork.delete(key)
+    }
   }
 
   function schedulePersistenceRetry(sessionId: string, requestId: string, work: () => boolean): void {
     const key = `${sessionId}\u0000${requestId}`
     if (persistenceRetryTimers.has(key)) return
-    const attempt = (settlementRetries.get(key) ?? 0) + 1
-    settlementRetries.set(key, attempt)
+    const attempt = (settlementPersistenceRetries.get(key) ?? 0) + 1
+    settlementPersistenceRetries.set(key, attempt)
     if (attempt > MAX_PERSISTENCE_RETRIES) {
       deps.audit('outbound.drain.persistence_stalled', { sessionId, requestId, attempts: attempt })
       return
@@ -725,8 +735,9 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       persistenceRetryTimers.delete(key)
       void Promise.resolve().then(work).then((settled) => {
         if (settled) {
-          settlementRetries.delete(key)
+          settlementPersistenceRetries.delete(key)
           settlementPending.delete(key)
+          settlementWork.delete(key)
           void drain(sessionId).catch((error) => deps.audit('outbound.drain.failed', { sessionId, requestId,
             error: error instanceof Error ? error.message : String(error) }))
         } else {
@@ -745,8 +756,8 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
   function queueDrainRetry(sessionId: string, requestId: string): void {
     const key = `${sessionId}\u0000${requestId}`
     if (persistenceRetryTimers.has(key)) return
-    const attempt = (settlementRetries.get(key) ?? 0) + 1
-    settlementRetries.set(key, attempt)
+    const attempt = (admissionPersistenceRetries.get(key) ?? 0) + 1
+    admissionPersistenceRetries.set(key, attempt)
     if (attempt > MAX_PERSISTENCE_RETRIES) {
       deps.audit('outbound.drain.persistence_stalled', { sessionId, requestId, attempts: attempt })
       return
@@ -787,9 +798,13 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       if (head?.source === 'agent-session' && head.requestId === failedRequestId &&
         deps.settleAgentSessionStartFailure) {
         settlementPending.add(retryKey)
+        const work = () => deps.settleAgentSessionStartFailure!({ sessionId, requestId: failedRequestId })
+        settlementWork.set(retryKey, work)
         try {
           if (deps.settleAgentSessionStartFailure({ sessionId, requestId: failedRequestId })) {
             retryAttempts.delete(retryKey)
+            settlementPending.delete(retryKey)
+            settlementWork.delete(retryKey)
             queueMicrotask(() => { void drain(sessionId).catch((error) => deps.audit('outbound.drain.failed', { sessionId,
               requestId: failedRequestId, error: error instanceof Error ? error.message : String(error) })) })
             return
@@ -798,8 +813,7 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
           deps.audit('outbound.drain.persistence_failed', { sessionId, requestId: failedRequestId,
             error: error instanceof Error ? error.message : String(error) })
         }
-        schedulePersistenceRetry(sessionId, failedRequestId, () =>
-          deps.settleAgentSessionStartFailure!({ sessionId, requestId: failedRequestId }))
+        schedulePersistenceRetry(sessionId, failedRequestId, work)
       }
       return
     }
@@ -817,7 +831,17 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
     const headBeforeDrain = deps.getNextQueued(sessionId)
     if (headBeforeDrain?.requestId) {
       const key = `${sessionId}\u0000${headBeforeDrain.requestId}`
-      if (settlementPending.has(key)) return
+      if (settlementPending.has(key)) {
+        if (!persistenceRetryTimers.has(key)) {
+          const work = settlementWork.get(key)
+          if (work) {
+            // A fresh external wake is the recovery edge after bounded retries park.
+            settlementPersistenceRetries.set(key, 0)
+            schedulePersistenceRetry(sessionId, headBeforeDrain.requestId, work)
+          }
+        }
+        return
+      }
       if (persistenceRetryTimers.has(key)) return
       for (const pendingKey of settlementPending) {
         if (pendingKey.startsWith(`${sessionId}\u0000`) && pendingKey !== key) cancelPersistenceRetry(sessionId, pendingKey.slice(sessionId.length + 1))
