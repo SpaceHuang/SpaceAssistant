@@ -25,6 +25,7 @@ import type { ContinuationSourceRef } from '../sessionStorage/public/model'
 import type { SessionExecutionStore } from '../sessionStorage/public/execution'
 import { readChatMessageAfterPreparation, readChatMessagesAfterPreparation } from '../sessionStorage/public/readMessages'
 import { TransactionCommitUnknownError } from '../database/transaction'
+import type { OutboundDrainWakeReason } from './drainWake'
 
 /** 出站受理时的主进程状态快照（全部由主进程权威源构建，渲染端不再提供其中任何一项） */
 export type OutboundSnapshot = {
@@ -685,110 +686,124 @@ const MAX_DRAIN_RETRIES = 3
  *    微任务自动重排(上限 MAX_DRAIN_RETRIES,成功发起即重置),configuring 失败不再导致队列停摆。
  */
 export function createOutboundDrainer(deps: OutboundDrainerDeps) {
-  type DrainAttempt = { kind: 'started' | 'idle' } | { kind: 'parked' | 'compaction-busy' | 'persistence-failed' | 'queue-head-waiting' | 'retryable-failure'; requestId: string }
-  const draining = new Set<string>()
-  const retryAttempts = new Map<string, number>()
-  const parkedAgentSessions = new Set<string>()
-  const compactionBlockedSessions = new Set<string>()
-  /** drain 进行中到达(被挡)的终态触发:B6——结束后必须补扫,否则丢触发导致队列停摆 */
-  const suppressedTriggers = new Set<string>()
-  const admissionPersistenceRetries = new Map<string, number>()
-  const settlementPersistenceRetries = new Map<string, number>()
-  const persistenceRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  const settlementPending = new Set<string>()
-  const settlementWork = new Map<string, () => boolean>()
+  type DrainAttempt = { kind: 'started' | 'idle' } | { kind: 'queue-head-waiting'; requestId?: string } |
+    { kind: 'parked' | 'compaction-busy' | 'persistence-failed' | 'retryable-failure'; requestId: string }
+  type RetryCounter = { requestId: string; attempts: number }
+  type PersistenceRetry = RetryCounter & { timer?: ReturnType<typeof setTimeout> }
+  type SettlementRetry = PersistenceRetry & { work: () => boolean; workInFlight: boolean }
+  type SessionDrainState = {
+    running: boolean
+    pendingWakeReasons: Set<OutboundDrainWakeReason>
+    startRetry?: RetryCounter
+    admissionRetry?: PersistenceRetry
+    settlementRetry?: SettlementRetry
+    compactionBlocked: boolean
+  }
+  // The per-session coordinator owns every volatile dispatch phase and retry task.
+  const sessionStates = new Map<string, SessionDrainState>()
   const MAX_PERSISTENCE_RETRIES = 8
 
-  function cancelPersistenceRetry(sessionId: string, requestId?: string): void {
-    const prefix = `${sessionId}\u0000`
-    for (const [key, timer] of persistenceRetryTimers) {
-      if (key.startsWith(prefix) && (!requestId || key === `${prefix}${requestId}`)) {
-        clearTimeout(timer)
-        persistenceRetryTimers.delete(key)
-        admissionPersistenceRetries.delete(key)
-        settlementPersistenceRetries.delete(key)
-      }
+  function stateFor(sessionId: string): SessionDrainState {
+    let state = sessionStates.get(sessionId)
+    if (!state) {
+      state = { running: false, pendingWakeReasons: new Set(), compactionBlocked: false }
+      sessionStates.set(sessionId, state)
     }
-    if (!requestId) {
-      for (const key of settlementPending) if (key.startsWith(prefix)) {
-        settlementPending.delete(key)
-        settlementWork.delete(key)
-      }
-    } else {
-      const key = `${prefix}${requestId}`
-      settlementPending.delete(key)
-      settlementWork.delete(key)
+    return state
+  }
+
+  function pruneState(sessionId: string, state: SessionDrainState): void {
+    if (!state.running && !state.compactionBlocked && state.pendingWakeReasons.size === 0 &&
+      !state.startRetry && !state.admissionRetry && !state.settlementRetry && sessionStates.get(sessionId) === state) {
+      sessionStates.delete(sessionId)
     }
   }
 
-  function schedulePersistenceRetry(sessionId: string, requestId: string, work: () => boolean): void {
-    const key = `${sessionId}\u0000${requestId}`
-    if (persistenceRetryTimers.has(key)) return
-    const attempt = (settlementPersistenceRetries.get(key) ?? 0) + 1
-    settlementPersistenceRetries.set(key, attempt)
+  function cancelPersistenceRetry(state: SessionDrainState, requestId?: string): void {
+    if (state.admissionRetry && (!requestId || state.admissionRetry.requestId === requestId)) {
+      if (state.admissionRetry.timer) clearTimeout(state.admissionRetry.timer)
+      state.admissionRetry = undefined
+    }
+    if (state.settlementRetry && (!requestId || state.settlementRetry.requestId === requestId)) {
+      if (state.settlementRetry.timer) clearTimeout(state.settlementRetry.timer)
+      state.settlementRetry = undefined
+    }
+  }
+
+  function schedulePersistenceRetry(sessionId: string, state: SessionDrainState, task: SettlementRetry): void {
+    if (state.settlementRetry !== task || task.timer || task.workInFlight) return
+    const attempt = ++task.attempts
     if (attempt > MAX_PERSISTENCE_RETRIES) {
-      deps.audit('outbound.drain.persistence_stalled', { sessionId, requestId, attempts: attempt })
+      deps.audit('outbound.drain.persistence_stalled', { sessionId, requestId: task.requestId, attempts: attempt })
       return
     }
     const delayMs = Math.min(25 * 2 ** (attempt - 1), 2_000)
     const timer = setTimeout(() => {
-      persistenceRetryTimers.delete(key)
-      void Promise.resolve().then(work).then((settled) => {
+      if (state.settlementRetry !== task) return
+      task.timer = undefined
+      task.workInFlight = true
+      try {
+        const settled = task.work()
+        if (state.settlementRetry !== task) return
+        task.workInFlight = false
         if (settled) {
-          settlementPersistenceRetries.delete(key)
-          settlementPending.delete(key)
-          settlementWork.delete(key)
-          void drain(sessionId).catch((error) => deps.audit('outbound.drain.failed', { sessionId, requestId,
+          state.settlementRetry = undefined
+          void drain(sessionId, 'persistence-retry').catch((error) => deps.audit('outbound.drain.failed', { sessionId, requestId: task.requestId,
             error: error instanceof Error ? error.message : String(error) }))
         } else {
-          schedulePersistenceRetry(sessionId, requestId, work)
+          schedulePersistenceRetry(sessionId, state, task)
         }
-      }).catch((error) => {
-        deps.audit('outbound.drain.persistence_failed', { sessionId, requestId,
+      } catch (error) {
+        if (state.settlementRetry !== task) return
+        task.workInFlight = false
+        deps.audit('outbound.drain.persistence_failed', { sessionId, requestId: task.requestId,
           error: error instanceof Error ? error.message : String(error) })
-        schedulePersistenceRetry(sessionId, requestId, work)
-      })
+        schedulePersistenceRetry(sessionId, state, task)
+      }
     }, delayMs)
-    persistenceRetryTimers.set(key, timer)
+    task.timer = timer
     ;(timer as unknown as { unref?: () => void }).unref?.()
   }
 
-  function queueDrainRetry(sessionId: string, requestId: string): void {
-    const key = `${sessionId}\u0000${requestId}`
-    if (persistenceRetryTimers.has(key)) return
-    const attempt = (admissionPersistenceRetries.get(key) ?? 0) + 1
-    admissionPersistenceRetries.set(key, attempt)
+  function queueDrainRetry(sessionId: string, state: SessionDrainState, requestId: string): void {
+    let task = state.admissionRetry
+    if (!task || task.requestId !== requestId) {
+      if (task?.timer) clearTimeout(task.timer)
+      task = { requestId, attempts: 0 }
+      state.admissionRetry = task
+    }
+    if (task.timer) return
+    const attempt = ++task.attempts
     if (attempt > MAX_PERSISTENCE_RETRIES) {
       deps.audit('outbound.drain.persistence_stalled', { sessionId, requestId, attempts: attempt })
       return
     }
     const delayMs = Math.min(25 * 2 ** (attempt - 1), 2_000)
     const timer = setTimeout(() => {
-      persistenceRetryTimers.delete(key)
-      void drain(sessionId).catch((error) => deps.audit('outbound.drain.failed', { sessionId, requestId,
+      if (state.admissionRetry !== task) return
+      task!.timer = undefined
+      void drain(sessionId, 'retry-timer').catch((error) => deps.audit('outbound.drain.failed', { sessionId, requestId,
         error: error instanceof Error ? error.message : String(error) }))
     }, delayMs)
-    persistenceRetryTimers.set(key, timer)
+    task.timer = timer
     ;(timer as unknown as { unref?: () => void }).unref?.()
   }
 
-  function clearSessionRetries(sessionId: string): void {
-    for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
+  function clearStartRetry(state: SessionDrainState): void {
+    state.startRetry = undefined
   }
 
-  function scheduleRetry(sessionId: string, failedRequestId: string): void {
+  function scheduleRetry(sessionId: string, state: SessionDrainState, failedRequestId: string): void {
     const head = deps.getNextQueued(sessionId)
     if (head?.requestId !== failedRequestId) {
-      clearSessionRetries(sessionId)
-      queueMicrotask(() => { void drain(sessionId) })
+      clearStartRetry(state)
+      deferDrain(sessionId, 'retry-timer', failedRequestId)
       return
     }
-    const retryKey = `${sessionId}\u0000${failedRequestId}`
-    for (const key of retryAttempts.keys()) {
-      if (key.startsWith(`${sessionId}\u0000`) && key !== retryKey) retryAttempts.delete(key)
+    if (!state.startRetry || state.startRetry.requestId !== failedRequestId) {
+      state.startRetry = { requestId: failedRequestId, attempts: 0 }
     }
-    const n = (retryAttempts.get(retryKey) ?? 0) + 1
-    retryAttempts.set(retryKey, n)
+    const n = ++state.startRetry.attempts
     if (n > MAX_DRAIN_RETRIES) {
       deps.audit('outbound.drain.stalled', {
         sessionId,
@@ -797,236 +812,240 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       })
       if (head?.source === 'agent-session' && head.requestId === failedRequestId &&
         deps.settleAgentSessionStartFailure) {
-        settlementPending.add(retryKey)
         const work = () => deps.settleAgentSessionStartFailure!({ sessionId, requestId: failedRequestId })
-        settlementWork.set(retryKey, work)
+        const settlement: SettlementRetry = { requestId: failedRequestId, attempts: 0, work, workInFlight: false }
+        state.settlementRetry = settlement
         try {
           if (deps.settleAgentSessionStartFailure({ sessionId, requestId: failedRequestId })) {
-            retryAttempts.delete(retryKey)
-            settlementPending.delete(retryKey)
-            settlementWork.delete(retryKey)
-            queueMicrotask(() => { void drain(sessionId).catch((error) => deps.audit('outbound.drain.failed', { sessionId,
-              requestId: failedRequestId, error: error instanceof Error ? error.message : String(error) })) })
+            state.startRetry = undefined
+            state.settlementRetry = undefined
+            deferDrain(sessionId, 'persistence-retry', failedRequestId)
             return
           }
         } catch (error) {
           deps.audit('outbound.drain.persistence_failed', { sessionId, requestId: failedRequestId,
             error: error instanceof Error ? error.message : String(error) })
         }
-        schedulePersistenceRetry(sessionId, failedRequestId, work)
+        schedulePersistenceRetry(sessionId, state, settlement)
       }
       return
     }
+    deferDrain(sessionId, 'retry-timer', failedRequestId)
+  }
+
+  function deferDrain(sessionId: string, reason: OutboundDrainWakeReason, requestId?: string): void {
     queueMicrotask(() => {
-      void drain(sessionId)
+      void drain(sessionId, reason).catch((error) => deps.audit('outbound.drain.failed', { sessionId,
+        ...(requestId ? { requestId } : {}), error: error instanceof Error ? error.message : String(error) }))
     })
   }
 
-  async function drain(sessionId: string): Promise<void> {
-    if (compactionBlockedSessions.has(sessionId)) return
-    if (draining.has(sessionId)) {
-      suppressedTriggers.add(sessionId)
+  function rescanAfterAttempt(sessionId: string, reasons: Set<OutboundDrainWakeReason>): void {
+    const reason = [...reasons].find((candidate) => candidate !== 'capacity-released' && candidate !== 'retry-timer')
+    if (!reason || deps.listActiveCount(sessionId) > 0 || deps.getNextQueued(sessionId)?.message.status !== 'queued') return
+    deferDrain(sessionId, reason)
+  }
+
+  async function drain(sessionId: string, wakeReason: OutboundDrainWakeReason = 'external'): Promise<void> {
+    const state = stateFor(sessionId)
+    if (state.compactionBlocked) return
+    if (state.running) {
+      state.pendingWakeReasons.add(wakeReason)
       return
     }
     const headBeforeDrain = deps.getNextQueued(sessionId)
     if (headBeforeDrain?.requestId) {
-      const key = `${sessionId}\u0000${headBeforeDrain.requestId}`
-      if (settlementPending.has(key)) {
-        if (!persistenceRetryTimers.has(key)) {
-          const work = settlementWork.get(key)
-          if (work) {
-            // A fresh external wake is the recovery edge after bounded retries park.
-            settlementPersistenceRetries.set(key, 0)
-            schedulePersistenceRetry(sessionId, headBeforeDrain.requestId, work)
-          }
+      if (state.settlementRetry?.requestId === headBeforeDrain.requestId) {
+        const task = state.settlementRetry
+        if (!task.timer && !task.workInFlight) {
+          // A fresh wake is the recovery edge after bounded settlement retries park.
+          task.attempts = 0
+          schedulePersistenceRetry(sessionId, state, task)
         }
         return
       }
-      if (persistenceRetryTimers.has(key)) return
-      for (const pendingKey of settlementPending) {
-        if (pendingKey.startsWith(`${sessionId}\u0000`) && pendingKey !== key) cancelPersistenceRetry(sessionId, pendingKey.slice(sessionId.length + 1))
+      if (state.admissionRetry?.requestId === headBeforeDrain.requestId && state.admissionRetry.timer) return
+      if (state.settlementRetry && state.settlementRetry.requestId !== headBeforeDrain.requestId) {
+        cancelPersistenceRetry(state, state.settlementRetry.requestId)
       }
-      for (const retryKey of persistenceRetryTimers.keys()) {
-        if (retryKey.startsWith(`${sessionId}\u0000`) && retryKey !== key) cancelPersistenceRetry(sessionId, retryKey.slice(sessionId.length + 1))
+      if (state.admissionRetry && state.admissionRetry.requestId !== headBeforeDrain.requestId) {
+        cancelPersistenceRetry(state, state.admissionRetry.requestId)
       }
-    } else cancelPersistenceRetry(sessionId)
+      if (state.startRetry && state.startRetry.requestId !== headBeforeDrain.requestId) clearStartRetry(state)
+    } else {
+      cancelPersistenceRetry(state)
+      clearStartRetry(state)
+    }
+
     let attempt: DrainAttempt = { kind: 'idle' }
+    state.running = true
     try {
       attempt = await drainOnce(sessionId)
     } finally {
-      if (draining.has(sessionId)) draining.delete(sessionId)
+      state.running = false
     }
-    if (attempt.kind === 'started') {
-      cancelPersistenceRetry(sessionId)
-      // 已成功发起:后续丢触发由新 turn 的终态投影接管(turn-started 必有 active)
-      for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
-      // 但 submitOutbound await 期间可能有终态被挡(如 configuring 立即失败)——仍需补扫一次
-      if (suppressedTriggers.has(sessionId)) {
-        suppressedTriggers.delete(sessionId)
-        if (deps.listActiveCount(sessionId) === 0 && deps.getNextQueued(sessionId)?.message.status === 'queued') {
-          queueMicrotask(() => { void drain(sessionId) })
-        }
+
+    try {
+      if (attempt.kind === 'started') {
+        cancelPersistenceRetry(state)
+        clearStartRetry(state)
+        const pending = new Set(state.pendingWakeReasons)
+        state.pendingWakeReasons.clear()
+        // Capacity release alone cannot advance a queue after this dispatch. Keep a terminal,
+        // enqueue, or recovery event that arrived while dispatch was awaiting.
+        if (deps.listActiveCount(sessionId) === 0) rescanAfterAttempt(sessionId, pending)
+        return
       }
-      return
-    }
-    if (attempt.kind === 'compaction-busy') {
-      compactionBlockedSessions.add(sessionId)
-      // The failed dispatch releases a global ticket, whose synchronous wake is not an
-      // external capacity change. All wakes received under this lock are subsumed by
-      // the unlock callback, which rechecks persistent authorization before dispatch.
-      suppressedTriggers.delete(sessionId)
-      deps.onCompactionRelease?.(sessionId, () => {
-        compactionBlockedSessions.delete(sessionId)
-        queueMicrotask(() => { void drain(sessionId) })
-      })
-      return
-    }
-    if (attempt.kind === 'queue-head-waiting') {
-      parkedAgentSessions.delete(sessionId)
-      clearSessionRetries(sessionId)
-      // Ticket release during the failed claim synchronously woke this same drain.
-      // The physical FIFO head is unchanged, so only its own lifecycle transition may retry it.
-      suppressedTriggers.delete(sessionId)
-      return
-    }
-    if (attempt.kind === 'persistence-failed') {
-      suppressedTriggers.delete(sessionId)
-      queueDrainRetry(sessionId, attempt.requestId)
-      return
-    }
-    if (parkedAgentSessions.delete(sessionId)) {
-      clearSessionRetries(sessionId)
-      // A wake arriving while startAgentSession was pending is an external state change
-      // (revoke, admission release, or a replacement queue head); rescan once without spending retry budget.
-      if (suppressedTriggers.delete(sessionId)) queueMicrotask(() => { void drain(sessionId) })
-      return
-    }
-    if (attempt.kind === 'retryable-failure') {
-      if (suppressedTriggers.delete(sessionId)) {
+      if (attempt.kind === 'compaction-busy') {
+        state.compactionBlocked = true
+        // The unlock callback rereads persistent state, so wakes observed under the lock are subsumed.
+        state.pendingWakeReasons.clear()
+        deps.onCompactionRelease?.(sessionId, () => {
+          state.compactionBlocked = false
+          deferDrain(sessionId, 'compaction-released')
+        })
+        return
+      }
+      if (attempt.kind === 'queue-head-waiting') {
+        clearStartRetry(state)
+        const pending = new Set(state.pendingWakeReasons)
+        state.pendingWakeReasons.clear()
+        // A capacity release caused by this failed claim is not a queue transition. Other
+        // typed events are retained and trigger one fresh read of the physical head.
+        rescanAfterAttempt(sessionId, pending)
+        return
+      }
+      if (attempt.kind === 'persistence-failed') {
+        state.pendingWakeReasons.clear()
+        queueDrainRetry(sessionId, state, attempt.requestId)
+        return
+      }
+      if (attempt.kind === 'parked') {
+        clearStartRetry(state)
+        const pending = new Set(state.pendingWakeReasons)
+        state.pendingWakeReasons.clear()
+        if (pending.size > 0 && deps.listActiveCount(sessionId) === 0 && deps.getNextQueued(sessionId)?.message.status === 'queued') {
+          deferDrain(sessionId, pending.values().next().value ?? 'external')
+        }
+        return
+      }
+      if (attempt.kind === 'retryable-failure') {
+        const pending = new Set(state.pendingWakeReasons)
+        state.pendingWakeReasons.clear()
         const head = deps.getNextQueued(sessionId)
-        if (head?.requestId !== attempt.requestId) {
-          clearSessionRetries(sessionId)
-          queueMicrotask(() => { void drain(sessionId) })
+        if (pending.size > 0 && head?.requestId !== attempt.requestId) {
+          clearStartRetry(state)
+          rescanAfterAttempt(sessionId, pending)
           return
         }
+        scheduleRetry(sessionId, state, attempt.requestId)
+        return
       }
-      scheduleRetry(sessionId, attempt.requestId)
-      return
+      const pending = new Set(state.pendingWakeReasons)
+      state.pendingWakeReasons.clear()
+      if (deps.listActiveCount(sessionId) > 0) {
+        clearStartRetry(state)
+        return
+      }
+      rescanAfterAttempt(sessionId, pending)
+    } finally {
+      pruneState(sessionId, state)
     }
-    if (suppressedTriggers.has(sessionId)) {
-      // A wake without a failed attempt is a fresh observation, not a retry-budget cost.
-      suppressedTriggers.delete(sessionId)
-      queueMicrotask(() => { void drain(sessionId) })
-      return
-    }
-    if (deps.listActiveCount(sessionId) > 0) {
-      clearSessionRetries(sessionId)
-      return
-    }
-    // A queued head with no attempted failure waits for a lifecycle wake. Never invent
-    // a failure against whichever item happens to be at the head after this scan.
   }
 
   /** A result carries the request identity and reason from this exact dispatch attempt. */
   async function drainOnce(sessionId: string): Promise<DrainAttempt> {
-    if (draining.has(sessionId)) return { kind: 'idle' }
-    try {
-      // 单轮循环:驱动一条 turn 后停(等它的终态再触发);本地命令类消费后继续(队列收敛)
-      for (;;) {
-        if (deps.listActiveCount(sessionId) > 0) return { kind: 'idle' }
-        const next = deps.getNextQueued(sessionId)
-        if (!next || next.message.role !== 'user' || next.message.status !== 'queued' || !next.requestId) return { kind: 'idle' }
-        if (next.source === 'runtime-trigger') {
-          // Trigger recovery owns this physical FIFO head; do not acquire a turn ticket for later inputs.
-          deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'RUNTIME_TRIGGER_QUEUE_HEAD' })
-          return { kind: 'queue-head-waiting', requestId: next.requestId }
+    // 单轮循环:驱动一条 turn 后停(等它的终态再触发);本地命令类消费后继续(队列收敛)
+    for (;;) {
+      if (deps.listActiveCount(sessionId) > 0) return { kind: 'idle' }
+      const next = deps.getNextQueued(sessionId)
+      if (!next || next.message.role !== 'user' || next.message.status !== 'queued') return { kind: 'idle' }
+      if (next.source === 'invalid' || !next.requestId) {
+        deps.audit('outbound.drain.parked', { sessionId, ...(next.requestId ? { requestId: next.requestId } : {}),
+          messageId: next.message.id, reason: 'DESKTOP_QUEUE_HEAD_SOURCE_INVALID' })
+        return { kind: 'queue-head-waiting', ...(next.requestId ? { requestId: next.requestId } : {}) }
+      }
+      if (next.source === 'runtime-trigger') {
+        // Trigger recovery owns this physical FIFO head; do not acquire a turn ticket for later inputs.
+        deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'RUNTIME_TRIGGER_QUEUE_HEAD' })
+        return { kind: 'queue-head-waiting', requestId: next.requestId }
+      }
+      if (next.source === 'agent-session') {
+        if (!deps.startAgentSession) {
+          deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_DISPATCH_UNAVAILABLE' })
+          return { kind: 'parked', requestId: next.requestId }
         }
-        if (next.source === 'agent-session') {
-          if (!deps.startAgentSession) {
-            parkedAgentSessions.add(sessionId)
-            deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_DISPATCH_UNAVAILABLE' })
+        try {
+          const result = await deps.startAgentSession({ sessionId, requestId: next.requestId, messageId: next.message.id })
+          if (result === 'started') return { kind: 'started' }
+          if (result === 'rejected') continue
+          if (result === 'compaction-busy') {
+            deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_COMPACTION_BUSY' })
+            return { kind: 'compaction-busy', requestId: next.requestId }
+          }
+          if (result === 'queue-head-waiting') {
+            deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_QUEUE_HEAD_CHANGED' })
+            return { kind: 'queue-head-waiting', requestId: next.requestId }
+          }
+          if (result === 'persistence-failed') return { kind: 'persistence-failed', requestId: next.requestId }
+          if (result === 'busy' || result === 'waiting' || result === 'unavailable') {
+            deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: `AGENT_SESSION_${result.toUpperCase()}` })
             return { kind: 'parked', requestId: next.requestId }
           }
-          draining.add(sessionId)
-          try {
-            const result = await deps.startAgentSession({ sessionId, requestId: next.requestId, messageId: next.message.id })
-            if (result === 'started') return { kind: 'started' }
-            if (result === 'rejected') continue
-            if (result === 'compaction-busy') {
-              deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_COMPACTION_BUSY' })
-              return { kind: 'compaction-busy', requestId: next.requestId }
-            }
-            if (result === 'queue-head-waiting') {
-              parkedAgentSessions.add(sessionId)
-              deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_QUEUE_HEAD_CHANGED' })
-              return { kind: 'queue-head-waiting', requestId: next.requestId }
-            }
-            if (result === 'persistence-failed') return { kind: 'persistence-failed', requestId: next.requestId }
-            if (result === 'busy' || result === 'waiting' || result === 'unavailable') {
-              parkedAgentSessions.add(sessionId)
-              deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: `AGENT_SESSION_${result.toUpperCase()}` })
-              return { kind: 'parked', requestId: next.requestId }
-            }
-            return { kind: 'idle' }
-          } catch (error) {
-            deps.audit('outbound.drain.failed', { sessionId, requestId: next.requestId,
-              error: error instanceof Error ? error.message : String(error) })
-            return { kind: 'retryable-failure', requestId: next.requestId }
-          } finally {
-            draining.delete(sessionId)
-          }
-        }
-        draining.add(sessionId)
-        let result: OutboundSubmitResult
-        try {
-          result = await deps.submitOutbound({
-            sessionId,
-            text: next.message.content,
-            contextIntent: {
-              kind: 'reuse-user',
-              currentUser: { message: next.message, order: { kind: 'persisted', sequence: next.sequence } },
-              requestId: next.requestId
-            }
-          })
+          return { kind: 'idle' }
         } catch (error) {
-          deps.audit('outbound.drain.failed', {
-            sessionId,
-            requestId: next.requestId,
-            error: error instanceof Error ? error.message : String(error)
-          })
-          return { kind: 'retryable-failure', requestId: next.requestId }
-        } finally {
-          draining.delete(sessionId)
-        }
-        if ('rejected' in result) {
-          deps.audit('outbound.drain.rejected', { sessionId, requestId: next.requestId, reason: result.rejected.reason })
+          deps.audit('outbound.drain.failed', { sessionId, requestId: next.requestId,
+            error: error instanceof Error ? error.message : String(error) })
           return { kind: 'retryable-failure', requestId: next.requestId }
         }
-        if (result.accepted === 'turn-started') {
-          return { kind: 'started' }
-        }
-        if (result.accepted === 'local-command') {
-          // B5:主进程无法执行渲染端本地命令(如排队的 /test-cards)——审计 + 消费该条目,继续驱动后续
-          deps.audit('outbound.drain.local_command_consumed', {
-            sessionId,
-            requestId: next.requestId,
-            command: result.command.kind
-          })
-          deps.consumeQueued(sessionId, next.message.id)
-          continue
-        }
-        // queued(理论不可达:reuse-user 排队语义)——审计防静默,跳出等下一次触发
-        deps.audit('outbound.drain.unexpected_queued', { sessionId, requestId: next.requestId })
+      }
+      let result: OutboundSubmitResult
+      try {
+        result = await deps.submitOutbound({
+          sessionId,
+          text: next.message.content,
+          contextIntent: {
+            kind: 'reuse-user',
+            currentUser: { message: next.message, order: { kind: 'persisted', sequence: next.sequence } },
+            requestId: next.requestId
+          }
+        })
+      } catch (error) {
+        deps.audit('outbound.drain.failed', {
+          sessionId,
+          requestId: next.requestId,
+          error: error instanceof Error ? error.message : String(error)
+        })
         return { kind: 'retryable-failure', requestId: next.requestId }
       }
-    } finally {
-      if (draining.has(sessionId)) draining.delete(sessionId)
+      if ('rejected' in result) {
+        deps.audit('outbound.drain.rejected', { sessionId, requestId: next.requestId, reason: result.rejected.reason })
+        return { kind: 'retryable-failure', requestId: next.requestId }
+      }
+      if (result.accepted === 'turn-started') {
+        return { kind: 'started' }
+      }
+      if (result.accepted === 'local-command') {
+        // B5:主进程无法执行渲染端本地命令(如排队的 /test-cards)——审计 + 消费该条目,继续驱动后续
+        deps.audit('outbound.drain.local_command_consumed', {
+          sessionId,
+          requestId: next.requestId,
+          command: result.command.kind
+        })
+        deps.consumeQueued(sessionId, next.message.id)
+        continue
+      }
+      // queued(理论不可达:reuse-user 排队语义)——审计防静默,跳出等下一次触发
+      deps.audit('outbound.drain.unexpected_queued', { sessionId, requestId: next.requestId })
+      return { kind: 'retryable-failure', requestId: next.requestId }
     }
   }
 
   function onTurnProjection(turn: { sessionId: string }, event: { type: string }): void {
     if (!TERMINAL_FACT_EVENTS.has(event.type)) return
-    void drain(turn.sessionId)
+    void drain(turn.sessionId, 'turn-terminal').catch((error) => deps.audit('outbound.drain.failed', {
+      sessionId: turn.sessionId, error: error instanceof Error ? error.message : String(error)
+    }))
   }
 
   return { drain, onTurnProjection }

@@ -2,8 +2,9 @@ import type { SessionStorage } from '../sessionStorage/host/ports'
 import type { SessionMessageCapabilityPort } from './types'
 import { createHash } from 'node:crypto'
 import type { AgentSessionExecutionApproval } from '../../src/shared/domainTypes'
+import type { OutboundDrainWakeReason } from '../outbound/drainWake'
 
-export type SessionMessageDrain = (sessionId: string) => void | Promise<void>
+export type SessionMessageDrain = (sessionId: string, reason?: OutboundDrainWakeReason) => void | Promise<void>
 export type SessionMessageRecoveryIssue = (input: { sessionId: string; requestId: string; stage: 'approval-persistence' | 'drain' }) => void
 
 /** facts phase: resolve a user-visible target and persist an untrusted source; policy/permit remains A02. */
@@ -18,7 +19,7 @@ export function createSessionMessageService(input: {
   }
   const scheduleDrain = (sessionId: string, requestId: string): 'requested' | 'retry-pending' => {
     try {
-      void Promise.resolve(input.requestDesktopDrain(sessionId)).catch(() => reportRecoveryIssue(sessionId, requestId, 'drain'))
+      void Promise.resolve(input.requestDesktopDrain(sessionId, 'queue-enqueued')).catch(() => reportRecoveryIssue(sessionId, requestId, 'drain'))
       return 'requested'
     } catch {
       reportRecoveryIssue(sessionId, requestId, 'drain')

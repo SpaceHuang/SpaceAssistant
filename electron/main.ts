@@ -131,6 +131,7 @@ import { getDefaultAgentRuntime, setDefaultAgentRuntime } from './runtime/agentR
 import { createDesktopAgentRuntime } from './runtime/desktopAgentRuntime'
 import { CallAdmissionGate, getCallAdmissionGate, setCallAdmissionGate } from './runtime/callAdmissionGate'
 import { wakeQueuedAgentSessions } from './outbound/desktopAgentSessionWake'
+import type { OutboundDrainWakeReason } from './outbound/drainWake'
 import { resetActiveAdmissionOnStartup } from './storage/callAdmissionStore'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { initWeChatCliLogger } from './wechat/weChatCliLogger'
@@ -1505,20 +1506,21 @@ app.whenReady().then(async () => {
   // 顺序纪律(P1-1,评审):先清零 DB 活跃段、再构造门——门构造即 loadAdmissionState,
   // 反序会把上一进程的幻影票据读进内存且永无 release,并发上限被永久蚕食
   resetActiveAdmissionOnStartup(db, Date.now())
-  const wakeAgentSessionQueue = () => wakeQueuedAgentSessions({
+  const wakeAgentSessionQueue = (reason: OutboundDrainWakeReason) => wakeQueuedAgentSessions({
     sessionIds: () => sessionStorage.queries.listSessions({ view: 'all' }).map((session) => session.id),
     getNextQueued: (sessionId) => sessionStorage.execution.getNextDesktopQueueInput(sessionId),
     recoverTarget: (sessionId) => sessionStorage.execution.recoverExecutionTarget(sessionId),
-    drain: (sessionId) => requestDesktopDrain(sessionId),
+    reason,
+    drain: (sessionId, wakeReason) => requestDesktopDrain(sessionId, wakeReason),
     onError: (_sessionId, error) => console.warn('[session-message] desktop queue wake failed:',
       error instanceof Error ? error.message : String(error))
   })
   setCallAdmissionGate(new CallAdmissionGate({ db, onReleased: () => {
     // facts-only scan: global capacity release wakes persisted agent-session inputs across desktop sessions.
-    wakeAgentSessionQueue()
+    wakeAgentSessionQueue('capacity-released')
   } }))
   // Startup recovery only wakes durable queued work; approval and atomic claim are rechecked by the drainer.
-  wakeAgentSessionQueue()
+  wakeAgentSessionQueue('startup-recovery')
   // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
   // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
   // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。

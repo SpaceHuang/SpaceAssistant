@@ -1150,7 +1150,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     },
     notifyEnqueued: (sessionId) => {
       // B3(v2 评审):enqueue 落库后若无 active turn,补一次排水(闭环 snapshot→enqueue 窗口竞态)
-      if (turnRuntime.listActive(sessionId).length === 0) void outboundDrainer.drain(sessionId)
+      if (turnRuntime.listActive(sessionId).length === 0) void outboundDrainer.drain(sessionId, 'queue-enqueued')
     },
     contextUsageWarn: async ({ sessionId, attachments }) => computeContextPressureWarnings(ctx.db, sessionId, attachments, sessionQueries, sessionStorage.ensureChatBodyV1),
     newRequestId: () => randomUUID(),
@@ -1229,7 +1229,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     },
     audit: (event, data) => logAgentEvent('warn', event as AgentLogEventName, data as AgentLogFields)
   })
-  ctx.publishDesktopDrainRequester?.((sessionId) => outboundDrainer.drain(sessionId))
+  ctx.publishDesktopDrainRequester?.((sessionId, reason) => outboundDrainer.drain(sessionId, reason))
   turnRuntime.subscribe((turn, event) => outboundDrainer.onTurnProjection(turn, event))
 
   ipcMain.handle('chat:cancel-turn', (_e, turnId: string) => {

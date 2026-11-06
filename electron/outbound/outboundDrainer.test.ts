@@ -647,6 +647,7 @@ describe('createOutboundDrainer（排水不变量）', () => {
           content: isCmd ? `/cmd-${step}` : `msg-${step}`
         })
         enqueuedTotal += 1
+        await drainer.drain(session.id, 'queue-enqueued')
       } else if (roll < 0.6) {
         // 随机终态:清掉一个 active turn 并发终态投影(触发排水)
         const turnId = [...active][0]
@@ -658,13 +659,14 @@ describe('createOutboundDrainer（排水不变量）', () => {
         // 重复终态投影(被挡/无 active 的空触发)
         drainer.onTurnProjection({ sessionId: session.id }, { type: 'source-completed' })
       } else if (roll < 0.9) {
-        await drainer.drain(session.id)
+        await drainer.drain(session.id, roll < 0.83 ? 'capacity-released' : 'startup-recovery')
       } else {
         await settle()
       }
       // 步进不变量:排队条数只可能来自 enqueue(不凭空增);active 非负
       expect(queuedCount(db, session.id)).toBeLessThanOrEqual(enqueuedTotal)
       expect(active.size).toBeGreaterThanOrEqual(0)
+      expect(active.size).toBeLessThanOrEqual(1)
     }
 
     // 排空所有未 settled 的重排链
@@ -781,7 +783,7 @@ describe('createOutboundDrainer（排水不变量）', () => {
     const startAgentSession = vi.fn(async () => {
       if (isSessionContextCompactionLocked(session.id)) {
         ticketReleaseCount += 1
-        if (ticketReleaseCount <= 7) void drainer.drain(session.id)
+        if (ticketReleaseCount <= 7) void drainer.drain(session.id, 'capacity-released')
         return 'compaction-busy' as const
       }
       return 'started' as const
@@ -952,6 +954,42 @@ describe('createOutboundDrainer（排水不变量）', () => {
     }
   })
 
+  it('终态重试写入执行中收到唤醒不会创建第二条重试链', async () => {
+    vi.useFakeTimers()
+    const session = createSession(db, { name: 'settlement-work-inflight' })
+    const owner = createSession(db, { name: 'settlement-work-inflight-owner' })
+    const storage = createSqliteSessionStorage(db)
+    storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'settlement-work-inflight-head', content: 'write once per retry event', authorizationBinding: {} })
+    const startAgentSession = vi.fn(async () => { throw new Error('start failed') })
+    let drainer!: ReturnType<typeof createOutboundDrainer>
+    const settle = vi.fn(() => {
+      if (settle.mock.calls.length > 1) void drainer.drain(session.id, 'capacity-released')
+      return false
+    })
+    drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined,
+      settleAgentSessionStartFailure: settle, audit: vi.fn() })
+
+    try {
+      await drainer.drain(session.id)
+      for (let tick = 0; tick < 12; tick += 1) await Promise.resolve()
+      expect(startAgentSession).toHaveBeenCalledTimes(4)
+      expect(settle).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(1)
+
+      vi.advanceTimersByTime(25)
+      expect(settle).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersByTime(25)
+      expect(settle).toHaveBeenCalledTimes(2)
+      vi.advanceTimersByTime(25)
+      expect(settle).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('更早的真实 runtime-trigger 队首等待清除时不消耗已批准来信启动预算', async () => {
     const target = createSession(db, { name: 'trigger-before-agent-target' })
     const owner = createSession(db, { name: 'trigger-before-agent-owner' })
@@ -1001,12 +1039,12 @@ describe('createOutboundDrainer（排水不变量）', () => {
       const candidate = listQueuedUserMessages(db, { sessionId, queueScope, source: 'agent-session' })[0]
       return candidate ? { ...candidate, source: 'agent-session' as const } : null
     }
-    const wakeAgentQueue = () => wakeQueuedAgentSessions({ sessionIds: () => [target.id],
+    const wakeAgentQueue = (reason: 'capacity-released' | 'turn-terminal' = 'capacity-released') => wakeQueuedAgentSessions({ sessionIds: () => [target.id],
       getNextQueued: filteredAgentQueue, recoverTarget: () => ({ status: 'ready' }),
-      drain: (sessionId) => drainer.drain(sessionId) })
+      reason, drain: (sessionId, wakeReason) => drainer.drain(sessionId, wakeReason) })
     const admissionGate = new CallAdmissionGate({ db, onReleased: () => {
       releaseWakeCount += 1
-      if (releaseWakeCount <= 8) wakeAgentQueue()
+      if (releaseWakeCount <= 8) wakeAgentQueue('capacity-released')
     } })
     const startAgentSession = vi.fn(async ({ sessionId, requestId, messageId }: { sessionId: string; requestId: string; messageId: string }) => {
       const admission = await admissionGate.acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
@@ -1059,7 +1097,7 @@ describe('createOutboundDrainer（排水不变量）', () => {
       .run(Date.now())
     triggerTurnActive = false
     expect(getNextDesktopQueueInput(db, target.id)?.requestId).toBe(accepted.receipt.requestId)
-    wakeAgentQueue()
+    wakeAgentQueue('turn-terminal')
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(startAgentSession).toHaveBeenCalledTimes(2)
@@ -1072,6 +1110,62 @@ describe('createOutboundDrainer（排水不变量）', () => {
       .get(target.id, accepted.receipt.requestId)).toEqual({ state: 'claimed' })
     expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(accepted.source.messageId))
       .toEqual({ status: 'sent' })
+  })
+
+  it('未知来源的物理队首不会被跳过并派发后续来信', async () => {
+    const target = createSession(db, { name: 'invalid-physical-head-target' })
+    const owner = createSession(db, { name: 'invalid-physical-head-owner' })
+    const storage = createSqliteSessionStorage(db)
+    const invalidHead = enqueueQueuedUserMessage(db, { sessionId: target.id, requestId: 'invalid-head', content: 'ordinary' })
+    storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId: 'valid-later-agent-input', content: 'later', authorizationBinding: {} })
+    getDbConnection(db).prepare('UPDATE messages SET content=? WHERE id=?')
+      .run('跨会话来信：来源会话 forged，以下内容不代表用户批准。\n{}', invalidHead.persisted.message.id)
+
+    const selected = getNextDesktopQueueInput(db, target.id)
+    expect(selected).toMatchObject({ requestId: 'invalid-head', source: 'invalid' })
+
+    const submitOutbound = vi.fn()
+    const startAgentSession = vi.fn()
+    const drainer = createOutboundDrainer({ submitOutbound, startAgentSession,
+      listActiveCount: () => 0, getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId),
+      consumeQueued: () => undefined, audit: vi.fn() })
+    await drainer.drain(target.id)
+
+    expect(submitOutbound).not.toHaveBeenCalled()
+    expect(startAgentSession).not.toHaveBeenCalled()
+    expect(getNextDesktopQueueInput(db, target.id)?.requestId).toBe('invalid-head')
+  })
+
+  it('队首等待期间到达的终态唤醒在队首变化后仍会被处理', async () => {
+    const session = createSession(db, { name: 'queue-head-wait-keeps-terminal-wake' })
+    const owner = createSession(db, { name: 'queue-head-wait-keeps-terminal-wake-owner' })
+    const storage = createSqliteSessionStorage(db)
+    const earlierQueueInput = enqueueQueuedUserMessage(db, { sessionId: session.id,
+      requestId: 'earlier-queue-head', content: 'earlier queued input' })
+    storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'wake-preserved-head', content: 'wait then retry', authorizationBinding: {} })
+    let finishFirst!: (result: 'queue-head-waiting') => void
+    const firstAttempt = new Promise<'queue-head-waiting'>((resolve) => { finishFirst = resolve })
+    const startAgentSession = vi.fn().mockImplementationOnce(() => firstAttempt).mockResolvedValue('started')
+    const getAgentCandidate = (sessionId: string) => {
+      const candidate = listQueuedUserMessages(db, { sessionId, queueScope: { kind: 'desktop' }, source: 'agent-session' })[0]
+      return candidate ? { ...candidate, source: 'agent-session' as const } : null
+    }
+    const drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession, listActiveCount: () => 0,
+      getNextQueued: getAgentCandidate, consumeQueued: () => undefined, audit: vi.fn() })
+
+    const pendingDrain = drainer.drain(session.id)
+    await vi.waitFor(() => expect(startAgentSession).toHaveBeenCalledOnce())
+    // The earlier FIFO owner completes after the atomic claim observed it and before dispatch returns.
+    deleteQueuedUserMessage(db, earlierQueueInput.persisted.message.id)
+    drainer.onTurnProjection({ sessionId: session.id }, { type: 'source-completed' })
+    finishFirst('queue-head-waiting')
+    await pendingDrain
+    await vi.waitFor(() => expect(startAgentSession).toHaveBeenCalledTimes(2))
+
+    expect(await Promise.all(startAgentSession.mock.results.map((result) => result.value)))
+      .toEqual(['queue-head-waiting', 'started'])
   })
 
   it('停泊返回时消费排水期间收到的撤回唤醒并驱动新队首', async () => {

@@ -249,7 +249,7 @@ describe('action.session.message', () => {
       accepted: { receipt: { requestId: string; queuedMessageId: string }; duplicate: boolean }; wake: string
     }
     expect(sent).toMatchObject({ accepted: { receipt: { requestId: `${owner}:send-key`, queuedMessageId: expect.any(String) }, duplicate: false }, wake: 'requested' })
-    expect(drain).toHaveBeenCalledWith(target)
+    expect(drain).toHaveBeenCalledWith(target, 'queue-enqueued')
     expect(storage.queries.readMessage({ sessionId: target, messageId: sent.accepted.receipt.queuedMessageId })?.content).toContain('hello')
     await expect(send.handler({ targetSessionId: target, requestId: 'bad-key', content: 'forged owner' }, ctx({ ...messageContext, sessionId: undefined } as never)))
       .rejects.toThrow('SESSION_MESSAGE_CALLER_UNAVAILABLE')
@@ -365,7 +365,7 @@ describe('action.session.message', () => {
     const first = await send.handler(message, ctx({ sessionId: owner, lane: 'desktop', sessionMessages: service,
       sessionMessageAuthorization: authorization })) as { accepted: { duplicate: boolean; receipt: { queuedMessageId: string } }; wake: string }
     expect(first).toMatchObject({ accepted: { duplicate: false, receipt: { queuedMessageId: expect.any(String) } }, wake: 'retry-pending' })
-    expect(drain).toHaveBeenCalledWith(target)
+    expect(drain).toHaveBeenCalledWith(target, 'queue-enqueued')
     expect(recoveryIssues).toHaveBeenCalledWith({ sessionId: target, requestId: `${owner}:approval-write-failure`, stage: 'approval-persistence' })
     expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner, requestId: `${owner}:approval-write-failure` }))
       .toMatchObject({ kind: 'queued', messageId: first.accepted.receipt.queuedMessageId })

@@ -1273,6 +1273,17 @@ export function refreshAgentInputExecutionApproval(
   })
 }
 
+type DesktopQueueHeadRow = MessageRow & { queue_request_id?: string }
+
+/** Shared physical FIFO query for desktop selection and transactional claim. */
+function readDesktopQueueHead(db: AppDatabase, sessionId: string): DesktopQueueHeadRow | undefined {
+  return getDbConnection(db).prepare(`SELECT messages.*,
+      (SELECT request_id FROM queue_input_requests WHERE queue_input_requests.queued_message_id=messages.id
+        AND queue_input_requests.queue_scope=messages.queue_scope ORDER BY created_at ASC LIMIT 1) AS queue_request_id
+    FROM messages WHERE messages.session_id=? AND messages.queue_scope='desktop' AND messages.status='queued' AND messages.role='user'
+    ORDER BY messages.sequence ASC,messages.id ASC LIMIT 1`).get(sessionId) as DesktopQueueHeadRow | undefined
+}
+
 export function enqueueQueuedUserMessage(
   db: AppDatabase,
   input: { sessionId: string; requestId: string; content: string; attachments?: Message['attachments'] }
@@ -1325,8 +1336,7 @@ export function claimQueuedTurnAtomicallyInScope(
       if (!target || !agentExecutionApprovalMatchesSource(approval, source, originDigest) || approval.targetGeneration !== target.generation) {
         throw new Error('AGENT_SESSION_EXECUTION_APPROVAL_STALE')
       }
-      const queueHead = conn.prepare(`SELECT id FROM messages WHERE session_id=? AND queue_scope='desktop' AND role='user' AND status='queued'
-        ORDER BY sequence,id LIMIT 1`).get(input.sessionId) as { id: string } | undefined
+      const queueHead = readDesktopQueueHead(db, input.sessionId)
       if (queueHead?.id !== input.userMessageId) throw new Error('AGENT_SESSION_QUEUE_HEAD_CHANGED')
       if (!input.agentSessionFinalCheck) throw new Error('AGENT_SESSION_EXECUTION_APPROVAL_FINAL_CHECK_REQUIRED')
       let finalCheckPassed = false
@@ -2082,21 +2092,14 @@ export function getNextQueuedMessageInScope(db: AppDatabase, sessionId: string, 
 
 /** The desktop drainer observes the persisted FIFO head, including trigger markers handled by recovery. */
 export function getNextDesktopQueueInput(db: AppDatabase, sessionId: string): QueuedMessageEntry | null {
-  const conn = getDbConnection(db)
-  const rows = conn.prepare(`SELECT messages.*,
-      (SELECT request_id FROM queue_input_requests WHERE queue_input_requests.queued_message_id=messages.id
-        AND queue_input_requests.queue_scope=messages.queue_scope ORDER BY created_at ASC LIMIT 1) AS queue_request_id
-    FROM messages WHERE messages.session_id=? AND messages.queue_scope='desktop' AND messages.status='queued' AND messages.role='user'
-    ORDER BY messages.sequence ASC,messages.id ASC`).all(sessionId) as Array<MessageRow & { queue_request_id?: string }>
-  for (const row of rows) {
-    if (!row.queue_request_id) continue
-    const source = classifyQueueInputSource(db, { sessionId, queueScope: DESKTOP_QUEUE_SCOPE,
+  const row = readDesktopQueueHead(db, sessionId)
+  if (!row) return null
+  const source = row.queue_request_id
+    ? classifyQueueInputSource(db, { sessionId, queueScope: DESKTOP_QUEUE_SCOPE,
       requestId: row.queue_request_id, queuedMessageId: row.id })
-    if (source === 'ordinary-desktop' || source === 'agent-session' || source === 'runtime-trigger') {
-      return { message: rowToStoredMessage(row), sequence: row.sequence, requestId: row.queue_request_id, source }
-    }
-  }
-  return null
+    : 'invalid'
+  return { message: rowToStoredMessage(row), sequence: row.sequence,
+    ...(row.queue_request_id ? { requestId: row.queue_request_id } : {}), source }
 }
 
 /** Facts-only source projection for session.read; never parses the visible message envelope. */
