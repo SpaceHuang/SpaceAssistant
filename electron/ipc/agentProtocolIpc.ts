@@ -1193,7 +1193,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     }
     const admission = await getCallAdmissionGate().acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
       disposition: 'defer', requestId: input.requestId })
-    if (!admission.ok) return 'busy' as const
+    if (!admission.ok) return admission.verdict === 'rejected' && admission.cause === 'persistence-failed'
+      ? 'persistence-failed' as const : 'busy' as const
     let admissionRef: ClaudeAdmissionRef | undefined
     let ticketPrimed = false
     try {

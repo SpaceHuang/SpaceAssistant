@@ -665,7 +665,7 @@ export type OutboundDrainerDeps = {
   listActiveCount: (sessionId: string) => number
   getNextQueued: (sessionId: string) => { message: Message; sequence: number; requestId?: string; source?: import('../sessionStorage/public/model').QueueInputSource } | null
   /** Host-only path for receipt-bound cross-session inputs; never routes through submitOutbound. */
-  startAgentSession?: (input: { sessionId: string; requestId: string; messageId: string }) => Promise<'started' | 'busy' | 'compaction-busy' | 'waiting' | 'unavailable' | 'rejected'>
+  startAgentSession?: (input: { sessionId: string; requestId: string; messageId: string }) => Promise<'started' | 'busy' | 'compaction-busy' | 'persistence-failed' | 'waiting' | 'unavailable' | 'rejected'>
   settleAgentSessionStartFailure?: (input: { sessionId: string; requestId: string }) => boolean
   onCompactionRelease?: (sessionId: string, callback: () => void) => () => void
   /** 消费一条不可由主进程执行的排队条目(本地命令类),由实现层删除落库 */
@@ -685,13 +685,50 @@ const MAX_DRAIN_RETRIES = 3
  *    微任务自动重排(上限 MAX_DRAIN_RETRIES,成功发起即重置),configuring 失败不再导致队列停摆。
  */
 export function createOutboundDrainer(deps: OutboundDrainerDeps) {
-  type DrainAttempt = { kind: 'started' | 'idle' } | { kind: 'parked' | 'compaction-busy' | 'retryable-failure'; requestId: string }
+  type DrainAttempt = { kind: 'started' | 'idle' } | { kind: 'parked' | 'compaction-busy' | 'persistence-failed' | 'retryable-failure'; requestId: string }
   const draining = new Set<string>()
   const retryAttempts = new Map<string, number>()
   const parkedAgentSessions = new Set<string>()
   const compactionBlockedSessions = new Set<string>()
   /** drain 进行中到达(被挡)的终态触发:B6——结束后必须补扫,否则丢触发导致队列停摆 */
   const suppressedTriggers = new Set<string>()
+  const settlementRetries = new Map<string, number>()
+  const MAX_PERSISTENCE_RETRIES = 8
+
+  function schedulePersistenceRetry(sessionId: string, requestId: string, work: () => boolean): void {
+    const key = `${sessionId}\u0000${requestId}`
+    const attempt = (settlementRetries.get(key) ?? 0) + 1
+    settlementRetries.set(key, attempt)
+    if (attempt > MAX_PERSISTENCE_RETRIES) {
+      deps.audit('outbound.drain.persistence_stalled', { sessionId, requestId, attempts: attempt })
+      return
+    }
+    const delayMs = Math.min(25 * 2 ** (attempt - 1), 2_000)
+    const timer = setTimeout(() => {
+      void Promise.resolve().then(work).then((settled) => {
+        if (settled) {
+          settlementRetries.delete(key)
+          void drain(sessionId).catch((error) => deps.audit('outbound.drain.failed', { sessionId, requestId,
+            error: error instanceof Error ? error.message : String(error) }))
+        } else {
+          schedulePersistenceRetry(sessionId, requestId, work)
+        }
+      }).catch((error) => {
+        deps.audit('outbound.drain.persistence_failed', { sessionId, requestId,
+          error: error instanceof Error ? error.message : String(error) })
+        schedulePersistenceRetry(sessionId, requestId, work)
+      })
+    }, delayMs)
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+  }
+
+  function queueDrainRetry(sessionId: string, requestId: string): void {
+    const timer = setTimeout(() => {
+      void drain(sessionId).catch((error) => deps.audit('outbound.drain.failed', { sessionId, requestId,
+        error: error instanceof Error ? error.message : String(error) }))
+    }, 25)
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+  }
 
   function clearSessionRetries(sessionId: string): void {
     for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
@@ -717,9 +754,20 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
         requestId: head?.requestId
       })
       if (head?.source === 'agent-session' && head.requestId === failedRequestId &&
-        deps.settleAgentSessionStartFailure?.({ sessionId, requestId: failedRequestId })) {
-        retryAttempts.delete(retryKey)
-        queueMicrotask(() => { void drain(sessionId) })
+        deps.settleAgentSessionStartFailure) {
+        try {
+          if (deps.settleAgentSessionStartFailure({ sessionId, requestId: failedRequestId })) {
+            retryAttempts.delete(retryKey)
+            queueMicrotask(() => { void drain(sessionId).catch((error) => deps.audit('outbound.drain.failed', { sessionId,
+              requestId: failedRequestId, error: error instanceof Error ? error.message : String(error) })) })
+            return
+          }
+        } catch (error) {
+          deps.audit('outbound.drain.persistence_failed', { sessionId, requestId: failedRequestId,
+            error: error instanceof Error ? error.message : String(error) })
+        }
+        schedulePersistenceRetry(sessionId, failedRequestId, () =>
+          deps.settleAgentSessionStartFailure!({ sessionId, requestId: failedRequestId }))
       }
       return
     }
@@ -762,6 +810,11 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
         compactionBlockedSessions.delete(sessionId)
         queueMicrotask(() => { void drain(sessionId) })
       })
+      return
+    }
+    if (attempt.kind === 'persistence-failed') {
+      suppressedTriggers.delete(sessionId)
+      queueDrainRetry(sessionId, attempt.requestId)
       return
     }
     if (parkedAgentSessions.delete(sessionId)) {
@@ -821,6 +874,7 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
               deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_COMPACTION_BUSY' })
               return { kind: 'compaction-busy', requestId: next.requestId }
             }
+            if (result === 'persistence-failed') return { kind: 'persistence-failed', requestId: next.requestId }
             if (result === 'busy' || result === 'waiting' || result === 'unavailable') {
               parkedAgentSessions.add(sessionId)
               deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: `AGENT_SESSION_${result.toUpperCase()}` })

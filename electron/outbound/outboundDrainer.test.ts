@@ -5,6 +5,9 @@ import { DEFAULT_WIKI_CONFIG, type Message } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
 import { claimQueuedTurnAtomically, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getMessages, getNextQueuedMessage, getNextDesktopQueueInput } from '../database/operations'
 import { createTempDatabase } from '../database/testHelpers'
+import { getDbConnection } from '../database/sqliteStore'
+import { CallAdmissionGate } from '../runtime/callAdmissionGate'
+import { DEFAULT_ADMISSION_POLICY } from '../runtime/callAdmission'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { isSessionContextCompactionLocked, onSessionContextCompactionRelease, withSessionContextCompactionLock } from '../sessionCompactionLock'
 
@@ -792,6 +795,81 @@ describe('createOutboundDrainer（排水不变量）', () => {
     releaseCompaction()
     await compaction
     await vi.waitFor(() => expect(startAgentSession).toHaveBeenCalledTimes(2))
+  })
+
+  it('准入持久化暂时失败后有界重试，存储恢复时无需其他会话事件即可启动原来信', async () => {
+    const session = createSession(db, { name: 'admission-persistence-retry' })
+    const owner = createSession(db, { name: 'admission-persistence-owner' })
+    const storage = createSqliteSessionStorage(db)
+    storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'admission-persistence-head', content: 'retry admission', authorizationBinding: {} })
+    const conn = getDbConnection(db)
+    conn.exec(`CREATE TRIGGER fail_admission_state_once
+      BEFORE INSERT ON configs
+      WHEN NEW.key = 'admission.state'
+      BEGIN SELECT RAISE(ABORT, 'injected admission persistence failure'); END`)
+    const admissionGate = new CallAdmissionGate({ db, policy: structuredClone(DEFAULT_ADMISSION_POLICY) })
+    const audit = vi.fn()
+    const startAgentSession = vi.fn(async () => {
+      const admission = await admissionGate.acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
+        disposition: 'defer', requestId: 'admission-persistence-head' })
+      if (!admission.ok) return admission.verdict === 'rejected' && admission.cause === 'persistence-failed'
+        ? 'persistence-failed' as const : 'busy' as const
+      admission.ticket.release()
+      return 'started' as const
+    })
+    const drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined,
+      settleAgentSessionStartFailure: ({ sessionId, requestId }) => storage.commands.agentSessionMessages.markNotExecuted({ sessionId, requestId, reason: 'start-failed' }),
+      audit })
+
+    await drainer.drain(session.id)
+    await vi.waitFor(() => expect(startAgentSession).toHaveBeenCalledTimes(1), { timeout: 1_000 })
+    conn.exec('DROP TRIGGER fail_admission_state_once')
+    await vi.waitFor(() => expect(startAgentSession).toHaveBeenCalledTimes(2), { timeout: 1_000 })
+
+    expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('admission-persistence-head')
+    expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId: 'admission-persistence-head' }))
+      .toMatchObject({ kind: 'queued' })
+    expect(audit).not.toHaveBeenCalledWith('outbound.drain.stalled', expect.anything())
+  })
+
+  it('终态落库暂时失败时不产生未处理拒绝，恢复后只结算同一来信一次再推进下一条', async () => {
+    const session = createSession(db, { name: 'settlement-persistence-retry' })
+    const owner = createSession(db, { name: 'settlement-persistence-owner' })
+    const storage = createSqliteSessionStorage(db)
+    const first = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'settlement-persistence-head', content: 'must settle', authorizationBinding: {} })
+    enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'settlement-persistence-next', content: 'next' })
+    const conn = getDbConnection(db)
+    conn.exec(`CREATE TRIGGER fail_agent_message_terminal_once
+      BEFORE UPDATE OF state ON queue_input_requests
+      WHEN NEW.request_id = 'settlement-persistence-head' AND NEW.state = 'not-executed:start-failed'
+      BEGIN SELECT RAISE(ABORT, 'injected terminal write failure'); END`)
+    const startAgentSession = vi.fn(async () => { throw new Error('configuration failed') })
+    const settle = vi.fn(({ sessionId, requestId }: { sessionId: string; requestId: string }) =>
+      storage.commands.agentSessionMessages.markNotExecuted({ sessionId, requestId, reason: 'start-failed' }))
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    const drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined,
+      settleAgentSessionStartFailure: settle, audit: vi.fn() })
+
+    try {
+      await drainer.drain(session.id)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(unhandled).toEqual([])
+      expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('settlement-persistence-head')
+      conn.exec('DROP TRIGGER fail_agent_message_terminal_once')
+      await vi.waitFor(() => expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId: 'settlement-persistence-head' }))
+        .toMatchObject({ kind: 'not-executed', reason: 'start-failed' }))
+      await vi.waitFor(() => expect(startAgentSession).toHaveBeenCalledTimes(4))
+      expect(settle).toHaveBeenCalledTimes(2)
+      expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('settlement-persistence-next')
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 
   it('停泊返回时消费排水期间收到的撤回唤醒并驱动新队首', async () => {
