@@ -872,6 +872,74 @@ describe('createOutboundDrainer（排水不变量）', () => {
     }
   })
 
+  it('持续准入持久化失败时重复唤醒共享单条有界重试链', async () => {
+    vi.useFakeTimers()
+    const session = createSession(db, { name: 'admission-retry-bounded' })
+    const owner = createSession(db, { name: 'admission-retry-bounded-owner' })
+    const storage = createSqliteSessionStorage(db)
+    storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'admission-retry-bounded-head', content: 'persistent failure', authorizationBinding: {} })
+    const startAgentSession = vi.fn(async () => 'persistence-failed' as const)
+    const drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined, audit: vi.fn() })
+
+    try {
+      await drainer.drain(session.id)
+      await drainer.drain(session.id)
+      await drainer.drain(session.id)
+      await drainer.drain(session.id)
+      expect(vi.getTimerCount()).toBe(1)
+      for (let attempt = 0; attempt < 10; attempt += 1) await vi.advanceTimersToNextTimerAsync()
+      expect(vi.getTimerCount()).toBe(0)
+      expect(startAgentSession.mock.calls.length).toBeLessThanOrEqual(12)
+      expect(getNextDesktopQueueInput(db, session.id)?.requestId).toBe('admission-retry-bounded-head')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('终态待结算期间重复唤醒不重跑已耗尽的启动预算', async () => {
+    vi.useFakeTimers()
+    const session = createSession(db, { name: 'settlement-wakeup-merge' })
+    const owner = createSession(db, { name: 'settlement-wakeup-merge-owner' })
+    const storage = createSqliteSessionStorage(db)
+    const head = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: session.id,
+      requestId: 'settlement-wakeup-head', content: 'retry start then settle', authorizationBinding: {} })
+    const conn = getDbConnection(db)
+    conn.exec(`CREATE TRIGGER fail_settlement_until_recovered
+      BEFORE UPDATE OF state ON queue_input_requests
+      WHEN NEW.request_id = 'settlement-wakeup-head' AND NEW.state = 'not-executed:start-failed'
+      BEGIN SELECT RAISE(ABORT, 'injected terminal persistence failure'); END`)
+    const startAgentSession = vi.fn(async () => { throw new Error('start failed') })
+    const settle = vi.fn(({ sessionId, requestId }: { sessionId: string; requestId: string }) =>
+      storage.commands.agentSessionMessages.markNotExecuted({ sessionId, requestId, reason: 'start-failed' }))
+    const drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession, listActiveCount: () => 0,
+      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined,
+      settleAgentSessionStartFailure: settle, audit: vi.fn() })
+
+    try {
+      await drainer.drain(session.id)
+      for (let tick = 0; tick < 12; tick += 1) await Promise.resolve()
+      expect(startAgentSession).toHaveBeenCalledTimes(4)
+      expect(settle).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(1)
+      await drainer.drain(session.id)
+      await drainer.drain(session.id)
+      expect(startAgentSession).toHaveBeenCalledTimes(4)
+      expect(settle).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(1)
+      conn.exec('DROP TRIGGER fail_settlement_until_recovered')
+      await vi.advanceTimersByTimeAsync(25)
+      for (let tick = 0; tick < 12; tick += 1) await Promise.resolve()
+      expect(settle).toHaveBeenCalledTimes(2)
+      expect(startAgentSession).toHaveBeenCalledTimes(4)
+      expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId: head.receipt.requestId }))
+        .toMatchObject({ kind: 'not-executed', reason: 'start-failed' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('停泊返回时消费排水期间收到的撤回唤醒并驱动新队首', async () => {
     const session = createSession(db, { name: 'parked-wakeup-revoke' })
     const owner = createSession(db, { name: 'parked-wakeup-owner' })

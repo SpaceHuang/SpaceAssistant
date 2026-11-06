@@ -693,10 +693,27 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
   /** drain 进行中到达(被挡)的终态触发:B6——结束后必须补扫,否则丢触发导致队列停摆 */
   const suppressedTriggers = new Set<string>()
   const settlementRetries = new Map<string, number>()
+  const persistenceRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const settlementPending = new Set<string>()
   const MAX_PERSISTENCE_RETRIES = 8
+
+  function cancelPersistenceRetry(sessionId: string, requestId?: string): void {
+    const prefix = `${sessionId}\u0000`
+    for (const [key, timer] of persistenceRetryTimers) {
+      if (key.startsWith(prefix) && (!requestId || key === `${prefix}${requestId}`)) {
+        clearTimeout(timer)
+        persistenceRetryTimers.delete(key)
+        settlementRetries.delete(key)
+      }
+    }
+    if (!requestId) {
+      for (const key of settlementPending) if (key.startsWith(prefix)) settlementPending.delete(key)
+    } else settlementPending.delete(`${prefix}${requestId}`)
+  }
 
   function schedulePersistenceRetry(sessionId: string, requestId: string, work: () => boolean): void {
     const key = `${sessionId}\u0000${requestId}`
+    if (persistenceRetryTimers.has(key)) return
     const attempt = (settlementRetries.get(key) ?? 0) + 1
     settlementRetries.set(key, attempt)
     if (attempt > MAX_PERSISTENCE_RETRIES) {
@@ -705,9 +722,11 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
     }
     const delayMs = Math.min(25 * 2 ** (attempt - 1), 2_000)
     const timer = setTimeout(() => {
+      persistenceRetryTimers.delete(key)
       void Promise.resolve().then(work).then((settled) => {
         if (settled) {
           settlementRetries.delete(key)
+          settlementPending.delete(key)
           void drain(sessionId).catch((error) => deps.audit('outbound.drain.failed', { sessionId, requestId,
             error: error instanceof Error ? error.message : String(error) }))
         } else {
@@ -719,14 +738,26 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
         schedulePersistenceRetry(sessionId, requestId, work)
       })
     }, delayMs)
+    persistenceRetryTimers.set(key, timer)
     ;(timer as unknown as { unref?: () => void }).unref?.()
   }
 
   function queueDrainRetry(sessionId: string, requestId: string): void {
+    const key = `${sessionId}\u0000${requestId}`
+    if (persistenceRetryTimers.has(key)) return
+    const attempt = (settlementRetries.get(key) ?? 0) + 1
+    settlementRetries.set(key, attempt)
+    if (attempt > MAX_PERSISTENCE_RETRIES) {
+      deps.audit('outbound.drain.persistence_stalled', { sessionId, requestId, attempts: attempt })
+      return
+    }
+    const delayMs = Math.min(25 * 2 ** (attempt - 1), 2_000)
     const timer = setTimeout(() => {
+      persistenceRetryTimers.delete(key)
       void drain(sessionId).catch((error) => deps.audit('outbound.drain.failed', { sessionId, requestId,
         error: error instanceof Error ? error.message : String(error) }))
-    }, 25)
+    }, delayMs)
+    persistenceRetryTimers.set(key, timer)
     ;(timer as unknown as { unref?: () => void }).unref?.()
   }
 
@@ -755,6 +786,7 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       })
       if (head?.source === 'agent-session' && head.requestId === failedRequestId &&
         deps.settleAgentSessionStartFailure) {
+        settlementPending.add(retryKey)
         try {
           if (deps.settleAgentSessionStartFailure({ sessionId, requestId: failedRequestId })) {
             retryAttempts.delete(retryKey)
@@ -782,6 +814,18 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       suppressedTriggers.add(sessionId)
       return
     }
+    const headBeforeDrain = deps.getNextQueued(sessionId)
+    if (headBeforeDrain?.requestId) {
+      const key = `${sessionId}\u0000${headBeforeDrain.requestId}`
+      if (settlementPending.has(key)) return
+      if (persistenceRetryTimers.has(key)) return
+      for (const pendingKey of settlementPending) {
+        if (pendingKey.startsWith(`${sessionId}\u0000`) && pendingKey !== key) cancelPersistenceRetry(sessionId, pendingKey.slice(sessionId.length + 1))
+      }
+      for (const retryKey of persistenceRetryTimers.keys()) {
+        if (retryKey.startsWith(`${sessionId}\u0000`) && retryKey !== key) cancelPersistenceRetry(sessionId, retryKey.slice(sessionId.length + 1))
+      }
+    } else cancelPersistenceRetry(sessionId)
     let attempt: DrainAttempt = { kind: 'idle' }
     try {
       attempt = await drainOnce(sessionId)
@@ -789,6 +833,7 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       if (draining.has(sessionId)) draining.delete(sessionId)
     }
     if (attempt.kind === 'started') {
+      cancelPersistenceRetry(sessionId)
       // 已成功发起:后续丢触发由新 turn 的终态投影接管(turn-started 必有 active)
       for (const key of retryAttempts.keys()) if (key.startsWith(`${sessionId}\u0000`)) retryAttempts.delete(key)
       // 但 submitOutbound await 期间可能有终态被挡(如 configuring 立即失败)——仍需补扫一次
