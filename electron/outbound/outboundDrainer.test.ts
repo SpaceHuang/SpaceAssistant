@@ -3,7 +3,7 @@ import { createOutboundAcceptor as createSessionStorageOutboundAcceptor, createO
 import type { OutboundSubmitIntent, OutboundSubmitResult } from '../../src/shared/outboundProtocol'
 import { DEFAULT_WIKI_CONFIG, type Message } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
-import { claimQueuedTurnAtomically, claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getMessages, getNextQueuedMessage, getNextDesktopQueueInput } from '../database/operations'
+import { claimQueuedTurnAtomically, claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getMessages, getNextQueuedMessage, getNextDesktopQueueInput, listQueuedUserMessages } from '../database/operations'
 import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { CallAdmissionGate } from '../runtime/callAdmissionGate'
@@ -11,6 +11,7 @@ import { DEFAULT_ADMISSION_POLICY } from '../runtime/callAdmission'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { isSessionContextCompactionLocked, onSessionContextCompactionRelease, withSessionContextCompactionLock } from '../sessionCompactionLock'
 import { insertRuntimeTrigger } from '../triggers/store'
+import { wakeQueuedAgentSessions } from './desktopAgentSessionWake'
 import { classifyAgentSessionStartFailure } from './agentSessionStartFailure'
 
 function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
@@ -980,36 +981,74 @@ describe('createOutboundDrainer（排水不变量）', () => {
     expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id,
       requestId: accepted.receipt.requestId, expectedOriginDigest: snapshot.originDigest,
       expectedApprovalDigest: snapshot.approvalDigest ?? null, approval })).not.toBeNull()
-    expect(getNextDesktopQueueInput(db, target.id)?.requestId).toBe(accepted.receipt.requestId)
-    expect(getNextDesktopQueueInput(db, target.id)?.requestId).not.toBe(notification.receipt.requestId)
+    expect(getNextDesktopQueueInput(db, target.id)?.requestId).toBe(notification.receipt.requestId)
+    expect(getNextDesktopQueueInput(db, target.id)?.source).toBe('runtime-trigger')
+    const physicalHeadStart = vi.fn(async () => 'started' as const)
+    const physicalHeadDrainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession: physicalHeadStart,
+      listActiveCount: () => 0, getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId),
+      consumeQueued: () => undefined, audit: vi.fn() })
+    await physicalHeadDrainer.drain(target.id)
+    expect(physicalHeadStart).not.toHaveBeenCalled()
+    expect(getDbConnection(db).prepare('SELECT state FROM queue_input_requests WHERE session_id=? AND request_id=?')
+      .get(target.id, accepted.receipt.requestId)).toEqual({ state: 'queued' })
 
     let triggerTurnActive = false
     let agentTurnActive = false
+    let drainer!: ReturnType<typeof createOutboundDrainer>
+    let ticketReleaseCount = 0
+    let releaseWakeCount = 0
+    const filteredAgentQueue = (sessionId: string) => {
+      const candidate = listQueuedUserMessages(db, { sessionId, queueScope, source: 'agent-session' })[0]
+      return candidate ? { ...candidate, source: 'agent-session' as const } : null
+    }
+    const wakeAgentQueue = () => wakeQueuedAgentSessions({ sessionIds: () => [target.id],
+      getNextQueued: filteredAgentQueue, recoverTarget: () => ({ status: 'ready' }),
+      drain: (sessionId) => drainer.drain(sessionId) })
+    const admissionGate = new CallAdmissionGate({ db, onReleased: () => {
+      releaseWakeCount += 1
+      if (releaseWakeCount <= 8) wakeAgentQueue()
+    } })
     const startAgentSession = vi.fn(async ({ sessionId, requestId, messageId }: { sessionId: string; requestId: string; messageId: string }) => {
+      const admission = await admissionGate.acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
+        disposition: 'defer', requestId })
+      if (!admission.ok) return 'busy' as const
+      let dispatchError: unknown
+      let dispatchStarted = false
       try {
         claimQueuedTurnAtomicallyInScope(db, { sessionId, userMessageId: messageId, turnId: `turn:${requestId}`,
           assistantMessageId: `assistant:${requestId}`, requestId, queueScope, source: 'agent-session',
           agentSessionFinalCheck: () => true })
         agentTurnActive = true
-        return 'started' as const
       } catch (error) {
-        const failure = classifyAgentSessionStartFailure(sessionId, error)
-        if (failure) return failure
-        throw error
+        dispatchError = error
+      } finally {
+        ticketReleaseCount += 1
+        admission.ticket.release()
       }
+      if (dispatchError) {
+        const failure = classifyAgentSessionStartFailure(sessionId, dispatchError)
+        if (failure) return failure
+        throw dispatchError
+      }
+      dispatchStarted = true
+      return dispatchStarted ? 'started' as const : 'waiting' as const
     })
-    const drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession,
+    drainer = createOutboundDrainer({ submitOutbound: vi.fn(), startAgentSession,
       listActiveCount: () => Number(triggerTurnActive || agentTurnActive),
-      getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId), consumeQueued: () => undefined, audit: vi.fn(),
+      getNextQueued: filteredAgentQueue, consumeQueued: () => undefined, audit: vi.fn(),
       settleAgentSessionStartFailure: ({ sessionId, requestId }) => storage.commands.agentSessionMessages.markNotExecuted({ sessionId, requestId, reason: 'start-failed' }) })
 
     await drainer.drain(target.id)
     for (let tick = 0; tick < 8; tick += 1) await Promise.resolve()
     expect(startAgentSession).toHaveBeenCalledTimes(1)
+    expect(ticketReleaseCount).toBe(1)
+    expect(releaseWakeCount).toBe(1)
     expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId: accepted.receipt.requestId }))
       .toMatchObject({ kind: 'queued' })
     expect(getDbConnection(db).prepare('SELECT state FROM queue_input_requests WHERE session_id=? AND request_id=?')
       .get(target.id, accepted.receipt.requestId)).toEqual({ state: 'queued' })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM turns WHERE request_id=?')
+      .get(accepted.receipt.requestId)).toEqual({ count: 0 })
 
     claimQueuedTurnAtomicallyInScope(db, { sessionId: target.id, userMessageId: notification.persisted.message.id,
       turnId: 'trigger-notification-turn', assistantMessageId: 'trigger-notification-assistant', requestId: triggerRequestId,
@@ -1020,10 +1059,12 @@ describe('createOutboundDrainer（排水不变量）', () => {
       .run(Date.now())
     triggerTurnActive = false
     expect(getNextDesktopQueueInput(db, target.id)?.requestId).toBe(accepted.receipt.requestId)
-    await drainer.drain(target.id)
+    wakeAgentQueue()
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(startAgentSession).toHaveBeenCalledTimes(2)
-    expect(await Promise.all(startAgentSession.mock.results.map((result) => result.value))).toEqual(['waiting', 'started'])
+    expect(ticketReleaseCount).toBe(2)
+    expect(await Promise.all(startAgentSession.mock.results.map((result) => result.value))).toEqual(['queue-head-waiting', 'started'])
     expect(startAgentSession.mock.calls.map(([input]) => input.requestId)).toEqual([
       accepted.receipt.requestId, accepted.receipt.requestId
     ])

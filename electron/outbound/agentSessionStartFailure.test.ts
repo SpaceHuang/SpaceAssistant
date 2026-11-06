@@ -28,6 +28,6 @@ describe('agent session start failure classification', () => {
   })
 
   it('parks an approved agent input when an earlier runtime-trigger notification owns the FIFO head', () => {
-    expect(classifyAgentSessionStartFailure('s', new Error('AGENT_SESSION_QUEUE_HEAD_CHANGED'))).toBe('waiting')
+    expect(classifyAgentSessionStartFailure('s', new Error('AGENT_SESSION_QUEUE_HEAD_CHANGED'))).toBe('queue-head-waiting')
   })
 })

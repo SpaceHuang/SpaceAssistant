@@ -2080,7 +2080,7 @@ export function getNextQueuedMessageInScope(db: AppDatabase, sessionId: string, 
   return listQueuedUserMessages(db, { sessionId, queueScope, source })[0] ?? null
 }
 
-/** The desktop drainer arbitrates ordinary and trusted Agent input by one persisted FIFO. */
+/** The desktop drainer observes the persisted FIFO head, including trigger markers handled by recovery. */
 export function getNextDesktopQueueInput(db: AppDatabase, sessionId: string): QueuedMessageEntry | null {
   const conn = getDbConnection(db)
   const rows = conn.prepare(`SELECT messages.*,
@@ -2092,7 +2092,7 @@ export function getNextDesktopQueueInput(db: AppDatabase, sessionId: string): Qu
     if (!row.queue_request_id) continue
     const source = classifyQueueInputSource(db, { sessionId, queueScope: DESKTOP_QUEUE_SCOPE,
       requestId: row.queue_request_id, queuedMessageId: row.id })
-    if (source === 'ordinary-desktop' || source === 'agent-session') {
+    if (source === 'ordinary-desktop' || source === 'agent-session' || source === 'runtime-trigger') {
       return { message: rowToStoredMessage(row), sequence: row.sequence, requestId: row.queue_request_id, source }
     }
   }

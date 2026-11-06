@@ -665,7 +665,7 @@ export type OutboundDrainerDeps = {
   listActiveCount: (sessionId: string) => number
   getNextQueued: (sessionId: string) => { message: Message; sequence: number; requestId?: string; source?: import('../sessionStorage/public/model').QueueInputSource } | null
   /** Host-only path for receipt-bound cross-session inputs; never routes through submitOutbound. */
-  startAgentSession?: (input: { sessionId: string; requestId: string; messageId: string }) => Promise<'started' | 'busy' | 'compaction-busy' | 'persistence-failed' | 'waiting' | 'unavailable' | 'rejected'>
+  startAgentSession?: (input: { sessionId: string; requestId: string; messageId: string }) => Promise<'started' | 'busy' | 'compaction-busy' | 'persistence-failed' | 'queue-head-waiting' | 'waiting' | 'unavailable' | 'rejected'>
   settleAgentSessionStartFailure?: (input: { sessionId: string; requestId: string }) => boolean
   onCompactionRelease?: (sessionId: string, callback: () => void) => () => void
   /** 消费一条不可由主进程执行的排队条目(本地命令类),由实现层删除落库 */
@@ -685,7 +685,7 @@ const MAX_DRAIN_RETRIES = 3
  *    微任务自动重排(上限 MAX_DRAIN_RETRIES,成功发起即重置),configuring 失败不再导致队列停摆。
  */
 export function createOutboundDrainer(deps: OutboundDrainerDeps) {
-  type DrainAttempt = { kind: 'started' | 'idle' } | { kind: 'parked' | 'compaction-busy' | 'persistence-failed' | 'retryable-failure'; requestId: string }
+  type DrainAttempt = { kind: 'started' | 'idle' } | { kind: 'parked' | 'compaction-busy' | 'persistence-failed' | 'queue-head-waiting' | 'retryable-failure'; requestId: string }
   const draining = new Set<string>()
   const retryAttempts = new Map<string, number>()
   const parkedAgentSessions = new Set<string>()
@@ -881,6 +881,14 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
       })
       return
     }
+    if (attempt.kind === 'queue-head-waiting') {
+      parkedAgentSessions.delete(sessionId)
+      clearSessionRetries(sessionId)
+      // Ticket release during the failed claim synchronously woke this same drain.
+      // The physical FIFO head is unchanged, so only its own lifecycle transition may retry it.
+      suppressedTriggers.delete(sessionId)
+      return
+    }
     if (attempt.kind === 'persistence-failed') {
       suppressedTriggers.delete(sessionId)
       queueDrainRetry(sessionId, attempt.requestId)
@@ -928,6 +936,11 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
         if (deps.listActiveCount(sessionId) > 0) return { kind: 'idle' }
         const next = deps.getNextQueued(sessionId)
         if (!next || next.message.role !== 'user' || next.message.status !== 'queued' || !next.requestId) return { kind: 'idle' }
+        if (next.source === 'runtime-trigger') {
+          // Trigger recovery owns this physical FIFO head; do not acquire a turn ticket for later inputs.
+          deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'RUNTIME_TRIGGER_QUEUE_HEAD' })
+          return { kind: 'queue-head-waiting', requestId: next.requestId }
+        }
         if (next.source === 'agent-session') {
           if (!deps.startAgentSession) {
             parkedAgentSessions.add(sessionId)
@@ -942,6 +955,11 @@ export function createOutboundDrainer(deps: OutboundDrainerDeps) {
             if (result === 'compaction-busy') {
               deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_COMPACTION_BUSY' })
               return { kind: 'compaction-busy', requestId: next.requestId }
+            }
+            if (result === 'queue-head-waiting') {
+              parkedAgentSessions.add(sessionId)
+              deps.audit('outbound.drain.parked', { sessionId, requestId: next.requestId, reason: 'AGENT_SESSION_QUEUE_HEAD_CHANGED' })
+              return { kind: 'queue-head-waiting', requestId: next.requestId }
             }
             if (result === 'persistence-failed') return { kind: 'persistence-failed', requestId: next.requestId }
             if (result === 'busy' || result === 'waiting' || result === 'unavailable') {
