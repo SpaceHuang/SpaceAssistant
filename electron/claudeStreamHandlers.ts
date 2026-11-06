@@ -57,7 +57,7 @@ import { safeSummaryContentText } from '../src/shared/safeSummaryText'
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
   getWorkDir: () => string
-  resolveWorkDirForSession: (sessionId: string) => string
+  resolveWorkDirForSession: (sessionId: string, requestId?: string, turnId?: string) => string
   /** R1：桌面链路注入 manager，使装配期快照与调用边界 refresh() 可解析会话绑定（不再只传回合起点字符串） */
   getWorkDirManager?: () => import('./workDirManager').WorkDirManager | undefined
   getUserDataPath: () => string
@@ -91,12 +91,24 @@ const automaticSummaryCache = new SessionContextSummaryCache()
 
 const admissionCancelControllers = new Map<string, AbortController>()
 const preAdmittedTickets = new Map<string, AdmissionTicket>()
+const preAdmittedWorkDirs = new Map<string, Readonly<{ workDir: string; binding: string }>>()
 export type ClaudeAdmissionRef = Readonly<{ sessionId: string; requestId: string; turnId: string }>
 function primedAdmissionKey(ref: ClaudeAdmissionRef): string { return JSON.stringify([ref.sessionId, ref.requestId, ref.turnId]) }
-export function primeClaudeAdmission(ref: ClaudeAdmissionRef, ticket: AdmissionTicket): void {
+export function primeClaudeAdmission(ref: ClaudeAdmissionRef, ticket: AdmissionTicket,
+  workDirSnapshot?: Readonly<{ workDir: string; binding: string }>): void {
   const key = primedAdmissionKey(ref)
   if (preAdmittedTickets.has(key)) throw new Error('CLAUDE_ADMISSION_ALREADY_PRIMED')
   preAdmittedTickets.set(key, ticket)
+  if (workDirSnapshot) preAdmittedWorkDirs.set(key, workDirSnapshot)
+}
+export function getPrimedClaudeWorkDir(ref: ClaudeAdmissionRef): Readonly<{ workDir: string; binding: string }> | undefined {
+  return preAdmittedWorkDirs.get(primedAdmissionKey(ref))
+}
+export function resolvePrimedClaudeWorkDir(ref: ClaudeAdmissionRef, currentBinding: string | undefined, fallback: string): string {
+  const primed = getPrimedClaudeWorkDir(ref)
+  if (!primed) return fallback
+  if (!currentBinding || currentBinding !== primed.binding) throw new Error('AGENT_SESSION_WORKDIR_CHANGED_DURING_PREPARATION')
+  return primed.workDir
 }
 export function takePrimedClaudeAdmission(ref: ClaudeAdmissionRef): AdmissionTicket | undefined {
   const key = primedAdmissionKey(ref)
@@ -108,6 +120,7 @@ export function clearPrimedClaudeAdmission(ref: ClaudeAdmissionRef): void {
   const key = primedAdmissionKey(ref)
   preAdmittedTickets.get(key)?.release()
   preAdmittedTickets.delete(key)
+  preAdmittedWorkDirs.delete(key)
 }
 export function cancelClaudeAdmission(turnId: string): void {
   admissionCancelControllers.get(turnId)?.abort()
@@ -349,6 +362,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
       let requestId = ''
       let eventWriter: SessionEventSink | undefined
       let eventTurnId = ''
+      let admissionRefForCleanup: ClaudeAdmissionRef | undefined
       let finalizePromise: Promise<FinalizeResult> | undefined
       let releaseAdmission: (() => boolean) | undefined
       // 台账写入失败必须可见，但不能把整轮对话打成 llm.error（瞬时 IO 错误会丢弃已流式输出的内容）。
@@ -402,6 +416,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         // The ticket is keyed to the exact host-owned Turn and is consumed only after persisted
         // credentials validate. A public execute IPC with a mismatched Turn cannot release it.
         const admissionRef = { sessionId, requestId, turnId }
+        admissionRefForCleanup = admissionRef
         const preAdmitted = takePrimedClaudeAdmission(admissionRef)
         const admissionGate = getCallAdmissionGate()
         const admission = preAdmitted ? { ok: true as const, ticket: preAdmitted } : await (async () => {
@@ -579,7 +594,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           undefined
         )
         const needsToolWorkDir = builtinCandidates.length > 0 || mayBuildMcpToolSnapshot(listProfiles(db))
-        const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId) : ''
+        const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId, requestId, turnId) : ''
         const currentApprovalTaskMessage = authoritative.messages.find((message) =>
           message.id === authoritative.currentUserMessageId && message.role === 'user')
         const approvalTaskEvidence = buildApprovalTaskEvidence(currentApprovalTaskMessage?.content ?? '')
@@ -984,6 +999,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             : {})
         }
       } finally {
+        if (admissionRefForCleanup) clearPrimedClaudeAdmission(admissionRefForCleanup)
         payload.skillTurnScope?.close()
         const refreshSessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
         try {

@@ -21,6 +21,69 @@ function matched(overrides: Partial<RuntimeTriggerRecord> = {}): RuntimeTriggerR
 describe('runtime trigger recovery and delivery lifecycle', () => {
   afterEach(() => { vi.useRealTimers() })
 
+  it.each(['completed', 'failed'] as const)('retains source-gap failure after a %s one-shot owner notification and recovery replay', async (notificationOutcome) => {
+    const db = createMemoryAppDb()
+    try {
+      const commands = createSessionCommands(db)
+      const owner = createSession(db, { name: 'source-gap-notice-owner' }).id
+      let timestamp = Date.now()
+      const scope = { kind: 'desktop' } as const
+      const service = createRuntimeTriggerService(commands, { now: () => timestamp, authorize: () => true, authorizeTarget: () => true })
+      const registered = await service.register({ ownerSessionId: owner, params: { clientKey: 'source-gap-notice', receiverSessionId: owner,
+        expiresAt: timestamp + 60_000, condition: { type: 'agent_session_message', requestId: `${owner}:missing-source` } } })
+      const triggerId = registered.trigger.triggerId
+      const markerReceipt: { queuedMessageId?: string; turnId?: string; state: string } = { state: 'queued' }
+      const enqueue = vi.fn((input: { sessionId: string; requestId: string; content: string }) => {
+        markerReceipt.queuedMessageId = 'source-gap-marker'
+        return { receipt: { queuedMessageId: markerReceipt.queuedMessageId }, persisted: { message: { id: markerReceipt.queuedMessageId, content: input.content } } }
+      })
+      const delivery = createRuntimeTriggerDelivery({
+        read: (id) => commands.runtimeTriggers.read(id),
+        update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: timestamp }),
+        authorize: (trigger, queueScope) => ({ bindingVersion: 1, requestId: `runtime-trigger:${trigger.id}`, ownerSessionId: owner,
+          receiverSessionId: owner, queueScope, sourceIdentity: trigger.definition.condition, payloadDigest: 'event-digest',
+          policyRevision: 'policy', authorizationGeneration: 'auth', runtimeGeneration: 'runtime' }),
+        queueScope: () => scope, enqueue, readReceipt: () => ({ queuedMessageId: markerReceipt.queuedMessageId }), now: () => timestamp
+      })
+      const recovery = createRuntimeTriggerRecovery({
+        listWaiting: () => commands.runtimeTriggers.listByState('waiting', 100),
+        listMatched: (after) => commands.runtimeTriggers.listByState('matched', 100, after),
+        read: (id) => commands.runtimeTriggers.read(id),
+        evaluateWaiting: (_trigger, now) => ({ kind: 'candidate', event: { type: 'agent_session_message', requestId: `${owner}:missing-source`,
+          occurredAt: now, status: 'source-gap', case: 'agent-message-settlement-missing' } }),
+        match: (id, revision, event) => commands.runtimeTriggers.update(id, revision, { state: 'matched', matchedAt: timestamp, event, updatedAt: timestamp }),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: timestamp }),
+        fail: (id, revision, code, caseId) => commands.runtimeTriggers.update(id, revision, { state: 'failed', result: { code, case: caseId }, updatedAt: timestamp }),
+        deliver: delivery, update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        readReceipt: () => ({ ...markerReceipt }), isSessionBusy: () => false,
+        startReceiver: () => { markerReceipt.turnId = 'source-gap-notice-turn'; markerReceipt.state = 'claimed'; return 'started' },
+        readTurnTerminal: () => ({ kind: 'terminal', outcome: notificationOutcome }), now: () => timestamp
+      })
+
+      await recovery.scan()
+      expect(commands.runtimeTriggers.read(triggerId)).toMatchObject({ state: 'failed', result: {
+        code: 'TRIGGER_SOURCE_GAP', case: 'agent-message-settlement-missing', receiverTurnId: 'source-gap-notice-turn',
+        detail: notificationOutcome, notificationOutcome
+      } })
+      const replay = createRuntimeTriggerRecovery({
+        listWaiting: () => commands.runtimeTriggers.listByState('waiting', 100),
+        listMatched: (after) => commands.runtimeTriggers.listByState('matched', 100, after),
+        read: (id) => commands.runtimeTriggers.read(id), evaluateWaiting: () => ({ kind: 'none' }),
+        match: vi.fn(), expire: vi.fn(), fail: vi.fn(), deliver: delivery,
+        update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        readReceipt: () => ({ ...markerReceipt }), isSessionBusy: () => false,
+        startReceiver: vi.fn(() => 'started' as const), readTurnTerminal: () => ({ kind: 'terminal', outcome: notificationOutcome }), now: () => timestamp
+      })
+      timestamp += 1_000
+      await replay.scan()
+      expect(enqueue).toHaveBeenCalledTimes(1)
+      expect(service.get({ ownerSessionId: owner, triggerId }).trigger).toMatchObject({ state: 'failed', failure: {
+        code: 'TRIGGER_SOURCE_GAP', case: 'agent-message-settlement-missing'
+      } })
+    } finally { db.close() }
+  })
+
   it.each([true, false] as const)('reconciles a target-unavailable result when target deletion is before registration=%s and delivers one owner marker', async (registerBeforeDelete) => {
     const db = createMemoryAppDb()
     try {

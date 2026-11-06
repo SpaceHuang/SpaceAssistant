@@ -6,7 +6,7 @@ import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import type { StorageProfileCoordinator } from './storageProfile/storageProfileCoordinator'
 import { CONFIG_KEYS, readToolsConfig } from './ipc/ipcShared'
-import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
+import { resolvePrimedClaudeWorkDir, registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
@@ -150,7 +150,7 @@ import { applyMainWindowIcon, setupWindowIconThemeListener } from './windowIcon'
 import { getMainWindowFrameOptions } from './windowFrame'
 import { attachWindowMaximizeEvents, registerWindowControlsIpc } from './windowControlsIpc'
 import { isAllowedExternalUrl, openExternalLink } from './externalLink'
-import { createWorkDirManager, resolveWorkDirForSession, type WorkDirManager } from './workDirManager'
+import { createWorkDirManager, resolveWorkDirForSession, workDirAuthorizationBinding, workDirAuthorizationSnapshot, type WorkDirManager } from './workDirManager'
 import { FloatingNotificationManager } from './floatingNotificationManager'
 import { runStartupDecisionCacheCleanup } from './confirmation/cacheMaintenanceHooks'
 import { runExemptionMigrationOnce } from './confirmation/exemptionMigrationRunner'
@@ -792,19 +792,55 @@ app.whenReady().then(async () => {
   })
   const sessionStorage = sessionStorageHost.storage
   let requestDesktopDrain: SessionMessageDrain = () => { throw new Error('SESSION_MESSAGE_DRAIN_UNAVAILABLE') }
+  const resolveSessionWorkDir = (sessionId: string) => {
+    if (!workDirManager) return undefined
+    return resolveWorkDirForSession(sessionStorage.queries, sessionId,
+      () => workDirManager!.listProfiles(),
+      () => workDirManager!.getActiveProfileId(),
+      () => workDirManager!.getActiveWorkDir())
+  }
   const resolveSessionWorkDirProfileId = (sessionId: string): string | undefined => {
-    const session = sessionStorage.queries.readSession(sessionId)
-    if (!session) return undefined
-    if (session.fixedWorkDir) return `fixed:${path.resolve(session.fixedWorkDir)}`
-    return session.workDirProfileId ?? workDirManager?.getActiveProfileId()
+    return workDirAuthorizationBinding(resolveSessionWorkDir(sessionId))
   }
   const sessionMessages = createSessionMessageService({ storage: sessionStorage,
     requestDesktopDrain: (sessionId) => requestDesktopDrain(sessionId),
     resolveWorkDirProfileId: resolveSessionWorkDirProfileId })
   const agentSessionExecutionAuthorization = createAgentSessionExecutionAuthorization({ storage: sessionStorage,
     resolveWorkDirProfileId: resolveSessionWorkDirProfileId,
+    resolveWorkDirSnapshot: (sessionId) => workDirAuthorizationSnapshot(resolveSessionWorkDir(sessionId)),
     evaluateCurrentPolicy: ({ sessionId }) => evaluateAgentSessionExecutionPolicy({ sessionId,
       rules: resolveEffectivePolicyRulesWithOrigin(db, 'desktop').rules, config: readToolsConfig(db) }),
+    requestUserConfirmation: async ({ sessionId, requestId, messageId, ruleId, decisionTraceRef, source }) => {
+      const target = sessionStorage.queries.readSession(sessionId)
+      const message = sessionStorage.queries.readMessage({ sessionId, messageId })
+      if (!target || target.ownership !== 'user' || target.visibility === 'hidden' || !message || typeof message.content !== 'string' ||
+        createHash('sha256').update(message.content, 'utf8').digest('hex') !== source.payloadSha256) return 'waiting'
+      const audit = getSecurityAuditLog()
+      const auditBase = { lane: 'desktop' as const, sessionId, requestId, toolUseId: messageId, toolName: 'toolkit.call',
+        actionClass: 'execute' as const, riskLevel: 'medium' as const, factsSummary: '跨会话来信执行权限重审',
+        signals: ['toolkit-capability'], decisionId: decisionTraceRef, decisionRuleId: ruleId }
+      audit.record({ ...auditBase, ts: Date.now(), event: 'policy.decision', decision: 'require-confirm',
+        answerer: 'user', ruleId, reason: '跨会话来信执行授权在启动恢复时需要人工重审。', actor: 'system' })
+      audit.record({ ...auditBase, ts: Date.now(), event: 'confirm.request', actor: 'user' })
+      let result: 'approved' | 'rejected' | 'waiting' = 'waiting'
+      try {
+        const parent = getMainWindow()
+        const response = await (parent
+          ? dialog.showMessageBox(parent, { type: 'warning', title: '确认执行跨会话来信',
+              message: `会话“${target.name}”收到一条需要确认后才能执行的跨会话来信。`,
+              detail: `策略规则：${ruleId}\n\n来信内容：\n${message.content}`,
+              buttons: ['批准执行一次', '拒绝此来信', '暂不处理'], defaultId: 2, cancelId: 2, noLink: true })
+          : dialog.showMessageBox({ type: 'warning', title: '确认执行跨会话来信',
+              message: `会话“${target.name}”收到一条需要确认后才能执行的跨会话来信。`,
+              detail: `策略规则：${ruleId}\n\n来信内容：\n${message.content}`,
+              buttons: ['批准执行一次', '拒绝此来信', '暂不处理'], defaultId: 2, cancelId: 2, noLink: true }))
+        result = response.response === 0 ? 'approved' : response.response === 1 ? 'rejected' : 'waiting'
+      } catch { result = 'waiting' }
+      audit.record({ ...auditBase, ts: Date.now(), event: 'confirm.outcome', actor: result === 'waiting' ? 'system' : 'user',
+        outcome: result === 'approved' ? 'approved' : result === 'rejected' ? 'rejected' : 'cancelled',
+        cause: result === 'approved' ? 'user-approved' : result === 'rejected' ? 'user-denied' : 'cancelled' })
+      return result
+    },
     readCurrentAuthority: () => {
       try {
         const conn = getDbConnection(db)
@@ -1293,15 +1329,12 @@ app.whenReady().then(async () => {
     getApiKey,
     getWorkDir: () => workDirState,
     getWorkDirManager: () => workDirManager ?? undefined,
-    resolveWorkDirForSession: (sessionId) => {
-      const resolved = resolveWorkDirForSession(
-        sessionStorage.queries,
-        sessionId,
-        () => workDirManager!.listProfiles(),
-        () => workDirManager!.getActiveProfileId(),
-        () => workDirManager!.getActiveWorkDir()
-      )
-      return resolved?.workDir ?? workDirState
+    resolveWorkDirForSession: (sessionId, requestId, turnId) => {
+      const resolved = resolveSessionWorkDir(sessionId)
+      const snapshot = workDirAuthorizationSnapshot(resolved)
+      return requestId && turnId
+        ? resolvePrimedClaudeWorkDir({ sessionId, requestId, turnId }, snapshot?.binding, snapshot?.workDir ?? workDirState)
+        : snapshot?.workDir ?? resolved?.workDir ?? workDirState
     },
     getUserDataPath: () => app.getPath('userData'),
     getToolsConfig: () => {

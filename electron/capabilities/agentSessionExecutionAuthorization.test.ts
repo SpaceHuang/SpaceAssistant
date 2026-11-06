@@ -12,7 +12,7 @@ describe('agent-session execution authorization', () => {
 
   it('uses the current shared toolkit policy for reauthorization without exposing the queued body', () => {
     const decision = evaluateAgentSessionExecutionPolicy({ sessionId: 'execution-target', rules: DEFAULT_POLICY_RULES, config: {} })
-    expect(decision).toEqual({ kind: 'require-confirm' })
+    expect(decision).toEqual({ kind: 'require-confirm', ruleId: 'toolkit-act-ask' })
     const denied = evaluateAgentSessionExecutionPolicy({ sessionId: 'execution-target', config: {}, rules: [
       { id: 'execution-target-deny', when: 'invocation', match: { lane: ['desktop'], toolName: 'toolkit.call', signals: ['toolkit-act'] },
         action: 'deny', reason: 'execution denied by policy' }
@@ -143,6 +143,69 @@ describe('agent-session execution authorization', () => {
     expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
   })
 
+  it('rejects an old approval when the same profile id resolves to a different actual path', async () => {
+    const db = createMemoryAppDb(); dbs.push(db)
+    const owner = createSession(db, { name: 'same-profile-path-owner', workDirProfileId: 'profile-a' })
+    const target = createSession(db, { name: 'same-profile-path-target', workDirProfileId: 'profile-a' })
+    const storage = createSqliteSessionStorage(db)
+    const requestId = 'same-profile-path-change'
+    const bindingA = 'profile-a:sha256-path-a'
+    const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId, content: 'approval bound to path a', authorizationBinding: { ownerSessionId: owner.id,
+        targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: bindingA, queueScope: 'desktop',
+        payloadDigest: createHash('sha256').update('approval bound to path a').digest('hex') } })
+    const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision-path-a', permitRef: 'permit-path-a',
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: bindingA, requestId,
+      messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
+      policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: '1', approvedAt: Date.now() }
+    storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })
+    const requestUserConfirmation = vi.fn(async () => 'approved' as const)
+    const service = createAgentSessionExecutionAuthorization({ storage,
+      readCurrentAuthority: () => ({ policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: '1' }),
+      resolveWorkDirProfileId: () => 'profile-a:sha256-path-b',
+      evaluateCurrentPolicy: () => ({ kind: 'require-confirm', ruleId: 'toolkit-act-ask' }), requestUserConfirmation })
+    const resolved = service.resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId })
+    expect(resolved).toMatchObject({ kind: 'waiting', reason: 'source-mismatch' })
+    await expect(service.reauthorize!({ sessionId: target.id, requestId, messageId: accepted.source.messageId })).resolves.toBe('waiting')
+    expect(requestUserConfirmation).not.toHaveBeenCalled()
+    expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
+  })
+
+  it('rechecks the effective workdir path inside the atomic claim callback', () => {
+    const db = createMemoryAppDb(); dbs.push(db)
+    const owner = createSession(db, { name: 'claim-path-owner', workDirProfileId: 'profile-a' })
+    const target = createSession(db, { name: 'claim-path-target', workDirProfileId: 'profile-a' })
+    const storage = createSqliteSessionStorage(db)
+    const requestId = 'claim-path-change'
+    const binding = 'profile-a:sha256-path-a'
+    const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId, content: 'claim path binding', authorizationBinding: { ownerSessionId: owner.id, targetSessionId: target.id,
+        targetGeneration: target.generation, workDirProfileId: binding, queueScope: 'desktop',
+        payloadDigest: createHash('sha256').update('claim path binding').digest('hex') } })
+    const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'decision-claim-path', permitRef: 'permit-claim-path',
+      ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: binding, requestId,
+      messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
+      policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: '1', approvedAt: Date.now() }
+    storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })
+    let pathBinding = binding
+    const resolved = createAgentSessionExecutionAuthorization({ storage,
+      readCurrentAuthority: () => ({ policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: '1' }),
+      resolveWorkDirProfileId: () => pathBinding,
+      resolveWorkDirSnapshot: () => ({ workDir: pathBinding.endsWith('path-a') ? '/work/a' : '/work/b', binding: pathBinding })
+    }).resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId })
+    expect(resolved.kind).toBe('approved')
+    if (resolved.kind !== 'approved') throw new Error(`unexpected waiting: ${resolved.reason}`)
+    const current = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    pathBinding = 'profile-a:sha256-path-b'
+    expect(resolved.finalCheck({ source: current.source, approval: current.approval!, originDigest: current.originDigest,
+      approvalDigest: current.approvalDigest!, targetGeneration: target.generation })).toBe(false)
+    expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
+  })
+
   it('re-enters target execution policy after restart even when the sender session was deleted', () => {
     const db = createMemoryAppDb(); dbs.push(db)
     const owner = createSession(db, { name: 'restart-policy-owner', workDirProfileId: 'profile-a' })
@@ -174,7 +237,7 @@ describe('agent-session execution authorization', () => {
     expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId })).toMatchObject({ kind: 'queued' })
     const requireConfirm = createAgentSessionExecutionAuthorization({ storage,
       readCurrentAuthority: () => ({ policyRevision: '1', authorizationGeneration: '1', runtimeGeneration: 'new-process' }),
-      resolveWorkDirProfileId: () => 'profile-a', evaluateCurrentPolicy: () => ({ kind: 'require-confirm' }) })
+      resolveWorkDirProfileId: () => 'profile-a', evaluateCurrentPolicy: () => ({ kind: 'require-confirm', ruleId: 'toolkit-act-ask' }) })
     expect(requireConfirm.resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId }))
       .toEqual({ kind: 'waiting', reason: 'approval-stale' })
     expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
@@ -183,6 +246,46 @@ describe('agent-session execution authorization', () => {
       resolveWorkDirProfileId: () => 'profile-a', evaluateCurrentPolicy: () => ({ kind: 'allow' }) })
     expect(allow.resolve({ sessionId: target.id, requestId, messageId: accepted.source.messageId }))
       .toEqual({ kind: 'waiting', reason: 'approval-stale' })
+    expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
+  })
+
+  it('replays a missing approval through deduplicated target confirmation without creating a Turn while waiting', async () => {
+    const db = createMemoryAppDb(); dbs.push(db)
+    const owner = createSession(db, { name: 'recovery-confirm-owner', workDirProfileId: 'profile-a' })
+    const target = createSession(db, { name: 'recovery-confirm-target', workDirProfileId: 'profile-a' })
+    const storage = createSqliteSessionStorage(db)
+    const requestId = 'recovery-confirm-request'
+    const accepted = storage.commands.agentSessionMessages.accept({ ownerSessionId: owner.id, targetSessionId: target.id, requestId,
+      content: 'persisted through application restart', authorizationBinding: { decisionTraceRef: 'send-decision',
+        permitRef: 'send-user-receipt', ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation,
+        workDirProfileId: 'profile-a', queueScope: 'desktop', payloadDigest: createHash('sha256').update('persisted through application restart').digest('hex'),
+        policyRevision: '1', authorizationGeneration: 'old-auth', runtimeGeneration: 'old-runtime' } })
+    let resolveConfirmation!: (value: 'approved' | 'rejected' | 'waiting') => void
+    const requestUserConfirmation = vi.fn(() => new Promise<'approved' | 'rejected' | 'waiting'>((resolve) => { resolveConfirmation = resolve }))
+    const service = createAgentSessionExecutionAuthorization({ storage,
+      readCurrentAuthority: () => ({ policyRevision: '2', authorizationGeneration: 'new-auth', runtimeGeneration: 'new-runtime' }),
+      resolveWorkDirProfileId: () => 'profile-a',
+      evaluateCurrentPolicy: () => ({ kind: 'require-confirm', ruleId: 'toolkit-act-ask' }), requestUserConfirmation })
+    const input = { sessionId: target.id, requestId, messageId: accepted.source.messageId }
+    const first = service.reauthorize!(input)
+    const concurrent = service.reauthorize!(input)
+    await Promise.resolve()
+    expect(requestUserConfirmation).toHaveBeenCalledTimes(1)
+    expect(storage.commands.agentSessionMessages.readSettlement({ ownerSessionId: owner.id, requestId })).toMatchObject({ kind: 'queued' })
+    expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
+    resolveConfirmation('waiting')
+    await expect(first).resolves.toBe('waiting')
+    await expect(concurrent).resolves.toBe('waiting')
+    expect(storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })?.approval).toBeUndefined()
+
+    requestUserConfirmation.mockResolvedValueOnce('approved')
+    await expect(service.reauthorize!(input)).resolves.toBe('approved')
+    expect(storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })?.approval).toMatchObject({
+      policyRevision: '2', authorizationGeneration: 'new-auth', runtimeGeneration: 'new-runtime',
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId, messageId: accepted.source.messageId,
+      workDirProfileId: 'profile-a', queueScope: 'desktop', payloadDigest: accepted.source.payloadSha256
+    })
+    expect(service.resolve(input).kind).toBe('approved')
     expect(storage.execution.readTurnByRequest({ sessionId: target.id, requestId })).toBeUndefined()
   })
 

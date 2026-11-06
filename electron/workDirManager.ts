@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import type { Session } from '../src/shared/domainTypes'
 import type { WorkDirProfile } from '../src/shared/feishuTypes'
 import type { AppDatabase } from './database'
@@ -106,6 +106,19 @@ export type ResolvedSessionWorkDir = {
   profileId: string
   workDir: string
   isSensitive?: boolean
+}
+
+export function workDirAuthorizationSnapshot(resolved: ResolvedSessionWorkDir | null | undefined): Readonly<{ workDir: string; binding: string }> | undefined {
+  if (!resolved?.workDir) return undefined
+  let effectivePath = path.resolve(resolved.workDir)
+  try { effectivePath = fs.realpathSync.native(effectivePath) } catch { /* nonexistent paths retain their normalized configured target */ }
+  const pathDigest = createHash('sha256').update(effectivePath, 'utf8').digest('hex')
+  return { workDir: effectivePath, binding: `${resolved.profileId || 'fixed'}:${pathDigest}` }
+}
+
+/** Stable authorization binding for the effective directory the executor will use. */
+export function workDirAuthorizationBinding(resolved: ResolvedSessionWorkDir | null | undefined): string | undefined {
+  return workDirAuthorizationSnapshot(resolved)?.binding
 }
 
 /** 按会话绑定的 Profile 解析 workDir；缺失时回退到当前 active profile */

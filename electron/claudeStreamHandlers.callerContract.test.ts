@@ -5,7 +5,7 @@ import { getDbConnection, openDatabase, setConfigValue, type AppDatabase } from 
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
-import { clearPrimedClaudeAdmission, primeClaudeAdmission, takePrimedClaudeAdmission } from './claudeStreamHandlers'
+import { clearPrimedClaudeAdmission, primeClaudeAdmission, resolvePrimedClaudeWorkDir, takePrimedClaudeAdmission } from './claudeStreamHandlers'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createAnthropicStreamHarness } from './testSupport/anthropicStreamHarness'
 
@@ -156,6 +156,15 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
     expect(ticket.release).not.toHaveBeenCalled()
     ticket.release()
     expect(ticket.release).toHaveBeenCalledOnce()
+  })
+
+  it('uses the approved effective workdir snapshot and rejects a profile path change before tool setup', () => {
+    const ref = { sessionId: 'workspace-session', requestId: 'workspace-request', turnId: 'workspace-turn' }
+    primeClaudeAdmission(ref, { release: vi.fn(() => true) } as never, { workDir: '/workspace/a', binding: 'profile-a:path-a' })
+    expect(resolvePrimedClaudeWorkDir(ref, 'profile-a:path-a', '/workspace/b')).toBe('/workspace/a')
+    expect(() => resolvePrimedClaudeWorkDir(ref, 'profile-a:path-b', '/workspace/b'))
+      .toThrow('AGENT_SESSION_WORKDIR_CHANGED_DURING_PREPARATION')
+    clearPrimedClaudeAdmission(ref)
   })
 
   beforeEach(() => {

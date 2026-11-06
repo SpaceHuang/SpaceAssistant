@@ -62,7 +62,8 @@ export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord
     catch { return { kind: 'source-gap', case: 'agent-message-settlement-unavailable' } }
     if (!settlement || settlement.kind === 'source-gap') {
       return input.now >= trigger.expiresAt ? { kind: 'expired', case: 'source-expired' }
-        : { kind: 'candidate', event: { type: 'agent_session_message', occurredAt: input.now, requestId: condition.requestId, status: 'source-gap' } }
+        : { kind: 'candidate', event: { type: 'agent_session_message', occurredAt: input.now, requestId: condition.requestId,
+          status: 'source-gap', case: settlement?.kind === 'source-gap' ? 'agent-message-settlement-invalid' : 'agent-message-settlement-missing' } }
     }
     if (settlement.kind === 'queued' || settlement.kind === 'claimed') {
       return input.now >= trigger.expiresAt ? { kind: 'expired', case: 'source-expired' } : { kind: 'none' }

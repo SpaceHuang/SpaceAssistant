@@ -4,7 +4,7 @@ import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSession } from './database/operations'
 import { openDatabase, setConfigValue } from './database'
-import { createWorkDirManager, listSessionsForProfile, resolveWorkDirForSession } from './workDirManager'
+import { createWorkDirManager, listSessionsForProfile, resolveWorkDirForSession, workDirAuthorizationBinding, workDirAuthorizationSnapshot } from './workDirManager'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 
 function tempDir(): string {
@@ -161,6 +161,44 @@ describe('WorkDirManager', () => {
       )
 
       expect(resolved).toEqual({ profileId: b.id, workDir: dirB, isSensitive: false })
+    })
+
+    it('changes the authorization binding when a profile keeps its id but changes path', () => {
+      const dirA = tempDir()
+      const dirB = tempDir()
+      dirs.push(dirA, dirB)
+      const { db, manager, queries } = setupManager()
+      const profile = manager.addProfile({ name: 'Mutable profile', path: dirA }).profile!
+      const session = createSession(db, { name: 'Bound session', workDirProfileId: profile.id })
+      const resolveBinding = () => workDirAuthorizationBinding(resolveWorkDirForSession(queries, session.id,
+        () => manager.listProfiles(), () => manager.getActiveProfileId(), () => manager.getActiveWorkDir()))
+      const before = resolveBinding()
+
+      expect(manager.updateProfile(profile.id, { path: dirB }).success).toBe(true)
+      expect(resolveBinding()).not.toBe(before)
+      expect(resolveWorkDirForSession(queries, session.id, () => manager.listProfiles(),
+        () => manager.getActiveProfileId(), () => manager.getActiveWorkDir())?.workDir).toBe(dirB)
+    })
+
+    it('binds and executes the real directory when a stable symlink is redirected', () => {
+      const dirA = tempDir()
+      const dirB = tempDir()
+      const linkRoot = tempDir()
+      const link = path.join(linkRoot, 'workspace')
+      dirs.push(dirA, dirB, linkRoot)
+      fs.symlinkSync(dirA, link, 'dir')
+      const { db, manager, queries } = setupManager()
+      const profile = manager.addProfile({ name: 'Symlink profile', path: link }).profile!
+      const session = createSession(db, { name: 'Symlink bound session', workDirProfileId: profile.id })
+      const resolveSnapshot = () => workDirAuthorizationSnapshot(resolveWorkDirForSession(queries, session.id,
+        () => manager.listProfiles(), () => manager.getActiveProfileId(), () => manager.getActiveWorkDir()))!
+      const before = resolveSnapshot()
+      expect(before.workDir).toBe(fs.realpathSync(dirA))
+      fs.unlinkSync(link)
+      fs.symlinkSync(dirB, link, 'dir')
+      const after = resolveSnapshot()
+      expect(after.workDir).toBe(fs.realpathSync(dirB))
+      expect(after.binding).not.toBe(before.binding)
     })
 
     it('falls back to active profile when session has no profile id', () => {

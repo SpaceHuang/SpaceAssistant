@@ -1163,7 +1163,23 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   const startAgentSession = async (input: { sessionId: string; requestId: string; messageId: string }) => {
     const requestId = input.requestId.trim()
     if (!requestId || requestId.length > 200 || requestId !== input.requestId) throw new Error('Invalid requestId')
-    const approval = ctx.agentSessionExecutionAuthorization?.resolve(input)
+    let approval = ctx.agentSessionExecutionAuthorization?.resolve(input)
+    if (!approval) return 'unavailable' as const
+    if (approval.kind === 'waiting' && approval.reason !== 'source-mismatch' && ctx.agentSessionExecutionAuthorization?.reauthorize) {
+      const reauthorization = await ctx.agentSessionExecutionAuthorization.reauthorize(input)
+      if (reauthorization === 'policy-rejected') {
+        const settled = sessionCommands.agentSessionMessages.markNotExecuted({ sessionId: input.sessionId,
+          requestId: input.requestId, reason: 'policy-rejected' })
+        return settled ? 'rejected' as const : 'waiting' as const
+      }
+      if (reauthorization === 'user-rejected') {
+        const settled = sessionCommands.agentSessionMessages.markNotExecuted({ sessionId: input.sessionId,
+          requestId: input.requestId, reason: 'authorized-cancel' })
+        return settled ? 'rejected' as const : 'waiting' as const
+      }
+      if (reauthorization === 'waiting') return 'waiting' as const
+      approval = ctx.agentSessionExecutionAuthorization.resolve(input)
+    }
     if (!approval) return 'unavailable' as const
     if (approval.kind === 'waiting') return 'waiting' as const
     if (approval.kind === 'rejected') {
@@ -1183,7 +1199,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       const prepared = await prepareTurnInternal({ mode: 'reuse-user', requestId: input.requestId,
         sessionId: input.sessionId, userMessageId: input.messageId, excludeMessageIds: [], config: {} }, approval.finalCheck)
       admissionRef = { sessionId: prepared.sessionId, requestId: prepared.requestId, turnId: prepared.turnId }
-      primeClaudeAdmission(admissionRef, admission.ticket)
+      primeClaudeAdmission(admissionRef, admission.ticket, approval.workDirSnapshot)
       ticketPrimed = true
       const dispatched = await executeTurnInternal(null, { requestId: prepared.requestId, turnId: prepared.turnId,
         turnStartToken: prepared.startToken, sessionId: prepared.sessionId }, undefined, admissionRef)
