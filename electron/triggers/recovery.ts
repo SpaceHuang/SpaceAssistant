@@ -32,6 +32,8 @@ export function createRuntimeTriggerRecovery(input: {
   deliver(triggerId: string): RuntimeTriggerDeliveryResult
   update(triggerId: string, expectedRevision: number, patch: Partial<Pick<RuntimeTriggerRecord, 'state' | 'messageId' | 'attempts' | 'nextAttemptAt' | 'result' | 'updatedAt'>>): RuntimeTriggerRecord | null
   readReceipt(trigger: RuntimeTriggerRecord): Receipt | undefined
+  /** Remove only the still-queued runtime-trigger marker before terminally failing its delivery. */
+  cancelQueuedMarker?: (trigger: RuntimeTriggerRecord) => boolean
   isSessionBusy(sessionId: string): boolean
   startReceiver(input: { sessionId: string; requestId: string; messageId: string }): Promise<'started' | 'busy' | 'unavailable'> | 'started' | 'busy' | 'unavailable'
   readTurnTerminal(sessionId: string, turnId: string): Promise<TurnTerminal> | TurnTerminal
@@ -63,6 +65,32 @@ export function createRuntimeTriggerRecovery(input: {
   }
 
   const failDelivery = (trigger: RuntimeTriggerRecord, caseId: string): void => {
+    let receipt: Receipt | undefined
+    try { receipt = input.readReceipt(trigger) }
+    catch (error) {
+      input.onDeliveryError?.(trigger.id, error)
+      return
+    }
+    if (receipt?.state === 'claimed' || receipt?.turnId) return
+    if (receipt?.state === 'queued' && receipt.queuedMessageId) {
+      let cancelled = false
+      try { cancelled = input.cancelQueuedMarker?.(trigger) === true }
+      catch (error) { input.onDeliveryError?.(trigger.id, error) }
+      if (!cancelled) {
+        try { receipt = input.readReceipt(trigger) }
+        catch (error) {
+          input.onDeliveryError?.(trigger.id, error)
+          return
+        }
+        // A concurrent atomic claim owns the marker now; its persisted Turn will settle the trigger.
+        if (receipt?.state === 'claimed' || receipt?.turnId) return
+        // Keep the trigger matched so a later recovery scan can retry cleanup instead of stranding FIFO.
+        if (receipt?.state === 'queued' && receipt.queuedMessageId) {
+          input.onDeliveryError?.(trigger.id, new Error('runtime trigger queued marker cancellation unavailable'))
+          return
+        }
+      }
+    }
     const sourceFailure = sourceFailureForEvent(trigger.event)
     if (!sourceFailure) {
       input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', caseId)

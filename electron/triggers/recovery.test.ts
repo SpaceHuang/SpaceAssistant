@@ -4,12 +4,13 @@ import { createRuntimeTriggerRecovery } from './recovery'
 import { beginManagedProcess, finishManagedProcess, resetManagedProcessSourceForTests } from './processSource'
 import { evaluateRuntimeTriggerSource } from './sources'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { createSession, deleteSession, enqueueAgentSessionMessageInScope } from '../database/operations'
+import { createSession, deleteSession, enqueueAgentSessionMessageInScope, getNextDesktopQueueInput } from '../database/operations'
 import { getDbConnection } from '../database'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerService } from './service'
 import { createRuntimeTriggerDelivery } from './delivery'
 import { createRuntimeTriggerHostService } from './hostService'
+import { insertRuntimeTrigger } from './store'
 
 function matched(overrides: Partial<RuntimeTriggerRecord> = {}): RuntimeTriggerRecord {
   return { id: 'trigger-1', ownerSessionId: 'owner', receiverSessionId: 'receiver', clientKey: 'key',
@@ -20,6 +21,59 @@ function matched(overrides: Partial<RuntimeTriggerRecord> = {}): RuntimeTriggerR
 
 describe('runtime trigger recovery and delivery lifecycle', () => {
   afterEach(() => { vi.useRealTimers() })
+
+  it('cancels its unclaimed desktop marker when receiver startup permanently fails', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const commands = createSessionCommands(db)
+      const owner = createSession(db, { name: 'failed-trigger-owner' })
+      const receiver = createSession(db, { name: 'failed-trigger-receiver' })
+      let timestamp = Date.now()
+      const scope = { kind: 'desktop' } as const
+      const requestId = 'runtime-trigger:failed-before-claim'
+      const binding = { bindingVersion: 1 as const, requestId, ownerSessionId: owner.id, receiverSessionId: receiver.id,
+        queueScope: scope, sourceIdentity: { kind: 'test-source' }, payloadDigest: 'payload', policyRevision: 'policy',
+        authorizationGeneration: 'auth', runtimeGeneration: 'runtime' }
+      insertRuntimeTrigger(commands, { id: 'failed-before-claim', ownerSessionId: owner.id, receiverSessionId: receiver.id,
+        clientKey: 'failed-before-claim', definition: { version: 1, condition: { type: 'time', at: new Date(timestamp).toISOString(),
+          taskPrompt: 'notify' }, sourceBaseline: {} }, state: 'matched', result: { authorization: binding }, createdAt: timestamp,
+        matchedAt: timestamp, event: { type: 'time', taskPrompt: 'notify' }, expiresAt: timestamp + 60_000, attempts: 0, revision: 1, updatedAt: timestamp })
+      const delivery = createRuntimeTriggerDelivery({
+        read: (id) => commands.runtimeTriggers.read(id),
+        update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: timestamp }),
+        authorize: () => binding,
+        queueScope: () => scope,
+        enqueue: (input) => commands.scopedQueue.enqueue(input),
+        readReceipt: ({ sessionId, requestId: receiptRequestId, queueScope }) =>
+          commands.scopedQueue.readReceipt({ sessionId, requestId: receiptRequestId, queueScope }),
+        now: () => timestamp
+      })
+      const recovery = createRuntimeTriggerRecovery({
+        listWaiting: () => [], listMatched: (after) => commands.runtimeTriggers.listByState('matched', 20, after),
+        read: (id) => commands.runtimeTriggers.read(id), evaluateWaiting: () => ({ kind: 'none' }), match: vi.fn(), expire: vi.fn(),
+        fail: (id, revision, code, caseId) => commands.runtimeTriggers.update(id, revision, { state: 'failed', result: { code, case: caseId }, updatedAt: timestamp }),
+        deliver: delivery,
+        update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        readReceipt: (trigger) => commands.scopedQueue.readReceipt({ sessionId: trigger.receiverSessionId, requestId: `runtime-trigger:${trigger.id}`, queueScope: scope }),
+        cancelQueuedMarker: (trigger) => commands.scopedQueue.cancelUnstartedInput({ sessionId: trigger.receiverSessionId,
+          requestId: `runtime-trigger:${trigger.id}`, queueScope: scope, expectedSource: 'runtime-trigger' }),
+        isSessionBusy: () => false, startReceiver: vi.fn(async () => { throw new Error('receiver configuration failed') }),
+        readTurnTerminal: () => ({ kind: 'missing' }), now: () => timestamp,
+        retryPolicy: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1, maxElapsedMs: 60_000, jitterRatio: 0, random: () => 0 }
+      })
+
+      await recovery.scan()
+      const retryAt = commands.runtimeTriggers.read('failed-before-claim')!.nextAttemptAt!
+      timestamp = retryAt
+      await recovery.scan()
+      await recovery.scan()
+
+      expect(commands.runtimeTriggers.read('failed-before-claim')?.state).toBe('failed')
+      expect(commands.scopedQueue.readReceipt({ sessionId: receiver.id, requestId, queueScope: scope })).toMatchObject({ state: 'cancelled' })
+      expect(getNextDesktopQueueInput(db, receiver.id)).toBeNull()
+    } finally { db.close() }
+  })
 
   it.each(['completed', 'failed'] as const)('retains source-gap failure after a %s one-shot owner notification and recovery replay', async (notificationOutcome) => {
     const db = createMemoryAppDb()
@@ -109,6 +163,7 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
           { state: 'failed', result: { code, case: caseId }, updatedAt: timestamp }),
         deliver: () => ({ kind: 'delivered', messageId: 'delivered-notice' }) as never,
         update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch), readReceipt: () => receipt,
+        cancelQueuedMarker: vi.fn(() => true),
         isSessionBusy: () => false, startReceiver: () => 'unavailable',
         readTurnTerminal: () => ({ kind: 'active' }), now: () => timestamp
       })
@@ -462,6 +517,7 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
       listWaiting: () => [], listMatched: () => [record], read: () => record, evaluateWaiting: async () => ({ kind: 'none' }),
       match: vi.fn(), expire: vi.fn(), fail: vi.fn(), deliver: vi.fn(), update: vi.fn(() => record),
       readReceipt: () => ({ queuedMessageId: 'marker-1', state: 'queued' }), isSessionBusy: () => false,
+      cancelQueuedMarker: () => true,
       startReceiver: vi.fn(async () => { throw startupError }), readTurnTerminal: vi.fn(async () => ({ kind: 'active' })),
       onDeliveryError
     })
@@ -505,6 +561,7 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
       listWaiting: () => [], listMatched: () => [record], read: () => record, evaluateWaiting: async () => ({ kind: 'none' }),
       match: vi.fn(), expire: vi.fn(), fail, deliver: vi.fn(), update: vi.fn(() => record),
       readReceipt: () => ({ queuedMessageId: 'marker-1', state: 'queued' }), isSessionBusy: () => false,
+      cancelQueuedMarker: vi.fn(() => true),
       startReceiver: vi.fn(async () => 'unavailable' as const), readTurnTerminal: vi.fn(async () => ({ kind: 'active' })), now: () => 2_000
     })
     await recovery.scan()

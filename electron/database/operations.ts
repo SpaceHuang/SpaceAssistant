@@ -1348,6 +1348,10 @@ export function claimQueuedTurnAtomicallyInScope(
       if (!finalCheckPassed) throw new Error('AGENT_SESSION_EXECUTION_APPROVAL_FINAL_CHECK_FAILED')
       agentAdmission = { source, approval, originDigest, approvalDigest, targetGeneration: target.generation, sourceJson: receipt.source_json }
     }
+    if (expectedSource === 'runtime-trigger' && input.queueScope.kind === 'desktop') {
+      const queueHead = readDesktopQueueHead(db, input.sessionId)
+      if (queueHead?.id !== input.userMessageId) throw new Error('DESKTOP_QUEUE_HEAD_CHANGED')
+    }
     const userResult = updateMessageContent(db, input.userMessageId, { status: 'sent' })
     if (!userResult) throw new Error('QUEUE_MESSAGE_NOT_CLAIMABLE')
     const assistant = appendMessage(db, { id: input.assistantMessageId, sessionId: input.sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming' })

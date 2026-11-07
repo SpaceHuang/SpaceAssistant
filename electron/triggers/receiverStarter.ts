@@ -64,7 +64,7 @@ export function createRuntimeTriggerReceiverStarter(input: {
     } catch (error) {
       const code = error instanceof Error ? error.message : String(error)
       if (code === 'SESSION_TURN_BUSY' || code === 'SESSION_CONTEXT_COMPACTION_BUSY' || code === 'SESSION_EXECUTION_ACTIVE' ||
-        code === 'SESSION_EXECUTION_ACTIVE_OWNER') return 'busy'
+        code === 'SESSION_EXECUTION_ACTIVE_OWNER' || code === 'DESKTOP_QUEUE_HEAD_CHANGED') return 'busy'
       throw error
     }
     if (prepared.requestId !== receiver.requestId || prepared.sessionId !== receiver.sessionId) return 'unavailable'

@@ -1476,6 +1476,11 @@ app.whenReady().then(async () => {
     deliver: runtimeTriggerDelivery,
     update: (id, revision, patch) => sessionStorage.commands.runtimeTriggers.update(id, revision, patch),
     readReceipt: runtimeTriggerReadReceipt,
+    cancelQueuedMarker: (trigger) => {
+      const queueScope = runtimeTriggerQueueScope(trigger.receiverSessionId)
+      return queueScope ? sessionStorage.commands.scopedQueue.cancelUnstartedInput({ sessionId: trigger.receiverSessionId,
+        requestId: `runtime-trigger:${trigger.id}`, queueScope, expectedSource: 'runtime-trigger' }) : false
+    },
     isSessionBusy: (sessionId) => sessionStorage.execution.hasActiveTurn(sessionId),
     startReceiver: async ({ sessionId, requestId, messageId }) => {
       const scope = runtimeTriggerQueueScope(sessionId)
