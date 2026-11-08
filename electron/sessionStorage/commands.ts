@@ -56,6 +56,66 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
         : getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at FROM runtime_triggers WHERE state=? ORDER BY created_at,id LIMIT ?`).all(state, limit) as TriggerRow[]
       return rows.map(decodeRuntimeTriggerRow)
     },
+    recoverOrphanedSyncTrigger: ({ triggerId, expectedRevision, now, queueScope }) => {
+      const conn = getDbConnection(db)
+      return runInTransaction(conn, () => {
+        const trigger = readRuntimeTrigger(triggerId)
+        if (!trigger || trigger.revision !== expectedRevision) return { kind: 'stale' as const, markerRemoved: false }
+        const condition = trigger.definition.condition
+        if (condition.type !== 'session_steps' || condition.mode !== 'sync') return { kind: 'not-eligible' as const, markerRemoved: false }
+        const alreadyFailed = trigger.state === 'failed' && trigger.result?.code === 'TRIGGER_SOURCE_GAP' &&
+          trigger.result.case === 'sync-waiter-lost-on-restart'
+        if (trigger.state !== 'matched' && !alreadyFailed) return { kind: 'not-eligible' as const, markerRemoved: false }
+        if (!queueScope) return { kind: 'unverified' as const, markerRemoved: false }
+        const requestId = `runtime-trigger:${trigger.id}`
+        const receipt = getQueueInputReceiptInScope(db, trigger.receiverSessionId, requestId, queueScope)
+        let markerRemoved = false
+        if (receipt?.state === 'queued') {
+          if (!receipt.queuedMessageId) return { kind: 'unverified' as const, markerRemoved: false }
+          if (trigger.messageId && trigger.messageId !== receipt.queuedMessageId) return { kind: 'unverified' as const, markerRemoved: false }
+          const receiptSource = conn.prepare(`SELECT source_json FROM queue_input_requests
+            WHERE session_id=? AND request_id=? AND queue_scope=? AND queued_message_id=?`).get(trigger.receiverSessionId, requestId,
+              serializeQueueScope(queueScope), receipt.queuedMessageId) as { source_json: string | null } | undefined
+          const marker = `运行时事件待处理：${trigger.id}`
+          const message = conn.prepare("SELECT content FROM messages WHERE id=? AND session_id=? AND role='user' AND status='queued' AND queue_scope=?")
+            .get(receipt.queuedMessageId, trigger.receiverSessionId, serializeQueueScope(queueScope)) as { content: string } | undefined
+          const trustedMatchedMarker = !alreadyFailed && receiptSource?.source_json === null &&
+            classifyQueueInputSource(db, { sessionId: trigger.receiverSessionId, queueScope, requestId,
+              queuedMessageId: receipt.queuedMessageId }) === 'runtime-trigger'
+          const rawAuthorization = trigger.result?.authorization
+          const authorization = rawAuthorization !== null && typeof rawAuthorization === 'object' && !Array.isArray(rawAuthorization)
+            ? rawAuthorization as Record<string, unknown> : undefined
+          const trustedLegacyMarker = alreadyFailed && receiptSource?.source_json === null && authorization !== undefined &&
+            authorization.bindingVersion === 1 && authorization.requestId === requestId &&
+            authorization.ownerSessionId === trigger.ownerSessionId && authorization.receiverSessionId === trigger.receiverSessionId &&
+            authorization.queueScope !== null && typeof authorization.queueScope === 'object' &&
+            JSON.stringify(authorization.queueScope) === JSON.stringify(queueScope) &&
+            JSON.stringify(authorization.sourceIdentity) === JSON.stringify(condition) &&
+            typeof authorization.payloadDigest === 'string' && authorization.payloadDigest.length > 0 &&
+            typeof authorization.policyRevision === 'string' && authorization.policyRevision.length > 0 &&
+            typeof authorization.authorizationGeneration === 'string' && authorization.authorizationGeneration.length > 0 &&
+            typeof authorization.runtimeGeneration === 'string' && authorization.runtimeGeneration.length > 0 &&
+            trigger.result?.pauseAcceptedBySdk === true && receipt.fingerprint === queueInputFingerprint({ text: marker }) &&
+            message?.content === marker
+          if (!message || (!trustedMatchedMarker && !trustedLegacyMarker)) return { kind: 'unverified' as const, markerRemoved: false }
+          const deleted = deleteQueuedUserMessageInScope(db, receipt.queuedMessageId, queueScope)
+          if (!deleted.ok) return { kind: 'retry' as const, markerRemoved: false }
+          markerRemoved = true
+        } else if (alreadyFailed) {
+          // Older releases may have finalized the trigger before failing to remove its marker.
+          // Only a queued, fully verified marker can be touched here.
+          return { kind: 'already-failed' as const, markerRemoved: false }
+        } else if (receipt && ['claimed', 'completed', 'failed'].includes(receipt.state)) {
+          return { kind: 'not-eligible' as const, markerRemoved: false }
+        }
+        if (alreadyFailed) return { kind: 'already-failed' as const, markerRemoved }
+        const result = { ...(trigger.result ?? {}), code: 'TRIGGER_SOURCE_GAP', case: 'sync-waiter-lost-on-restart' }
+        const updated = conn.prepare(`UPDATE runtime_triggers SET state='failed',result_json=?,updated_at=?,revision=revision+1
+          WHERE id=? AND revision=? AND state='matched'`).run(JSON.stringify(result), now, trigger.id, trigger.revision)
+        if (Number(updated.changes) !== 1) throw new Error('RUNTIME_TRIGGER_ORPHAN_FINALIZE_CONFLICT')
+        return { kind: 'failed' as const, markerRemoved }
+      })
+    },
     listWaitingForManagedProcessExit: ({ managedProcessId, runtimeGeneration, ownerSessionId }) => {
       const rows = getDbConnection(db).prepare(`SELECT id,owner_session_id,receiver_session_id,client_key,definition_json,state,created_at,expires_at,matched_at,event_json,message_id,attempts,next_attempt_at,result_json,revision,updated_at
         FROM runtime_triggers WHERE state='waiting' AND owner_session_id=?

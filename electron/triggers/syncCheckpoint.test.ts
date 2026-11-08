@@ -3,12 +3,49 @@ import { AgentTurnPauseTimedOutError, type AgentTurnLifecycleLimits } from '../.
 import type { RuntimeTriggerRecord } from '../sessionStorage/public/model'
 import { createRuntimeTriggerLifecycleAssembly, createRuntimeTriggerSyncWaitRegistry, createSyncCheckpointLifecycleHooks, failOrphanedRuntimeSyncTriggers } from './syncCheckpoint'
 import { RUNTIME_TRIGGER_LIMITS } from './limits'
+import { createMemoryAppDb } from '../database/testHelpers'
+import { createSession, enqueueQueuedUserMessageInScope, getNextDesktopQueueInput } from '../database/operations'
+import { getDbConnection } from '../database/sqliteStore'
+import { createSessionCommands } from '../sessionStorage/commands'
+import { insertRuntimeTrigger } from './store'
 
 const limits: AgentTurnLifecycleLimits = { callbackTimeoutMs: 5000, maxPauseMs: 60000 }
 function syncRecord(): RuntimeTriggerRecord {
   return { id: 'sync-1', ownerSessionId: 'owner', receiverSessionId: 'receiver', clientKey: 'key', definition: { version: 1,
     condition: { type: 'session_steps', targetSessionId: 'target', origin: 'registration', threshold: 1, mode: 'sync', pauseTimeoutMs: 60_000, onPauseTimeout: 'continue' },
     sourceBaseline: { settledCount: 0 } }, state: 'waiting', createdAt: 1, expiresAt: 100_000, attempts: 0, revision: 1, updatedAt: 1 }
+}
+
+function orphanedSyncQueueFixture() {
+  const db = createMemoryAppDb()
+  const commands = createSessionCommands(db)
+  const owner = createSession(db, { name: 'orphaned sync owner' })
+  const receiver = createSession(db, { name: 'orphaned sync receiver' })
+  const now = 1234
+  const scope = { kind: 'desktop' } as const
+  const triggerId = 'orphaned-sync'
+  const requestId = `runtime-trigger:${triggerId}`
+  const condition = { type: 'session_steps' as const, targetSessionId: receiver.id, origin: 'registration' as const, threshold: 1,
+    mode: 'sync' as const, pauseTimeoutMs: 60_000, onPauseTimeout: 'continue' as const }
+  const binding = { bindingVersion: 1, requestId, ownerSessionId: owner.id, receiverSessionId: receiver.id, queueScope: scope,
+    sourceIdentity: condition, payloadDigest: 'source-digest', policyRevision: 'policy',
+    authorizationGeneration: 'auth', runtimeGeneration: 'runtime' }
+  insertRuntimeTrigger(commands, { id: triggerId, ownerSessionId: owner.id, receiverSessionId: receiver.id, clientKey: triggerId,
+    definition: { version: 1, condition, sourceBaseline: { settledCount: 0 } },
+    state: 'matched', createdAt: now, expiresAt: now + 60_000, matchedAt: now,
+    event: { type: 'session_steps', occurredAt: now, targetSessionId: receiver.id, pauseDeadlineAt: now + 60_000 }, attempts: 0,
+    result: { pauseAcceptedBySdk: true, authorization: binding }, revision: 1, updatedAt: now })
+  const marker = commands.scopedQueue.enqueue({ sessionId: receiver.id, requestId, content: `运行时事件待处理：${triggerId}`, queueScope: scope })
+  const stored = commands.runtimeTriggers.read(triggerId)!
+  commands.runtimeTriggers.update(triggerId, stored.revision, { messageId: marker.persisted.message.id })
+  const laterInput = enqueueQueuedUserMessageInScope(db, { sessionId: receiver.id, requestId: 'later-desktop-input',
+    content: 'must run after orphan cleanup', queueScope: scope })
+  const wake = vi.fn()
+  const recover = () => failOrphanedRuntimeSyncTriggers(commands, now, {
+    resolveQueueScope: () => scope,
+    onQueueReleased: wake
+  })
+  return { db, commands, receiver, requestId, laterInput, wake, recover }
 }
 
 describe('sync runtime trigger checkpoint', () => {
@@ -36,16 +73,75 @@ describe('sync runtime trigger checkpoint', () => {
     const sync = syncRecord()
     const matchedSync = { ...sync, id: 'sync-matched', state: 'matched' as const, revision: 3, result: { pauseAcceptedBySdk: true } }
     const ordinary = { ...sync, id: 'async-1', definition: { ...sync.definition, condition: { ...sync.definition.condition, mode: 'async' as const } } }
-    const update = vi.fn((id: string, revision: number, patch: { state: string; result: Record<string, unknown>; updatedAt: number }) => {
-      const record = id === sync.id && revision === sync.revision ? sync : id === matchedSync.id && revision === matchedSync.revision ? matchedSync : null
-      return record && patch.result.case === 'sync-waiter-lost-on-restart' ? ({ ...record, ...patch }) as RuntimeTriggerRecord : null
-    })
-    const commands = { runtimeTriggers: { listByState: vi.fn((state: string) => state === 'waiting' ? [sync, ordinary] : [matchedSync]), update } }
-    expect(failOrphanedRuntimeSyncTriggers(commands as never, 1234)).toBe(1)
-    expect(update).toHaveBeenCalledOnce()
-    expect(update).toHaveBeenCalledWith(matchedSync.id, matchedSync.revision, { state: 'failed', result: { pauseAcceptedBySdk: true,
-      code: 'TRIGGER_SOURCE_GAP', case: 'sync-waiter-lost-on-restart' }, updatedAt: 1234 })
-    expect(update).not.toHaveBeenCalledWith(sync.id, expect.anything(), expect.anything())
+    const recover = vi.fn(({ triggerId }: { triggerId: string }) => triggerId === matchedSync.id
+      ? { kind: 'failed' as const, markerRemoved: false }
+      : { kind: 'not-eligible' as const, markerRemoved: false })
+    const commands = { runtimeTriggers: { listByState: vi.fn((state: string) => state === 'matched' ? [matchedSync] : []), recoverOrphanedSyncTrigger: recover } }
+    expect(failOrphanedRuntimeSyncTriggers(commands as never, 1234, { resolveQueueScope: () => ({ kind: 'desktop' }) })).toBe(1)
+    expect(recover).toHaveBeenCalledOnce()
+    expect(recover).toHaveBeenCalledWith({ triggerId: matchedSync.id, expectedRevision: matchedSync.revision, now: 1234,
+      queueScope: { kind: 'desktop' } })
+  })
+
+  it('removes an orphaned sync trigger notification before marking it failed', () => {
+    const fixture = orphanedSyncQueueFixture()
+    try {
+      expect(fixture.recover()).toBe(1)
+      expect(fixture.commands.scopedQueue.readReceipt({ sessionId: fixture.receiver.id, requestId: fixture.requestId,
+        queueScope: { kind: 'desktop' } })).toMatchObject({ state: 'cancelled' })
+      expect(getNextDesktopQueueInput(fixture.db, fixture.receiver.id)?.requestId).toBe('later-desktop-input')
+    } finally { fixture.db.close() }
+  })
+
+  it('wakes the desktop drainer after orphan cleanup exposes the next queued input', () => {
+    const fixture = orphanedSyncQueueFixture()
+    try {
+      expect(fixture.recover()).toBe(1)
+      expect(fixture.wake).toHaveBeenCalledExactlyOnceWith(fixture.receiver.id)
+      expect(getNextDesktopQueueInput(fixture.db, fixture.receiver.id)?.message.id).toBe(fixture.laterInput.persisted.message.id)
+    } finally { fixture.db.close() }
+  })
+
+  it('rolls back queue cleanup if writing the trigger terminal state fails', () => {
+    const fixture = orphanedSyncQueueFixture()
+    try {
+      getDbConnection(fixture.db).exec(`CREATE TRIGGER reject_sync_orphan_failure
+        BEFORE UPDATE OF state ON runtime_triggers WHEN NEW.id='orphaned-sync' AND NEW.state='failed'
+        BEGIN SELECT RAISE(ABORT, 'injected terminal write failure'); END`)
+      expect(fixture.recover).toThrow('injected terminal write failure')
+      expect(fixture.commands.scopedQueue.readReceipt({ sessionId: fixture.receiver.id, requestId: fixture.requestId,
+        queueScope: { kind: 'desktop' } })).toMatchObject({ state: 'queued' })
+      expect(fixture.commands.runtimeTriggers.read('orphaned-sync')?.state).toBe('matched')
+      expect(fixture.wake).not.toHaveBeenCalled()
+    } finally { fixture.db.close() }
+  })
+
+  it('cleans a trusted queued marker left by an older recovery after the trigger was failed', () => {
+    const fixture = orphanedSyncQueueFixture()
+    try {
+      const trigger = fixture.commands.runtimeTriggers.read('orphaned-sync')!
+      fixture.commands.runtimeTriggers.update(trigger.id, trigger.revision, { state: 'failed', result: {
+        ...(trigger.result ?? {}), code: 'TRIGGER_SOURCE_GAP', case: 'sync-waiter-lost-on-restart'
+      }, updatedAt: 1234 })
+      expect(fixture.recover()).toBe(0)
+      expect(fixture.commands.scopedQueue.readReceipt({ sessionId: fixture.receiver.id, requestId: fixture.requestId,
+        queueScope: { kind: 'desktop' } })).toMatchObject({ state: 'cancelled' })
+      expect(fixture.wake).toHaveBeenCalledExactlyOnceWith(fixture.receiver.id)
+      expect(getNextDesktopQueueInput(fixture.db, fixture.receiver.id)?.requestId).toBe('later-desktop-input')
+    } finally { fixture.db.close() }
+  })
+
+  it('keeps an orphan marker when its stored source does not match the trusted trigger identity', () => {
+    const fixture = orphanedSyncQueueFixture()
+    try {
+      getDbConnection(fixture.db).prepare('UPDATE messages SET content=? WHERE id=?').run('forged marker',
+        fixture.commands.scopedQueue.readReceipt({ sessionId: fixture.receiver.id, requestId: fixture.requestId, queueScope: { kind: 'desktop' } })?.queuedMessageId)
+      expect(fixture.recover()).toBe(0)
+      expect(fixture.commands.runtimeTriggers.read('orphaned-sync')?.state).toBe('matched')
+      expect(fixture.commands.scopedQueue.readReceipt({ sessionId: fixture.receiver.id, requestId: fixture.requestId,
+        queueScope: { kind: 'desktop' } })).toMatchObject({ state: 'queued' })
+      expect(fixture.wake).not.toHaveBeenCalled()
+    } finally { fixture.db.close() }
   })
 
   it('assembles production hooks with the confirmed bounds, without fixture defaults', () => {

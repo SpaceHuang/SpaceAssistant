@@ -16,6 +16,7 @@ import type { HistoryEvent, HistoryPort, HistorySnapshot } from '../../../packag
 import type { CanonicalModelMessage } from '../../../packages/agent-sdk/src/model'
 import type { CompactionReplay } from '../../../src/shared/compactionEvents'
 import type { TurnExecutionConfig } from '../../../src/shared/assistantFactAggregator'
+import type { QueueScope } from '../../../src/shared/queueScope'
 
 export type ProjectionPreparationRequest = Readonly<{ sessionId: string; scopeKey: string; specVersion: number }>
 export type SessionTurnSnapshot = Readonly<{
@@ -91,7 +92,10 @@ export interface SessionCommands {
     read(triggerId: string): RuntimeTriggerRecord | null
     findByClientKey(ownerSessionId: string, clientKey: string): RuntimeTriggerRecord | null
     listByOwner(input: { ownerSessionId: string; cursor?: { createdAt: number; id: string }; limit: number }): readonly RuntimeTriggerRecord[]
-    listByState(state: 'waiting' | 'matched', limit?: number, after?: { createdAt: number; id: string }): readonly RuntimeTriggerRecord[]
+    listByState(state: 'waiting' | 'matched' | 'failed', limit?: number, after?: { createdAt: number; id: string }): readonly RuntimeTriggerRecord[]
+    recoverOrphanedSyncTrigger(input: { triggerId: string; expectedRevision: number; now: number; queueScope?: QueueScope }): Readonly<{
+      kind: 'failed' | 'already-failed' | 'not-eligible' | 'stale' | 'unverified' | 'retry'; markerRemoved: boolean
+    }>
     listWaitingForManagedProcessExit(input: { managedProcessId: string; runtimeGeneration: string; ownerSessionId: string }): readonly RuntimeTriggerRecord[]
     countActive(input?: { ownerSessionId?: string; now?: number }): number
     findActiveSyncTarget(targetSessionId: string): RuntimeTriggerRecord | null

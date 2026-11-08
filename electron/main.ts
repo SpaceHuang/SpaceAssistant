@@ -1481,6 +1481,11 @@ app.whenReady().then(async () => {
       return queueScope ? sessionStorage.commands.scopedQueue.cancelUnstartedInput({ sessionId: trigger.receiverSessionId,
         requestId: `runtime-trigger:${trigger.id}`, queueScope, expectedSource: 'runtime-trigger' }) : false
     },
+    onQueueReleased: (sessionId) => {
+      void Promise.resolve().then(() => requestDesktopDrain(sessionId, 'capacity-released')).catch((error) => {
+        console.warn('[session-message] failed trigger queue wake failed:', error instanceof Error ? error.message : String(error))
+      })
+    },
     isSessionBusy: (sessionId) => sessionStorage.execution.hasActiveTurn(sessionId),
     startReceiver: async ({ sessionId, requestId, messageId }) => {
       const scope = runtimeTriggerQueueScope(sessionId)
@@ -1501,7 +1506,15 @@ app.whenReady().then(async () => {
     })
   })
   subscribeRuntimeTriggerProcessExitHandoff(sessionStorage.commands)
-  failOrphanedRuntimeSyncTriggers(sessionStorage.commands, Date.now())
+  failOrphanedRuntimeSyncTriggers(sessionStorage.commands, Date.now(), {
+    resolveQueueScope: runtimeTriggerQueueScope,
+    onQueueReleased: (sessionId) => {
+      // Defer until startup finishes installing the admission gate, then reread and drain the new physical head.
+      void Promise.resolve().then(() => requestDesktopDrain(sessionId, 'startup-recovery')).catch((error) => {
+        console.warn('[session-message] orphaned sync trigger queue wake failed:', error instanceof Error ? error.message : String(error))
+      })
+    }
+  })
   runtimeTriggerRecoveryStop = runtimeTriggerRecovery.stop
   runtimeTriggerRecovery.start()
   void runtimeTriggerRecovery.scan()

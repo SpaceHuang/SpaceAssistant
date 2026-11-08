@@ -1,6 +1,7 @@
 import { AgentTurnPauseTimedOutError, type AgentTurnLifecycleHooks, type AgentTurnLifecycleLimits } from '../../packages/agent-sdk/src/turn'
 import { RUNTIME_TRIGGER_LIMITS } from './limits'
 import type { RuntimeTriggerRecord } from '../sessionStorage/public/model'
+import type { QueueScope } from '../../src/shared/queueScope'
 import type { PersistedTurnTerminal, SettledStepFacts } from './sources'
 import type { SessionCommands } from '../sessionStorage/public/ports'
 
@@ -181,21 +182,36 @@ export function createRuntimeTriggerLifecycleAssembly(input: Omit<SyncCheckpoint
 }
 
 /** An in-memory SDK pause cannot resume after restart; fail only sync triggers that already matched a lost checkpoint. */
-export function failOrphanedRuntimeSyncTriggers(commands: Pick<SessionCommands, 'runtimeTriggers'>, now = Date.now()): number {
+export function failOrphanedRuntimeSyncTriggers(
+  commands: Pick<SessionCommands, 'runtimeTriggers'>,
+  now = Date.now(),
+  recovery: Readonly<{
+    resolveQueueScope: (sessionId: string) => QueueScope | undefined
+    onQueueReleased?: (sessionId: string) => void
+  }>
+): number {
   let failed = 0
-  let cursor: { createdAt: number; id: string } | undefined
-  while (true) {
-    const page = commands.runtimeTriggers.listByState('matched', 4_096, cursor)
-    if (page.length === 0) break
-    for (const trigger of page) {
-      if (trigger.definition.condition.type !== 'session_steps' || trigger.definition.condition.mode !== 'sync') continue
-      if (commands.runtimeTriggers.update(trigger.id, trigger.revision, { state: 'failed',
-        result: { ...(trigger.result ?? {}), code: 'TRIGGER_SOURCE_GAP', case: 'sync-waiter-lost-on-restart' }, updatedAt: now })) failed += 1
+  const recoverState = (state: 'matched' | 'failed') => {
+    let cursor: { createdAt: number; id: string } | undefined
+    while (true) {
+      const page = commands.runtimeTriggers.listByState(state, 4_096, cursor)
+      if (page.length === 0) break
+      for (const trigger of page) {
+        if (trigger.definition.condition.type !== 'session_steps' || trigger.definition.condition.mode !== 'sync') continue
+        if (state === 'failed' && !(trigger.result?.code === 'TRIGGER_SOURCE_GAP' &&
+          trigger.result.case === 'sync-waiter-lost-on-restart')) continue
+        const result = commands.runtimeTriggers.recoverOrphanedSyncTrigger({ triggerId: trigger.id,
+          expectedRevision: trigger.revision, now, queueScope: recovery.resolveQueueScope(trigger.receiverSessionId) })
+        if (result.kind === 'failed') failed += 1
+        if (result.markerRemoved) recovery.onQueueReleased?.(trigger.receiverSessionId)
+      }
+      if (page.length < 4_096) break
+      const last = page[page.length - 1]!
+      cursor = { createdAt: last.createdAt, id: last.id }
     }
-    if (page.length < 4_096) break
-    const last = page[page.length - 1]!
-    cursor = { createdAt: last.createdAt, id: last.id }
   }
+  recoverState('matched')
+  recoverState('failed')
   return failed
 }
 

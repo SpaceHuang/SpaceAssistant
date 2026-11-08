@@ -34,6 +34,8 @@ export function createRuntimeTriggerRecovery(input: {
   readReceipt(trigger: RuntimeTriggerRecord): Receipt | undefined
   /** Remove only the still-queued runtime-trigger marker before terminally failing its delivery. */
   cancelQueuedMarker?: (trigger: RuntimeTriggerRecord) => boolean
+  /** Wake the desktop queue after a failed trigger marker was removed and exposed the next input. */
+  onQueueReleased?: (sessionId: string) => void
   isSessionBusy(sessionId: string): boolean
   startReceiver(input: { sessionId: string; requestId: string; messageId: string }): Promise<'started' | 'busy' | 'unavailable'> | 'started' | 'busy' | 'unavailable'
   readTurnTerminal(sessionId: string, turnId: string): Promise<TurnTerminal> | TurnTerminal
@@ -72,6 +74,7 @@ export function createRuntimeTriggerRecovery(input: {
       return
     }
     if (receipt?.state === 'claimed' || receipt?.turnId) return
+    let queueReleased = false
     if (receipt?.state === 'queued' && receipt.queuedMessageId) {
       let cancelled = false
       try { cancelled = input.cancelQueuedMarker?.(trigger) === true }
@@ -90,14 +93,19 @@ export function createRuntimeTriggerRecovery(input: {
           return
         }
       }
+      queueReleased = cancelled
     }
-    const sourceFailure = sourceFailureForEvent(trigger.event)
-    if (!sourceFailure) {
-      input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', caseId)
-      return
+    try {
+      const sourceFailure = sourceFailureForEvent(trigger.event)
+      if (!sourceFailure) {
+        input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', caseId)
+        return
+      }
+      input.update(trigger.id, trigger.revision, { state: 'failed', result: { ...(trigger.result ?? {}), ...sourceFailure,
+        notificationFailure: { code: 'TRIGGER_DELIVERY_FAILED', case: caseId } }, updatedAt: now() })
+    } finally {
+      if (queueReleased) input.onQueueReleased?.(trigger.receiverSessionId)
     }
-    input.update(trigger.id, trigger.revision, { state: 'failed', result: { ...(trigger.result ?? {}), ...sourceFailure,
-      notificationFailure: { code: 'TRIGGER_DELIVERY_FAILED', case: caseId } }, updatedAt: now() })
   }
 
   const recordDeliveryFailure = (trigger: RuntimeTriggerRecord, failureCase: string): void => {

@@ -4,7 +4,7 @@ import { createRuntimeTriggerRecovery } from './recovery'
 import { beginManagedProcess, finishManagedProcess, resetManagedProcessSourceForTests } from './processSource'
 import { evaluateRuntimeTriggerSource } from './sources'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { createSession, deleteSession, enqueueAgentSessionMessageInScope, getNextDesktopQueueInput } from '../database/operations'
+import { createSession, deleteSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessageInScope, getNextDesktopQueueInput } from '../database/operations'
 import { getDbConnection } from '../database'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerService } from './service'
@@ -49,6 +49,7 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
           commands.scopedQueue.readReceipt({ sessionId, requestId: receiptRequestId, queueScope }),
         now: () => timestamp
       })
+      const queueReleased = vi.fn()
       const recovery = createRuntimeTriggerRecovery({
         listWaiting: () => [], listMatched: (after) => commands.runtimeTriggers.listByState('matched', 20, after),
         read: (id) => commands.runtimeTriggers.read(id), evaluateWaiting: () => ({ kind: 'none' }), match: vi.fn(), expire: vi.fn(),
@@ -58,12 +59,15 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
         readReceipt: (trigger) => commands.scopedQueue.readReceipt({ sessionId: trigger.receiverSessionId, requestId: `runtime-trigger:${trigger.id}`, queueScope: scope }),
         cancelQueuedMarker: (trigger) => commands.scopedQueue.cancelUnstartedInput({ sessionId: trigger.receiverSessionId,
           requestId: `runtime-trigger:${trigger.id}`, queueScope: scope, expectedSource: 'runtime-trigger' }),
+        onQueueReleased: (sessionId) => queueReleased(sessionId),
         isSessionBusy: () => false, startReceiver: vi.fn(async () => { throw new Error('receiver configuration failed') }),
         readTurnTerminal: () => ({ kind: 'missing' }), now: () => timestamp,
         retryPolicy: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1, maxElapsedMs: 60_000, jitterRatio: 0, random: () => 0 }
       })
 
       await recovery.scan()
+      const laterInput = enqueueQueuedUserMessageInScope(db, { sessionId: receiver.id, requestId: 'after-failed-trigger',
+        content: 'drain me after trigger cleanup', queueScope: scope })
       const retryAt = commands.runtimeTriggers.read('failed-before-claim')!.nextAttemptAt!
       timestamp = retryAt
       await recovery.scan()
@@ -71,7 +75,8 @@ describe('runtime trigger recovery and delivery lifecycle', () => {
 
       expect(commands.runtimeTriggers.read('failed-before-claim')?.state).toBe('failed')
       expect(commands.scopedQueue.readReceipt({ sessionId: receiver.id, requestId, queueScope: scope })).toMatchObject({ state: 'cancelled' })
-      expect(getNextDesktopQueueInput(db, receiver.id)).toBeNull()
+      expect(getNextDesktopQueueInput(db, receiver.id)?.message.id).toBe(laterInput.persisted.message.id)
+      expect(queueReleased).toHaveBeenCalledExactlyOnceWith(receiver.id)
     } finally { db.close() }
   })
 
