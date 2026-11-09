@@ -4,10 +4,12 @@ import type { RuntimeTriggerRecord } from '../sessionStorage/public/model'
 import { createRuntimeTriggerLifecycleAssembly, createRuntimeTriggerSyncWaitRegistry, createSyncCheckpointLifecycleHooks, failOrphanedRuntimeSyncTriggers } from './syncCheckpoint'
 import { RUNTIME_TRIGGER_LIMITS } from './limits'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { createSession, enqueueQueuedUserMessageInScope, getNextDesktopQueueInput } from '../database/operations'
+import { claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, enqueueAgentSessionMessageInScope,
+  enqueueQueuedUserMessageInScope, getNextDesktopQueueInput } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { insertRuntimeTrigger } from './store'
+import { createOutboundDrainer } from '../outbound/outboundAcceptor'
 
 const limits: AgentTurnLifecycleLimits = { callbackTimeoutMs: 5000, maxPauseMs: 60000 }
 function syncRecord(): RuntimeTriggerRecord {
@@ -412,6 +414,137 @@ describe('sync runtime trigger checkpoint', () => {
     await expect(waiting).rejects.toBeInstanceOf(AgentTurnPauseTimedOutError)
     expect(cancelPendingDelivery).toHaveBeenCalledOnce()
     expect(fail).toHaveBeenCalledWith(record.id, record.revision, 'TRIGGER_HANDLING_FAILED', 'pause-timeout')
+  })
+
+  it.each([
+    { ending: 'SDK pause timeout', incoming: 'ordinary message' },
+    { ending: 'active cancellation', incoming: 'ordinary message' },
+    { ending: 'SDK pause timeout', incoming: 'cross-session message' },
+    { ending: 'active cancellation', incoming: 'cross-session message' }
+  ])('wakes the real desktop drainer after $ending releases a sync marker before a $incoming', async ({ ending, incoming }) => {
+    const db = createMemoryAppDb()
+    try {
+      const commands = createSessionCommands(db)
+      const source = createSession(db, { name: `sync source ${ending} ${incoming}` })
+      const receiver = createSession(db, { name: `sync receiver ${ending} ${incoming}` })
+      const now = 1_000
+      const scope = { kind: 'desktop' } as const
+      const triggerId = `sync-release-${ending.replaceAll(' ', '-')}-${incoming.replaceAll(' ', '-')}`
+      const triggerRequestId = `runtime-trigger:${triggerId}`
+      const condition = { type: 'session_steps' as const, targetSessionId: source.id, origin: 'registration' as const, threshold: 1,
+        mode: 'sync' as const, pauseTimeoutMs: 60_000, onPauseTimeout: 'continue' as const }
+      const binding = { bindingVersion: 1 as const, requestId: triggerRequestId, ownerSessionId: source.id, receiverSessionId: receiver.id,
+        queueScope: scope, sourceIdentity: condition, payloadDigest: 'source-digest', policyRevision: 'policy',
+        authorizationGeneration: 'authorization', runtimeGeneration: 'runtime' }
+      insertRuntimeTrigger(commands, { id: triggerId, ownerSessionId: source.id, receiverSessionId: receiver.id, clientKey: triggerId,
+        definition: { version: 1, condition, sourceBaseline: { settledCount: 0 } }, state: 'waiting', createdAt: now,
+        expiresAt: now + 60_000, attempts: 0, revision: 1, updatedAt: now, result: { authorization: binding } })
+
+      const dispatched: string[] = []
+      let activeTurns = 0
+      const drainer = createOutboundDrainer({
+        submitOutbound: async (intent) => {
+          const context = intent.contextIntent
+          if (context?.kind !== 'reuse-user' || !context.requestId) throw new Error('ordinary queued turn intent missing')
+          claimQueuedTurnAtomicallyInScope(db, { sessionId: receiver.id, userMessageId: context.currentUser.message.id,
+            turnId: `turn:${context.requestId}`, assistantMessageId: `assistant:${context.requestId}`, requestId: context.requestId,
+            queueScope: scope, source: 'ordinary-desktop' })
+          dispatched.push(`ordinary:${context.requestId}`)
+          activeTurns += 1
+          return { accepted: 'turn-started', sessionId: receiver.id, turnId: `turn:${context.requestId}`, assistantMessage: {} as never }
+        },
+        listActiveCount: () => activeTurns,
+        getNextQueued: (sessionId) => getNextDesktopQueueInput(db, sessionId),
+        startAgentSession: async ({ sessionId, requestId }) => {
+          expect(sessionId).toBe(receiver.id)
+          const snapshot = commands.agentSessionMessages.readApprovalSnapshot({ sessionId, requestId })
+          expect(snapshot).not.toBeNull()
+          if (!snapshot) return 'rejected'
+          const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: `decision:${requestId}`,
+            permitRef: `permit:${requestId}`, ownerSessionId: source.id, targetSessionId: receiver.id,
+            targetGeneration: receiver.generation, workDirProfileId: receiver.workDirProfileId || 'default', requestId,
+            messageId: snapshot.source.messageId, queueScope: 'desktop' as const, payloadDigest: snapshot.source.payloadSha256,
+            policyRevision: 'policy', authorizationGeneration: 'authorization', runtimeGeneration: 'runtime', approvedAt: now }
+          expect(commands.agentSessionMessages.refreshExecutionApproval({ sessionId, requestId,
+            expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: snapshot.approvalDigest ?? null, approval })).not.toBeNull()
+          const current = getNextDesktopQueueInput(db, sessionId)
+          if (!current || current.requestId !== requestId) return 'queue-head-waiting'
+          claimQueuedTurnAtomicallyInScope(db, { sessionId, userMessageId: current.message.id, turnId: `turn:${requestId}`,
+            assistantMessageId: `assistant:${requestId}`, requestId, queueScope: scope, source: 'agent-session', agentSessionFinalCheck: () => true })
+          dispatched.push(`agent-session:${requestId}`)
+          activeTurns += 1
+          return 'started'
+        },
+        consumeQueued: (sessionId, messageId) => { deleteQueuedUserMessageInScope(db, messageId, scope) },
+        audit: vi.fn()
+      })
+      let record = commands.runtimeTriggers.read(triggerId)!
+      let waitingSignal: AbortSignal | undefined
+      let cancelWait: (() => void) | undefined
+      let releasedDrain: Promise<void> | undefined
+      const hooks = createSyncCheckpointLifecycleHooks({
+        sessionId: source.id, limits, now: () => now,
+        listWaitingSync: (targetSessionId) => targetSessionId === source.id ? commands.runtimeTriggers.listByState('waiting', 20) : [],
+        listMatchedForExecution: () => [],
+        readStepFacts: async () => ({ historyVersion: 5, facts: { ok: true, settledCount: 1, settledStepIds: ['settled-step'], pendingStepIds: [] } }),
+        saveProgress: (id, revision, progress) => {
+          const current = commands.runtimeTriggers.read(id)
+          return current && commands.runtimeTriggers.update(id, revision, { result: { ...(current.result ?? {}), syncStepProgress: progress }, updatedAt: now })
+        },
+        match: (id, revision, event) => commands.runtimeTriggers.update(id, revision, { state: 'matched', matchedAt: now, event, updatedAt: now }),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: now }),
+        read: (id) => { record = commands.runtimeTriggers.read(id) ?? record; return record },
+        acceptPause: ({ trigger }) => commands.runtimeTriggers.update(trigger.id, trigger.revision,
+          { result: { ...(trigger.result ?? {}), pauseAcceptedBySdk: true }, updatedAt: now }),
+        activateDelivery: async (trigger) => {
+          const marker = commands.scopedQueue.enqueue({ sessionId: receiver.id, requestId: triggerRequestId,
+            content: `运行时事件待处理：${triggerId}`, queueScope: scope })
+          const persisted = commands.runtimeTriggers.read(trigger.id)!
+          commands.runtimeTriggers.update(persisted.id, persisted.revision, { messageId: marker.persisted.message.id, updatedAt: now })
+          if (incoming === 'ordinary message') {
+            enqueueQueuedUserMessageInScope(db, { sessionId: receiver.id, requestId: 'ordinary-after-sync', content: 'ordinary after sync', queueScope: scope })
+          } else {
+            enqueueAgentSessionMessageInScope(db, { ownerSessionId: source.id, targetSessionId: receiver.id,
+              requestId: 'agent-after-sync', content: 'cross-session after sync', authorizationBinding: { marker: 'test-fact' } })
+          }
+          await drainer.drain(receiver.id, 'queue-enqueued')
+          expect(dispatched).toEqual([])
+          return 'busy'
+        },
+        waitForReceiverTurn: (_trigger, { signal }) => {
+          waitingSignal = signal
+          return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error(String(signal.reason))), { once: true }))
+        },
+        cancelPendingDelivery: (trigger) => commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId: trigger.receiverSessionId,
+          requestId: triggerRequestId, queueScope: scope }),
+        onQueueReleased: (sessionId) => { releasedDrain = drainer.drain(sessionId, 'capacity-released') },
+        subscribeReceiver: () => () => undefined,
+        readReceiver: async () => ({ kind: 'pending' }),
+        registerWaiter: (_id, cancel) => { cancelWait = cancel; return () => { cancelWait = undefined } },
+        fail: (id, revision, code, caseId) => commands.runtimeTriggers.update(id, revision,
+          { state: 'failed', result: { ...(commands.runtimeTriggers.read(id)?.result ?? {}), code, case: caseId }, updatedAt: now })
+      })
+      const pause = await hooks.postStep!({ invocationId: 'sync-invocation', turnId: 'source-turn', stepKey: 'sync-invocation:turn:1',
+        modelTurn: 1, historyVersion: 5, hasNextStep: true, executionGeneration: 7, signal: new AbortController().signal })
+      const outerSignal = new AbortController()
+      const waiting = pause!.wait(outerSignal.signal)
+      await vi.waitFor(() => expect(waitingSignal).toBeDefined())
+
+      if (ending === 'SDK pause timeout') outerSignal.abort('lifecycle-pause-timeout')
+      else {
+        const current = commands.runtimeTriggers.read(triggerId)!
+        commands.runtimeTriggers.update(current.id, current.revision, { state: 'cancelled', updatedAt: now })
+        cancelWait!()
+      }
+      await expect(waiting).rejects.toThrow()
+      await releasedDrain
+
+      expect(commands.scopedQueue.readReceipt({ sessionId: receiver.id, requestId: triggerRequestId, queueScope: scope })).toMatchObject({ state: 'cancelled' })
+      const incomingRequestId = incoming === 'ordinary message' ? 'ordinary-after-sync' : 'agent-after-sync'
+      expect(commands.scopedQueue.readReceipt({ sessionId: receiver.id, requestId: incomingRequestId, queueScope: scope })).toMatchObject({ state: 'claimed' })
+      expect(getNextDesktopQueueInput(db, receiver.id)).toBeNull()
+      expect(dispatched).toEqual([`${incoming === 'ordinary message' ? 'ordinary' : 'agent-session'}:${incoming === 'ordinary message' ? 'ordinary-after-sync' : 'agent-after-sync'}`])
+    } finally { db.close() }
   })
 
   it('settles pause timeout and cleans up an unaccepted matched checkpoint at Turn terminal', async () => {

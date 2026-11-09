@@ -793,6 +793,11 @@ app.whenReady().then(async () => {
   })
   const sessionStorage = sessionStorageHost.storage
   let requestDesktopDrain: SessionMessageDrain = () => { throw new Error('SESSION_MESSAGE_DRAIN_UNAVAILABLE') }
+  const requestDesktopDrainAfterQueueRelease = (sessionId: string, reason: OutboundDrainWakeReason, owner: string) => {
+    void Promise.resolve().then(() => requestDesktopDrain(sessionId, reason)).catch((error) => {
+      console.warn(`[session-message] ${owner} queue wake failed:`, error instanceof Error ? error.message : String(error))
+    })
+  }
   const resolveSessionWorkDir = (sessionId: string) => {
     if (!workDirManager) return undefined
     return resolveWorkDirForSession(sessionStorage.queries, sessionId,
@@ -1024,9 +1029,10 @@ app.whenReady().then(async () => {
       },
       cancelPendingDelivery: (trigger) => {
         const queueScope = runtimeTriggerQueueScope(trigger.receiverSessionId)
-        if (queueScope) sessionStorage.commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId: trigger.receiverSessionId,
-          requestId: `runtime-trigger:${trigger.id}`, queueScope })
+        return queueScope ? sessionStorage.commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId: trigger.receiverSessionId,
+          requestId: `runtime-trigger:${trigger.id}`, queueScope }) : false
       },
+      onQueueReleased: (receiverSessionId) => requestDesktopDrainAfterQueueRelease(receiverSessionId, 'external', 'sync trigger'),
       subscribeReceiver: (receiverSessionId, receiverTurnId, listener) => turnTerminalBusForExecution(sessionStorage.execution)
         .subscribe(receiverSessionId, receiverTurnId, listener),
       readReceiver: async (receiverSessionId, receiverTurnId) => readPersistedTurnTerminal(
@@ -1482,9 +1488,7 @@ app.whenReady().then(async () => {
         requestId: `runtime-trigger:${trigger.id}`, queueScope, expectedSource: 'runtime-trigger' }) : false
     },
     onQueueReleased: (sessionId) => {
-      void Promise.resolve().then(() => requestDesktopDrain(sessionId, 'capacity-released')).catch((error) => {
-        console.warn('[session-message] failed trigger queue wake failed:', error instanceof Error ? error.message : String(error))
-      })
+      requestDesktopDrainAfterQueueRelease(sessionId, 'external', 'failed trigger')
     },
     isSessionBusy: (sessionId) => sessionStorage.execution.hasActiveTurn(sessionId),
     startReceiver: async ({ sessionId, requestId, messageId }) => {
@@ -1510,9 +1514,7 @@ app.whenReady().then(async () => {
     resolveQueueScope: runtimeTriggerQueueScope,
     onQueueReleased: (sessionId) => {
       // Defer until startup finishes installing the admission gate, then reread and drain the new physical head.
-      void Promise.resolve().then(() => requestDesktopDrain(sessionId, 'startup-recovery')).catch((error) => {
-        console.warn('[session-message] orphaned sync trigger queue wake failed:', error instanceof Error ? error.message : String(error))
-      })
+      requestDesktopDrainAfterQueueRelease(sessionId, 'startup-recovery', 'orphaned sync trigger')
     }
   })
   runtimeTriggerRecoveryStop = runtimeTriggerRecovery.stop

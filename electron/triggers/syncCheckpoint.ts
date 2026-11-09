@@ -23,7 +23,8 @@ export type SyncCheckpointLifecycleDependencies = Readonly<{
   acceptPause: (input: { trigger: RuntimeTriggerRecord; checkpoint: SyncCheckpointStep }) => RuntimeTriggerRecord | null
   activateDelivery: (trigger: RuntimeTriggerRecord, input: { signal: AbortSignal; deadlineAt: number }) => Promise<ReceiverTurnRef | 'busy'>
   waitForReceiverTurn?: (trigger: RuntimeTriggerRecord, input: { signal: AbortSignal; deadlineAt: number }) => Promise<ReceiverTurnRef>
-  cancelPendingDelivery?: (trigger: RuntimeTriggerRecord) => void
+  cancelPendingDelivery?: (trigger: RuntimeTriggerRecord) => boolean
+  onQueueReleased?: (sessionId: string) => void
   subscribeReceiver: (sessionId: string, turnId: string, listener: (terminal: PersistedTurnTerminal) => void) => () => void
   readReceiver: (sessionId: string, turnId: string) => Promise<PersistedTurnTerminal>
   fail: (triggerId: string, expectedRevision: number, code: 'TRIGGER_SOURCE_GAP' | 'TRIGGER_HANDLING_FAILED' | 'TRIGGER_DELIVERY_FAILED', caseId: string) => unknown
@@ -332,7 +333,8 @@ async function waitForAcceptedReceiverTurn(input: SyncCheckpointLifecycleDepende
       }, (error) => finish(error instanceof Error ? error : new Error(String(error))))
     })
   } catch (error) {
-    input.cancelPendingDelivery?.(accepted)
+    const markerRemoved = input.cancelPendingDelivery?.(accepted) === true
+    if (markerRemoved) input.onQueueReleased?.(accepted.receiverSessionId)
     if (waitController.signal.reason === 'lifecycle-pause-timeout' || error instanceof AgentTurnPauseTimedOutError) fail('TRIGGER_HANDLING_FAILED', 'pause-timeout')
     else if (!signal.aborted && !cancelled) fail('TRIGGER_DELIVERY_FAILED', 'receiver-wait-failed')
     throw error
