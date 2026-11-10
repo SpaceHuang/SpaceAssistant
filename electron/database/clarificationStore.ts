@@ -102,7 +102,7 @@ function terminateParkedClarificationInput(
   if (!source) throw new Error('CLARIFICATION_PARKED_INPUT_MISSING')
   const status = state === 'expired' ? 'clarification-expired' : 'clarification-invalidated'
   conn.prepare('UPDATE messages SET status=? WHERE id=? AND status=\'parked\'').run(status, row.parked_input_ref)
-  conn.prepare("UPDATE queue_input_requests SET state=?,updated_at=? WHERE session_id=? AND request_id=? AND state='parked'")
+  conn.prepare("UPDATE queue_input_requests SET state=?,updated_at=? WHERE session_id=? AND request_id=? AND state='parked' AND source_json IS NULL")
     .run(state, now, source.session_id, row.source_message_id)
   const text = state === 'expired' ? '这条澄清已超时，原消息没有执行。请重新发送原指令。' : '原任务已失效，澄清已取消，原消息没有执行。请重新描述。'
   conn.prepare(`INSERT OR IGNORE INTO im_lifecycle_outbox(event_id,session_id,stage,text,state,created_at,updated_at)

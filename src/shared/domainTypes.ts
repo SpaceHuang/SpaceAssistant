@@ -11,6 +11,52 @@ export type MessageRole = 'user' | 'assistant' | 'system'
 
 export type MessageStatus = 'sending' | 'sent' | 'queued' | 'streaming' | 'completed' | 'failed' | 'cancelled'
 
+/** Host verified source identity for a persisted cross-session input; never inferred from message text. */
+export type AgentSessionInputSource = Readonly<{
+  version: 1
+  kind: 'agent-session'
+  ownerSessionId: string
+  requestId: string
+  targetSessionId: string
+  messageId: string
+  payloadSha256: string
+  authorizationBinding: Readonly<Record<string, unknown>>
+  executionApproval?: Readonly<Record<string, unknown>>
+  admission?: Readonly<Record<string, unknown>>
+}>
+export type AgentSessionExecutionApproval = Readonly<{
+  version: 1
+  originDigest: string
+  decisionTraceRef: string
+  permitRef: string
+  ownerSessionId: string
+  targetSessionId: string
+  targetGeneration: string
+  workDirProfileId: string
+  requestId: string
+  messageId: string
+  queueScope: 'desktop'
+  payloadDigest: string
+  policyRevision: string
+  authorizationGeneration: string
+  runtimeGeneration: string
+  approvedAt: number
+}>
+export type AgentSessionExecutionFinalCheckFacts = Readonly<{
+  source: AgentSessionInputSource
+  approval: AgentSessionExecutionApproval
+  originDigest: string
+  approvalDigest: string
+  targetGeneration: string
+}>
+export type AgentInputNotExecutedReason = 'sender-revoked' | 'authorized-cancel' | 'target-unavailable' | 'policy-rejected' | 'start-failed'
+export type AgentInputSettlement =
+  | Readonly<{ kind: 'queued'; targetSessionId: string; messageId: string }>
+  | Readonly<{ kind: 'claimed'; turnId: string; turnState: string }>
+  | Readonly<{ kind: 'turn-terminal'; turnId: string; outcome: string; occurredAt: number }>
+  | Readonly<{ kind: 'not-executed'; reason: AgentInputNotExecutedReason; occurredAt: number }>
+  | Readonly<{ kind: 'source-gap' }>
+
 export type ToolRiskLevel = 'low' | 'medium' | 'high'
 
 export type ToolCallStatus = 'calling' | 'confirming' | 'executing' | 'completed' | 'failed' | 'rejected'
@@ -1056,6 +1102,7 @@ export type RuntimeTriggerCondition =
   | Readonly<{ type: 'session_steps'; targetSessionId: string; origin: 'registration'; threshold: number; mode: 'sync'; pauseTimeoutMs: number; onPauseTimeout: 'continue' | 'fail' }>
   | Readonly<{ type: 'process_exit'; managedProcessId: string }>
   | Readonly<{ type: 'im_message'; channel: 'feishu' | 'wechat'; accountId: string; conversationId: string; senderIds?: readonly string[]; bodyContains?: string }>
+  | Readonly<{ type: 'agent_session_message'; requestId: string }>
   | Readonly<{ type: 'time'; at: string; taskPrompt: string }>
 export type RuntimeTriggerDefinitionV1 = Readonly<{ version: 1; condition: RuntimeTriggerCondition; sourceBaseline: Readonly<Record<string, unknown>> }>
 export type RuntimeTriggerFailure = Readonly<{

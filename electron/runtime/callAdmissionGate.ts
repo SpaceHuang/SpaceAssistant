@@ -59,6 +59,7 @@ export class CallAdmissionGate {
   private state: AdmissionState
   private readonly policy: AdmissionPolicy
   private readonly db: AppDatabase | null
+  private readonly onReleased?: (request: AdmissionRequest) => void
   private readonly waiters: Waiter[] = []
   private readonly resumeWaiters: ResumeWaiter[] = []
   private readonly activeTickets = new WeakSet<AdmissionTicket>()
@@ -108,8 +109,10 @@ export class CallAdmissionGate {
     this.releaseRetries.delete(ticket)
   }
 
-  constructor(options: { db?: AppDatabase; policy?: AdmissionPolicy; now?: () => number; initialState?: AdmissionState } = {}) {
+  constructor(options: { db?: AppDatabase; policy?: AdmissionPolicy; now?: () => number; initialState?: AdmissionState;
+    onReleased?: (request: AdmissionRequest) => void } = {}) {
     this.db = options.db ?? null
+    this.onReleased = options.onReleased
     this.policy = options.policy ?? (options.db ? resolveAdmissionPolicy(options.db) : structuredClone(DEFAULT_ADMISSION_POLICY))
     const now = options.now?.() ?? Date.now()
     this.state = options.initialState ?? (options.db ? loadAdmissionState(options.db, now) : emptyAdmissionState(now))
@@ -207,6 +210,7 @@ export class CallAdmissionGate {
       return false
     }
     this.wakeNext()
+    try { this.onReleased?.(request) } catch { /* release completion must not be undone by a wake callback */ }
     return true
   }
 

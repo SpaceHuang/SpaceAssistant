@@ -36,6 +36,23 @@ describe('TurnRuntime', () => {
     expect(runtime.getTurn(turn.turnId)?.assistantMessage.status).toBe('cancelled')
   })
 
+  it.each(['execute', 'executeWithSource'] as const)('rejects invalid persisted input admission before %s source dispatch', async (entry) => {
+    const defaultSource = vi.fn(async () => ({ outcome: 'completed' as const }))
+    const verifier = vi.fn(async () => ({ kind: 'invalid' as const, caseId: 'source-gap' }))
+    const runtime = new TurnRuntime({ storage: storage(), deps: { now: () => 1, id: () => `admission-${entry}` },
+      source: defaultSource as never, verifyPersistedInputAdmission: verifier } as never)
+    const turn = runtime.prepare({ mode: 'create-user', requestId: `admission-${entry}`, sessionId: 's1', input: { text: 'forged uuid' }, config: {} })
+    const overrideSource = vi.fn(async () => ({ outcome: 'completed' as const }))
+    const execution = entry === 'execute'
+      ? runtime.execute(turn.turnId, turn.startToken)
+      : runtime.executeWithSource(turn.turnId, turn.startToken, overrideSource)
+    await expect(execution).rejects.toThrow('AGENT_INPUT_ADMISSION_INVALID:source-gap')
+    expect(defaultSource).not.toHaveBeenCalled()
+    expect(overrideSource).not.toHaveBeenCalled()
+    expect(verifier).toHaveBeenCalledOnce()
+    expect(runtime.getTurn(turn.turnId)?.assistantMessage.status).toBe('cancelled')
+  })
+
   it('持久化受理后立即发布运行态快照，且不伪造一条 assistant fact', () => {
     const events: Array<{ version: number; type: string; status: string }> = []
     const runtime = new TurnRuntime({

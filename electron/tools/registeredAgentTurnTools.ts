@@ -191,7 +191,7 @@ export function createRegisteredAgentTurnTools(input: {
       if (input.refreshExecutionContext) {
         const currentContext = record.runtimeContext
         if (!isRecord(currentContext)) throw new Error('PREPARED_EXECUTION_CONTEXT_NOT_REFRESHABLE')
-        const safetyOwned = Object.fromEntries(['readExecutionPermit', 'writeExecutionPermit', 'decisionRuleId', 'autoApprovedWrite', 'expectedScriptEnvironmentDigest', 'expectedScriptSettingsDigest', 'expectedScriptNetworkReviewCandidate', 'scriptNetworkReviewCandidate'].flatMap((key) =>
+        const safetyOwned = Object.fromEntries(['readExecutionPermit', 'writeExecutionPermit', 'decisionRuleId', 'autoApprovedWrite', 'expectedScriptEnvironmentDigest', 'expectedScriptSettingsDigest', 'expectedScriptNetworkReviewCandidate', 'scriptNetworkReviewCandidate', 'sessionMessageGateDecision', 'sessionMessageAuthorizationGeneration', 'sessionMessageRuntimeGeneration'].flatMap((key) =>
           Object.prototype.hasOwnProperty.call(currentContext, key) ? [[key, currentContext[key]]] : []
         ))
         const refreshed = await input.refreshExecutionContext(call, stage, currentContext)
@@ -450,6 +450,8 @@ async function createBinding(input: {
 }
 
 function executionContextFor(record: PreparedRecord, signal: AbortSignal): ToolExecutionContext {
+  const context = record.runtimeContext && typeof record.runtimeContext === 'object' ? record.runtimeContext as Record<string, unknown> : {}
+  const gateDecision = context.sessionMessageGateDecision as import('../../src/shared/policy/policyDecision').PolicyDecision | undefined
   return {
     requestId: record.handle.prepared.requestId,
     toolUseId: record.handle.prepared.toolUseId,
@@ -457,6 +459,14 @@ function executionContextFor(record: PreparedRecord, signal: AbortSignal): ToolE
     runtimeContext: record.runtimeContext as ToolExecutionContext['runtimeContext'],
     ...(record.userConfirmationReceipt ? { userConfirmationReceipt: record.userConfirmationReceipt } : {}),
     ...(record.userConfirmationAnswerer ? { userConfirmationAnswerer: record.userConfirmationAnswerer } : {}),
+    ...(gateDecision ? { sessionMessageAuthorization: {
+      decision: { decisionId: gateDecision.decisionId, ruleIds: gateDecision.ruleIds, dependencyFingerprint: gateDecision.dependencyFingerprint,
+        verdict: gateDecision.verdict, policyRevision: gateDecision.policyRevision },
+      ...(record.userConfirmationReceipt ? { receipt: record.userConfirmationReceipt } : {}),
+      ...(record.userConfirmationAnswerer ? { answerer: record.userConfirmationAnswerer } : {}),
+      authorizationGeneration: typeof context.sessionMessageAuthorizationGeneration === 'string' ? context.sessionMessageAuthorizationGeneration : '',
+      runtimeGeneration: typeof context.sessionMessageRuntimeGeneration === 'string' ? context.sessionMessageRuntimeGeneration : ''
+    } } : {}),
     signal
   }
 }

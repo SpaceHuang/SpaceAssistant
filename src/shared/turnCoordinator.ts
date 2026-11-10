@@ -1,4 +1,5 @@
 import type { Message } from './domainTypes'
+import type { AgentSessionExecutionFinalCheckFacts } from './domainTypes'
 import { acceptedAssistantCheckpoint, assistantOutputCheckpoint, reduceAssistantFact, type AssistantFactEvent, type TurnExecutionConfig, type TurnIntent, type TurnTerminal, type TurnOutcome } from './assistantFactAggregator'
 import { canonicalQueueInput } from './queueInputFingerprint'
 import type { QueueScope } from './queueScope'
@@ -6,6 +7,11 @@ import { CheckpointQueue } from './checkpointQueue'
 import { isTerminalMessageStatus } from './messageStatus'
 
 export type PersistedMessage = { message: Message; sequence: number }
+type AgentSessionClaimInput = {
+  sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string
+  state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig
+  source: 'agent-session'
+}
 export type TurnStorage = {
   findByRequestId: (sessionId: string, requestId: string) => TurnStarted | undefined
   hasActiveTurn?: (sessionId: string) => boolean
@@ -21,6 +27,7 @@ export type TurnStorage = {
     acceptance?: PersistedTurnRecord['continuationAcceptance']
   }) => { user: PersistedMessage; assistant: PersistedMessage }
   claimQueuedAtomic: (input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope?: QueueScope; source?: 'platform-im' | 'runtime-trigger' | 'ordinary-desktop' }) => { user: PersistedMessage; assistant: PersistedMessage; executionConfig?: TurnExecutionConfig }
+  claimAgentSessionAtomic?: (input: AgentSessionClaimInput, finalCheck: (facts: AgentSessionExecutionFinalCheckFacts) => boolean) => { user: PersistedMessage; assistant: PersistedMessage; executionConfig?: TurnExecutionConfig }
   update: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   updateIfStreaming: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   checkpoint: (turnId: string, version: number, message: Message) => boolean
@@ -85,6 +92,19 @@ export class TurnCoordinator {
   constructor(private readonly storage: TurnStorage, private readonly deps: CoordinatorDeps, private readonly checkpoint: Checkpoint = (turnId, version, message) => this.storage.checkpoint(turnId, version, message), private readonly cancelHook: CancelHook = () => {}) {}
 
   prepare(intent: TurnIntent, initialState = 'prepared', fixedIdentity?: { turnId: string; startToken: string }): TurnStarted {
+    return this.prepareInternal(intent, initialState, fixedIdentity)
+  }
+
+  /** Host-only queue admission path. Renderer TurnIntent never carries source or final-check callbacks. */
+  prepareAgentSession(intent: Omit<Extract<TurnIntent, { mode: 'reuse-user' }>, 'queueScope' | 'queueInputSource'>,
+    finalCheck: (facts: AgentSessionExecutionFinalCheckFacts) => boolean): TurnStarted {
+    if ((intent as { queueScope?: unknown }).queueScope !== undefined ||
+      (intent as { queueInputSource?: unknown }).queueInputSource !== undefined) throw new Error('UNTRUSTED_QUEUE_INPUT_METADATA')
+    return this.prepareInternal(intent, 'configuring', undefined, finalCheck)
+  }
+
+  private prepareInternal(intent: TurnIntent, initialState = 'prepared', fixedIdentity?: { turnId: string; startToken: string },
+    agentSessionFinalCheck?: (facts: AgentSessionExecutionFinalCheckFacts) => boolean): TurnStarted {
     if (fixedIdentity && intent.mode !== 'reuse-user') throw new Error('TURN_FIXED_IDENTITY_REQUIRES_REUSE_USER')
     const existing = this.storage.findByRequestId(intent.sessionId, intent.requestId) ?? [...this.turns.values()].find((turn) => turn.sessionId === intent.sessionId && turn.requestId === intent.requestId)
     if (existing) {
@@ -113,7 +133,7 @@ export class TurnCoordinator {
         const turnId = this.deps.id()
         const assistantId = this.deps.id()
         const startToken = this.deps.id()
-        const claimed = this.storage.claimQueuedAtomic({
+        const claimInput = {
           sessionId: intent.sessionId,
           userMessageId: userMessage.id,
           turnId,
@@ -124,9 +144,14 @@ export class TurnCoordinator {
           intentFingerprint: this.intentFingerprint(intent),
           excludeMessageIds: intent.excludeMessageIds,
           executionConfig: normalizeTurnExecutionConfig(intent.config)
-          ,...(intent.queueScope ? { queueScope: intent.queueScope } : {}),
-          ...(intent.queueInputSource ? { source: intent.queueInputSource } : {})
-        })
+        }
+        const claimed = agentSessionFinalCheck
+          ? this.storage.claimAgentSessionAtomic
+            ? this.storage.claimAgentSessionAtomic({ ...claimInput, source: 'agent-session' }, agentSessionFinalCheck)
+            : (() => { throw new Error('AGENT_SESSION_CLAIM_ADAPTER_REQUIRED') })()
+          : this.storage.claimQueuedAtomic({ ...claimInput,
+            ...(intent.queueScope ? { queueScope: intent.queueScope } : {}),
+            ...(intent.queueInputSource ? { source: intent.queueInputSource } : {}) })
         const started = this.makeStarted(intent, claimed.user.message, claimed.assistant.message, { turnId, startToken, persist: false, state: initialState })
         if (claimed.executionConfig) started.executionConfig = claimed.executionConfig
         this.turns.set(started.turnId, started)

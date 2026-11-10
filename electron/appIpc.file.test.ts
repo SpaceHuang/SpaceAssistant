@@ -8,7 +8,8 @@ import * as databaseComposition from './database'
 import * as databaseOperations from './database/operations'
 import { getMainWindow } from './windowRef'
 import { BrowserWindow } from 'electron'
-import { getCallAdmissionGate } from './runtime/callAdmissionGate'
+import { CallAdmissionGate, getCallAdmissionGate, setCallAdmissionGate } from './runtime/callAdmissionGate'
+import { DEFAULT_ADMISSION_POLICY } from './runtime/callAdmission'
 import * as turnExecutionConfig from './turnExecutionConfig'
 import * as sessionStorageShadow from './sessionStorage/infrastructure/sqlite/sessionStorageShadow'
 import * as sessionStorageCutover from './sessionStorage/certification'
@@ -23,6 +24,7 @@ import type { SessionQueries } from './sessionStorage/public/ports'
 import type { SessionStorage } from './sessionStorage/host/ports'
 import { createSessionTurnRuntime, createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createSessionCommands } from './sessionStorage/commands'
+import { clearPrimedClaudeAdmission, primeClaudeAdmission } from './claudeStreamHandlers'
 import { createSessionExecutionStore } from './sessionStorage/execution'
 import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch, markSessionMessageContentWriteStopped,
   verifyAndCompleteSessionMessageContentCleanup } from './sessionStorage/maintenance'
@@ -280,6 +282,7 @@ function makeCtx(db = createMemoryAppDb()): AppIpcContext {
     searchMessages: ({ query, activeProfileId, limit }) => sessionTranscriptProjection.searchProjectedMessages(ctx.db, query, activeProfileId, limit),
     readRetryTarget: ({ sessionId, failedAssistantMessageId }) =>
       sessionTranscriptProjection.resolveProjectedRetryContext(ctx.db, sessionId, failedAssistantMessageId),
+    verifyAgentSessionAdmission: (input) => databaseOperations.verifyAgentSessionAdmission(ctx.db, input),
     listTurnErrorsByAssistantMessageIds: (ids) => database.listTurnErrorsByAssistantMessageIds(ctx.db, ids),
     readMessageSequence: ({ sessionId, messageId }) => database.getMessageSequence(ctx.db, sessionId, messageId)
   }
@@ -315,9 +318,13 @@ describe('file IPC handlers', () => {
   let ipc: ReturnType<typeof mockIpcMain>
   let ctx: AppIpcContext
   let resetRealDbForwarding: (() => void) | undefined
+  let restoreDirectExecutionDatabaseMocks: (() => void) | undefined
 
   afterEach(() => {
+    restoreDirectExecutionDatabaseMocks?.()
+    restoreDirectExecutionDatabaseMocks = undefined
     try { ctx?.db.close() } catch { /* real reopen tests close their database explicitly */ }
+    setCallAdmissionGate(null)
   })
 
   beforeEach(() => {
@@ -356,6 +363,218 @@ describe('file IPC handlers', () => {
     ipc = mockIpcMain()
     ctx = makeCtx()
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+  })
+
+  it('公开 prepare IPC 拒绝客户端自报队列来源与范围，且不认领队列消息', async () => {
+    const session = databaseOperations.createSession(ctx.db, { name: 'untrusted queue metadata', model: 'test', workDirProfileId: 'default' })
+    const queued = databaseOperations.enqueueQueuedUserMessage(ctx.db, {
+      sessionId: session.id, requestId: 'forged-source-request', content: 'must remain queued'
+    })
+
+    await expect(ipc.getHandler('chat:prepare-turn')!({}, {
+      mode: 'reuse-user', requestId: 'forged-source-request', sessionId: session.id,
+      userMessageId: queued.persisted.message.id, excludeMessageIds: [], config: {},
+      queueScope: { kind: 'im', channel: 'wechat', sessionId: session.id }, queueInputSource: 'platform-im'
+    })).rejects.toThrow('UNTRUSTED_QUEUE_INPUT_METADATA')
+
+    expect(databaseOperations.getTurnByRequestId(ctx.db, session.id, 'forged-source-request')).toBeUndefined()
+    expect(databaseOperations.getMessage(ctx.db, queued.persisted.message.id)?.status).toBe('queued')
+  })
+
+  it('公开 prepare IPC 不能省略来源字段来领取真实 agent-session 队首', async () => {
+    const owner = databaseOperations.createSession(ctx.db, { name: 'agent source owner', model: 'test', workDirProfileId: 'default' })
+    const target = databaseOperations.createSession(ctx.db, { name: 'agent source target', model: 'test', workDirProfileId: 'default' })
+    const accepted = databaseOperations.enqueueAgentSessionMessageInScope(ctx.db, {
+      ownerSessionId: owner.id, targetSessionId: target.id, requestId: 'agent-direct-prepare', content: 'trusted body',
+      authorizationBinding: { decisionTraceRef: 'decision', permitRef: 'permit', ownerSessionId: owner.id,
+        targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), queueScope: 'desktop', payloadDigest: 'digest',
+        policyRevision: 'policy', authorizationGeneration: 'authorization', runtimeGeneration: 'runtime' }
+    })
+
+    await expect(ipc.getHandler('chat:prepare-turn')!({}, {
+      mode: 'reuse-user', requestId: 'agent-direct-prepare', sessionId: target.id,
+      userMessageId: accepted.source.messageId, excludeMessageIds: [], config: {}
+    })).rejects.toThrow('QUEUE_INPUT_SOURCE_INVALID')
+
+    expect(databaseOperations.getTurnByRequestId(ctx.db, target.id, 'agent-direct-prepare')).toBeUndefined()
+    expect(databaseOperations.getMessage(ctx.db, accepted.source.messageId)?.status).toBe('queued')
+  })
+
+  it('应用装配把唯一桌面排水入口发布给跨会话消息服务', async () => {
+    const publish = vi.fn()
+    ctx.publishDesktopDrainRequester = publish
+
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish.mock.calls[0]?.[0]).toBeTypeOf('function')
+    await expect(publish.mock.calls[0]![0]('no-queued-session')).resolves.toBeUndefined()
+  })
+
+  it('预留准入票据在执行入口发现 Turn 已终结时立即释放', async () => {
+    const session = databaseOperations.createSession(ctx.db, { name: 'terminal pre-admission', model: 'test', workDirProfileId: 'default' })
+    const requestId = 'terminal-pre-admission-request'
+    const turnId = 'terminal-pre-admission-turn'
+    const user = databaseOperations.appendMessage(ctx.db, { id: 'terminal-pre-admission-user', sessionId: session.id,
+      role: 'user', content: 'already finished', timestamp: 1, status: 'sent' })
+    databaseOperations.appendMessage(ctx.db, { id: 'terminal-pre-admission-assistant', sessionId: session.id,
+      role: 'assistant', content: 'finished', timestamp: 2, status: 'completed' })
+    databaseOperations.createPersistedTurn(ctx.db, { turnId, requestId, sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: 'terminal-pre-admission-assistant', state: 'terminal', outcome: 'failed' })
+    ctx.executeTurn = vi.fn()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const release = vi.fn()
+    const admissionRef = { sessionId: session.id, requestId, turnId }
+    primeClaudeAdmission(admissionRef, { release } as never)
+    await expect(ipc.getHandler('chat:execute-turn')!({ sender: {} }, { requestId, turnId,
+      turnStartToken: 'terminal-pre-admission-token', sessionId: session.id })).resolves.toMatchObject({ accepted: false })
+    expect(release).not.toHaveBeenCalled()
+    clearPrimedClaudeAdmission(admissionRef)
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('公开执行 IPC 用旧 Turn 和新 requestId 时不能释放新来信票据', async () => {
+    const session = databaseOperations.createSession(ctx.db, { name: 'mismatched terminal execution', model: 'test', workDirProfileId: 'default' })
+    const oldRequestId = 'old-terminal-request'
+    const newRequestId = 'new-agent-request'
+    const oldTurnId = 'old-terminal-turn'
+    const user = databaseOperations.appendMessage(ctx.db, { id: 'old-terminal-user', sessionId: session.id,
+      role: 'user', content: 'old input', timestamp: 1, status: 'sent' })
+    databaseOperations.appendMessage(ctx.db, { id: 'old-terminal-assistant', sessionId: session.id,
+      role: 'assistant', content: 'finished', timestamp: 2, status: 'completed' })
+    databaseOperations.createPersistedTurn(ctx.db, { turnId: oldTurnId, requestId: oldRequestId, sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: 'old-terminal-assistant', state: 'terminal', outcome: 'failed' })
+    ctx.executeTurn = vi.fn()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const release = vi.fn()
+    const admissionRef = { sessionId: session.id, requestId: newRequestId, turnId: 'new-agent-turn' }
+    primeClaudeAdmission(admissionRef, { release } as never)
+
+    await expect(ipc.getHandler('chat:execute-turn')!({ sender: {} }, { requestId: newRequestId, turnId: oldTurnId,
+      turnStartToken: 'attacker-token', sessionId: session.id })).resolves.toMatchObject({ accepted: false })
+    expect(release).not.toHaveBeenCalled()
+    clearPrimedClaudeAdmission(admissionRef)
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('全局桌面容量已满时 agent-session 保持 queued 且不创建 Turn', async () => {
+    const owner = databaseOperations.createSession(ctx.db, { name: 'capacity owner', model: 'test', workDirProfileId: 'default' })
+    const target = databaseOperations.createSession(ctx.db, { name: 'capacity target', model: 'test', workDirProfileId: 'default' })
+    const accepted = databaseOperations.enqueueAgentSessionMessageInScope(ctx.db, { ownerSessionId: owner.id,
+      targetSessionId: target.id, requestId: 'capacity-agent-request', content: 'queued while busy', authorizationBinding: {} })
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    setCallAdmissionGate(gate)
+    const blocker = await gate.acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level', disposition: 'defer', requestId: 'capacity-blocker' })
+    expect(blocker.ok).toBe(true)
+    const publish = vi.fn()
+    ctx.publishDesktopDrainRequester = publish
+    ctx.agentSessionExecutionAuthorization = { resolve: vi.fn(() => ({ kind: 'approved' as const, finalCheck: () => true })) }
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const drain = publish.mock.calls[0]![0]
+
+    await drain(target.id)
+
+    expect(databaseOperations.getMessage(ctx.db, accepted.source.messageId)?.status).toBe('queued')
+    expect(databaseOperations.getTurnByRequestId(ctx.db, target.id, accepted.receipt.requestId)).toBeUndefined()
+    if (blocker.ok) blocker.ticket.release()
+  })
+
+  it('专用 dispatcher 在原子领取 final-check 失败时不创建 Turn 或执行模型', async () => {
+    const owner = databaseOperations.createSession(ctx.db, { name: 'final-check owner', model: 'test', workDirProfileId: 'default' })
+    const target = databaseOperations.createSession(ctx.db, { name: 'final-check target', model: 'test', workDirProfileId: 'default' })
+    const accepted = databaseOperations.enqueueAgentSessionMessageInScope(ctx.db, { ownerSessionId: owner.id,
+      targetSessionId: target.id, requestId: 'final-check-agent-request', content: 'must not dispatch', authorizationBinding: {} })
+    const executeTurn = vi.fn()
+    ctx.executeTurn = executeTurn
+    ctx.publishDesktopDrainRequester = vi.fn()
+    ctx.agentSessionExecutionAuthorization = { resolve: vi.fn(() => ({ kind: 'approved' as const, finalCheck: () => false })) }
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const drain = ctx.publishDesktopDrainRequester.mock.calls[0]![0]
+
+    await expect(drain(target.id)).resolves.toBeUndefined()
+
+    expect(databaseOperations.getMessage(ctx.db, accepted.source.messageId)?.status).toBe('queued')
+    expect(databaseOperations.getTurnByRequestId(ctx.db, target.id, accepted.receipt.requestId)).toBeUndefined()
+    expect(executeTurn).not.toHaveBeenCalled()
+  })
+
+  it.each(['source-json', 'source-digest', 'approval', 'input-event-digest'] as const)('直接 execute IPC 在既有 Turn 凭据下遇到 %s 损坏时不进入模型', async (damage) => {
+    const owner = databaseOperations.createSession(ctx.db, { name: `direct execute owner ${damage}`, model: 'test', workDirProfileId: 'default' })
+    const target = databaseOperations.createSession(ctx.db, { name: `direct execute target ${damage}`, model: 'test', workDirProfileId: 'default' })
+    const commands = createSessionCommands(ctx.db).agentSessionMessages
+    const requestId = `direct-execute-${damage}`
+    const accepted = commands.accept({ ownerSessionId: owner.id, targetSessionId: target.id, requestId,
+      content: `trusted-${damage}-body`, authorizationBinding: {} })
+    const snapshot = commands.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: `decision:${requestId}`,
+      permitRef: `permit:${requestId}`, ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"),
+      requestId, messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: snapshot.source.payloadSha256,
+      policyRevision: 'policy-1', authorizationGeneration: 'authorization-1', runtimeGeneration: 'runtime-1', approvedAt: Date.now() }
+    expect(commands.refreshExecutionApproval({ sessionId: target.id, requestId, expectedOriginDigest: snapshot.originDigest,
+      expectedApprovalDigest: snapshot.approvalDigest ?? null, approval })).not.toBeNull()
+
+    let savedPayload: { requestId: string; turnId: string; turnStartToken: string; sessionId: string } | undefined
+    let executeCalls = 0
+    const modelSource = vi.fn(async () => ({ outcome: 'completed' as const }))
+    ctx.executeTurn = async (_sender, payload) => {
+      executeCalls += 1
+      if (executeCalls === 1) { savedPayload = payload; return }
+      await ctx.turnRuntime!.executeWithSource(payload.turnId, payload.turnStartToken, modelSource as never)
+    }
+    const publish = vi.fn()
+    ctx.publishDesktopDrainRequester = publish
+    ctx.agentSessionExecutionAuthorization = { resolve: vi.fn(() => ({ kind: 'approved' as const, finalCheck: () => true })) }
+    const priorGetSession = vi.mocked(database.getSession).getMockImplementation()
+    const priorSnapshot = vi.mocked(database.getSessionMessageRevisionSnapshot).getMockImplementation()
+    vi.mocked(database.getSession).mockImplementation((_db, sessionId) => databaseOperations.getSession(ctx.db, sessionId))
+    vi.mocked(database.getSessionMessageRevisionSnapshot).mockImplementation((_db, sessionId) => databaseOperations.getSessionMessageRevisionSnapshot(ctx.db, sessionId))
+    restoreDirectExecutionDatabaseMocks = () => {
+      if (priorGetSession) vi.mocked(database.getSession).mockImplementation(priorGetSession)
+      else vi.mocked(database.getSession).mockReset()
+      if (priorSnapshot) vi.mocked(database.getSessionMessageRevisionSnapshot).mockImplementation(priorSnapshot)
+      else vi.mocked(database.getSessionMessageRevisionSnapshot).mockReset()
+    }
+    const readSession = vi.fn((sessionId: string) => databaseOperations.getSession(ctx.db, sessionId))
+    ctx.sessionStorage = { ...ctx.sessionStorage!, queries: { ...ctx.sessionStorage!.queries, readSession } }
+    expect(ctx.sessionStorage.queries.readSession(target.id)?.id).toBe(target.id)
+    expect(databaseOperations.getNextDesktopQueueInput(ctx.db, target.id)).toMatchObject({ requestId, source: 'agent-session' })
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    await publish.mock.calls[0]![0](target.id)
+    expect(readSession).toHaveBeenCalledWith(target.id)
+    expect(ctx.agentSessionExecutionAuthorization.resolve).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: target.id, requestId, messageId: accepted.source.messageId
+    }))
+    const persistedTurn = databaseOperations.getTurnByRequestId(ctx.db, target.id, requestId)
+    expect(persistedTurn?.state).toBe('prepared')
+    await vi.waitFor(() => expect(savedPayload).toBeDefined())
+
+    const conn = getActualDbConnection(ctx.db)
+    if (damage === 'source-json') {
+      conn.prepare('UPDATE queue_input_requests SET source_json=NULL WHERE session_id=? AND request_id=?').run(target.id, requestId)
+    } else if (damage === 'source-digest') {
+      const row = conn.prepare('SELECT source_json FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, requestId) as { source_json: string }
+      const sourceJson = JSON.parse(row.source_json) as Record<string, unknown>
+      conn.prepare('UPDATE queue_input_requests SET source_json=? WHERE session_id=? AND request_id=?')
+        .run(JSON.stringify({ ...sourceJson, payloadSha256: '0'.repeat(64) }), target.id, requestId)
+    } else if (damage === 'approval') {
+      const row = conn.prepare('SELECT source_json FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, requestId) as { source_json: string }
+      const sourceJson = JSON.parse(row.source_json) as Record<string, unknown>
+      const executionApproval = sourceJson.executionApproval as Record<string, unknown>
+      conn.prepare('UPDATE queue_input_requests SET source_json=? WHERE session_id=? AND request_id=?')
+        .run(JSON.stringify({ ...sourceJson, executionApproval: { ...executionApproval, policyRevision: 'forged-policy' } }), target.id, requestId)
+    } else {
+      const row = conn.prepare('SELECT source_json FROM queue_input_requests WHERE session_id=? AND request_id=?').get(target.id, requestId) as { source_json: string }
+      const sourceJson = JSON.parse(row.source_json) as Record<string, unknown>
+      const admission = sourceJson.admission as Record<string, unknown>
+      conn.prepare('UPDATE queue_input_requests SET source_json=? WHERE session_id=? AND request_id=?')
+        .run(JSON.stringify({ ...sourceJson, admission: { ...admission, inputEventDigest: 'f'.repeat(64) } }), target.id, requestId)
+    }
+
+    await expect(ipc.getHandler('chat:execute-turn')!({ sender: {} }, savedPayload)).resolves.toMatchObject({ accepted: true })
+    await vi.waitFor(() => expect(executeCalls).toBe(2))
+    await vi.waitFor(() => expect(ctx.turnRuntime!.getTurn(savedPayload!.turnId)?.assistantMessage.status).toBe('cancelled'))
+    expect(modelSource).not.toHaveBeenCalled()
+    expect(databaseOperations.getPersistedTurn(ctx.db, savedPayload!.turnId)).toMatchObject({ state: 'terminal', outcome: 'cancelled' })
   })
 
   it('session:list filters profile in its query and does not persist legacy metadata cleanup', () => {
@@ -662,6 +881,8 @@ describe('file IPC handlers', () => {
     const skillScope = scope.scope as ReturnType<typeof createSkillTurnScope>
     const finish = vi.spyOn(skillScope, 'close')
     const validPayload = { requestId: prepared.requestId, turnId: prepared.turnId, turnStartToken: prepared.startToken, sessionId: prepared.sessionId }
+    expect(ctx.sessionStorage!.queries.verifyAgentSessionAdmission({ sessionId: session.id, turnId: prepared.turnId,
+      requestId: prepared.requestId })).toEqual({ kind: 'ordinary' })
     await expect(execute({ sender: {} }, { ...validPayload, turnStartToken: 'wrong-token' })).resolves.toMatchObject({ accepted: true })
     await vi.waitFor(() => expect(finish).not.toHaveBeenCalled())
     // 错误凭证先到后，准备记录仍可被合法凭证认领，且共享目录读取仍有效。

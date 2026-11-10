@@ -34,6 +34,14 @@ describe('runtime trigger receiver starter', () => {
       .resolves.toBe('busy')
   })
 
+  it('keeps a later trigger marker queued when the atomic desktop FIFO check finds an earlier input', async () => {
+    const dispatch = vi.fn()
+    const starter = createRuntimeTriggerReceiverStarter({ prepare: async () => { throw new Error('DESKTOP_QUEUE_HEAD_CHANGED') }, dispatch })
+    await expect(starter({ sessionId: 'receiver', requestId: 'runtime-trigger:t1', messageId: 'marker-1', queueScope: { kind: 'desktop' } }))
+      .resolves.toBe('busy')
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
   it('waits for recovery to persist the queued receiver Turn identity', async () => {
     let receipt = { queuedMessageId: 'marker-1', state: 'queued' }
     setTimeout(() => { receipt = { queuedMessageId: 'marker-1', state: 'claimed', turnId: 'receiver-turn' } }, 15)

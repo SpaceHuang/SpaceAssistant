@@ -17,6 +17,7 @@ import {
   ,prepareTurnAtomically
   ,checkpointTurnAtomically
   ,claimQueuedTurnAtomically
+  ,claimAgentSessionTurnAtomically
   ,recoverPersistedTurn
 } from '../database/operations'
 import type { AppDatabase } from '../database/sqliteStore'
@@ -65,6 +66,10 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
     })
   },
   claimQueuedAtomic: (input) => claimQueuedTurnAtomically(db, input),
+    claimAgentSessionAtomic: (input, finalCheck) => {
+      const { source: _source, ...claim } = input
+      return claimAgentSessionTurnAtomically(db, claim, finalCheck)
+    },
     update: (messageId, patch) => updateMessageContent(db, messageId, patch),
     updateIfStreaming: (messageId, patch) => updateMessageContentIfStreaming(db, messageId, patch),
     checkpoint: (turnId, version, message) => checkpointTurnAtomically(db, turnId, version, message.id, message),

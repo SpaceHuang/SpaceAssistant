@@ -1,4 +1,5 @@
 import type { AssistantFactEvent, TurnIntent, TurnTerminal } from '../src/shared/assistantFactAggregator'
+import type { AgentSessionExecutionFinalCheckFacts } from '../src/shared/domainTypes'
 import { TurnCoordinator, type CoordinatorDeps, type ModelResult, type ModelSource, type TurnStarted, type TurnStorage } from '../src/shared/turnCoordinator'
 
 export type TurnRuntimeOptions = {
@@ -9,6 +10,9 @@ export type TurnRuntimeOptions = {
   onCancel?: (turn: TurnStarted) => void
   /** Host current-policy gate for runtime-trigger queue starts; absent means fail closed for trigger IDs. */
   authorizeRuntimeTriggerStart?: (turn: TurnStarted) => boolean | Promise<boolean>
+  /** Verify durable source/admission facts before either model-source entry point. */
+  verifyPersistedInputAdmission?: (turn: TurnStarted) => Promise<{ kind: 'ordinary' } | { kind: 'admitted'; material: unknown } | { kind: 'invalid'; caseId: string }> |
+    { kind: 'ordinary' } | { kind: 'admitted'; material: unknown } | { kind: 'invalid'; caseId: string }
 }
 
 export type TurnRuntimeProjectionEvent = AssistantFactEvent | { type: 'turn-started' }
@@ -20,6 +24,7 @@ export class TurnRuntime {
   private readonly source: ModelSource
   private readonly onEvent?: TurnRuntimeOptions['onEvent']
   private readonly authorizeRuntimeTriggerStart?: TurnRuntimeOptions['authorizeRuntimeTriggerStart']
+  private readonly verifyPersistedInputAdmission?: TurnRuntimeOptions['verifyPersistedInputAdmission']
   private readonly listeners = new Set<TurnProjectionListener>()
   private readonly requestToTurns = new Map<string, Set<string>>()
   private readonly turnEventSeq = new Map<string, number>()
@@ -28,6 +33,7 @@ export class TurnRuntime {
     this.source = options.source ?? (async () => { throw new Error('TURN_MODEL_SOURCE_NOT_CONFIGURED') })
     this.onEvent = options.onEvent
     this.authorizeRuntimeTriggerStart = options.authorizeRuntimeTriggerStart
+    this.verifyPersistedInputAdmission = options.verifyPersistedInputAdmission
     this.coordinator = new TurnCoordinator(options.storage, options.deps, undefined, (turnId) => {
       const turn = this.coordinator.getTurn(turnId)
       if (turn) options.onCancel?.(turn)
@@ -35,6 +41,11 @@ export class TurnRuntime {
   }
 
   prepare(intent: TurnIntent): TurnStarted { return this.coordinator.prepare(intent) }
+
+  prepareAgentSession(intent: Omit<Extract<TurnIntent, { mode: 'reuse-user' }>, 'queueScope' | 'queueInputSource'>,
+    finalCheck: (facts: AgentSessionExecutionFinalCheckFacts) => boolean): TurnStarted {
+    return this.coordinator.prepareAgentSession(intent, finalCheck)
+  }
 
   /** 持久化受理后立即发布；后续异步上下文与配置工作继续保持运行态。 */
   publishStarted(turn: TurnStarted): void {
@@ -103,6 +114,7 @@ export class TurnRuntime {
   async execute(turnId: string, token: string): Promise<ModelResult | void> {
     const authorization = this.assertRuntimeTriggerStartAuthorized(turnId)
     if (authorization) await authorization
+    if (this.verifyPersistedInputAdmission) await this.assertPersistedInputAdmission(turnId)
     const before = this.coordinator.getTurn(turnId)?.version
     const result = await this.coordinator.execute(turnId, token, this.source)
     this.publishTerminalResultProjection(turnId, before, result)
@@ -112,6 +124,7 @@ export class TurnRuntime {
   async executeWithSource(turnId: string, token: string, source: ModelSource): Promise<ModelResult | void> {
     const authorization = this.assertRuntimeTriggerStartAuthorized(turnId)
     if (authorization) await authorization
+    if (this.verifyPersistedInputAdmission) await this.assertPersistedInputAdmission(turnId)
     const before = this.coordinator.getTurn(turnId)?.version
     const result = await this.coordinator.execute(turnId, token, async (turn, startToken) => {
       try {
@@ -126,6 +139,22 @@ export class TurnRuntime {
     })
     this.publishTerminalResultProjection(turnId, before, result)
     return result
+  }
+
+  private async assertPersistedInputAdmission(turnId: string): Promise<void> {
+    const turn = this.coordinator.getTurn(turnId)
+    if (!turn) throw new Error('UNKNOWN_TURN')
+    if (!this.verifyPersistedInputAdmission) return
+    // final-check: consumes host-persisted admission only; it never recalculates policy risk.
+    // This runs before Coordinator.execute and before either ModelSource callback can be entered.
+    let result: Awaited<ReturnType<NonNullable<TurnRuntimeOptions['verifyPersistedInputAdmission']>>>
+    try { result = await this.verifyPersistedInputAdmission(turn) }
+    catch { result = { kind: 'invalid', caseId: 'verifier-failed' } }
+    if (result && typeof result === 'object' && (result.kind === 'ordinary' || result.kind === 'admitted')) return
+    const caseId = result && typeof result === 'object' && result.kind === 'invalid' && /^[a-z0-9-]{1,64}$/.test(result.caseId)
+      ? result.caseId : 'invalid-verdict'
+    this.cancel(turnId)
+    throw new Error(`AGENT_INPUT_ADMISSION_INVALID:${caseId}`)
   }
 
   private assertRuntimeTriggerStartAuthorized(turnId: string): Promise<void> | undefined {

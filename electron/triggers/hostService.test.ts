@@ -1,14 +1,137 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { appendMessage, createPersistedTurn, createSession, getPersistedTurn, updatePersistedTurnState } from '../database/operations'
+import { getDbConnection } from '../database/sqliteStore'
+import { appendMessage, createPersistedTurn, createSession, enqueueAgentSessionMessageInScope, getPersistedTurn, revokeAgentSessionMessage, updatePersistedTurnState } from '../database/operations'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { createRuntimeTriggerHostService } from './hostService'
 import { evaluateImInboundGuard } from '../remote/imInboundGuard'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { authorizeRuntimeTriggerImSource } from './imSourceAuthorization'
+import { evaluateRuntimeTriggerSource } from './sources'
+import { createRuntimeTriggerDelivery } from './delivery'
+import { createRuntimeTriggerRecovery } from './recovery'
 
 describe('runtime trigger host capability adapter', () => {
+  it.each([true, false] as const)('preserves exact sender-revoked settlement across wait registration race=%s', async (registerFirst) => {
+    const db = createMemoryAppDb()
+    try {
+      const commands = createSessionCommands(db)
+      const owner = createSession(db, { name: `revocation wait owner ${registerFirst}`, workDirProfileId: 'revocation-wait-profile' })
+      const target = createSession(db, { name: `revocation wait target ${registerFirst}`, workDirProfileId: 'revocation-wait-profile' })
+      const requestId = `${owner.id}:revocation-wait-${registerFirst}`
+      enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id, requestId,
+        content: 'private revoked body', authorizationBinding: {} })
+      const service = createRuntimeTriggerHostService({ commands,
+        queries: { listSessions: () => [owner, target], imAcceptedFacts: {} } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: () => undefined } as never })
+      const params = { clientKey: `wait-revoked-${registerFirst}`, receiverSessionId: owner.id, expiresAt: Date.now() + 60_000,
+        condition: { type: 'agent_session_message', requestId } }
+
+      const registeredBeforeRevocation = registerFirst ? await service.register({ ownerSessionId: owner.id, params }) : undefined
+      expect(revokeAgentSessionMessage(db, { ownerSessionId: owner.id, requestId }).kind).toBe('revoked')
+      const registered = registeredBeforeRevocation ?? await service.register({ ownerSessionId: owner.id, params })
+      const triggerId = registered.trigger.triggerId
+      const delivery = createRuntimeTriggerDelivery({ read: (id) => commands.runtimeTriggers.read(id),
+        update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch), expire: vi.fn(),
+        authorize: (trigger, queueScope) => ({ bindingVersion: 1, requestId: `runtime-trigger:${trigger.id}`, ownerSessionId: owner.id,
+          receiverSessionId: owner.id, queueScope, sourceIdentity: trigger.definition.condition, payloadDigest: 'digest',
+          policyRevision: 'policy', authorizationGeneration: 'auth', runtimeGeneration: 'runtime' }),
+        queueScope: () => ({ kind: 'desktop' }), enqueue: (request) => commands.scopedQueue.enqueue(request),
+        readReceipt: (request) => commands.scopedQueue.readReceipt(request) })
+      const recovery = createRuntimeTriggerRecovery({
+        listWaiting: () => commands.runtimeTriggers.listByState('waiting', 4096),
+        listMatched: () => commands.runtimeTriggers.listByState('matched', 4096), read: (id) => commands.runtimeTriggers.read(id),
+        evaluateWaiting: (trigger, now) => evaluateRuntimeTriggerSource(trigger, { now,
+          readAgentSettlement: (sourceOwnerId, sourceRequestId) => commands.agentSessionMessages.readSettlement({ ownerSessionId: sourceOwnerId, requestId: sourceRequestId }) }),
+        match: (id, revision, event) => commands.runtimeTriggers.update(id, revision, { state: 'matched', matchedAt: Date.now(), event, updatedAt: Date.now() }),
+        expire: (id, revision) => commands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: Date.now() }),
+        fail: (id, revision, code, caseId) => commands.runtimeTriggers.update(id, revision, { state: 'failed', result: { code, case: caseId }, updatedAt: Date.now() }),
+        deliver: delivery, update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch),
+        readReceipt: (trigger) => commands.scopedQueue.readReceipt({ sessionId: owner.id, requestId: `runtime-trigger:${trigger.id}`, queueScope: { kind: 'desktop' } }),
+        isSessionBusy: () => true, startReceiver: () => 'busy', readTurnTerminal: () => ({ kind: 'missing' as const }), now: () => Date.now()
+      })
+      await recovery.scan()
+      const matched = commands.runtimeTriggers.read(triggerId)
+      expect(matched).toMatchObject({ state: 'matched', event: { type: 'agent_session_message', requestId,
+        status: 'not-executed', reason: 'sender-revoked' } })
+      expect(JSON.stringify(matched?.event)).not.toContain('private revoked body')
+    } finally { db.close() }
+  })
+
+  it('rejects a stale trigger revision after a concurrent update', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const commands = createSessionCommands(db)
+      const owner = createSession(db, { name: 'revision-race owner', workDirProfileId: 'revision-race-profile' })
+      const target = createSession(db, { name: 'revision-race target', workDirProfileId: 'revision-race-profile' })
+      const requestId = `${owner.id}:revision-race-request`
+      enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id, requestId, content: 'body', authorizationBinding: {} })
+      const service = createRuntimeTriggerHostService({ commands,
+        queries: { listSessions: () => [owner, target], imAcceptedFacts: {} } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: () => undefined } as never })
+      const registered = await service.register({ ownerSessionId: owner.id, params: { clientKey: 'revision-race', receiverSessionId: owner.id,
+        expiresAt: Date.now() + 60_000, condition: { type: 'agent_session_message', requestId } } })
+      const stale = commands.runtimeTriggers.read(registered.trigger.triggerId)!
+      const current = commands.runtimeTriggers.update(stale.id, stale.revision, { updatedAt: Date.now() + 1 })
+      expect(current).not.toBeNull()
+      expect(commands.runtimeTriggers.update(stale.id, stale.revision, { state: 'matched', matchedAt: Date.now(), event: { occurredAt: Date.now() } })).toBeNull()
+      expect(commands.runtimeTriggers.read(stale.id)).toMatchObject({ state: 'waiting', revision: stale.revision + 1 })
+    } finally { db.close() }
+  })
+  it('registers an exact outgoing agent-session request wait in the owner session, even during an active Turn', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'message wait owner', workDirProfileId: 'message-wait-profile' })
+      const foreignOwner = createSession(db, { name: 'foreign message wait owner', workDirProfileId: 'message-wait-profile' })
+      const target = createSession(db, { name: 'message wait target', workDirProfileId: 'message-wait-profile' })
+      const accepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+        requestId: `${owner.id}:message-wait-request`, content: 'not read by wait registration', authorizationBinding: {} })
+      const assistant = appendMessage(db, { id: 'message-wait-active-assistant', sessionId: owner.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+      createPersistedTurn(db, { turnId: 'message-wait-active-turn', requestId: 'message-wait-active-request', sessionId: owner.id,
+        assistantMessageId: assistant.message.id, state: 'executing' })
+      const commands = createSessionCommands(db)
+      const service = createRuntimeTriggerHostService({ commands,
+        queries: { listSessions: () => [owner, foreignOwner, target], imAcceptedFacts: {} } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: ({ sessionId, turnId }: { sessionId: string; turnId: string }) => {
+          const turn = getPersistedTurn(db, turnId)
+          return turn?.sessionId === sessionId ? turn : undefined
+        } } as never })
+      const params = { clientKey: 'wait-for-agent-session-message', receiverSessionId: owner.id, expiresAt: Date.now() + 60_000,
+        condition: { type: 'agent_session_message', requestId: accepted.receipt.requestId } }
+
+      await expect(service.register({ ownerSessionId: owner.id, params })).resolves.toMatchObject({
+        trigger: { state: 'waiting', receiverSessionId: owner.id, definition: { condition: params.condition,
+          sourceBaseline: { kind: 'agent-session-source', ownerSessionId: owner.id, receiverSessionId: owner.id,
+            requestId: accepted.receipt.requestId, targetSessionId: target.id, messageId: accepted.receipt.queuedMessageId } } }
+      })
+      const trigger = commands.runtimeTriggers.findByClientKey(owner.id, params.clientKey)!
+      getDbConnection(db).prepare('DELETE FROM queue_input_requests WHERE session_id=? AND request_id=? AND queue_scope=?')
+        .run(target.id, accepted.receipt.requestId, 'desktop')
+      const sourceGap = { type: 'agent_session_message', occurredAt: Date.now(), requestId: accepted.receipt.requestId, status: 'source-gap' }
+      expect(service.authorizeSource(owner.id, owner.id, params.condition, trigger.definition.sourceBaseline, sourceGap)).toMatchObject({ allowed: true })
+      const enqueue = vi.fn(() => ({ receipt: { queuedMessageId: 'source-gap-marker' }, persisted: { message: { id: 'source-gap-marker', content: `运行时事件待处理：${trigger.id}` } } }))
+      const delivery = createRuntimeTriggerDelivery({ read: (id) => commands.runtimeTriggers.read(id),
+        update: (id, revision, patch) => commands.runtimeTriggers.update(id, revision, patch), expire: vi.fn(),
+        authorize: (record, queueScope) => service.authorizeSource(record.ownerSessionId, record.receiverSessionId,
+          record.definition.condition, record.definition.sourceBaseline, record.event).allowed
+          ? { bindingVersion: 1, requestId: `runtime-trigger:${record.id}`, ownerSessionId: record.ownerSessionId,
+            receiverSessionId: record.receiverSessionId, queueScope, sourceIdentity: record.definition.condition,
+            payloadDigest: 'source-gap', policyRevision: 'p', authorizationGeneration: 'a', runtimeGeneration: 'r' } : null,
+        queueScope: () => ({ kind: 'desktop' }), enqueue })
+      commands.runtimeTriggers.update(trigger.id, trigger.revision, { state: 'matched', matchedAt: Date.now(), event: sourceGap, updatedAt: Date.now() })
+      expect(delivery(trigger.id)).toMatchObject({ kind: 'enqueued', messageId: 'source-gap-marker' })
+      expect(enqueue).toHaveBeenCalledTimes(1)
+      await expect(service.register({ ownerSessionId: owner.id, params: { ...params, clientKey: 'unknown-request',
+        condition: { ...params.condition, requestId: `${owner.id}:unknown` } } }))
+        .rejects.toMatchObject({ failure: { code: 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' } })
+      await expect(service.register({ ownerSessionId: owner.id, params: { ...params, clientKey: 'wrong-receiver', receiverSessionId: target.id } }))
+        .rejects.toMatchObject({ failure: { code: 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' } })
+      await expect(service.register({ ownerSessionId: foreignOwner.id, params: { ...params, clientKey: 'cross-owner', receiverSessionId: foreignOwner.id } }))
+        .rejects.toMatchObject({ failure: { code: 'TRIGGER_NOT_FOUND_OR_FORBIDDEN' } })
+    } finally { db.close() }
+  })
+
   it('rejects stale or foreign Turn registrations but preserves a prior idempotent registration', async () => {
     const db = createMemoryAppDb()
     try {

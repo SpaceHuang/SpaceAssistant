@@ -9,6 +9,7 @@ const TARGET_EVENTS = new Set<AgentLogEventName>([
   'storage.spill.source_truth_gc', 'storage.spill.source_truth_gc_failed',
   'llm.silent_overflow',
   'llm.cancel', 'turn.cancel', 'turn.cancel.tools',
+  'session.message.recovery.pending',
   'tool.request', 'tool.error', 'tool.result', 'tool.result.contract-violation',
   'trust.remove',
   'history.cutover', 'session.storage.shadow', 'session.history.recovery', 'session.history.repair.failed', 'session.transcript.read',

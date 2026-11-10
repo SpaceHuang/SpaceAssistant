@@ -13,6 +13,7 @@ import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { runToolChatSession, DESKTOP_TOOL_LOOP_MAX_ROUNDS } from './toolChatLoop'
 import { assembleInvocation } from './runtime/invocationAssembler'
 import { formatRuntimeTriggerSourceContext } from './triggers/sourceContext'
+import type { AdmissionTicket } from './runtime/callAdmissionGate'
 import { createAgentSdkSessionEventProjector } from './runtime/agentSdkSessionEventProjection'
 import { isAppLocale } from '../src/shared/locale'
 import { buildApprovalConversationContext, buildApprovalTaskEvidence, buildApprovalTaskIdentity,
@@ -47,6 +48,7 @@ import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './runtime/hostedTurnFinalization'
 import { assertContinuationExecutionConfigUnchanged, fingerprintContinuationExecutionConfig } from './runtime/continuationSafetySnapshot'
 import type { SessionStorage } from './sessionStorage/host/ports'
+import type { PersistedInputAdmissionVerdict } from './sessionStorage/public/model'
 import { SessionContextSummaryCache, sessionContextSummaryCacheKey, summarizeSessionContext, waitForSessionContextSummary } from './sessionContextSummary'
 import { createLostCompactionRepairId, createSessionContextCheckpointMessage, isSessionContextCheckpointWorthCompacting, type SessionContextSummary } from './sessionContextCompaction'
 import { inspectLostCompactionRepairEvidence, isCompactionRepairSourceRevisionCurrent } from './sessionCompactionEvidence'
@@ -55,7 +57,7 @@ import { safeSummaryContentText } from '../src/shared/safeSummaryText'
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
   getWorkDir: () => string
-  resolveWorkDirForSession: (sessionId: string) => string
+  resolveWorkDirForSession: (sessionId: string, requestId?: string, turnId?: string) => string
   /** R1：桌面链路注入 manager，使装配期快照与调用边界 refresh() 可解析会话绑定（不再只传回合起点字符串） */
   getWorkDirManager?: () => import('./workDirManager').WorkDirManager | undefined
   getUserDataPath: () => string
@@ -73,6 +75,7 @@ export type ClaudeStreamDeps = {
   turnRuntime?: TurnRuntime
   sessionStorage?: SessionStorage
   runtimeTriggers?: import('./capabilities/types').RuntimeTriggerCapabilityPort
+  sessionMessages?: import('./capabilities/types').SessionMessageCapabilityPort
   /** Trusted SQLite admission material for the first runtime-trigger source context. */
   runtimeTriggerAdmission?: (input: { sessionId: string; turnId: string; requestId: string }) => import('./sessionStorage/public/model').RuntimeTriggerHistoryAdmission | undefined
   /** Current-authorized source facts held only in memory until History commits the admission receipt. */
@@ -87,6 +90,38 @@ export type ClaudeStreamDeps = {
 const automaticSummaryCache = new SessionContextSummaryCache()
 
 const admissionCancelControllers = new Map<string, AbortController>()
+const preAdmittedTickets = new Map<string, AdmissionTicket>()
+const preAdmittedWorkDirs = new Map<string, Readonly<{ workDir: string; binding: string }>>()
+export type ClaudeAdmissionRef = Readonly<{ sessionId: string; requestId: string; turnId: string }>
+function primedAdmissionKey(ref: ClaudeAdmissionRef): string { return JSON.stringify([ref.sessionId, ref.requestId, ref.turnId]) }
+export function primeClaudeAdmission(ref: ClaudeAdmissionRef, ticket: AdmissionTicket,
+  workDirSnapshot?: Readonly<{ workDir: string; binding: string }>): void {
+  const key = primedAdmissionKey(ref)
+  if (preAdmittedTickets.has(key)) throw new Error('CLAUDE_ADMISSION_ALREADY_PRIMED')
+  preAdmittedTickets.set(key, ticket)
+  if (workDirSnapshot) preAdmittedWorkDirs.set(key, workDirSnapshot)
+}
+export function getPrimedClaudeWorkDir(ref: ClaudeAdmissionRef): Readonly<{ workDir: string; binding: string }> | undefined {
+  return preAdmittedWorkDirs.get(primedAdmissionKey(ref))
+}
+export function resolvePrimedClaudeWorkDir(ref: ClaudeAdmissionRef, currentBinding: string | undefined, fallback: string): string {
+  const primed = getPrimedClaudeWorkDir(ref)
+  if (!primed) return fallback
+  if (!currentBinding || currentBinding !== primed.binding) throw new Error('AGENT_SESSION_WORKDIR_CHANGED_DURING_PREPARATION')
+  return primed.workDir
+}
+export function takePrimedClaudeAdmission(ref: ClaudeAdmissionRef): AdmissionTicket | undefined {
+  const key = primedAdmissionKey(ref)
+  const ticket = preAdmittedTickets.get(key)
+  if (ticket) preAdmittedTickets.delete(key)
+  return ticket
+}
+export function clearPrimedClaudeAdmission(ref: ClaudeAdmissionRef): void {
+  const key = primedAdmissionKey(ref)
+  preAdmittedTickets.get(key)?.release()
+  preAdmittedTickets.delete(key)
+  preAdmittedWorkDirs.delete(key)
+}
 export function cancelClaudeAdmission(turnId: string): void {
   admissionCancelControllers.get(turnId)?.abort()
 }
@@ -100,7 +135,7 @@ type ClaudeChatMessageWithContentBlocks = {
   timestamp?: number
 }
 
-export async function loadAuthoritativeTurnContext(_db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string, sessionStorage: SessionStorage): Promise<{ messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] }> {
+export async function loadAuthoritativeTurnContext(_db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string, sessionStorage: SessionStorage): Promise<{ messages: Message[]; currentUserMessageId: string; inputAdmission: Exclude<PersistedInputAdmissionVerdict, { kind: 'invalid' }>; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] }> {
   const persisted = sessionStorage.execution.readTurn({ sessionId, turnId })
   if (!persisted || persisted.sessionId !== sessionId || persisted.requestId !== requestId || persisted.startToken !== startToken) {
     throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
@@ -108,12 +143,22 @@ export async function loadAuthoritativeTurnContext(_db: AppDatabase, turnId: str
   if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
   if (!persisted.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
   const messages = await sessionStorage.execution.loadAcceptedMessagesAsync({ sessionId, turnId })
+  // final-check: consult the committed input-history anchor even when the source row itself is missing;
+  // otherwise damaged agent-session input could silently degrade to an ordinary user message.
+  const inputAdmission = sessionStorage.queries.verifyAgentSessionAdmission({ sessionId, turnId, requestId, userMessageId: persisted.userMessageId })
+  if (inputAdmission.kind === 'invalid') throw new Error(`TURN_INPUT_ADMISSION_INVALID:${inputAdmission.caseId}`)
+  const source = sessionStorage.queries.readAgentSessionMessageSource({ sessionId, messageId: persisted.userMessageId })
+  if (source && inputAdmission.kind !== 'admitted') throw new Error('TURN_INPUT_ADMISSION_INVALID:agent-source-not-admitted')
+  const verifiedInputAdmission = inputAdmission.kind === 'admitted' ? inputAdmission : { kind: 'ordinary' as const }
   let continuationTranscript: ClaudeChatMessageWithContentBlocks[] | undefined
   if (persisted.executionConfig?.continuationSource) {
     continuationTranscript = sessionStorage.execution.loadAcceptedContinuationTranscript({ sessionId, turnId })
     if (!continuationTranscript) throw new Error('TURN_CONTINUATION_HISTORY_MISMATCH')
   }
-  return { messages, currentUserMessageId: persisted.userMessageId, ...(persisted.assistantMessageId ? { assistantMessageId: persisted.assistantMessageId } : {}), ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}), ...(continuationTranscript ? { continuationTranscript } : {}) }
+  return { messages, currentUserMessageId: persisted.userMessageId, inputAdmission: verifiedInputAdmission,
+    ...(persisted.assistantMessageId ? { assistantMessageId: persisted.assistantMessageId } : {}),
+    ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}),
+    ...(continuationTranscript ? { continuationTranscript } : {}) }
 }
 
 export type ClaudeChatCreateWithToolsPayload = {
@@ -317,6 +362,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
       let requestId = ''
       let eventWriter: SessionEventSink | undefined
       let eventTurnId = ''
+      let admissionRefForCleanup: ClaudeAdmissionRef | undefined
       let finalizePromise: Promise<FinalizeResult> | undefined
       let releaseAdmission: (() => boolean) | undefined
       // 台账写入失败必须可见，但不能把整轮对话打成 llm.error（瞬时 IO 错误会丢弃已流式输出的内容）。
@@ -357,30 +403,36 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
       }
       try {
         requestId = assertValidRequestId(payload.requestId)
-        const admissionGate = getCallAdmissionGate()
-        const turnCancelController = new AbortController()
-        if (typeof payload.turnId === 'string' && payload.turnId) admissionCancelControllers.set(payload.turnId, turnCancelController)
-        const admission = await admissionGate.acquire({
-          lane: 'desktop',
-          priority: 'interactive',
-          role: 'top-level',
-          disposition: 'queue',
-          requestId,
-          ...(typeof payload.turnId === 'string' && payload.turnId ? { turnId: payload.turnId } : {})
-        }, { signal: turnCancelController.signal })
-        if (typeof payload.turnId === 'string' && payload.turnId) admissionCancelControllers.delete(payload.turnId)
-        if (!admission.ok) throw new Error(`当前调用暂不可运行：${admission.verdict === 'rejected' ? admission.cause : admission.verdict}`)
-        // 普通 turn 名额持有至整轮结束；审批等待期间不 park，也不重新申请。
-        releaseAdmission = admission.ticket.release
         const turnId = typeof payload.turnId === 'string' ? payload.turnId.trim() : ''
         const turnStartToken = typeof payload.turnStartToken === 'string' ? payload.turnStartToken : ''
-        if (deps.turnRuntime && turnId && turnStartToken) {
-          deps.turnRuntime.bindRequest(requestId, turnId)
-        }
         const sessionId = typeof payload.sessionId === 'string' && payload.sessionId.trim().length > 0 ? payload.sessionId : ''
         if (!sessionId) throw new Error('Invalid sessionId')
         const db = deps.getAppDatabase()
         if (!deps.turnRuntime || !turnId || !turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
+        const persistedTurn = sessionStorage.execution.readTurn({ sessionId, turnId })
+        if (!persistedTurn || persistedTurn.sessionId !== sessionId || persistedTurn.requestId !== requestId || persistedTurn.startToken !== turnStartToken) {
+          throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
+        }
+        // The ticket is keyed to the exact host-owned Turn and is consumed only after persisted
+        // credentials validate. A public execute IPC with a mismatched Turn cannot release it.
+        const admissionRef = { sessionId, requestId, turnId }
+        admissionRefForCleanup = admissionRef
+        const preAdmitted = takePrimedClaudeAdmission(admissionRef)
+        const admissionGate = getCallAdmissionGate()
+        const admission = preAdmitted ? { ok: true as const, ticket: preAdmitted } : await (async () => {
+          const turnCancelController = new AbortController()
+          admissionCancelControllers.set(turnId, turnCancelController)
+          try {
+            return await admissionGate.acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
+              disposition: 'queue', requestId, turnId }, { signal: turnCancelController.signal })
+          } finally {
+            admissionCancelControllers.delete(turnId)
+          }
+        })()
+        if (!admission.ok) throw new Error(`当前调用暂不可运行：${admission.verdict === 'rejected' ? admission.cause : admission.verdict}`)
+        // 普通 turn 名额持有至整轮结束；审批等待期间不 park，也不重新申请。
+        releaseAdmission = admission.ticket.release
+        deps.turnRuntime.bindRequest(requestId, turnId)
         const authoritative = await loadAuthoritativeTurnContext(db, turnId, sessionId, requestId, turnStartToken, sessionStorage)
         eventTurnId = turnId
         const emitSystemOperation = (operation: import('../src/shared/domainTypes').SystemOperationRecord): void => {
@@ -542,7 +594,8 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           undefined
         )
         const needsToolWorkDir = builtinCandidates.length > 0 || mayBuildMcpToolSnapshot(listProfiles(db))
-        const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId) : ''
+        const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId, requestId, turnId) : ''
+        const pinnedAgentSessionWorkDir = authoritative.inputAdmission.kind === 'admitted' && sessionWorkDir ? sessionWorkDir : undefined
         const currentApprovalTaskMessage = authoritative.messages.find((message) =>
           message.id === authoritative.currentUserMessageId && message.role === 'user')
         const approvalTaskEvidence = buildApprovalTaskEvidence(currentApprovalTaskMessage?.content ?? '')
@@ -614,12 +667,14 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           ...(approvalReviewScopeEvidenceComplete ? { approvalReviewScopeEvidenceComplete: true } : {}),
           ...(approvalConversationContext ? { approvalConversationContext } : {}),
           workDir: sessionWorkDir,
+          ...(pinnedAgentSessionWorkDir ? { pinnedWorkDir: pinnedAgentSessionWorkDir } : {}),
           ...(deps.getWorkDirManager ? { workDirManager: deps.getWorkDirManager() } : {}),
           userDataDir,
           getApiKey,
           appDb: deps.getAppDatabase(),
           sessionStorage,
           ...(deps.runtimeTriggers ? { runtimeTriggers: deps.runtimeTriggers } : {}),
+          ...(deps.sessionMessages ? { sessionMessages: deps.sessionMessages } : {}),
           historyForSession: (scopeSessionId: string) => {
             const admission = scopeSessionId === sessionId
               ? deps.runtimeTriggerAdmission?.({ sessionId, turnId, requestId }) : undefined
@@ -946,6 +1001,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             : {})
         }
       } finally {
+        if (admissionRefForCleanup) clearPrimedClaudeAdmission(admissionRefForCleanup)
         payload.skillTurnScope?.close()
         const refreshSessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
         try {

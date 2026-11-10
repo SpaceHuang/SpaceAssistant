@@ -33,6 +33,9 @@ export function parseRuntimeTriggerCondition(value: unknown): RuntimeTriggerCond
         (record.bodyContains !== undefined && !nonEmpty(record.bodyContains))) throw new RuntimeTriggerProtocolError('im-condition-invalid')
       return { type: 'im_message', channel: record.channel, accountId: record.accountId, conversationId: record.conversationId,
         ...(record.senderIds ? { senderIds: record.senderIds as string[] } : {}), ...(record.bodyContains ? { bodyContains: record.bodyContains as string } : {}) }
+    case 'agent_session_message':
+      if (!ownKeysAre(record, ['type', 'requestId']) || !nonEmpty(record.requestId)) throw new RuntimeTriggerProtocolError('agent-message-condition-invalid')
+      return { type: 'agent_session_message', requestId: record.requestId }
     case 'time':
       if (!ownKeysAre(record, ['type', 'at', 'taskPrompt']) || !nonEmpty(record.at) || !nonEmpty(record.taskPrompt) || !Number.isFinite(Date.parse(record.at)) || !/([zZ]|[+-]\d{2}:?\d{2})$/.test(record.at)) throw new RuntimeTriggerProtocolError('time-condition-invalid')
       return { type: 'time', at: record.at, taskPrompt: record.taskPrompt }

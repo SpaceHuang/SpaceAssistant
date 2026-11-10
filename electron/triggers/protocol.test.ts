@@ -6,19 +6,28 @@ describe('runtime trigger protocol v1 contracts', () => {
   it('pins lifecycle limits as explicit finite fixture values, not production defaults', () => {
     const fixtureLimits = { callbackTimeoutMs: 1000, maxPauseMs: 2000 }
     expect(Object.values(fixtureLimits).every((value) => Number.isFinite(value) && value > 0)).toBe(true)
-    expect(DB_SCHEMA_VERSION).toBe(123)
+    expect(DB_SCHEMA_VERSION).toBe(124)
     expect(SCHEMA_META_KEYS.schemaVersion).toBe('schema_version')
     expect(SCHEMA_META_KEYS.imFactNextSeq).toBe('im_fact_next_seq')
     expect(SCHEMA_META_KEYS.imFactCoverageRevisionPrefix).toBe('im_fact_coverage_revision:')
   })
 
-  it('accepts all five condition families and preserves explicit sync mode', () => {
+  it('accepts all five existing condition families and preserves explicit sync mode', () => {
     expect(parseRuntimeTriggerCondition({ type: 'turn_completed', targetSessionId: 's1', turnId: 't1' }).type).toBe('turn_completed')
     expect(parseRuntimeTriggerCondition({ type: 'session_steps', targetSessionId: 's1', origin: 'registration', threshold: 2, mode: 'async' })).toMatchObject({ mode: 'async' })
     expect(parseRuntimeTriggerCondition({ type: 'session_steps', targetSessionId: 's1', origin: 'registration', threshold: 2, mode: 'sync', pauseTimeoutMs: 3000, onPauseTimeout: 'fail' })).toMatchObject({ mode: 'sync', onPauseTimeout: 'fail' })
     expect(parseRuntimeTriggerCondition({ type: 'process_exit', managedProcessId: 'proc opaque' }).type).toBe('process_exit')
     expect(parseRuntimeTriggerCondition({ type: 'im_message', channel: 'feishu', accountId: 'a', conversationId: 'c', senderIds: ['u'] }).type).toBe('im_message')
     expect(parseRuntimeTriggerCondition({ type: 'time', at: '2030-01-01T00:00:00Z', taskPrompt: 'wake' }).type).toBe('time')
+  })
+
+  it('accepts a versioned exact agent-session message settlement condition', () => {
+    expect(parseRuntimeTriggerCondition({ type: 'agent_session_message', requestId: 'owner:request-1' }))
+      .toEqual({ type: 'agent_session_message', requestId: 'owner:request-1' })
+    expect(() => parseRuntimeTriggerCondition({ type: 'agent_session_message', requestId: 'owner:request-1', targetSessionId: 'model-controlled' }))
+      .toThrow('agent-message-condition-invalid')
+    expect(() => parseRuntimeTriggerDefinition({ version: 2, condition: { type: 'agent_session_message', requestId: 'owner:request-1' }, sourceBaseline: {} }))
+      .toThrow('definition-v1-invalid')
   })
 
   it('rejects unknown fields, malformed timezones and invalid sync limits', () => {

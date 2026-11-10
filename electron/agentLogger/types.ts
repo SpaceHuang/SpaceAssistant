@@ -32,6 +32,7 @@ export type AgentLogEventName =
   | 'outbound.submit.rejected'
   | 'outbound.drain.rejected'
   | 'outbound.drain.failed'
+  | 'session.message.recovery.pending'
   | 'llm.request'
   | 'llm.max_tokens_floor'
   | 'llm.effort.unsupported'

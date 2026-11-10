@@ -44,4 +44,32 @@ describe('runtime trigger delivery', () => {
     expect(deliver(record.id)).toMatchObject({ kind: 'enqueued', messageId: 'offline-message' })
     expect(enqueue).toHaveBeenCalledOnce()
   })
+
+  it('reuses the durable queue receipt when the trigger result write fails after enqueue', () => {
+    let record: any = { id: 'crash-window', ownerSessionId: 'owner', receiverSessionId: 'receiver', state: 'matched', event: {},
+      definition: { condition: { type: 'time' } }, result: {}, revision: 1 }
+    let durableReceipt: { queuedMessageId?: string } | undefined
+    let messageWriteShouldFail = true
+    const enqueue = vi.fn(({ content }: { content: string }) => {
+      durableReceipt ??= { queuedMessageId: 'durable-message' }
+      return { receipt: durableReceipt, persisted: { message: { id: 'durable-message', content } } }
+    })
+    const update = vi.fn((_id: string, expectedRevision: number, patch: any) => {
+      if (record.revision !== expectedRevision) return null
+      if ('messageId' in patch && messageWriteShouldFail) {
+        messageWriteShouldFail = false
+        return null
+      }
+      record = { ...record, ...patch, revision: record.revision + 1 }
+      return record
+    })
+    const deliver = createRuntimeTriggerDelivery({ enqueue, read: () => record, update, expire: vi.fn(), authorize,
+      queueScope: () => ({ kind: 'desktop' }), readReceipt: () => durableReceipt })
+
+    expect(deliver(record.id)).toEqual({ kind: 'failed', case: 'delivery-write-conflict' })
+    expect(durableReceipt).toEqual({ queuedMessageId: 'durable-message' })
+    expect(deliver(record.id)).toEqual({ kind: 'enqueued', messageId: 'durable-message' })
+    expect(enqueue).toHaveBeenCalledTimes(2)
+    expect(record.messageId).toBe('durable-message')
+  })
 })

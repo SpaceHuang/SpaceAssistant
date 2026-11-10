@@ -5,6 +5,7 @@ import { getDbConnection, openDatabase, setConfigValue, type AppDatabase } from 
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
+import { clearPrimedClaudeAdmission, primeClaudeAdmission, resolvePrimedClaudeWorkDir, takePrimedClaudeAdmission } from './claudeStreamHandlers'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createAnthropicStreamHarness } from './testSupport/anthropicStreamHarness'
 
@@ -128,6 +129,44 @@ function seedTrustedModel(db: AppDatabase): void {
 }
 
 describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
+  it('pre-admitted admission 以 sessionId 与 requestId 共同隔离', () => {
+    const firstRelease = vi.fn(() => true)
+    const secondRelease = vi.fn(() => true)
+    const firstRef = { sessionId: 'target-a', requestId: 'same-request', turnId: 'turn-a' }
+    const secondRef = { sessionId: 'target-b', requestId: 'same-request', turnId: 'turn-b' }
+    primeClaudeAdmission(firstRef, { release: firstRelease } as never)
+    primeClaudeAdmission(secondRef, { release: secondRelease } as never)
+
+    clearPrimedClaudeAdmission({ ...firstRef, turnId: 'wrong-turn' })
+    expect(firstRelease).not.toHaveBeenCalled()
+    clearPrimedClaudeAdmission(firstRef)
+    clearPrimedClaudeAdmission(secondRef)
+
+    expect(firstRelease).toHaveBeenCalledOnce()
+    expect(secondRelease).toHaveBeenCalledOnce()
+  })
+
+  it('pre-admitted ticket 只能由完整的 session/request/turn 身份消费', () => {
+    const ticket = { release: vi.fn(() => true) }
+    const ref = { sessionId: 'ticket-session', requestId: 'ticket-request', turnId: 'ticket-turn' }
+    primeClaudeAdmission(ref, ticket as never)
+    expect(takePrimedClaudeAdmission({ ...ref, turnId: 'old-turn' })).toBeUndefined()
+    expect(takePrimedClaudeAdmission(ref)).toBe(ticket)
+    expect(takePrimedClaudeAdmission(ref)).toBeUndefined()
+    expect(ticket.release).not.toHaveBeenCalled()
+    ticket.release()
+    expect(ticket.release).toHaveBeenCalledOnce()
+  })
+
+  it('uses the approved effective workdir snapshot and rejects a profile path change before tool setup', () => {
+    const ref = { sessionId: 'workspace-session', requestId: 'workspace-request', turnId: 'workspace-turn' }
+    primeClaudeAdmission(ref, { release: vi.fn(() => true) } as never, { workDir: '/workspace/a', binding: 'profile-a:path-a' })
+    expect(resolvePrimedClaudeWorkDir(ref, 'profile-a:path-a', '/workspace/b')).toBe('/workspace/a')
+    expect(() => resolvePrimedClaudeWorkDir(ref, 'profile-a:path-b', '/workspace/b'))
+      .toThrow('AGENT_SESSION_WORKDIR_CHANGED_DURING_PREPARATION')
+    clearPrimedClaudeAdmission(ref)
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     handlers.clear()
@@ -209,6 +248,33 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
     // 偏差 11/3c:文件树失效归一为统一出口(scope:invalidated),不再直发 file:tree-changed
     expect(() => invocation.events.onFileTreeChanged?.({ kind: 'paths', relPaths: ['a.txt'] })).not.toThrow()
     expect(notifyMainWindow).not.toHaveBeenCalledWith('file:tree-changed', expect.anything())
+
+    const queuedUser = appendMessage(db, { id: 'cc-pre-admitted-user', sessionId: session.id, role: 'user', content: 'queued input', timestamp: 4, status: 'sent' })
+    const queuedAssistant = appendMessage(db, { id: 'cc-pre-admitted-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 5, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'cc-pre-admitted-turn', requestId: 'cc-pre-admitted-request', sessionId: session.id,
+      userMessageId: queuedUser.message.id, assistantMessageId: queuedAssistant.message.id, contextBoundarySequence: queuedUser.sequence,
+      state: 'prepared', startToken: 'cc-pre-admitted-token', executionConfig: {
+        lane: 'desktop', model: modelId, baseUrl: 'https://trusted.example.com', system: 'sys', maxTokens: 2048, enableThinking: false, locale: 'zh-CN'
+      } })
+    const preAdmission = await getCallAdmissionGate().acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
+      disposition: 'defer', requestId: 'cc-pre-admitted-request' })
+    expect(preAdmission.ok).toBe(true)
+    if (!preAdmission.ok) throw new Error('expected pre-admission ticket')
+    const preAdmissionRef = { sessionId: session.id, requestId: 'cc-pre-admitted-request', turnId: 'cc-pre-admitted-turn' }
+    const releasePreAdmission = vi.spyOn(preAdmission.ticket, 'release')
+    primeClaudeAdmission(preAdmissionRef, preAdmission.ticket)
+    admissionAcquire.mockClear()
+    const invalidExecution = await execute(makeSender(), { requestId: preAdmissionRef.requestId, turnId: preAdmissionRef.turnId,
+      turnStartToken: 'incorrect-pre-admitted-token', sessionId: session.id })
+    expect(invalidExecution).toMatchObject({ ok: false, error: 'TURN_EXECUTION_CREDENTIALS_INVALID' })
+    expect(releasePreAdmission).not.toHaveBeenCalled()
+    expect(mockRunToolChatSession).toHaveBeenCalledTimes(1)
+    expect(admissionAcquire).not.toHaveBeenCalled()
+    await execute(makeSender(), { requestId: 'cc-pre-admitted-request', turnId: 'cc-pre-admitted-turn',
+      turnStartToken: 'cc-pre-admitted-token', sessionId: session.id })
+    expect(admissionAcquire).not.toHaveBeenCalled()
+    expect(releasePreAdmission).toHaveBeenCalledOnce()
+    expect(mockRunToolChatSession).toHaveBeenCalledTimes(2)
     db.close()
   })
 

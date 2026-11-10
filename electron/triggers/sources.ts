@@ -1,7 +1,7 @@
 import { historyEventsEqual, type HistoryEvent, type HistoryPort, type HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import type { SessionExecutionStore } from '../sessionStorage/public/execution'
 import type { RuntimeTriggerRecord } from '../sessionStorage/public/model'
-import type { RuntimeTriggerCondition } from '../../src/shared/domainTypes'
+import type { AgentInputSettlement, RuntimeTriggerCondition } from '../../src/shared/domainTypes'
 import type { SessionQueries } from '../sessionStorage/public/ports'
 import { scanImTriggerFacts } from './imSource'
 import { readManagedProcessExit } from './processSource'
@@ -22,12 +22,13 @@ export type RuntimeTriggerCandidate = Readonly<{ kind: 'none' }> | Readonly<{ ki
 export type RuntimeTurnCompletionFact = Readonly<{ kind: 'pending' }> | Readonly<{ kind: 'missing' }> | Readonly<{ kind: 'source-gap'; case: string }> |
   Readonly<{ kind: 'terminal'; sessionId: string; turnId: string; outcome: 'completed' | 'failed' | 'cancelled' | 'timed-out'; occurredAt: number }>
 
-/** Resolve all five source types from their trusted facts; this layer extracts facts and never authorizes access. */
+/** Resolve supported source types from their trusted facts; this layer extracts facts and never authorizes access. */
 export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord, input: {
   now: number
   queries?: SessionQueries
   readSettledSteps?: (targetSessionId: string) => Promise<SettledStepFacts>
   readTurnCompletion?: (targetSessionId: string, turnId: string) => Promise<RuntimeTurnCompletionFact>
+  readAgentSettlement?: (ownerSessionId: string, requestId: string) => AgentInputSettlement | undefined
   readProcessExit?: (managedProcessId: string, runtimeGeneration: string) => ReturnType<typeof readManagedProcessExit>
   imPageSize?: number
 }): Promise<RuntimeTriggerCandidate> {
@@ -53,6 +54,26 @@ export async function evaluateRuntimeTriggerSource(trigger: RuntimeTriggerRecord
     if (fact.occurredAt < trigger.createdAt) return { kind: 'source-gap', case: 'turn-completed-before-registration' }
     return fact.occurredAt > trigger.expiresAt ? { kind: 'expired', case: 'turn-completed-after-expiry' }
       : { kind: 'candidate', event: { type: 'turn_completed', occurredAt: fact.occurredAt, targetSessionId: fact.sessionId, turnId: fact.turnId, outcome: fact.outcome } }
+  }
+  if (condition.type === 'agent_session_message') {
+    if (!input.readAgentSettlement) return { kind: 'source-gap', case: 'agent-message-settlement-unavailable' }
+    let settlement: AgentInputSettlement | undefined
+    try { settlement = input.readAgentSettlement(trigger.ownerSessionId, condition.requestId) }
+    catch { return { kind: 'source-gap', case: 'agent-message-settlement-unavailable' } }
+    if (!settlement || settlement.kind === 'source-gap') {
+      return input.now >= trigger.expiresAt ? { kind: 'expired', case: 'source-expired' }
+        : { kind: 'candidate', event: { type: 'agent_session_message', occurredAt: input.now, requestId: condition.requestId,
+          status: 'source-gap', case: settlement?.kind === 'source-gap' ? 'agent-message-settlement-invalid' : 'agent-message-settlement-missing' } }
+    }
+    if (settlement.kind === 'queued' || settlement.kind === 'claimed') {
+      return input.now >= trigger.expiresAt ? { kind: 'expired', case: 'source-expired' } : { kind: 'none' }
+    }
+    const occurredAt = settlement.kind === 'turn-terminal' || settlement.kind === 'not-executed' ? settlement.occurredAt : input.now
+    if (!Number.isSafeInteger(occurredAt)) return { kind: 'source-gap', case: 'agent-message-settlement-time-invalid' }
+    if (occurredAt > trigger.expiresAt) return { kind: 'expired', case: 'agent-message-after-expiry' }
+    return { kind: 'candidate', event: { type: 'agent_session_message', occurredAt, requestId: condition.requestId,
+      status: settlement.kind, ...(settlement.kind === 'turn-terminal' ? { turnId: settlement.turnId, outcome: settlement.outcome } : {}),
+      ...(settlement.kind === 'not-executed' ? { reason: settlement.reason } : {}) } }
   }
   if (condition.type === 'process_exit') {
     const runtimeGeneration = trigger.definition.sourceBaseline.runtimeGeneration

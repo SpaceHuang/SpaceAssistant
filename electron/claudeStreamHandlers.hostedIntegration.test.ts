@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WebContents } from 'electron'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
-import { appendMessage, claimQueuedTurnAtomically, createPersistedTurn, createSession, enqueueQueuedUserMessage, getPersistedTurn, getQueueInputReceipt, getSessionMessageRevisionSnapshot, prepareTurnAtomically, setPersistedTurnExecutionConfig, updatePersistedTurnState, updateQueuedUserMessageContent } from './database/operations'
+import { appendMessage, claimQueuedTurnAtomically, createPersistedTurn, createSession, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessage, getPersistedTurn, getQueueInputReceipt, getSessionMessageRevisionSnapshot, prepareTurnAtomically, setPersistedTurnExecutionConfig, updatePersistedTurnState, updateQueuedUserMessageContent } from './database/operations'
 import { openDatabase, setConfigValue, type AppDatabase } from './database'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
@@ -48,6 +48,7 @@ import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { computeCompactionSummaryHash, foldCompactionEvents } from '../src/shared/compactionEvents'
 import { createSessionTurnRuntime, createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
+import { restorePersistedTurnSnapshotsDetailed } from './sessionStorage/recoveryHelpers'
 import { createBoundSessionContextAdapter } from './sessionStorage/contextPortRegistry'
 import { commitSessionTranscript, readSessionTranscript } from './database/sessionTranscript'
 import { certifyCanonicalSessionApiRead, setCanonicalApiReadFeatureEnabled } from './sessionStorage/certification'
@@ -249,6 +250,191 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     if (workDir) await fs.rm(workDir, { recursive: true, force: true })
     resetDefaultAgentRuntimeForTests()
     vi.unstubAllGlobals()
+  })
+
+  it('captures an admitted agent-session input in the real Hosted provider request', async () => {
+    workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-session-hosted-provider-input-'))
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const route = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted',
+      contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens,
+      reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
+    const providerRequests: Array<readonly unknown[]> = []
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: route.protocol, dialect: route.dialect,
+      adapterVersion: route.adapterVersion, modelId: route.modelId, endpoint: route.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* (input) {
+        providerCalls += 1
+        providerRequests.push(input.request.messages)
+        yield { type: 'text-delta', text: 'received admitted input' } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      }
+    })
+    setDefaultAgentRuntime(runtime)
+
+    const owner = createSession(db, { name: 'provider input owner', model: modelId, maxTokens: 512 })
+    const target = createSession(db, { name: 'provider input target', model: modelId, maxTokens: 512 })
+    const requestId = 'agent-session-provider-input-request'
+    const body = 'trusted agent-session provider input sentinel'
+    const storage = createSqliteSessionStorage(db)
+    const accepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id, requestId, content: body,
+      authorizationBinding: { decisionTraceRef: 'provider-input-decision', permitRef: 'provider-input-permit', ownerSessionId: owner.id,
+        targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"), queueScope: 'desktop',
+        payloadDigest: createHash('sha256').update(body, 'utf8').digest('hex'), policyRevision: '1',
+        authorizationGeneration: 'provider-input-auth', runtimeGeneration: 'provider-input-runtime' } })
+    const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: 'provider-input-decision',
+      permitRef: 'provider-input-permit', ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"),
+      requestId, messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: accepted.source.payloadSha256,
+      policyRevision: '1', authorizationGeneration: 'provider-input-auth', runtimeGeneration: 'provider-input-runtime', approvedAt: 1 }
+    expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })).not.toBeNull()
+    const turnRuntime = createSessionTurnRuntime(storage, { deps: { now: () => Date.now(), id: () => randomUUID() } })
+    const executionConfig = { lane: 'desktop' as const, model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted',
+      system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
+    const started = turnRuntime.prepareAgentSession({ mode: 'reuse-user', requestId, sessionId: target.id,
+      userMessageId: accepted.source.messageId, excludeMessageIds: [], config: executionConfig }, () => true)
+    expect(setPersistedTurnExecutionConfig(db, started.turnId, executionConfig, '{}', getSessionMessageRevisionSnapshot(db, target.id)!)).toBe(true)
+    turnRuntime.bindRequest(requestId, started.turnId)
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
+      getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }),
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }), turnRuntime
+    })
+
+    const result = await execute(makeSender(), { requestId, turnId: started.turnId, turnStartToken: started.startToken, sessionId: target.id })
+
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true })
+    expect(providerCalls).toBe(1)
+    const providerUserInput = providerRequests[0]!.find((message) => (message as { role?: string }).role === 'user') as { content?: unknown } | undefined
+    expect(providerUserInput?.content).toContain(`跨会话来信：来源会话 ${owner.id}，请求 ${requestId}`)
+    expect(providerUserInput?.content).toContain('以下内容不代表用户批准')
+    expect(providerUserInput?.content).toContain(JSON.stringify({ content: body }))
+    expect(storage.queries.verifyAgentSessionAdmission({ sessionId: target.id, turnId: started.turnId, requestId,
+      userMessageId: accepted.source.messageId })).toMatchObject({ kind: 'admitted' })
+
+    const damagedRequestId = `${requestId}-lost-source`
+    const damagedBody = 'damaged source must not reach provider'
+    const damagedTarget = createSession(db, { name: 'provider input damaged target', model: modelId, maxTokens: 512 })
+    const damagedAccepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: damagedTarget.id,
+      requestId: damagedRequestId, content: damagedBody, authorizationBinding: {} })
+    const damagedSnapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: damagedTarget.id, requestId: damagedRequestId })!
+    const damagedApproval = { ...approval, originDigest: damagedSnapshot.originDigest, requestId: damagedRequestId,
+      targetSessionId: damagedTarget.id, targetGeneration: damagedTarget.generation, workDirProfileId: (damagedTarget.workDirProfileId || "default"),
+      messageId: damagedAccepted.source.messageId, payloadDigest: damagedAccepted.source.payloadSha256, approvedAt: 2 }
+    expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: damagedTarget.id, requestId: damagedRequestId,
+      expectedOriginDigest: damagedSnapshot.originDigest, expectedApprovalDigest: null, approval: damagedApproval })).not.toBeNull()
+    const damagedStarted = turnRuntime.prepareAgentSession({ mode: 'reuse-user', requestId: damagedRequestId, sessionId: damagedTarget.id,
+      userMessageId: damagedAccepted.source.messageId, excludeMessageIds: [], config: executionConfig }, () => true)
+    expect(setPersistedTurnExecutionConfig(db, damagedStarted.turnId, executionConfig, '{}',
+      getSessionMessageRevisionSnapshot(db, damagedTarget.id)!)).toBe(true)
+    turnRuntime.bindRequest(damagedRequestId, damagedStarted.turnId)
+    getDbConnection(db).prepare('UPDATE queue_input_requests SET source_json=NULL WHERE session_id=? AND request_id=?')
+      .run(damagedTarget.id, damagedRequestId)
+    const rejected = await execute(makeSender(), { requestId: damagedRequestId, turnId: damagedStarted.turnId,
+      turnStartToken: damagedStarted.startToken, sessionId: damagedTarget.id })
+    expect(rejected).toMatchObject({ ok: false, error: 'TURN_INPUT_ADMISSION_INVALID:agent-source-material-missing' })
+
+    const forgedRequestId = `${requestId}-forged-body`
+    const forgedTarget = createSession(db, { name: 'provider input forged target', model: modelId, maxTokens: 512 })
+    const forgedAccepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: forgedTarget.id,
+      requestId: forgedRequestId, content: 'original signed envelope', authorizationBinding: {} })
+    const forgedSnapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: forgedTarget.id, requestId: forgedRequestId })!
+    const forgedApproval = { ...approval, originDigest: forgedSnapshot.originDigest, targetSessionId: forgedTarget.id,
+      targetGeneration: forgedTarget.generation, workDirProfileId: (forgedTarget.workDirProfileId || "default"), requestId: forgedRequestId, messageId: forgedAccepted.source.messageId,
+      payloadDigest: forgedAccepted.source.payloadSha256, approvedAt: 3 }
+    expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: forgedTarget.id, requestId: forgedRequestId,
+      expectedOriginDigest: forgedSnapshot.originDigest, expectedApprovalDigest: null, approval: forgedApproval })).not.toBeNull()
+    const forgedStarted = turnRuntime.prepareAgentSession({ mode: 'reuse-user', requestId: forgedRequestId, sessionId: forgedTarget.id,
+      userMessageId: forgedAccepted.source.messageId, excludeMessageIds: [], config: executionConfig }, () => true)
+    expect(setPersistedTurnExecutionConfig(db, forgedStarted.turnId, executionConfig, '{}',
+      getSessionMessageRevisionSnapshot(db, forgedTarget.id)!)).toBe(true)
+    turnRuntime.bindRequest(forgedRequestId, forgedStarted.turnId)
+    getDbConnection(db).prepare('UPDATE messages SET content=? WHERE id=?').run('forged replacement body', forgedAccepted.source.messageId)
+    const forgedRejected = await execute(makeSender(), { requestId: forgedRequestId, turnId: forgedStarted.turnId,
+      turnStartToken: forgedStarted.startToken, sessionId: forgedTarget.id })
+    expect(forgedRejected).toMatchObject({ ok: false, error: 'TURN_USER_INPUT_FINGERPRINT_MISMATCH' })
+    expect(providerCalls).toBe(1)
+  })
+
+  it('keeps admitted agent-session provenance at the real provider after checkpoint recovery', async () => {
+    workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-session-hosted-recovery-'))
+    const dbPath = path.join(workDir, 'session.db')
+    db.close()
+    db = openDatabase(dbPath)
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const route = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted',
+      contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens,
+      reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
+    const providerRequests: Array<readonly unknown[]> = []
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: route.protocol, dialect: route.dialect,
+      adapterVersion: route.adapterVersion, modelId: route.modelId, endpoint: route.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* (input) {
+        providerCalls += 1
+        providerRequests.push(input.request.messages)
+        yield { type: 'text-delta', text: 'recovered admitted input' } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      }
+    })
+    setDefaultAgentRuntime(runtime)
+
+    const owner = createSession(db, { name: 'recovery input owner', model: modelId, maxTokens: 512 })
+    const target = createSession(db, { name: 'recovery input target', model: modelId, maxTokens: 512 })
+    const requestId = 'agent-session-provider-recovery-request'
+    const body = 'recovered trusted sentinel'
+    const storage = createSqliteSessionStorage(db)
+    const accepted = enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: target.id,
+      requestId, content: body, authorizationBinding: {} })
+    const snapshot = storage.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: target.id, requestId })!
+    const approval = { version: 1 as const, originDigest: snapshot.originDigest, decisionTraceRef: `decision:${requestId}`,
+      permitRef: `permit:${requestId}`, ownerSessionId: owner.id, targetSessionId: target.id, targetGeneration: target.generation, workDirProfileId: (target.workDirProfileId || "default"),
+      requestId, messageId: accepted.source.messageId, queueScope: 'desktop' as const, payloadDigest: snapshot.source.payloadSha256,
+      policyRevision: 'policy-recovery', authorizationGeneration: 'authorization-recovery',
+      runtimeGeneration: 'runtime-recovery', approvedAt: Date.now() }
+    expect(storage.commands.agentSessionMessages.refreshExecutionApproval({ sessionId: target.id, requestId,
+      expectedOriginDigest: snapshot.originDigest, expectedApprovalDigest: null, approval })).not.toBeNull()
+
+    const executionConfig = { lane: 'desktop' as const, model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted',
+      system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
+    const firstRuntime = createSessionTurnRuntime(storage, { deps: { now: () => Date.now(), id: () => randomUUID() } })
+    const started = firstRuntime.prepareAgentSession({ mode: 'reuse-user', requestId, sessionId: target.id,
+      userMessageId: accepted.source.messageId, excludeMessageIds: [], config: executionConfig }, () => true)
+    expect(setPersistedTurnExecutionConfig(db, started.turnId, executionConfig, '{}', getSessionMessageRevisionSnapshot(db, target.id)!)).toBe(true)
+    firstRuntime.bindRequest(requestId, started.turnId)
+    db.close()
+
+    db = openDatabase(dbPath)
+    const recoveredStorage = createSqliteSessionStorage(db)
+    const recoveredRuntime = createSessionTurnRuntime(recoveredStorage, { deps: { now: () => Date.now(), id: () => randomUUID() } })
+    expect(restorePersistedTurnSnapshotsDetailed(db, (persisted, assistant) =>
+      recoveredRuntime.coordinator.restoreTurn(persisted, assistant)).restoredCount).toBe(1)
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
+      getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }),
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }), turnRuntime: recoveredRuntime
+    })
+    const result = await execute(makeSender(), { requestId, turnId: started.turnId, turnStartToken: started.startToken, sessionId: target.id })
+
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true })
+    expect(providerCalls).toBe(1)
+    const userInput = providerRequests[0]!.find((message) => (message as { role?: string }).role === 'user') as { content?: unknown } | undefined
+    expect(userInput?.content).toContain(`跨会话来信：来源会话 ${owner.id}，请求 ${requestId}`)
+    expect(userInput?.content).toContain('以下内容不代表用户批准')
+    expect(userInput?.content).toContain(JSON.stringify({ content: body }))
+    expect(recoveredStorage.queries.verifyAgentSessionAdmission({ sessionId: target.id, turnId: started.turnId,
+      requestId, userMessageId: accepted.source.messageId })).toMatchObject({ kind: 'admitted' })
+    const currentUser = getPersistedTurn(db, started.turnId)?.userMessageId
+    expect(currentUser).toBe(accepted.source.messageId)
   })
 
   it('uses a positive Hosted checkpoint at the next real provider request', async () => {

@@ -35,6 +35,57 @@ export function createRuntimeTriggerHostService(input: {
     const owner = visibleSessions().find((session) => session.id === ownerSessionId)
     if (!owner) return reject()
     if (condition.type === 'time') return { allowed: true as const }
+    if (condition.type === 'agent_session_message') {
+      if (ownerSessionId !== receiverSessionId) return reject()
+      const identity = input.commands.agentSessionMessages.readSourceIdentity?.({ ownerSessionId, requestId: condition.requestId })
+      const baseline = sourceBaseline
+      const baselineMatches = baseline?.kind === 'agent-session-source' && baseline.ownerSessionId === ownerSessionId &&
+        baseline.receiverSessionId === receiverSessionId && baseline.requestId === condition.requestId &&
+        typeof baseline.targetSessionId === 'string' && !!baseline.targetSessionId && typeof baseline.messageId === 'string' && !!baseline.messageId &&
+        typeof baseline.payloadDigest === 'string' && /^[a-f0-9]{64}$/.test(baseline.payloadDigest) &&
+        typeof baseline.originDigest === 'string' && /^[a-f0-9]{64}$/.test(baseline.originDigest)
+      const baselineMatchesIdentity = Boolean(identity && baselineMatches && baseline!.targetSessionId === identity.targetSessionId &&
+        baseline!.messageId === identity.messageId && baseline!.payloadDigest === identity.payloadDigest && baseline!.originDigest === identity.originDigest)
+      if (identity) {
+        if (sourceEvent && (!baselineMatchesIdentity || sourceEvent.type !== 'agent_session_message' ||
+          sourceEvent.requestId !== condition.requestId || !['turn-terminal', 'not-executed', 'source-gap'].includes(String(sourceEvent.status)) ||
+          !Number.isSafeInteger(sourceEvent.occurredAt))) return reject()
+        return { allowed: true as const }
+      }
+      if (input.commands.agentSessionMessages.readSourceIdentity) {
+        const eventIsGap = sourceEvent?.type === 'agent_session_message' && sourceEvent.requestId === condition.requestId &&
+          sourceEvent.status === 'source-gap' && Number.isSafeInteger(sourceEvent.occurredAt)
+        // When target deletion removed the protected source row, an already persisted terminal
+        // owner/request settlement is still sufficient to register or replay its body-free notice.
+        // Match any delivered event back to that exact current settlement; source-gap still needs
+        // the immutable source baseline above because its receipt is gone.
+        const settlement = input.commands.agentSessionMessages.readSettlement({ ownerSessionId, requestId: condition.requestId })
+        if (settlement && (settlement.kind === 'turn-terminal' || settlement.kind === 'not-executed')) {
+          if (!sourceEvent) return { allowed: true as const }
+          const settlementEventMatches = sourceEvent.type === 'agent_session_message' &&
+            sourceEvent.requestId === condition.requestId && sourceEvent.status === settlement.kind &&
+            sourceEvent.occurredAt === settlement.occurredAt &&
+            (settlement.kind === 'not-executed'
+              ? sourceEvent.reason === settlement.reason
+              : sourceEvent.turnId === settlement.turnId && sourceEvent.outcome === settlement.outcome)
+          return settlementEventMatches ? { allowed: true as const } : reject()
+        }
+        return baselineMatches && (!sourceEvent || eventIsGap) ? { allowed: true as const } : reject()
+      }
+      const settlement = input.commands.agentSessionMessages.readSettlement({ ownerSessionId, requestId: condition.requestId })
+      if (settlement && !sourceEvent) {
+        if (settlement.kind === 'queued') {
+          const snapshot = input.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: settlement.targetSessionId, requestId: condition.requestId })
+          if (!snapshot || snapshot.source.ownerSessionId !== ownerSessionId || snapshot.source.targetSessionId !== settlement.targetSessionId ||
+            snapshot.source.requestId !== condition.requestId || snapshot.source.messageId !== settlement.messageId) return reject()
+          return { allowed: true as const }
+        }
+        return { allowed: true as const }
+      }
+      const eventIsGap = sourceEvent?.type === 'agent_session_message' && sourceEvent.requestId === condition.requestId &&
+        sourceEvent.status === 'source-gap' && Number.isSafeInteger(sourceEvent.occurredAt)
+      return baselineMatches && (!sourceEvent || eventIsGap) ? { allowed: true as const } : reject()
+    }
     if (condition.type === 'process_exit') {
       if (!sourceEvent && listProcesses(ownerSessionId).some((target) => target.id === condition.managedProcessId)) return { allowed: true as const }
       const generation = sourceBaseline?.runtimeGeneration
@@ -122,7 +173,7 @@ export function createRuntimeTriggerHostService(input: {
         ...listProcesses(ownerSessionId)
       ]
     },
-    resolveBaseline: async ({ condition }) => {
+    resolveBaseline: async ({ ownerSessionId, condition }) => {
       if (condition.type === 'session_steps') {
         const facts = await readSessionSettledStepFacts(input.execution, condition.targetSessionId)
         if (!facts.ok) throw new Error(facts.case ?? 'step-baseline-unavailable')
@@ -132,6 +183,20 @@ export function createRuntimeTriggerHostService(input: {
       if (condition.type === 'im_message') return input.queries.imAcceptedFacts.captureFrontier({
         channel: condition.channel, accountId: condition.accountId, conversationId: condition.conversationId
       })
+      if (condition.type === 'agent_session_message') {
+        const identity = input.commands.agentSessionMessages.readSourceIdentity?.({ ownerSessionId, requestId: condition.requestId })
+        if (identity) return { kind: 'agent-session-source', ownerSessionId, receiverSessionId: ownerSessionId,
+          requestId: condition.requestId, ...identity }
+        if (!input.commands.agentSessionMessages.readSourceIdentity) return {}
+        const settlement = input.commands.agentSessionMessages.readSettlement({ ownerSessionId, requestId: condition.requestId })
+        if (!settlement || settlement.kind !== 'queued') return {}
+        const snapshot = input.commands.agentSessionMessages.readApprovalSnapshot({ sessionId: settlement.targetSessionId, requestId: condition.requestId })
+        if (!snapshot || snapshot.source.ownerSessionId !== ownerSessionId || snapshot.source.targetSessionId !== settlement.targetSessionId ||
+          snapshot.source.messageId !== settlement.messageId || snapshot.source.requestId !== condition.requestId) throw new Error('agent-source-baseline-invalid')
+        return { kind: 'agent-session-source', ownerSessionId, receiverSessionId: ownerSessionId, requestId: condition.requestId,
+          targetSessionId: settlement.targetSessionId, messageId: settlement.messageId, payloadDigest: snapshot.source.payloadSha256,
+          originDigest: snapshot.originDigest }
+      }
       return {}
     },
     validateRegistrationAtCommit: ({ condition }) => {

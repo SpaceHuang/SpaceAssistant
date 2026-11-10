@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { projectAgentLogFields, projectRendererLongTaskMessage, projectRendererSessionSwitchTraceMessage } from './agentLogProjection'
 
 describe('projectAgentLogFields', () => {
+  it('projects session-message recovery pending as safe routing metadata only', () => {
+    expect(projectAgentLogFields('session.message.recovery.pending', {
+      sessionId: 'target-session', requestId: 'owner:request', stage: 'approval-persistence', content: 'must not be logged'
+    })).toEqual({ sessionId: 'target-session', requestId: 'owner:request', stage: 'approval-persistence' })
+  })
+
   it('accepts renderer long-task timing only from the private console envelope', () => {
     expect(projectRendererLongTaskMessage('[renderer.performance.long-task] {"kind":"long-animation-frame","startTimeMs":25.126,"durationMs":75.345,"blockingDurationMs":42.789,"scriptAttributionStatus":"present","scriptCandidateCount":2,"scriptAttributions":[{"file":"main-AbC123.js","functionName":"renderMessageList","durationMs":30.126,"path":"/private"}],"scripts":[{"sourceURL":"/private/path.js"}]}', 44))
       .toEqual({ kind: 'long-animation-frame', startTimeMs: 25.13, durationMs: 75.35, blockingDurationMs: 42.79, rendererProcessId: 44,

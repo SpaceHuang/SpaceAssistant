@@ -472,6 +472,93 @@ function migrateQueueReceiptScopeKey(conn: DatabaseSync): void {
   CREATE INDEX IF NOT EXISTS idx_queue_input_requests_scope_session_request ON queue_input_requests(queue_scope,session_id,request_id);`)
 }
 
+function quoteSqlIdentifier(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`
+}
+
+function assertNoIncomingQueueReceiptForeignKeys(conn: DatabaseSync): void {
+  const tables = conn.prepare(`SELECT name FROM sqlite_master
+    WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'queue_input_requests'`).all() as Array<{ name: string }>
+  for (const { name } of tables) {
+    const references = conn.prepare(`PRAGMA foreign_key_list(${quoteSqlIdentifier(name)})`).all() as Array<{ table: string }>
+    if (references.some((reference) => reference.table === 'queue_input_requests')) {
+      throw new Error('QUEUE_INPUT_REQUEST_INBOUND_DEPENDENCY_UNSUPPORTED')
+    }
+  }
+}
+
+function migrateAgentSessionMessageReceipts(conn: DatabaseSync): void {
+  if (!hasTable(conn, 'queue_input_requests')) return
+  const requiredColumns = [
+    'session_id', 'queue_scope', 'request_id', 'fingerprint', 'queued_message_id',
+    'turn_id', 'state', 'created_at', 'updated_at'
+  ]
+  const columns = new Set((conn.prepare('PRAGMA table_info(queue_input_requests)').all() as Array<{ name: string }>).map(({ name }) => name))
+  if (!requiredColumns.every((column) => columns.has(column))) {
+    throw new Error('QUEUE_INPUT_REQUEST_SCHEMA_UNEXPECTED')
+  }
+
+  assertNoIncomingQueueReceiptForeignKeys(conn)
+
+  const oldRowCount = (conn.prepare('SELECT COUNT(*) AS count FROM queue_input_requests').get() as { count: number }).count
+  conn.exec(`DROP TABLE IF EXISTS queue_input_requests_v124;
+    CREATE TABLE queue_input_requests_v124 (
+      session_id TEXT NOT NULL,
+      queue_scope TEXT NOT NULL DEFAULT 'desktop',
+      request_id TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      queued_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+      turn_id TEXT REFERENCES turns(turn_id) ON DELETE SET NULL,
+      state TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      source_json TEXT CHECK (
+        CASE WHEN source_json IS NULL THEN 1
+          WHEN json_valid(source_json) THEN COALESCE((
+            json_type(source_json)='object'
+            AND json_type(source_json,'$.version')='integer' AND json_extract(source_json,'$.version')=1
+            AND json_extract(source_json,'$.kind')='agent-session'
+            AND json_type(source_json,'$.ownerSessionId')='text' AND length(json_extract(source_json,'$.ownerSessionId'))>0
+            AND json_extract(source_json,'$.requestId')=request_id
+            AND json_extract(source_json,'$.targetSessionId')=session_id
+            AND json_type(source_json,'$.messageId')='text' AND length(json_extract(source_json,'$.messageId'))>0
+            AND json_type(source_json,'$.payloadSha256')='text' AND length(json_extract(source_json,'$.payloadSha256'))=64
+            AND json_extract(source_json,'$.payloadSha256') NOT GLOB '*[^0-9a-f]*'
+            AND json_type(source_json,'$.authorizationBinding')='object'
+            AND (json_type(source_json,'$.executionApproval') IS NULL OR json_type(source_json,'$.executionApproval')='object')
+            AND (json_type(source_json,'$.admission') IS NULL OR json_type(source_json,'$.admission')='object')
+          ),0)
+          ELSE 0 END
+      ),
+      PRIMARY KEY(queue_scope,session_id,request_id)
+    );
+    INSERT INTO queue_input_requests_v124(
+      session_id,queue_scope,request_id,fingerprint,queued_message_id,turn_id,state,created_at,updated_at,source_json
+    ) SELECT session_id,queue_scope,request_id,fingerprint,queued_message_id,turn_id,state,created_at,updated_at,NULL
+      FROM queue_input_requests;`)
+
+  const newRowCount = (conn.prepare('SELECT COUNT(*) AS count FROM queue_input_requests_v124').get() as { count: number }).count
+  if (newRowCount !== oldRowCount) throw new Error('QUEUE_INPUT_REQUEST_MIGRATION_ROW_COUNT_MISMATCH')
+  const oldColumnsSql = 'session_id,queue_scope,request_id,fingerprint,queued_message_id,turn_id,state,created_at,updated_at'
+  const rowsMissingFromCopy = conn.prepare(`SELECT ${oldColumnsSql} FROM queue_input_requests
+    EXCEPT SELECT ${oldColumnsSql} FROM queue_input_requests_v124`).all()
+  const unexpectedCopiedRows = conn.prepare(`SELECT ${oldColumnsSql} FROM queue_input_requests_v124
+    EXCEPT SELECT ${oldColumnsSql} FROM queue_input_requests`).all()
+  if (rowsMissingFromCopy.length || unexpectedCopiedRows.length) {
+    throw new Error('QUEUE_INPUT_REQUEST_MIGRATION_ROW_CONTENT_MISMATCH')
+  }
+
+  conn.exec(`DROP TABLE queue_input_requests;
+    ALTER TABLE queue_input_requests_v124 RENAME TO queue_input_requests;
+    CREATE INDEX idx_queue_input_requests_message ON queue_input_requests(queued_message_id);
+    CREATE INDEX idx_queue_input_requests_scope_session_request ON queue_input_requests(queue_scope,session_id,request_id);
+    CREATE UNIQUE INDEX idx_queue_input_requests_agent_owner_request
+      ON queue_input_requests(json_extract(source_json,'$.ownerSessionId'),request_id)
+      WHERE source_json IS NOT NULL;`)
+  const brokenForeignKeys = conn.prepare('PRAGMA foreign_key_check').all()
+  if (brokenForeignKeys.length) throw new Error('QUEUE_INPUT_REQUEST_MIGRATION_FOREIGN_KEY_CHECK_FAILED')
+}
+
 function migrateImInboxClaims(conn: DatabaseSync): void {
   const messagesExist = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").get() !== undefined
   if (!messagesExist) return
@@ -2434,6 +2521,12 @@ export function runMigrations(conn: DatabaseSync): void {
   if (version === 122) runInTransaction(conn, () => {
     if (hasTable(conn, 'runtime_triggers')) conn.exec(MIGRATION_V123_RUNTIME_TRIGGER_SYNC_TARGET_SQL)
     version = 123
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v123 → v124: add validated agent-session provenance to durable queue receipts.
+  if (version === 123) runInTransaction(conn, () => {
+    migrateAgentSessionMessageReceipts(conn)
+    version = 124
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

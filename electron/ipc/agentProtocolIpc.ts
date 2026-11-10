@@ -10,7 +10,7 @@ import { AgentLogEventName, AgentLogFields } from '../agentLogger/types'
 import { CONFIG_KEYS, readAppLocale, readSkillsConfig, readWikiConfig, readToolsConfig, readExposureInputsFromDb } from './ipcShared'
 import { ChatImageAttachment } from '../../src/shared/domainTypes'
 import { ErrorCodes } from '../../src/shared/errorCodes'
-import { Message, ModelEntry, SessionSkillsState, SkillDefinition, SkippedCandidate, SkillRouteRecentMessage, SkillRouteResult } from '../../src/shared/domainTypes'
+import { AgentSessionExecutionFinalCheckFacts, Message, ModelEntry, SessionSkillsState, SkillDefinition, SkippedCandidate, SkillRouteRecentMessage, SkillRouteResult } from '../../src/shared/domainTypes'
 import { OutboundSubmitIntent } from '../../src/shared/outboundProtocol'
 import { TurnExecutePayload } from '../../src/shared/api'
 import { TurnIntent } from '../../src/shared/assistantFactAggregator'
@@ -30,6 +30,7 @@ import { detectLegacyWikiRoots, migrateLegacyWikis } from '../wiki/wikiMigration
 import { renameWikiRoot } from '../wiki/wikiInit'
 import { createAnthropicClient } from '../anthropicClientFactory'
 import { createOutboundAcceptor, createOutboundDrainer, computeContextPressureWarnings } from '../outbound/outboundAcceptor'
+import { classifyAgentSessionStartFailure } from '../outbound/agentSessionStartFailure'
 import { createSkillHintSystemMessage } from '../../src/shared/skillHintRecords'
 import { createSkillManager } from '../skills/skillManager'
 import type { SkillTurnScope } from '../skills/skillTurnScope'
@@ -65,7 +66,7 @@ import { submitToolConfirmResponse, reserveToolConfirmResponse, restoreReservedT
 import { cancelActiveAgentTool } from '../activeAgentToolCancellation'
 import { toConfirmationSnapshot, turnToDisplay } from '../../src/shared/turnDisplayProtocol'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
-import { cancelClaudeAdmission } from '../claudeStreamHandlers'
+import { cancelClaudeAdmission, clearPrimedClaudeAdmission, primeClaudeAdmission, type ClaudeAdmissionRef } from '../claudeStreamHandlers'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, markConfirmationSubmissionReconciling, reconcileConfirmationSubmission, reconcileConfirmationSubmissions, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { forgetMcpSessionTrust, isMcpSessionTrusted, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
 import { createContinuationSafetySnapshot, fingerprintContinuationExecutionConfig } from '../runtime/continuationSafetySnapshot'
@@ -76,7 +77,7 @@ import { buildSnapshotFromDb } from '../mcp/mcpToolRegistry'
 import { listProfiles } from '../mcp/mcpConfigStore'
 import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
-import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
+import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, onSessionContextCompactionRelease, withSessionTurnAdmission } from '../sessionCompactionLock'
 import type { ContinuationIntentAcceptance, ContinuationSourceRef, PreparedChatBodyView } from '../sessionStorage/public/model'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import { createSessionSwitchRequestSequence } from './sessionSwitchTraceSequence'
@@ -816,7 +817,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   // Phase 1b：prepare 编排抽为内部函数——chat:prepare-turn 与出站受理端口（chat:submit-outbound）
   // 共用同一套 configuring/skill-route/execution-config 装配，避免两处分叉。
 
-  const prepareTurnInternal = async (intent: TurnIntent): Promise<PreparedTurn> => {
+  const prepareTurnInternal = async (intent: TurnIntent,
+    agentSessionFinalCheck?: (facts: AgentSessionExecutionFinalCheckFacts) => boolean): Promise<PreparedTurn> => {
     const configuringKey = JSON.stringify([intent.sessionId, intent.requestId])
     const existing = sessionStorage.execution.readTurnByRequest({ sessionId: intent.sessionId, requestId: intent.requestId })
     if (existing) {
@@ -847,6 +849,11 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     // 先原子占有 session 并写入 H。立即交还 turnId，使配置/路由阶段可被 cancel-turn 打断。
     const started = await withSessionTurnAdmission(intent.sessionId, async () => {
       if (isSessionContextCompactionLocked(intent.sessionId) || isActiveTurnAdmissionBlocked(intent.sessionId)) throw new Error('SESSION_CONTEXT_COMPACTION_BUSY')
+      if (agentSessionFinalCheck) {
+        if (intent.mode !== 'reuse-user') throw new Error('AGENT_SESSION_REUSE_USER_REQUIRED')
+        const { queueScope: _queueScope, queueInputSource: _queueInputSource, ...hostIntent } = intent
+        return turnCoordinator.prepareAgentSession({ ...hostIntent, config: {} }, agentSessionFinalCheck)
+      }
       return turnCoordinator.prepare({ ...intent, config: {} }, 'configuring')
     })
     // 用户消息与 configuring turn 已持久化受理；Skill 路由和上下文准备也属于本轮执行。
@@ -979,11 +986,19 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     return prepared
   }
 
-  ipcMain.handle('chat:prepare-turn', (_e, intent: TurnIntent) => prepareTurnInternal(intent))
+  ipcMain.handle('chat:prepare-turn', async (_e, intent: TurnIntent) => {
+    // facts / trust boundary: renderer input describes user intent only. Queue scope and source
+    // are host-owned provenance and are supplied only by internal trigger starters below.
+    if (intent && typeof intent === 'object' && ('queueScope' in intent || 'queueInputSource' in intent)) {
+      throw new Error('UNTRUSTED_QUEUE_INPUT_METADATA')
+    }
+    return await prepareTurnInternal(intent)
+  })
   // Phase 1b：execute 编排抽为内部函数——chat:execute-turn 与出站受理端口共用。
   // sender 为 null 表示主进程内部驱动源（排水器/受理端口）发起，事件出口不依赖 sender。
 
-  const executeTurnInternal = async (sender: Electron.WebContents | null, payload: TurnExecutePayload, continuationId?: string) => {
+  const executeTurnInternal = async (sender: Electron.WebContents | null, payload: TurnExecutePayload, continuationId?: string,
+    preAdmissionRef?: ClaudeAdmissionRef) => {
     if (!ctx.executeTurn) throw new Error('TURN_EXECUTOR_NOT_CONFIGURED')
     if (!payload || typeof payload !== 'object' || typeof payload.turnId !== 'string' || typeof payload.turnStartToken !== 'string') {
       throw new Error('INVALID_TURN_EXECUTION_PAYLOAD')
@@ -992,6 +1007,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const configuring = configuringTurnsById.get(payload.turnId)
     const persisted = sessionStorage.execution.readTurn({ sessionId: payload.sessionId, turnId: payload.turnId })
     if (persisted?.state === 'terminal') {
+      if (preAdmissionRef) clearPrimedClaudeAdmission(preAdmissionRef)
       if (configuring) void configuring.then(({ skillTurnScope }) => skillTurnScope?.close(), () => undefined)
       return { ok: true as const, accepted: false as const, turnId: payload.turnId }
     }
@@ -1012,6 +1028,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           sessionStorage.execution.continuations.settleForTurn({ targetTurnId: payload.turnId, status })
         }
       } catch {
+        // facts/final-check handoff: configuring may fail or be cancelled before Claude consumes
+        // the pre-admitted ticket. Release the ticket only if it is still owned by this request.
+        if (preAdmissionRef) clearPrimedClaudeAdmission(preAdmissionRef)
         // 配置失败/取消已由 configuring 路径写入 terminal，不能把它伪装成 legacy config 错误。
         if (continuationId) sessionStorage.execution.continuations.settleForTurn({ targetTurnId: payload.turnId, status: 'failed' })
       } finally {
@@ -1131,7 +1150,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     },
     notifyEnqueued: (sessionId) => {
       // B3(v2 评审):enqueue 落库后若无 active turn,补一次排水(闭环 snapshot→enqueue 窗口竞态)
-      if (turnRuntime.listActive(sessionId).length === 0) void outboundDrainer.drain(sessionId)
+      if (turnRuntime.listActive(sessionId).length === 0) void outboundDrainer.drain(sessionId, 'queue-enqueued')
     },
     contextUsageWarn: async ({ sessionId, attachments }) => computeContextPressureWarnings(ctx.db, sessionId, attachments, sessionQueries, sessionStorage.ensureChatBodyV1),
     newRequestId: () => randomUUID(),
@@ -1142,17 +1161,75 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   // 主进程排水器：turn 终态后取队首 queued 驱动下一回合（偏差 9 核心条目——「何时发起下一回合」回主进程）。
   // 渲染端 drainQueueForSession 触发器在 1c 删除，此前两者并存（先建后删，避免双驱空窗）。
+  const startAgentSession = async (input: { sessionId: string; requestId: string; messageId: string }) => {
+    const requestId = input.requestId.trim()
+    if (!requestId || requestId.length > 200 || requestId !== input.requestId) throw new Error('Invalid requestId')
+    let approval = ctx.agentSessionExecutionAuthorization?.resolve(input)
+    if (!approval) return 'unavailable' as const
+    if (approval.kind === 'waiting' && approval.reason !== 'source-mismatch' && ctx.agentSessionExecutionAuthorization?.reauthorize) {
+      const reauthorization = await ctx.agentSessionExecutionAuthorization.reauthorize(input)
+      if (reauthorization === 'policy-rejected') {
+        const settled = sessionCommands.agentSessionMessages.markNotExecuted({ sessionId: input.sessionId,
+          requestId: input.requestId, reason: 'policy-rejected' })
+        return settled ? 'rejected' as const : 'waiting' as const
+      }
+      if (reauthorization === 'user-rejected') {
+        const settled = sessionCommands.agentSessionMessages.markNotExecuted({ sessionId: input.sessionId,
+          requestId: input.requestId, reason: 'authorized-cancel' })
+        return settled ? 'rejected' as const : 'waiting' as const
+      }
+      if (reauthorization === 'waiting') return 'waiting' as const
+      approval = ctx.agentSessionExecutionAuthorization.resolve(input)
+    }
+    if (!approval) return 'unavailable' as const
+    if (approval.kind === 'waiting') return 'waiting' as const
+    if (approval.kind === 'rejected') {
+      const settled = sessionCommands.agentSessionMessages.markNotExecuted({ sessionId: input.sessionId,
+        requestId: input.requestId, reason: 'policy-rejected' })
+      if (!settled) return 'waiting' as const
+      logAgentEvent('warn', 'outbound.agent-session.policy-rejected' as AgentLogEventName,
+        { sessionId: input.sessionId, requestId: input.requestId, ruleId: approval.ruleId } as AgentLogFields)
+      return 'rejected' as const
+    }
+    const admission = await getCallAdmissionGate().acquire({ lane: 'desktop', priority: 'interactive', role: 'top-level',
+      disposition: 'defer', requestId: input.requestId })
+    if (!admission.ok) return admission.verdict === 'rejected' && admission.cause === 'persistence-failed'
+      ? 'persistence-failed' as const : 'busy' as const
+    let admissionRef: ClaudeAdmissionRef | undefined
+    let ticketPrimed = false
+    try {
+      const prepared = await prepareTurnInternal({ mode: 'reuse-user', requestId: input.requestId,
+        sessionId: input.sessionId, userMessageId: input.messageId, excludeMessageIds: [], config: {} }, approval.finalCheck)
+      admissionRef = { sessionId: prepared.sessionId, requestId: prepared.requestId, turnId: prepared.turnId }
+      primeClaudeAdmission(admissionRef, admission.ticket, approval.workDirSnapshot)
+      ticketPrimed = true
+      const dispatched = await executeTurnInternal(null, { requestId: prepared.requestId, turnId: prepared.turnId,
+        turnStartToken: prepared.startToken, sessionId: prepared.sessionId }, undefined, admissionRef)
+      if (!dispatched.accepted) clearPrimedClaudeAdmission(admissionRef)
+      return 'started' as const
+    } catch (error) {
+      if (ticketPrimed && admissionRef) clearPrimedClaudeAdmission(admissionRef)
+      else admission.ticket.release()
+      const failure = classifyAgentSessionStartFailure(input.sessionId, error)
+      if (failure) return failure
+      throw error
+    }
+  }
 
   const outboundDrainer = createOutboundDrainer({
     submitOutbound: outboundAcceptor.submitOutbound,
     listActiveCount: (sessionId) => turnRuntime.listActive(sessionId).length,
-    getNextQueued: (sessionId) => sessionStorage.execution.getNextQueuedMessage(sessionId),
+    getNextQueued: (sessionId) => sessionStorage.execution.getNextDesktopQueueInput(sessionId),
+    startAgentSession,
+    settleAgentSessionStartFailure: ({ sessionId, requestId }) => sessionCommands.agentSessionMessages.markNotExecuted({ sessionId, requestId, reason: 'start-failed' }),
+    onCompactionRelease: onSessionContextCompactionRelease,
     consumeQueued: (_sessionId, messageId) => {
       // B5:排队的渲染端本地命令(如 /test-cards)主进程无法执行,消费落库避免卡队
       sessionCommands.deleteQueuedMessage(messageId)
     },
     audit: (event, data) => logAgentEvent('warn', event as AgentLogEventName, data as AgentLogFields)
   })
+  ctx.publishDesktopDrainRequester?.((sessionId, reason) => outboundDrainer.drain(sessionId, reason))
   turnRuntime.subscribe((turn, event) => outboundDrainer.onTurnProjection(turn, event))
 
   ipcMain.handle('chat:cancel-turn', (_e, turnId: string) => {
@@ -1341,6 +1418,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       }
       const result = sessionCommands.deleteQueuedMessage(payload.messageId, previewCandidate)
       if (result.ok) {
+        void outboundDrainer.drain(result.sessionId).catch(() => undefined)
       }
       return result
     }

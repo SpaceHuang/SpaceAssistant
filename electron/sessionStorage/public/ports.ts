@@ -1,4 +1,4 @@
-import type { Message, Session } from '../../../src/shared/domainTypes'
+import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionExecutionApproval, AgentSessionInputSource, Message, Session } from '../../../src/shared/domainTypes'
 import type { AcceptedTurn } from '../../../src/shared/acceptedTurn'
 import type { SessionOwnership, SessionVisibility } from '../../../src/shared/sessionOwnership'
 import type { SessionDirectoryGrantRecord } from '../../../src/shared/sessionDirectoryGrant'
@@ -8,12 +8,15 @@ import type { EnqueueResult, MessageEntry, RemoteSessionIdentityUpdate, Continua
   RoutingRead, RouteInput, SelectionFence, ExportPage, SearchCorpusPage, MessageSearchHit, MessageSkeleton, RetryContextTarget,
   PreparedChatBodyView,
   ImAcceptedFactScope, ImAcceptedFactFrontier, ImAcceptedFactPage,
-  RuntimeTriggerRecord, RuntimeTriggerPatch, QueueInputReceiptSnapshot, ScopedQueueInput, QueueInputSource,
+  RuntimeTriggerRecord, RuntimeTriggerPatch, QueueInputReceiptSnapshot, ScopedQueueInput, QueueInputSource, AgentSessionMessageAcceptance, AgentSessionApprovalSnapshot,
+  AgentSessionMessageSourceSummary,
+  PersistedInputAdmissionVerdict,
 } from './model'
 import type { HistoryEvent, HistoryPort, HistorySnapshot } from '../../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../../packages/agent-sdk/src/model'
 import type { CompactionReplay } from '../../../src/shared/compactionEvents'
 import type { TurnExecutionConfig } from '../../../src/shared/assistantFactAggregator'
+import type { QueueScope } from '../../../src/shared/queueScope'
 
 export type ProjectionPreparationRequest = Readonly<{ sessionId: string; scopeKey: string; specVersion: number }>
 export type SessionTurnSnapshot = Readonly<{
@@ -69,6 +72,16 @@ export type SessionHistoryRecoveryOptions = Readonly<{
 
 /** Business commands for one session storage instance; implementation details stay behind the adapter. */
 export interface SessionCommands {
+  readonly agentSessionMessages: Readonly<{
+    accept(input: { ownerSessionId: string; targetSessionId: string; requestId: string; content: string; authorizationBinding: AgentSessionInputSource['authorizationBinding'] }): AgentSessionMessageAcceptance
+    markNotExecuted(input: { sessionId: string; requestId: string; reason: AgentInputNotExecutedReason }): boolean
+    revoke(input: { ownerSessionId: string; requestId: string }): Readonly<{ kind: 'revoked' | 'already-revoked' | 'claimed' | 'not-found' | 'not-revocable'; settlement?: AgentInputSettlement }>
+    readSettlement(input: { ownerSessionId: string; requestId: string }): AgentInputSettlement | undefined
+    readSourceIdentity?(input: { ownerSessionId: string; requestId: string }): Readonly<{ targetSessionId: string; messageId: string; payloadDigest: string; originDigest: string }> | undefined
+    readApprovalSnapshot(input: { sessionId: string; requestId: string }): AgentSessionApprovalSnapshot | null
+    refreshExecutionApproval(input: { sessionId: string; requestId: string; expectedOriginDigest: string; expectedApprovalDigest: string | null; approval: AgentSessionExecutionApproval }): { originDigest: string; approvalDigest: string } | null
+    readAcceptance(input: { ownerSessionId: string; requestId: string; targetSessionId: string; payloadSha256: string }): AgentSessionMessageAcceptance | undefined
+  }>
   readonly scopedQueue: Readonly<{
     enqueue(input: ScopedQueueInput): EnqueueResult
     readReceipt(input: { sessionId: string; requestId: string; queueScope: import('../../../src/shared/queueScope').QueueScope }): QueueInputReceiptSnapshot | undefined
@@ -79,7 +92,10 @@ export interface SessionCommands {
     read(triggerId: string): RuntimeTriggerRecord | null
     findByClientKey(ownerSessionId: string, clientKey: string): RuntimeTriggerRecord | null
     listByOwner(input: { ownerSessionId: string; cursor?: { createdAt: number; id: string }; limit: number }): readonly RuntimeTriggerRecord[]
-    listByState(state: 'waiting' | 'matched', limit?: number, after?: { createdAt: number; id: string }): readonly RuntimeTriggerRecord[]
+    listByState(state: 'waiting' | 'matched' | 'failed', limit?: number, after?: { createdAt: number; id: string }): readonly RuntimeTriggerRecord[]
+    recoverOrphanedSyncTrigger(input: { triggerId: string; expectedRevision: number; now: number; queueScope?: QueueScope }): Readonly<{
+      kind: 'failed' | 'already-failed' | 'not-eligible' | 'stale' | 'unverified' | 'retry'; markerRemoved: boolean
+    }>
     listWaitingForManagedProcessExit(input: { managedProcessId: string; runtimeGeneration: string; ownerSessionId: string }): readonly RuntimeTriggerRecord[]
     countActive(input?: { ownerSessionId?: string; now?: number }): number
     findActiveSyncTarget(targetSessionId: string): RuntimeTriggerRecord | null
@@ -146,6 +162,10 @@ export interface SessionQueries {
   readSessionUsage(sessionId: string): SessionUsage | undefined
   listSessions(options?: { view?: 'all' | 'user-visible'; workDirProfileId?: string }): Session[]
   readMessage(ref: MessageRef): Message | undefined
+  readAgentSessionMessageSource(ref: MessageRef): AgentSessionMessageSourceSummary | undefined
+  /** Original body only when the persisted agent-session envelope and source digest validate. */
+  readAgentSessionMessageContent(ref: MessageRef): string | undefined
+  verifyAgentSessionAdmission(input: { sessionId: string; turnId: string; requestId: string; userMessageId?: string }): PersistedInputAdmissionVerdict
   /** Read control metadata without materializing message content. */
   readMessageSkeleton(ref: MessageRef): MessageSkeleton | undefined
   readLatestMessagePreviewCandidate(sessionId: string, excludeMessageId: string): LatestMessagePreviewCandidate | undefined

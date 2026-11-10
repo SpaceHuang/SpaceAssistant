@@ -5,8 +5,8 @@ import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import type { StorageProfileCoordinator } from './storageProfile/storageProfileCoordinator'
-import { CONFIG_KEYS } from './ipc/ipcShared'
-import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
+import { CONFIG_KEYS, readToolsConfig } from './ipc/ipcShared'
+import { resolvePrimedClaudeWorkDir, registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
@@ -54,6 +54,10 @@ import { createRuntimeTriggerHostService } from './triggers/hostService'
 import { createRuntimeTriggerExecutionMaterials } from './triggers/runtimeMaterials'
 import { createRuntimeTriggerAuthorizationBinding, runtimeTriggerAuthorizationMatches, type RuntimeTriggerAuthoritySnapshot } from './triggers/hostAuthorization'
 import { createSecuritySettingsStorage } from './confirmation/securitySettingsStorage'
+import { readPolicyBehaviorSnapshot } from './confirmation/imPolicyStore'
+import { readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from './confirmation/policyRulesRuntime'
+import { createSessionMessageService, type SessionMessageDrain } from './capabilities/sessionMessageService'
+import { createAgentSessionExecutionAuthorization, evaluateAgentSessionExecutionPolicy } from './capabilities/agentSessionExecutionAuthorization'
 import { readImPolicySnapshot } from './confirmation/imPolicyStore'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { readImPolicyAuthorizationRevision } from './remote/imInboundGuard'
@@ -126,6 +130,8 @@ import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
 import { getDefaultAgentRuntime, setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { createDesktopAgentRuntime } from './runtime/desktopAgentRuntime'
 import { CallAdmissionGate, getCallAdmissionGate, setCallAdmissionGate } from './runtime/callAdmissionGate'
+import { wakeQueuedAgentSessions } from './outbound/desktopAgentSessionWake'
+import type { OutboundDrainWakeReason } from './outbound/drainWake'
 import { resetActiveAdmissionOnStartup } from './storage/callAdmissionStore'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { initWeChatCliLogger } from './wechat/weChatCliLogger'
@@ -145,7 +151,7 @@ import { applyMainWindowIcon, setupWindowIconThemeListener } from './windowIcon'
 import { getMainWindowFrameOptions } from './windowFrame'
 import { attachWindowMaximizeEvents, registerWindowControlsIpc } from './windowControlsIpc'
 import { isAllowedExternalUrl, openExternalLink } from './externalLink'
-import { createWorkDirManager, resolveWorkDirForSession, type WorkDirManager } from './workDirManager'
+import { createWorkDirManager, resolveWorkDirForSession, workDirAuthorizationBinding, workDirAuthorizationSnapshot, type WorkDirManager } from './workDirManager'
 import { FloatingNotificationManager } from './floatingNotificationManager'
 import { runStartupDecisionCacheCleanup } from './confirmation/cacheMaintenanceHooks'
 import { runExemptionMigrationOnce } from './confirmation/exemptionMigrationRunner'
@@ -786,6 +792,81 @@ app.whenReady().then(async () => {
     quiesceMaintenance: async () => { await safeDatabaseMaintenanceInFlight }
   })
   const sessionStorage = sessionStorageHost.storage
+  let requestDesktopDrain: SessionMessageDrain = () => { throw new Error('SESSION_MESSAGE_DRAIN_UNAVAILABLE') }
+  const requestDesktopDrainAfterQueueRelease = (sessionId: string, reason: OutboundDrainWakeReason, owner: string) => {
+    void Promise.resolve().then(() => requestDesktopDrain(sessionId, reason)).catch((error) => {
+      console.warn(`[session-message] ${owner} queue wake failed:`, error instanceof Error ? error.message : String(error))
+    })
+  }
+  const resolveSessionWorkDir = (sessionId: string) => {
+    if (!workDirManager) return undefined
+    return resolveWorkDirForSession(sessionStorage.queries, sessionId,
+      () => workDirManager!.listProfiles(),
+      () => workDirManager!.getActiveProfileId(),
+      () => workDirManager!.getActiveWorkDir())
+  }
+  const resolveSessionWorkDirProfileId = (sessionId: string): string | undefined => {
+    return workDirAuthorizationBinding(resolveSessionWorkDir(sessionId))
+  }
+  const sessionMessages = createSessionMessageService({ storage: sessionStorage,
+    requestDesktopDrain: (sessionId) => requestDesktopDrain(sessionId),
+    onRecoveryIssue: ({ sessionId, requestId, stage }) => logAgentEvent('warn', 'session.message.recovery.pending', { sessionId, requestId, stage }),
+    resolveWorkDirProfileId: resolveSessionWorkDirProfileId })
+  const agentSessionExecutionAuthorization = createAgentSessionExecutionAuthorization({ storage: sessionStorage,
+    resolveWorkDirProfileId: resolveSessionWorkDirProfileId,
+    resolveWorkDirSnapshot: (sessionId) => workDirAuthorizationSnapshot(resolveSessionWorkDir(sessionId)),
+    evaluateCurrentPolicy: ({ sessionId }) => evaluateAgentSessionExecutionPolicy({ sessionId,
+      rules: resolveEffectivePolicyRulesWithOrigin(db, 'desktop').rules, config: readToolsConfig(db) }),
+    requestUserConfirmation: async ({ sessionId, requestId, messageId, ruleId, decisionTraceRef }) => {
+      const target = sessionStorage.queries.readSession(sessionId)
+      const messageContent = sessionStorage.queries.readAgentSessionMessageContent({ sessionId, messageId })
+      if (!target || target.ownership !== 'user' || target.visibility === 'hidden' || messageContent === undefined) return 'waiting'
+      const translate = createHostTranslator({ locale: readAppLocale(db) })
+      const audit = getSecurityAuditLog()
+      const auditBase = { lane: 'desktop' as const, sessionId, requestId, toolUseId: messageId, toolName: 'toolkit.call',
+        actionClass: 'execute' as const, riskLevel: 'medium' as const, factsSummary: '跨会话来信执行权限重审',
+        signals: ['toolkit-capability'], decisionId: decisionTraceRef, decisionRuleId: ruleId }
+      audit.record({ ...auditBase, ts: Date.now(), event: 'policy.decision', decision: 'require-confirm',
+        answerer: 'user', ruleId, reason: '跨会话来信执行授权在启动恢复时需要人工重审。', actor: 'system' })
+      audit.record({ ...auditBase, ts: Date.now(), event: 'confirm.request', actor: 'user' })
+      let result: 'approved' | 'rejected' | 'waiting' = 'waiting'
+      try {
+        const parent = getMainWindow()
+        const options = {
+          type: 'warning' as const,
+          title: translate({ key: 'notification.sessionMessageConfirmTitle' }),
+          message: translate({ key: 'notification.sessionMessageConfirmMessage', params: { session: target.name } }),
+          detail: translate({ key: 'notification.sessionMessageConfirmDetail', params: { ruleId, content: messageContent } }),
+          buttons: [translate({ key: 'notification.sessionMessageConfirmApprove' }), translate({ key: 'notification.sessionMessageConfirmReject' }),
+            translate({ key: 'notification.sessionMessageConfirmDefer' })],
+          defaultId: 2, cancelId: 2, noLink: true
+        }
+        const response = await (parent
+          ? dialog.showMessageBox(parent, options)
+          : dialog.showMessageBox(options))
+        result = response.response === 0 ? 'approved' : response.response === 1 ? 'rejected' : 'waiting'
+      } catch { result = 'waiting' }
+      audit.record({ ...auditBase, ts: Date.now(), event: 'confirm.outcome', actor: result === 'waiting' ? 'system' : 'user',
+        outcome: result === 'approved' ? 'approved' : result === 'rejected' ? 'rejected' : 'cancelled',
+        cause: result === 'approved' ? 'user-approved' : result === 'rejected' ? 'user-denied' : 'cancelled' })
+      return result
+    },
+    readCurrentAuthority: () => {
+      try {
+        const conn = getDbConnection(db)
+        const snapshot = readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] })
+        const epoch = conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get() as { epoch?: number } | undefined
+        if (!epoch || !Number.isSafeInteger(epoch.epoch)) return undefined
+        const policyBinding = { domain: 'desktop' as const, policyBehaviorVersion: snapshot.policyBehaviorVersion,
+          revision: snapshot.revision, epoch: epoch.epoch! }
+        const origin = resolveEffectivePolicyRulesWithOrigin(db, 'desktop')
+        const authorizationGeneration = createHash('sha256').update(JSON.stringify({
+          effectiveRules: origin.rules, lanePackage: readPolicyPackages(db).desktop, policyOrigins: origin.origins, policyBinding
+        })).digest('hex')
+        return { policyRevision: String(snapshot.revision), authorizationGeneration,
+          runtimeGeneration: `process:${process.pid}:${currentProcessGeneration(conn)}` }
+      } catch { return undefined }
+    } })
   const runtimeTriggerSyncWaiters = createRuntimeTriggerSyncWaitRegistry()
   runtimeTriggerSyncWaitStop = runtimeTriggerSyncWaiters.cancelAll
   const runtimeTriggerService = createRuntimeTriggerHostService({ commands: sessionStorage.commands,
@@ -948,9 +1029,10 @@ app.whenReady().then(async () => {
       },
       cancelPendingDelivery: (trigger) => {
         const queueScope = runtimeTriggerQueueScope(trigger.receiverSessionId)
-        if (queueScope) sessionStorage.commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId: trigger.receiverSessionId,
-          requestId: `runtime-trigger:${trigger.id}`, queueScope })
+        return queueScope ? sessionStorage.commands.scopedQueue.cancelUndispatchedRuntimeInput({ sessionId: trigger.receiverSessionId,
+          requestId: `runtime-trigger:${trigger.id}`, queueScope }) : false
       },
+      onQueueReleased: (receiverSessionId) => requestDesktopDrainAfterQueueRelease(receiverSessionId, 'external', 'sync trigger'),
       subscribeReceiver: (receiverSessionId, receiverTurnId, listener) => turnTerminalBusForExecution(sessionStorage.execution)
         .subscribe(receiverSessionId, receiverTurnId, listener),
       readReceiver: async (receiverSessionId, receiverTurnId) => readPersistedTurnTerminal(
@@ -1258,15 +1340,12 @@ app.whenReady().then(async () => {
     getApiKey,
     getWorkDir: () => workDirState,
     getWorkDirManager: () => workDirManager ?? undefined,
-    resolveWorkDirForSession: (sessionId) => {
-      const resolved = resolveWorkDirForSession(
-        sessionStorage.queries,
-        sessionId,
-        () => workDirManager!.listProfiles(),
-        () => workDirManager!.getActiveProfileId(),
-        () => workDirManager!.getActiveWorkDir()
-      )
-      return resolved?.workDir ?? workDirState
+    resolveWorkDirForSession: (sessionId, requestId, turnId) => {
+      const resolved = resolveSessionWorkDir(sessionId)
+      const snapshot = workDirAuthorizationSnapshot(resolved)
+      return requestId && turnId
+        ? resolvePrimedClaudeWorkDir({ sessionId, requestId, turnId }, snapshot?.binding, snapshot?.workDir ?? workDirState)
+        : snapshot?.workDir ?? resolved?.workDir ?? workDirState
     },
     getUserDataPath: () => app.getPath('userData'),
     getToolsConfig: () => {
@@ -1288,6 +1367,7 @@ app.whenReady().then(async () => {
       }
     },
     getAppDatabase: () => db,
+    sessionMessages,
     getProjectMemoryEnabled: () => true,
     getBrowserConfig: () => readBrowserConfigFromDb(db),
     getShellConfig: () => readShellConfigFromDb(db),
@@ -1361,6 +1441,8 @@ app.whenReady().then(async () => {
     isTrayEnabled,
     turnRuntime,
     publishRuntimeTriggerReceiverStarter: (starter) => { runtimeTriggerReceiverStarter = starter },
+    publishDesktopDrainRequester: (requester) => { requestDesktopDrain = requester },
+    agentSessionExecutionAuthorization,
     wakeSourceTruthSpillGc: () => {
       const spillRoot = path.join(app.getPath('userData'), 'spill')
       void runSourceTruthSpillGcMaintenance(db, spillRoot).catch((error) => {
@@ -1389,7 +1471,8 @@ app.whenReady().then(async () => {
         const outcome = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'cancelled' ? 'cancelled'
           : terminal.outcome === 'timed-out' || terminal.outcome === 'timed_out' ? 'timed-out' : 'failed'
         return { kind: 'terminal', sessionId: terminal.sessionId, turnId: terminal.turnId, outcome, occurredAt }
-      }
+      },
+      readAgentSettlement: (ownerSessionId, requestId) => sessionStorage.commands.agentSessionMessages.readSettlement({ ownerSessionId, requestId })
     }),
     match: (id, revision, event) => sessionStorage.commands.runtimeTriggers.update(id, revision,
       { state: 'matched', matchedAt: Date.now(), event, updatedAt: Date.now() }),
@@ -1399,6 +1482,14 @@ app.whenReady().then(async () => {
     deliver: runtimeTriggerDelivery,
     update: (id, revision, patch) => sessionStorage.commands.runtimeTriggers.update(id, revision, patch),
     readReceipt: runtimeTriggerReadReceipt,
+    cancelQueuedMarker: (trigger) => {
+      const queueScope = runtimeTriggerQueueScope(trigger.receiverSessionId)
+      return queueScope ? sessionStorage.commands.scopedQueue.cancelUnstartedInput({ sessionId: trigger.receiverSessionId,
+        requestId: `runtime-trigger:${trigger.id}`, queueScope, expectedSource: 'runtime-trigger' }) : false
+    },
+    onQueueReleased: (sessionId) => {
+      requestDesktopDrainAfterQueueRelease(sessionId, 'external', 'failed trigger')
+    },
     isSessionBusy: (sessionId) => sessionStorage.execution.hasActiveTurn(sessionId),
     startReceiver: async ({ sessionId, requestId, messageId }) => {
       const scope = runtimeTriggerQueueScope(sessionId)
@@ -1419,7 +1510,13 @@ app.whenReady().then(async () => {
     })
   })
   subscribeRuntimeTriggerProcessExitHandoff(sessionStorage.commands)
-  failOrphanedRuntimeSyncTriggers(sessionStorage.commands, Date.now())
+  failOrphanedRuntimeSyncTriggers(sessionStorage.commands, Date.now(), {
+    resolveQueueScope: runtimeTriggerQueueScope,
+    onQueueReleased: (sessionId) => {
+      // Defer until startup finishes installing the admission gate, then reread and drain the new physical head.
+      requestDesktopDrainAfterQueueRelease(sessionId, 'startup-recovery', 'orphaned sync trigger')
+    }
+  })
   runtimeTriggerRecoveryStop = runtimeTriggerRecovery.stop
   runtimeTriggerRecovery.start()
   void runtimeTriggerRecovery.scan()
@@ -1429,7 +1526,21 @@ app.whenReady().then(async () => {
   // 顺序纪律(P1-1,评审):先清零 DB 活跃段、再构造门——门构造即 loadAdmissionState,
   // 反序会把上一进程的幻影票据读进内存且永无 release,并发上限被永久蚕食
   resetActiveAdmissionOnStartup(db, Date.now())
-  setCallAdmissionGate(new CallAdmissionGate({ db }))
+  const wakeAgentSessionQueue = (reason: OutboundDrainWakeReason) => wakeQueuedAgentSessions({
+    sessionIds: () => sessionStorage.queries.listSessions({ view: 'all' }).map((session) => session.id),
+    getNextQueued: (sessionId) => sessionStorage.execution.getNextDesktopQueueInput(sessionId),
+    recoverTarget: (sessionId) => sessionStorage.execution.recoverExecutionTarget(sessionId),
+    reason,
+    drain: (sessionId, wakeReason) => requestDesktopDrain(sessionId, wakeReason),
+    onError: (_sessionId, error) => console.warn('[session-message] desktop queue wake failed:',
+      error instanceof Error ? error.message : String(error))
+  })
+  setCallAdmissionGate(new CallAdmissionGate({ db, onReleased: () => {
+    // facts-only scan: global capacity release wakes persisted agent-session inputs across desktop sessions.
+    wakeAgentSessionQueue('capacity-released')
+  } }))
+  // Startup recovery only wakes durable queued work; approval and atomic claim are rechecked by the drainer.
+  wakeAgentSessionQueue('startup-recovery')
   // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
   // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
   // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。

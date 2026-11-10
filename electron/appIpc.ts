@@ -21,6 +21,7 @@ import { StorageProfileCoordinator } from './storageProfile/storageProfileCoordi
 import { runStorageProfileWorker } from './storageProfile/storageProfileWorkerClient'
 import type { SessionStorage } from './sessionStorage/host/ports'
 import { createSecuritySettingsStorage } from './confirmation/securitySettingsStorage'
+import type { OutboundDrainWakeReason } from './outbound/drainWake'
 
 // 兼容 re-export:既有外部消费方(butler/main/llmSystemPrompt)从本文件导入
 export { readAppLocale } from './ipc/ipcShared'
@@ -47,6 +48,10 @@ export type AppIpcContext = {
   executeTurn?: ClaudeTurnExecution
   /** Internal composition hook used by the durable trigger dispatcher after ordinary turn preparation is installed. */
   publishRuntimeTriggerReceiverStarter?: (starter: (input: import('./triggers/receiverStarter').RuntimeTriggerReceiverStartInput) => Promise<'started' | 'busy' | 'unavailable'>) => void
+  /** Internal composition hook: publish the single desktop drainer to host capabilities after it is created. */
+  publishDesktopDrainRequester?: (requester: (sessionId: string, reason?: OutboundDrainWakeReason) => void | Promise<void>) => void
+  /** Host policy/authorization resolver for the dedicated agent-session queue claim path. */
+  agentSessionExecutionAuthorization?: import('./capabilities/agentSessionExecutionAuthorization').AgentSessionExecutionAuthorizationPort
   /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
   isTrayEnabled?: () => boolean
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ackImInboxMessage, appendImInboxMessage, claimImInboxMessage, listImInboxMessages, releaseImInboxMessage, renewImInboxClaim } from '../database/imInbox'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
-import { claimQueuedTurnAtomicallyInScope, createSession, enqueueQueuedUserMessageInScope, listQueuedUserMessages } from '../database/operations'
+import { claimQueuedTurnAtomicallyInScope, createSession, deleteQueuedUserMessageInScope, enqueueAgentSessionMessageInScope, enqueueQueuedUserMessageInScope, getNextDesktopQueueInput, listQueuedUserMessages } from '../database/operations'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { classifyQueueInputSource } from './queueContract'
@@ -36,8 +36,33 @@ describe('trusted queue input source classification', () => {
       expect(listQueuedUserMessages(db, { sessionId: receiver, queueScope: scope, source: 'runtime-trigger' })).toHaveLength(1)
       expect(() => claimQueuedTurnAtomicallyInScope(db, { sessionId: receiver, userMessageId: valid.persisted.message.id, turnId: 'wrong-source-turn',
         assistantMessageId: 'wrong-source-assistant', requestId: valid.receipt.requestId, queueScope: scope })).toThrow('QUEUE_INPUT_SOURCE_INVALID')
+      expect(deleteQueuedUserMessageInScope(db, queued.persisted.message.id, scope).ok).toBe(true)
       expect(claimQueuedTurnAtomicallyInScope(db, { sessionId: receiver, userMessageId: valid.persisted.message.id, turnId: 'trigger-turn',
         assistantMessageId: 'trigger-assistant', requestId: valid.receipt.requestId, queueScope: scope, source: 'runtime-trigger' }).user.message.id).toBe(valid.persisted.message.id)
+    } finally { db.close() }
+  })
+
+  it('does not let a later desktop runtime-trigger claim bypass an earlier cross-session message', () => {
+    const db = createMemoryAppDb()
+    try {
+      const owner = createSession(db, { name: 'fifo-trigger-owner' })
+      const receiver = createSession(db, { name: 'fifo-trigger-receiver' })
+      const commands = createSessionCommands(db)
+      const scope = { kind: 'desktop' } as const
+      enqueueAgentSessionMessageInScope(db, { ownerSessionId: owner.id, targetSessionId: receiver.id,
+        requestId: 'earlier-agent-input', content: 'earlier', authorizationBinding: {} })
+      insertRuntimeTrigger(commands, { id: 'later-trigger', ownerSessionId: owner.id, receiverSessionId: receiver.id, clientKey: 'key',
+        definition: { version: 1, condition: { type: 'turn_completed', targetSessionId: owner.id, turnId: 'turn-1' }, sourceBaseline: {} },
+        state: 'matched', result: authorization('later-trigger', owner.id, receiver.id, scope), createdAt: 1, expiresAt: 9,
+        attempts: 0, revision: 1, updatedAt: 1 })
+      const trigger = enqueueQueuedUserMessageInScope(db, { sessionId: receiver.id, requestId: 'runtime-trigger:later-trigger',
+        content: '运行时事件待处理：later-trigger', queueScope: scope })
+
+      expect(getNextDesktopQueueInput(db, receiver.id)?.requestId).toBe('earlier-agent-input')
+      expect(() => claimQueuedTurnAtomicallyInScope(db, { sessionId: receiver.id, userMessageId: trigger.persisted.message.id,
+        turnId: 'later-trigger-turn', assistantMessageId: 'later-trigger-assistant', requestId: 'runtime-trigger:later-trigger',
+        queueScope: scope, source: 'runtime-trigger' })).toThrow('DESKTOP_QUEUE_HEAD_CHANGED')
+      expect(getNextDesktopQueueInput(db, receiver.id)?.requestId).toBe('earlier-agent-input')
     } finally { db.close() }
   })
 

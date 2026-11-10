@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Message } from './domainTypes'
 import { normalizeTurnExecutionConfig, TurnCoordinator, type TurnStorage, type TurnStarted } from './turnCoordinator'
-import type { AssistantFactEvent } from './assistantFactAggregator'
+import type { AssistantFactEvent, TurnIntent } from './assistantFactAggregator'
 import { canonicalQueueInput } from './queueInputFingerprint'
 
 const user: Message = { id: 'u1', sessionId: 's1', role: 'user', content: 'hi', timestamp: 1, status: 'sent', schemaVersion: 1 }
@@ -115,6 +115,25 @@ describe('TurnCoordinator', () => {
       requestId: 'r', sessionId: 's1', userMessageId: user.id, turnId: 't', startToken: 'token',
       config: { continuationSource: { continuationId: 'c', invocationId: 'i', sourceTurnId: 'source-t', checkpointSequence: 1, checkpointSha256: 'a'.repeat(64) } }
     })).toThrow('CONTINUATION_USER_NOT_SENT')
+  })
+
+  it('trusted agent-session prepare uses host-only atomic claim and never the generic claim adapter', () => {
+    const db = storage() as TurnStorage & { claimAgentSessionAtomic: ReturnType<typeof vi.fn> }
+    vi.mocked(db.getMessage).mockReturnValue({ ...user, status: 'queued' })
+    const finalCheck = vi.fn(() => true)
+    db.claimAgentSessionAtomic = vi.fn(() => ({ user: { message: { ...user, status: 'sent' }, sequence: 1 },
+      assistant: { message: assistant, sequence: 2 } }))
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: (() => { let n = 0; return () => `agent-${++n}` })() })
+
+    const started = (coordinator as unknown as { prepareAgentSession: (intent: TurnIntent, finalCheck: typeof finalCheck) => TurnStarted })
+      .prepareAgentSession({ mode: 'reuse-user', requestId: 'agent-request', sessionId: 's1', userMessageId: user.id,
+        excludeMessageIds: [], config: {} }, finalCheck)
+
+    expect(started).toMatchObject({ requestId: 'agent-request', sessionId: 's1', userMessage: { id: user.id, status: 'sent' } })
+    expect(db.claimAgentSessionAtomic).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'agent-request',
+      sessionId: 's1', userMessageId: user.id, state: 'configuring', source: 'agent-session' }), finalCheck)
+    expect(db.claimQueuedAtomic).not.toHaveBeenCalled()
+    expect(db.saveTurn).not.toHaveBeenCalled()
   })
 
   it('create-user prepare 原子追加 user 和 streaming assistant', () => {

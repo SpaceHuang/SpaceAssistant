@@ -4,10 +4,11 @@ import { createTempDatabase } from '../database/testHelpers'
 import { createSession, getSession } from '../database/operations'
 import { createSessionCommands } from '../sessionStorage/commands'
 import { subscribeRuntimeTriggerProcessExitHandoff } from './processExitHandoff'
-import { openDatabase } from '../database'
+import { getDbConnection, openDatabase } from '../database'
 import { createRuntimeTriggerHostService } from './hostService'
 import { createRuntimeTriggerDelivery } from './delivery'
 import { createRuntimeTriggerAuthorizationBinding } from './hostAuthorization'
+import { createRuntimeTriggerRecovery } from './recovery'
 
 describe('managed process trigger facts', () => {
   it('tracks opaque IDs and emits one settled exit with code, signal and bounded output reference', () => {
@@ -90,9 +91,13 @@ describe('managed process trigger facts', () => {
       expect(reopenedService.authorizeSource(owner, receiver, recovered.definition.condition, recovered.definition.sourceBaseline,
         { ...recovered.event, managedProcessId: 'tampered-process-id' })).toMatchObject({ allowed: false })
       const scopeForReceiver = reopenedService.resolveQueueScope(receiver)!
+      let failMessageIdCommit = true
       const deliver = createRuntimeTriggerDelivery({
         read: (id) => reopenedCommands.runtimeTriggers.read(id),
-        update: (id, revision, patch) => reopenedCommands.runtimeTriggers.update(id, revision, patch),
+        update: (id, revision, patch) => {
+          if ('messageId' in patch && failMessageIdCommit) { failMessageIdCommit = false; return null }
+          return reopenedCommands.runtimeTriggers.update(id, revision, patch)
+        },
         expire: (id, revision) => reopenedCommands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: Date.now() }),
         authorize: (trigger, queueScope) => {
           const decision = reopenedService.authorizeSource(trigger.ownerSessionId, trigger.receiverSessionId,
@@ -107,14 +112,49 @@ describe('managed process trigger facts', () => {
       })
       visibleSessions = [receiverSession]
       expect(deliver(registered.trigger.triggerId)).toMatchObject({ kind: 'failed', case: 'delivery-write-conflict' })
-      expect(reopenedCommands.scopedQueue.readReceipt({ sessionId: receiver, requestId: `runtime-trigger:${registered.trigger.triggerId}`,
-        queueScope: scopeForReceiver })).toBeUndefined()
+      const requestId = `runtime-trigger:${registered.trigger.triggerId}`
+      expect(reopenedCommands.scopedQueue.readReceipt({ sessionId: receiver, requestId, queueScope: scopeForReceiver })).toBeUndefined()
       visibleSessions = [ownerSession, receiverSession]
-      expect(deliver(registered.trigger.triggerId)).toMatchObject({ kind: 'enqueued', messageId: expect.any(String) })
-      const matched = reopenedCommands.runtimeTriggers.read(registered.trigger.triggerId)!
-      expect(reopenedCommands.runtimeTriggers.update(matched.id, matched.revision, { state: 'completed', updatedAt: Date.now() }))
+      expect(deliver(registered.trigger.triggerId)).toMatchObject({ kind: 'failed', case: 'delivery-write-conflict' })
+      const durableReceipt = reopenedCommands.scopedQueue.readReceipt({ sessionId: receiver, requestId, queueScope: scopeForReceiver })
+      expect(durableReceipt).toMatchObject({ queuedMessageId: expect.any(String), state: 'queued' })
+      db.close()
+      db = openDatabase(temp.dbPath)
+      const afterCrashCommands = createSessionCommands(db)
+      const afterCrashService = createRuntimeTriggerHostService({ commands: afterCrashCommands,
+        queries: { listSessions: () => visibleSessions, readSession: (sessionId: string) => getSession(db, sessionId), imAcceptedFacts: {} } as never,
+        execution: { historyFor: () => ({ listInvocationIds: () => [], read: vi.fn() }), readTurn: () => undefined } as never })
+      const afterCrashDelivery = createRuntimeTriggerDelivery({
+        read: (id) => afterCrashCommands.runtimeTriggers.read(id),
+        update: (id, revision, patch) => afterCrashCommands.runtimeTriggers.update(id, revision, patch),
+        expire: (id, revision) => afterCrashCommands.runtimeTriggers.update(id, revision, { state: 'expired', updatedAt: Date.now() }),
+        authorize: (trigger, queueScope) => createRuntimeTriggerAuthorizationBinding({ trigger, queueScope,
+          authority: { policyRevision: 'policy-current', authorizationGeneration: 'auth-current', runtimeGeneration: 'runtime-current' },
+          isAuthorized: () => true }),
+        queueScope: () => scopeForReceiver,
+        enqueue: (request) => afterCrashCommands.scopedQueue.enqueue(request),
+        readReceipt: (request) => afterCrashCommands.scopedQueue.readReceipt(request)
+      })
+      const recoveryDelivery = vi.fn(afterCrashDelivery)
+      const recovery = createRuntimeTriggerRecovery({
+        listWaiting: () => [], listMatched: () => afterCrashCommands.runtimeTriggers.listByState('matched', 100),
+        read: (id) => afterCrashCommands.runtimeTriggers.read(id), evaluateWaiting: () => ({ kind: 'none' }),
+        match: vi.fn(), expire: vi.fn(), fail: (id, revision, code, caseId) => afterCrashCommands.runtimeTriggers.update(id, revision,
+          { state: 'failed', result: { code, case: caseId }, updatedAt: Date.now() }),
+        deliver: recoveryDelivery, update: (id, revision, patch) => afterCrashCommands.runtimeTriggers.update(id, revision, patch),
+        readReceipt: (trigger) => afterCrashCommands.scopedQueue.readReceipt({ sessionId: receiver,
+          requestId: `runtime-trigger:${trigger.id}`, queueScope: scopeForReceiver }),
+        isSessionBusy: () => false, startReceiver: () => 'busy', readTurnTerminal: () => ({ kind: 'active' })
+      })
+      await recovery.scan()
+      expect(recoveryDelivery).not.toHaveBeenCalled()
+      expect(afterCrashCommands.runtimeTriggers.read(registered.trigger.triggerId)?.messageId).toBe(durableReceipt!.queuedMessageId)
+      expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM queue_input_requests WHERE request_id=?').get(requestId))
+        .toEqual({ count: 1 })
+      const matched = afterCrashCommands.runtimeTriggers.read(registered.trigger.triggerId)!
+      expect(afterCrashCommands.runtimeTriggers.update(matched.id, matched.revision, { state: 'completed', updatedAt: Date.now() }))
         .toMatchObject({ state: 'completed' })
-      await expect(reopenedService.register({ ownerSessionId: owner, params })).resolves.toMatchObject({ replayed: true,
+      await expect(afterCrashService.register({ ownerSessionId: owner, params })).resolves.toMatchObject({ replayed: true,
         trigger: { triggerId: registered.trigger.triggerId, state: 'completed' } })
     } finally { unsubscribe(); temp.cleanup(db) }
   })

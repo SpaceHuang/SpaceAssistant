@@ -10,6 +10,13 @@ type Candidate = Readonly<{ kind: 'none' }> | Readonly<{ kind: 'candidate'; even
   Readonly<{ kind: 'expired'; case: string }> | Readonly<{ kind: 'source-gap'; case: string }>
 type Receipt = Readonly<{ queuedMessageId?: string; turnId?: string; state: string }>
 type TurnTerminal = Readonly<{ kind: 'active' | 'missing' }> | Readonly<{ kind: 'terminal'; outcome: 'completed' | 'failed' | 'cancelled' | 'timed-out' }>
+type SourceFailure = Readonly<{ code: 'TRIGGER_SOURCE_GAP'; case: string }>
+
+function sourceFailureForEvent(event: Readonly<Record<string, unknown>> | undefined): SourceFailure | undefined {
+  if (event?.type !== 'agent_session_message' || event.status !== 'source-gap') return undefined
+  const caseId = typeof event.case === 'string' && /^[a-z0-9-]{1,64}$/.test(event.case) ? event.case : 'agent-message-source-gap'
+  return { code: 'TRIGGER_SOURCE_GAP', case: caseId }
+}
 
 const DEFAULT_TRIGGER_RETRY: WakeEventRetryConfig = { maxAttempts: 5, baseDelayMs: 1_000, maxDelayMs: 60_000, maxElapsedMs: 15 * 60_000, jitterRatio: 0.2 }
 
@@ -25,6 +32,10 @@ export function createRuntimeTriggerRecovery(input: {
   deliver(triggerId: string): RuntimeTriggerDeliveryResult
   update(triggerId: string, expectedRevision: number, patch: Partial<Pick<RuntimeTriggerRecord, 'state' | 'messageId' | 'attempts' | 'nextAttemptAt' | 'result' | 'updatedAt'>>): RuntimeTriggerRecord | null
   readReceipt(trigger: RuntimeTriggerRecord): Receipt | undefined
+  /** Remove only the still-queued runtime-trigger marker before terminally failing its delivery. */
+  cancelQueuedMarker?: (trigger: RuntimeTriggerRecord) => boolean
+  /** Wake the desktop queue after a failed trigger marker was removed and exposed the next input. */
+  onQueueReleased?: (sessionId: string) => void
   isSessionBusy(sessionId: string): boolean
   startReceiver(input: { sessionId: string; requestId: string; messageId: string }): Promise<'started' | 'busy' | 'unavailable'> | 'started' | 'busy' | 'unavailable'
   readTurnTerminal(sessionId: string, turnId: string): Promise<TurnTerminal> | TurnTerminal
@@ -49,13 +60,57 @@ export function createRuntimeTriggerRecovery(input: {
     const current = input.read(trigger.id)
     if (!current || current.state !== 'matched') return
     const completed = terminal.outcome === 'completed'
-    input.update(current.id, current.revision, { state: completed ? 'completed' : 'failed',
-      result: { ...(current.result ?? {}), receiverTurnId: receipt.turnId, detail: terminal.outcome, completedAt: now() }, updatedAt: now() })
+    const sourceFailure = sourceFailureForEvent(current.event)
+    input.update(current.id, current.revision, { state: sourceFailure || !completed ? 'failed' : 'completed',
+      result: { ...(current.result ?? {}), ...(sourceFailure ?? {}), receiverTurnId: receipt.turnId,
+        detail: terminal.outcome, notificationOutcome: terminal.outcome, completedAt: now() }, updatedAt: now() })
+  }
+
+  const failDelivery = (trigger: RuntimeTriggerRecord, caseId: string): void => {
+    let receipt: Receipt | undefined
+    try { receipt = input.readReceipt(trigger) }
+    catch (error) {
+      input.onDeliveryError?.(trigger.id, error)
+      return
+    }
+    if (receipt?.state === 'claimed' || receipt?.turnId) return
+    let queueReleased = false
+    if (receipt?.state === 'queued' && receipt.queuedMessageId) {
+      let cancelled = false
+      try { cancelled = input.cancelQueuedMarker?.(trigger) === true }
+      catch (error) { input.onDeliveryError?.(trigger.id, error) }
+      if (!cancelled) {
+        try { receipt = input.readReceipt(trigger) }
+        catch (error) {
+          input.onDeliveryError?.(trigger.id, error)
+          return
+        }
+        // A concurrent atomic claim owns the marker now; its persisted Turn will settle the trigger.
+        if (receipt?.state === 'claimed' || receipt?.turnId) return
+        // Keep the trigger matched so a later recovery scan can retry cleanup instead of stranding FIFO.
+        if (receipt?.state === 'queued' && receipt.queuedMessageId) {
+          input.onDeliveryError?.(trigger.id, new Error('runtime trigger queued marker cancellation unavailable'))
+          return
+        }
+      }
+      queueReleased = cancelled
+    }
+    try {
+      const sourceFailure = sourceFailureForEvent(trigger.event)
+      if (!sourceFailure) {
+        input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', caseId)
+        return
+      }
+      input.update(trigger.id, trigger.revision, { state: 'failed', result: { ...(trigger.result ?? {}), ...sourceFailure,
+        notificationFailure: { code: 'TRIGGER_DELIVERY_FAILED', case: caseId } }, updatedAt: now() })
+    } finally {
+      if (queueReleased) input.onQueueReleased?.(trigger.receiverSessionId)
+    }
   }
 
   const recordDeliveryFailure = (trigger: RuntimeTriggerRecord, failureCase: string): void => {
     if (failureCase === 'delivery-message-missing' || failureCase === 'delivery-receipt-missing') {
-      input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', failureCase)
+      failDelivery(trigger, failureCase)
       return
     }
     const startedAt = trigger.matchedAt ?? trigger.createdAt
@@ -64,7 +119,7 @@ export function createRuntimeTriggerRecovery(input: {
       shouldRetry: trigger.attempts < retryPolicy.maxAttempts }
     const retried = recordWakeEventRetryFailure(state, { message: failureCase, failedAt: Math.max(startedAt, now()) }, retryPolicy)
     if (!retried.shouldRetry || retried.nextAttemptAt === null) {
-      input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', 'delivery-retries-exhausted')
+      failDelivery(trigger, 'delivery-retries-exhausted')
       return
     }
     input.update(trigger.id, trigger.revision, { attempts: retried.attemptCount, nextAttemptAt: retried.nextAttemptAt,
@@ -79,8 +134,17 @@ export function createRuntimeTriggerRecovery(input: {
     let receipt = input.readReceipt(trigger)
     if (receipt?.queuedMessageId) {
       if (trigger.messageId && trigger.messageId !== receipt.queuedMessageId) {
-        input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', 'delivery-receipt-mismatch')
+        failDelivery(trigger, 'delivery-receipt-mismatch')
         return
+      }
+      if (!trigger.messageId) {
+        const current = input.read(trigger.id)
+        if (!current || current.state !== 'matched') return
+        if (current.messageId && current.messageId !== receipt.queuedMessageId) {
+          failDelivery(current, 'delivery-receipt-mismatch')
+          return
+        }
+        if (!current.messageId && !input.update(current.id, current.revision, { messageId: receipt.queuedMessageId, updatedAt: now() })) return
       }
       if (receipt.turnId) {
         await settleFromTurn(trigger, receipt)
@@ -88,7 +152,7 @@ export function createRuntimeTriggerRecovery(input: {
       }
     } else {
       if (trigger.messageId) {
-        input.fail(trigger.id, trigger.revision, 'TRIGGER_DELIVERY_FAILED', 'delivery-receipt-missing')
+        failDelivery(trigger, 'delivery-receipt-missing')
         return
       }
       const delivered = input.deliver(trigger.id)
@@ -102,7 +166,7 @@ export function createRuntimeTriggerRecovery(input: {
       if (!current || current.state !== 'matched') return
       receipt = input.readReceipt(current)
       if (!receipt?.queuedMessageId || receipt.queuedMessageId !== delivered.messageId) {
-        input.fail(current.id, current.revision, 'TRIGGER_DELIVERY_FAILED', 'delivery-receipt-missing')
+        failDelivery(current, 'delivery-receipt-missing')
         return
       }
       if (receipt.turnId) {
@@ -116,7 +180,7 @@ export function createRuntimeTriggerRecovery(input: {
     if (start === 'busy') return
     if (start === 'unavailable') {
       const current = input.read(trigger.id)
-      if (current?.state === 'matched') input.fail(current.id, current.revision, 'TRIGGER_DELIVERY_FAILED', 'receiver-unavailable')
+      if (current?.state === 'matched') failDelivery(current, 'receiver-unavailable')
       return
     }
     const current = input.read(trigger.id)
@@ -137,7 +201,14 @@ export function createRuntimeTriggerRecovery(input: {
           let candidate: Candidate
           try { candidate = await input.evaluateWaiting(trigger, timestamp) }
           catch { candidate = { kind: 'source-gap', case: 'source-read-failed' } }
-          if (candidate.kind === 'candidate') input.match(trigger.id, trigger.revision, candidate.event)
+          if (candidate.kind === 'candidate') {
+            input.match(trigger.id, trigger.revision, candidate.event)
+            const sourceFailure = sourceFailureForEvent(candidate.event)
+            const matched = sourceFailure && input.read(trigger.id)
+            if (sourceFailure && matched?.state === 'matched' && !matched.result?.sourceFailure) {
+              input.update(matched.id, matched.revision, { result: { ...(matched.result ?? {}), sourceFailure }, updatedAt: now() })
+            }
+          }
           else if (candidate.kind === 'expired') input.expire(trigger.id, trigger.revision)
           else if (candidate.kind === 'source-gap') input.fail(trigger.id, trigger.revision, 'TRIGGER_SOURCE_GAP', candidate.case)
         }

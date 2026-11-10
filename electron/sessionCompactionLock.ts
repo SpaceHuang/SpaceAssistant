@@ -2,6 +2,32 @@ const compactingSessions = new Set<string>()
 const compactionLocks = new Set<string>()
 const turnAdmissionSessions = new Set<string>()
 const activeTurnAdmissionBlocks = new Map<string, (sessionId: string) => boolean>()
+const compactionReleaseListeners = new Map<string, Set<() => void>>()
+
+function notifySessionCompactionReleased(sessionId: string): void {
+  for (const listener of [...(compactionReleaseListeners.get(sessionId) ?? [])]) queueMicrotask(listener)
+}
+
+/** Subscribe to the next unlock; an already-unlocked session is notified asynchronously. */
+export function onSessionContextCompactionRelease(sessionId: string, listener: () => void): () => void {
+  let active = true
+  const listeners = compactionReleaseListeners.get(sessionId) ?? new Set<() => void>()
+  const notifyOnce = () => {
+    if (!active) return
+    unsubscribe()
+    listener()
+  }
+  const unsubscribe = () => {
+    if (!active) return
+    active = false
+    listeners.delete(notifyOnce)
+    if (listeners.size === 0) compactionReleaseListeners.delete(sessionId)
+  }
+  listeners.add(notifyOnce)
+  compactionReleaseListeners.set(sessionId, listeners)
+  if (!isSessionContextCompactionLocked(sessionId)) queueMicrotask(notifyOnce)
+  return unsubscribe
+}
 
 export function isSessionContextCompacting(sessionId: string): boolean {
   return compactingSessions.has(sessionId)
@@ -20,7 +46,11 @@ export function tryAcquireSessionContextCompactionLock(sessionId: string): (() =
   if (compactingSessions.has(sessionId) || turnAdmissionSessions.has(sessionId)) return undefined
   compactingSessions.add(sessionId)
   compactionLocks.add(sessionId)
-  return () => { compactingSessions.delete(sessionId); compactionLocks.delete(sessionId) }
+  return () => {
+    const released = compactingSessions.delete(sessionId)
+    compactionLocks.delete(sessionId)
+    if (released) notifySessionCompactionReleased(sessionId)
+  }
 }
 
 function tryAcquireTurnAdmission(sessionId: string): (() => void) | undefined {
@@ -55,5 +85,6 @@ export async function withSessionContextCompactionLock<T>(
   } finally {
     compactingSessions.delete(sessionId)
     compactionLocks.delete(sessionId)
+    notifySessionCompactionReleased(sessionId)
   }
 }

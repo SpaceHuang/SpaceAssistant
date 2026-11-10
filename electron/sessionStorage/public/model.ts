@@ -1,4 +1,4 @@
-import type { Message, Session } from '../../../src/shared/domainTypes'
+import type { AgentInputNotExecutedReason, AgentInputSettlement, AgentSessionExecutionApproval, AgentSessionInputSource, Message, Session } from '../../../src/shared/domainTypes'
 import type { RuntimeTriggerDefinitionV1, RuntimeTriggerState } from '../../../src/shared/domainTypes'
 import type { QueueScope } from '../../../src/shared/queueScope'
 import type { HistorySnapshot } from '../../../packages/agent-sdk/src/history'
@@ -22,7 +22,7 @@ export type PreparedChatBodyView = Readonly<{
   statePayloadDigest: string
   stateValidatedRangeJson: string
 }>
-export type QueuedSessionMessage = Readonly<{ message: Message; sequence: number; requestId?: string }>
+export type QueuedSessionMessage = Readonly<{ message: Message; sequence: number; requestId?: string; source?: QueueInputSource }>
 export type ImAcceptedFactScope = Readonly<{ channel: 'feishu' | 'wechat'; accountId: string; conversationId: string }>
 export type ImAcceptedFactFrontier = Readonly<{ through: number; coverageRevision: number }>
 export type ImAcceptedFact = Readonly<{ messageId: string; acceptedSeq: number; channel: ImAcceptedFactScope['channel']; accountId: string; conversationId: string; senderId: string; platformMessageId: string; timestamp: number; isGroup?: boolean; contextToken?: string; trackId?: string; trackEventId?: string }>
@@ -40,8 +40,26 @@ export type RuntimeTriggerHistoryAdmission = Readonly<{
 }>
 export type RuntimeTriggerPatch = Readonly<Partial<Pick<RuntimeTriggerRecord, 'state' | 'matchedAt' | 'event' | 'messageId' | 'attempts' | 'nextAttemptAt' | 'result' | 'updatedAt'>>>
 export type QueueInputReceiptSnapshot = Readonly<{ sessionId: string; requestId: string; fingerprint: string; queuedMessageId?: string; turnId?: string; state: string }>
+export type AgentSessionMessageAcceptance = Readonly<{
+  receipt: Readonly<{ sessionId: string; requestId: string; fingerprint: string; queuedMessageId?: string; turnId?: string; state: string }>
+  source: AgentSessionInputSource
+  persisted?: MessageEntry
+  duplicate: boolean
+}>
+export type AgentSessionApprovalSnapshot = Readonly<{
+  source: AgentSessionInputSource
+  originDigest: string
+  approval?: AgentSessionExecutionApproval
+  approvalDigest?: string
+}>
+export type AgentSessionMessageSourceSummary = Readonly<{ kind: 'agent-session'; ownerSessionId: string; requestId: string }>
+export type PersistedInputAdmissionVerdict = Readonly<{ kind: 'ordinary' }> |
+  Readonly<{ kind: 'admitted'; material: Readonly<{ source: AgentSessionInputSource; approval: AgentSessionExecutionApproval; admission: Readonly<Record<string, unknown>> }> }> |
+  Readonly<{ kind: 'invalid'; caseId: string }>
+export type { AgentInputNotExecutedReason, AgentInputSettlement }
 export type ScopedQueueInput = Readonly<{ sessionId: string; requestId: string; content: string; attachments?: Message['attachments']; queueScope: QueueScope }>
-export type QueueInputSource = 'platform-im' | 'runtime-trigger' | 'ordinary-desktop' | 'invalid'
+export type QueueInputSource = 'platform-im' | 'runtime-trigger' | 'ordinary-desktop' | 'agent-session' | 'invalid'
+export type { AgentSessionInputSource }
 export type ApiContextBaseline = Readonly<{ sessionId: string; entries: readonly MessageEntry[] }>
 export type ChatMessagePage = Readonly<{ entries: readonly MessageEntry[]; oldestSequence: number | null; hasMoreBefore: boolean }>
 export type ExportPage = Readonly<{ rows: readonly MessageEntry[]; nextSequence: number }>
