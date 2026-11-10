@@ -366,17 +366,21 @@ describe('edit_file 匹配失败诊断（§7.1 场景）', () => {
     const largeText = mkFile(5000)
     const needle = 'anchor-50 unique-needle-tokenX'
 
-    // Warm up JIT, then use high-resolution median samples so filesystem setup,
-    // timer quantization, and one noisy scheduler slice don't dominate the ratio.
+    // Warm up JIT, then time batches so sub-millisecond samples and one noisy
+    // scheduler slice don't dominate the ratio. Divide by iterations only after
+    // the batch to preserve the per-call comparison.
     diagnoseMissingOldString(smallText, needle)
     diagnoseMissingOldString(largeText, needle)
+    const iterationsPerSample = 20
     const measureMedian = (text: string) => {
       const samples: number[] = []
       let result: EditMissingDiagnosis | undefined
       for (let i = 0; i < 5; i++) {
         const start = performance.now()
-        result = diagnoseMissingOldString(text, needle)
-        samples.push(performance.now() - start)
+        for (let j = 0; j < iterationsPerSample; j++) {
+          result = diagnoseMissingOldString(text, needle)
+        }
+        samples.push((performance.now() - start) / iterationsPerSample)
       }
       samples.sort((a, b) => a - b)
       return { result: result!, medianMs: samples[Math.floor(samples.length / 2)] }
