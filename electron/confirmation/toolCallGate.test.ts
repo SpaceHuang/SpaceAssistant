@@ -1648,7 +1648,8 @@ describe('evaluateToolCallGate', () => {
     expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, contentDigest: expect.any(String) }))
     expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
     const binding = gate.facts.signals.find((signal) => signal.kind === 'script-path-extraction')
-    expect(binding).toMatchObject({ parametersDigest: expect.any(String), environmentDigest: expect.any(String), authenticationVersion: expect.any(String) })
+    expect(binding).toMatchObject({ parametersDigest: expect.any(String), environmentDigest: expect.any(String) })
+    expect(gate.facts.extractorVersion).toEqual(expect.any(String))
   })
 
   it('remote uncertainty requires user confirmation while complete clean analysis can auto-allow', async () => {
@@ -1836,7 +1837,7 @@ describe('evaluateToolCallGate', () => {
     const changedArgs = readBinding(parameterChanged)
     const changedCode = readBinding(codeChanged)
     const changedEnvironment = readBinding(environmentChanged)
-    expect(initial).toMatchObject({ contentDigest: expect.any(String), parametersDigest: expect.any(String), environmentDigest: expect.any(String), authenticationVersion: 'script-analysis-v2' })
+    expect(initial).toMatchObject({ contentDigest: expect.any(String), parametersDigest: expect.any(String), environmentDigest: expect.any(String) })
     expect(changedArgs).toMatchObject({ contentDigest: initial.contentDigest, environmentDigest: initial.environmentDigest })
     expect(changedArgs.parametersDigest).not.toBe(initial.parametersDigest)
     expect(changedCode.contentDigest).not.toBe(initial.contentDigest)

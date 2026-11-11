@@ -192,7 +192,6 @@ export type FactSignal =
       /** Facts extraction binds arguments and runtime environment; changes require a fresh review. */
       parametersDigest?: string
       environmentDigest?: string
-      authenticationVersion?: string
     }
   | { kind: 'script-path-declaration'; scope: 'workdir-readonly'; consistent: boolean }
   | { kind: 'script-language-analysis'; language: 'javascript' | 'typescript' | 'powershell' | 'unknown'; status: 'unverified' }
@@ -496,7 +495,7 @@ export interface ApprovalCluePack {
   command?: string
   grepQuery?: string
   /** Host-computed digests binding the exact script and parameters reviewed for this invocation. */
-  scriptApprovalBinding?: { sha256: string; parametersSha256: string; environmentSha256: string; certifier: string; extractorVersion?: string }
+  scriptApprovalBinding?: { sha256: string; parametersSha256: string; environmentSha256: string; extractorVersion?: string }
   /** Optional, bounded raw script findings for independent review during this invocation. */
   scriptEvidence?: ApprovalScriptEvidence
   /** Provenance of the exact facts reviewed by policy and approval; contains no raw input. */

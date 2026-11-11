@@ -164,7 +164,7 @@ describe('createAgentSdkSafetyPolicy', () => {
     const makeResult = (sha256: string, parametersSha256: string, extractorVersion = 'script-extractor-v1'): ToolCallGateResult => {
       const scriptFacts: ContentFacts = { toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high', extractorVersion,
         signals: [{ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
-          contentDigest: sha256, parametersDigest: parametersSha256, environmentDigest: 'env-a', authenticationVersion: 'script-certifier-v1' }],
+          contentDigest: sha256, parametersDigest: parametersSha256, environmentDigest: 'env-a' }],
         summary: { text: 'script review' } }
       return { decision: { type: 'require-confirm', ruleId: 'automation-script-review', answerer: 'agent', riskLevel: 'high',
         facts: scriptFacts, memoryTiers: [], timeoutMs: 1000, disposition: 'auto-eligible' }, facts: scriptFacts, approvedFactIds: [] }
@@ -185,7 +185,7 @@ describe('createAgentSdkSafetyPolicy', () => {
     const make = (extractorVersion?: string): ToolCallGateResult => {
       const scriptFacts: ContentFacts = { toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
         ...(extractorVersion ? { extractorVersion } : {}),
-        signals: [{ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'env', authenticationVersion: 'script-certifier-v1' }],
+        signals: [{ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'env' }],
         summary: { text: 'script review' } }
       return { decision: { type: 'require-confirm', ruleId: 'automation-script-review', answerer: 'agent', riskLevel: 'high', facts: scriptFacts, memoryTiers: [], timeoutMs: 1000 }, facts: scriptFacts, approvedFactIds: [] }
     }

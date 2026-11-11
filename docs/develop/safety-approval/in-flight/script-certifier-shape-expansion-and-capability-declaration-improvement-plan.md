@@ -547,11 +547,11 @@ P2 是唯一允许删除 `script-uncertified` 的阶段，必须是原子切换�
 |---|---|---|
 | P0 现状 rebase | 完成 | 在隔离 worktree 基于 `7f9f4971` 核对生产者、消费者、调用方与计划；发现原 N8 `range/print` 假设与现行纯计算白名单不符，已用真实 gate RED 修正预期，记忆闭环样本改为 `customApi()`。 |
 | P1-A 事实与 completeness | 完成 | 结构化 uncertainty、脚本内容 uncertainty token、策略/snapshot/audit 共用 completeness、D6 parse-failed deny 均已实现。RemoteCertifier 旧拒绝形状现有 mapped uncertainty/finding 回归覆盖；补齐 loop target 来源未知和 chained assignment IR 丢失，覆盖 dangerous module roots 与未知 IR 变体。常见无害语法与相关 golden 通过。 |
-| P1-B 版本缓存与审批兼容 | 完成 | 脚本缓存键采用版本化四元组，旧三元组无 fallback；真实 Gate→人工回答→SQLite 写入→同版本命中、异版本/跨 session miss 和缺版本无 tier 已通过。审批材料同时携带旧 `certifier` 别名与新 `extractorVersion`；final-check 绑定新版本，旧缺版本/版本变化会返回真人重确认。已核对审批线索由宿主本地 `ApprovalCluePack` 消费，不改变 agent-sdk package schema。 |
-| P2 原子策略切换 | 进行中，旧认证信号仍保留 | 扩展完旧拒绝分支 finding/uncertainty 测试，并验证没有旧认证标签时 desktop/wechat/feishu uncertainty 逐次真人确认、automation partial 拒绝。尚需合并切换 memory eligibility、floor/resolver/rules，再移除 `script-uncertified` 与 RemoteCertifier verdict。 |
-| P3 兼容窗口清理 | 未开始 | P2 稳定后移除 `authenticationVersion/certifier` 兼容别名；不应与策略切换混做。 |
+| P1-B 版本缓存与审批兼容 | 完成 | 脚本缓存键采用版本化四元组，旧三元组无 fallback；真实 Gate→人工回答→SQLite 写入→同版本命中、异版本/跨 session miss 和缺版本无 tier 已通过。P1-B 先双写旧 `certifier` 别名与新 `extractorVersion`；P3 已清理旧别名。final-check 绑定新版本，旧缺版本/版本变化会返回真人重确认。审批线索由宿主本地 `ApprovalCluePack` 消费，不改变 agent-sdk package schema。 |
+| P2 原子策略切换 | 完成 | 同批切换 uncertainty 事实、策略 floor/resolver、memory eligibility 与规则/i18n；移除 `script-uncertified` signal/type 和 RemoteCertifier verdict。网络 finding 与除 `path-analysis-unmodeled-call` session 窄口外的 uncertainty 禁止记忆；远程 uncertainty 逐次真人确认，automation incomplete 拒绝。P2 相关 11 个测试文件 695 项通过；完整 `npm test` 通过（12,736 passed、140 skipped）。 |
+| P3 兼容窗口清理与审计 | 完成 | 删除 `script-path-extraction.authenticationVersion` 与审批线索 `certifier` 字段；审批 binding 直接携带 invocation `extractorVersion`，final-check 对比版本和内容/参数/环境摘要。Hosted 合成 Gate 用例补齐版本，确认执行后撤权仍不重试 provider。审批契约、审计投影、locked floor 分类及 i18n 已同步；`npm run check:agent-sdk` 通过。 |
 | P4 外部渠道验收 | 待真实环境 | 本次交付边界按用户选择：完成源码与本地门禁；真实微信/飞书账号及生产运行验收列为后续外部待办。 |
 
-本轮阶段回归：定向 Vitest 11 个测试文件，823 tests passed；`npx tsc -p tsconfig.electron.json --noEmit`、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run check:system-invariant-registry`、`npm run check:agent-sdk` 均通过；`git diff --check` 通过。真实微信/飞书渠道验收未执行，按用户选择列为外部待办。
+本轮最终验收：`npm test` 通过，1,290 个测试文件中 1,289 passed、1 skipped；12,736 tests passed、140 skipped。`npm run build`、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run i18n:check`、`npm run check:system-invariant-registry` 与 `npm run check:agent-sdk` 均通过。worktree 仅缺少本地 pi-ai 依赖入口，按现有根 checkout 安装包建立忽略文件 symlink 后，运行时 closure 门禁和完整构建通过。真实微信/飞书渠道验收未执行，按用户选择列为外部待办。
 
 **范围边界**：工作目录主 checkout 的其它未提交文件未纳入本 worktree；本分支只包含本计划与本轮代码文件。交付前按 `git status --short` 明确提交清单。

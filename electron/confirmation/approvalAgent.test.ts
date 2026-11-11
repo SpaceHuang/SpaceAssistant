@@ -1218,7 +1218,7 @@ describe('线索包任务声明（D：可信证据分区）', () => {
     const rendered = renderCluePackForTest(clue({
       toolName: 'run_script',
       grepQuery: 'path=/workspace/repo/src; pattern=TODO; glob=*.ts; output_mode=content',
-      scriptApprovalBinding: { sha256: 'a'.repeat(64), parametersSha256: 'b'.repeat(64), environmentSha256: 'c'.repeat(64), certifier: 'script-certifier-v1' }
+      scriptApprovalBinding: { sha256: 'a'.repeat(64), parametersSha256: 'b'.repeat(64), environmentSha256: 'c'.repeat(64), extractorVersion: 'script-extractor-v1' }
     } as never))
 
     expect(rendered).toContain('grep 搜索参数')

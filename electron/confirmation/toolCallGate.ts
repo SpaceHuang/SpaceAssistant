@@ -717,7 +717,6 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       workdirDigest: createHash('sha256').update(path.resolve(args.workDir), 'utf8').digest('hex'),
       parametersDigest: createHash('sha256').update(JSON.stringify({ ...args.toolInput, code }), 'utf8').digest('hex'),
       environmentDigest: stableScriptMaterialDigest({ workDir: path.resolve(args.workDir), userDataDir: path.resolve(args.userDataDir), lane, scriptEnvironmentDigest }),
-      authenticationVersion: 'script-analysis-v2'
     })
     let scriptPathHint: string | undefined
     if (scriptPaths.completeness === 'unknown') {

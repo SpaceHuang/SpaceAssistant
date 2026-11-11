@@ -967,7 +967,6 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     const deps = baseDependencies()
     deps.authorizedToolNames = new Set(['run_script'])
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(deps.invocationId, 'desktop', deps.turnId)
     const typedRegistry = new TypedToolRegistry()
     let executorSignal: AbortSignal | undefined
     let markEntered!: () => void
@@ -1000,12 +999,12 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
       } as never),
       evaluateGate: async () => {
         const scriptFacts = {
-          toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'low',
+          toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'low', extractorVersion: 'script-extractor-v1',
           signals: [{ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
             contentDigest: createHash('sha256').update('print("hello")').digest('hex'),
             parametersDigest: createHash('sha256').update('[]').digest('hex'),
             environmentDigest: createHash('sha256').update('script-env').digest('hex'),
-            authenticationVersion: 'test-script-certifier-v1' }],
+            }],
           summary: { text: 'execute script' }
         }
         return {
@@ -1038,13 +1037,16 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
       })()
     ]
     deps.providerRegistry.register(route, { providerId: 'run-script-revoke-provider', stream: () => toolRounds.shift()! })
+    let turnError: unknown
     const runningTurn = runHostedAgentTurn({
       host: createHostedAgentTurnHost(deps), invocationId: deps.invocationId, turnId: deps.turnId, routeId: deps.routeId,
       request: { messages: [{ role: 'user', content: 'run script' }], maxTokens: 128, tools: [{ name: 'run_script', description: 'run a script', inputSchema: { type: 'object' } }] }
-    }).catch(() => undefined)
+    }).catch((error) => { turnError = error; markEntered() })
 
     await entered
+    expect(turnError).toBeUndefined()
     expect(executorSignal?.aborted).toBe(false)
+    revocations.registerToolRevocationRequest(deps.invocationId, 'desktop', deps.turnId)
     expect(revocations.revokeToolForLane('desktop', 'run_script')).toBe(1)
     await runningTurn
 

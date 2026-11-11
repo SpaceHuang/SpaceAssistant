@@ -363,7 +363,6 @@ function matchesScriptApprovalBinding(previous: ToolCallGateResult, current: Too
     && prior.contentDigest === latest.contentDigest
     && prior.parametersDigest === latest.parametersDigest
     && prior.environmentDigest === latest.environmentDigest
-    && prior.authenticationVersion === latest.authenticationVersion
 }
 
 /**
