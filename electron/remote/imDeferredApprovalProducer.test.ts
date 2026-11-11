@@ -654,9 +654,9 @@ describe('production IM deferred approval producer', () => {
 
       const recheckBinding = await registered.prepareTool(call, { kind: 'recheck', confirmation: { receipt: agentOutcome.receipt } })
       const recheckGate = await evaluateToolCallGate(await agentSdk.resolveGateArgs(recheckBinding, call))
-      expect(recheckGate.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', disposition: 'auto-eligible', ruleId: 'im-write-ask' })
+      expect(recheckGate.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', disposition: 'auto-eligible', ruleId: 'im-low-risk-edit' })
       const humanDecision = await safetyGate.evaluate(recheckBinding)
-      expect(humanDecision).toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'im-write-ask',
+      expect(humanDecision).toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'im-low-risk-edit',
         context: { decision: { disposition: 'human-required' } } })
       if (humanDecision.kind !== 'ask') throw new Error('EXPECTED_FRESH_HUMAN_REQUIRED_DECISION')
       const deferred = await confirmation({ call, confirmationId: humanDecision.confirmationId, answerer: humanDecision.answerer,
@@ -666,10 +666,10 @@ describe('production IM deferred approval producer', () => {
 
       const envelope = envelopeStore.get(call.invocationId)
       expect(envelope).toMatchObject({ canonicalArgs: call.input,
-        executionContext: { ruleId: 'im-write-ask', toolInput: call.input, taskId: task.taskBinding.taskId } })
+        executionContext: { ruleId: 'im-low-risk-edit', toolInput: call.input, taskId: task.taskBinding.taskId } })
       const factsHash = (getDbConnection(db).prepare('SELECT facts_hash FROM deferred_todos WHERE todo_id=?').get(deferred.todoId) as { facts_hash: string }).facts_hash
       expect(todoStore.get(deferred.todoId, { channel: 'feishu', identityKey: 'chat-agent-recheck', ownerId: 'owner', authorizationEpoch: 5,
-        originSessionId: sessionId, rule: { ruleId: 'im-write-ask', factsHash } })).toMatchObject({ status: 'pending', originSessionId: sessionId, invocationId: call.invocationId })
+        originSessionId: sessionId, rule: { ruleId: 'im-low-risk-edit', factsHash } })).toMatchObject({ status: 'pending', originSessionId: sessionId, invocationId: call.invocationId })
       expect(notificationDelivery.list(deferred.todoId)).toMatchObject([{ state: 'delivered', trustedMessageId: 'agent-recheck-notice' }])
       expect(agentReview).toHaveBeenCalledOnce()
       expect(humanChannelRequest).not.toHaveBeenCalled()
