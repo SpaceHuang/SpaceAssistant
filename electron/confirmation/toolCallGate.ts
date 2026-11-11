@@ -821,7 +821,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         if ((args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2' || args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v3')
           && args.toolName === 'write_file' && writePathFact.targetKind === 'missing') facts.signals.push({ kind: 'write-target-new' })
         if ((args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2' || args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v3')
-          && args.toolName === 'edit_file' && writePathFact.targetKind === 'file') facts.signals.push({ kind: 'write-target-existing' })
+          && (args.toolName === 'edit_file' || args.toolName === 'write_file') && writePathFact.targetKind === 'file') {
+          facts.signals.push({ kind: 'write-target-existing' })
+        }
         if (writePathFact.targetKind !== 'file' && writePathFact.targetKind !== 'missing') facts.signals.push({ kind: 'write-target-unsupported' })
         if (isWikiRawSignalTarget(args, rawPath)) {
           facts.signals.push({ kind: 'wiki-raw-target' })

@@ -1868,8 +1868,35 @@ describe('evaluateToolCallGate', () => {
 
       const existingPath = path.join(root, 'existing.md')
       await fs.writeFile(existingPath, 'prior')
-      const overwrite = await evaluateToolCallGate(makeArgs({ path: existingPath, content: 'replacement' }))
-      expect(overwrite.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'agent', disposition: 'auto-eligible' })
+      const overwriteCache = new ReviewScopeCache()
+      const overwriteArgs = (content: string) => makeArgs({ path: existingPath, content }, {
+        remoteContext: remoteContext({ authOwner: 'authenticated-owner', authorizationGeneration: 1 }),
+        policyBinding: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, epoch: 0 },
+        reviewScopeEvidenceComplete: true, reviewScopeCache: overwriteCache
+      })
+      const overwrite = await evaluateToolCallGate(overwriteArgs('replacement'))
+      expect(overwrite.facts.signals).toEqual(expect.arrayContaining([
+        { kind: 'write-target-existing' },
+        { kind: 'path-target', path: existingPath, zone: 'workdir-normal' },
+        { kind: 'write-target-scope', scope: 'inside-workdir' }
+      ]))
+      expect(overwrite.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-low-risk-edit', answerer: 'agent', disposition: 'auto-eligible' })
+      expect(overwrite.reviewScopeCandidate).toMatchObject({ toolName: 'write_file', operation: 'write', objects: [{ role: 'target', target: existingPath }] })
+      expect(overwriteCache.grant({ scope: overwrite.reviewScopeCandidateScope!, source: 'agent',
+        scopeCandidateDigest: overwrite.reviewScopeCandidateDigest! })).toBe(true)
+      expect((await evaluateToolCallGate(overwriteArgs('second replacement'))).decision)
+        .toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+      await fs.writeFile(existingPath, 'second replacement')
+      const crossToolEdit = await evaluateToolCallGate(base({ lane: 'feishu',
+        remoteContext: remoteContext({ authOwner: 'authenticated-owner', authorizationGeneration: 1 }),
+        workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'edit_file',
+        toolInput: { path: existingPath, old_string: 'second replacement', new_string: 'cross-tool edit' },
+        effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard',
+          rules: loadEffectivePolicyRules(candidateDb, 'feishu') }), imPolicySnapshot: imSnapshot,
+        policyBinding: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, epoch: 0 },
+        reviewScopeEvidenceComplete: true, reviewScopeCache: overwriteCache }))
+      expect(crossToolEdit.reviewScopeCandidateDigest).toBe(overwrite.reviewScopeCandidateDigest)
+      expect(crossToolEdit.decision).toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
 
       const editCandidate = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(), workDir: root,
         userDataDir: path.join(root, '.userdata'), toolName: 'edit_file',
