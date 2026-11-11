@@ -1148,7 +1148,7 @@ app.whenReady().then(async () => {
   // A2(偏差 18):宿主装配单例 runtime——必须经 createDesktopAgentRuntime 注入完整组件集
   // (空参 createAgentRuntime 全组件 no-op 桩:内置工具/取消/撤销/confirmId/MCP 限流/审计静默失效,
   //  评审 batch3-runtime-admission-sdk-review P0-1);旧全局注册函数经兼容转发落到本实例
-  setDefaultAgentRuntime(createDesktopAgentRuntime())
+  setDefaultAgentRuntime(createDesktopAgentRuntime(getDbConnection(db)))
   // S3(偏差 14):跨天节流清理——新日志文件开启时读统一保留策略并删除超期日志(每日至多一次)
   setAgentLogDailyPrune(() => {
     requestAgentLogRetention?.()

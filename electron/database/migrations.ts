@@ -2529,6 +2529,39 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 124
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  // v124 → v125: durable, bounded review-scope approvals and their clock/settings metadata.
+  if (version === 124) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS review_scope_grants (
+      id INTEGER PRIMARY KEY,
+      format_version INTEGER NOT NULL CHECK (format_version = 1),
+      lane TEXT NOT NULL CHECK (lane IN ('desktop', 'feishu', 'wechat')),
+      subject_id TEXT NOT NULL,
+      domain TEXT NOT NULL CHECK (domain IN ('desktop', 'im')),
+      policy_revision INTEGER NOT NULL CHECK (policy_revision >= 0),
+      policy_epoch INTEGER NOT NULL CHECK (policy_epoch >= 0),
+      policy_version TEXT NOT NULL,
+      capability TEXT NOT NULL CHECK (capability IN ('file-read', 'file-write', 'grep', 'list-work-dirs')),
+      source TEXT NOT NULL CHECK (source IN ('agent', 'user')),
+      scope_json TEXT NOT NULL CHECK (json_valid(scope_json)),
+      lifetime TEXT NOT NULL CHECK (lifetime IN ('24h', '7d')),
+      issued_at_ms INTEGER NOT NULL CHECK (issued_at_ms >= 0),
+      expires_at_ms INTEGER NOT NULL,
+      CHECK (expires_at_ms - issued_at_ms = CASE lifetime WHEN '24h' THEN 86400000 ELSE 604800000 END),
+      CHECK ((lane = 'desktop' AND domain = 'desktop') OR (lane IN ('feishu', 'wechat') AND domain = 'im'))
+    ) STRICT;
+    CREATE UNIQUE INDEX IF NOT EXISTS review_scope_grants_identity
+      ON review_scope_grants(domain, lane, subject_id, policy_revision, policy_epoch, policy_version,
+        capability, source, lifetime, scope_json);
+    CREATE INDEX IF NOT EXISTS review_scope_grants_expiry ON review_scope_grants(expires_at_ms);
+    `)
+    if (hasTable(conn, 'policy_authorization_epochs')) conn.exec(`CREATE TRIGGER IF NOT EXISTS review_scope_grants_epoch_invalidation
+      AFTER UPDATE OF epoch ON policy_authorization_epochs
+      BEGIN DELETE FROM review_scope_grants WHERE domain=NEW.domain; END;`)
+    conn.prepare('INSERT OR IGNORE INTO schema_meta(key,value) VALUES(?,?)').run(SCHEMA_META_KEYS.reviewScopeDefaultLifetime, 'session')
+    conn.prepare('INSERT OR IGNORE INTO schema_meta(key,value) VALUES(?,?)').run(SCHEMA_META_KEYS.reviewScopeWallFloorMs, String(Date.now()))
+    version = 125
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {
@@ -2539,4 +2572,16 @@ export function runMigrations(conn: DatabaseSync): void {
     }
     throw migrationError
   }
+}
+
+/** Release rollback only: caller must stop the app, hold an exclusive DB lock, and take a verified backup first. */
+export function rollbackReviewScopeGrantsV125(conn: DatabaseSync): void {
+  const version = readSchemaVersion(conn)
+  if (version !== 125) throw new Error(`Review-scope rollback requires schema 125; found ${version ?? 'unknown'}`)
+  runInTransaction(conn, () => {
+    conn.exec('DROP TRIGGER IF EXISTS review_scope_grants_epoch_invalidation; DROP TABLE IF EXISTS review_scope_grants;')
+    conn.prepare('DELETE FROM schema_meta WHERE key IN (?,?)')
+      .run(SCHEMA_META_KEYS.reviewScopeDefaultLifetime, SCHEMA_META_KEYS.reviewScopeWallFloorMs)
+    conn.prepare('UPDATE schema_meta SET value=? WHERE key=?').run('124', SCHEMA_META_KEYS.schemaVersion)
+  })
 }

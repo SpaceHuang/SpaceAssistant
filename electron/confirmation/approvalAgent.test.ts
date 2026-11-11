@@ -989,6 +989,14 @@ describe('parseApprovalVerdict（Skill v2：双维裁决 + 非对称容错，对
       .not.toHaveProperty('reuseApproved')
   })
 
+  it('accepts only the explicit once marker on an approval verdict', () => {
+    expect(parseApprovalVerdict('{"kind":"approve","riskLevel":"low","reuse":"once","reason":{"summary":"范围明确"}}'))
+      .toMatchObject({ kind: 'approve', reuse: 'once' })
+    expect(parseApprovalVerdict('{"kind":"deny","reuse":"once"}')).not.toHaveProperty('reuse')
+    expect(parseApprovalVerdict('{"kind":"approve","riskLevel":"low","reuse":"forever","reason":{"summary":"范围明确"}}'))
+      .not.toHaveProperty('reuse')
+  })
+
   it('A 矩阵降级：approve + critical → deny（无条件拒绝格，结论与自报风险矛盾时取严）', () => {
     const v = parseApprovalVerdict(
       '{"kind":"approve","riskLevel":"critical","reason":{"summary":"任务需要"}}'

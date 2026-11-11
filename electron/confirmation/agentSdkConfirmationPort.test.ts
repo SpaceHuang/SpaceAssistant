@@ -107,6 +107,29 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(onApproved).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'approved' }), expect.anything(), context, memory)
   })
 
+  it('真人批准候选范围时触发授权登记回调，并保留仅本次选择', async () => {
+    const onScopeApproved = vi.fn()
+    const approvedCandidate = {
+      toolName: 'write_file', operation: 'write', scopeCandidateDigest: 'a'.repeat(64),
+      objects: [{ role: 'target', target: '/workspace/a.txt' }]
+    }
+    const approvedContext = {
+      ...context,
+      reviewScopeCandidate: approvedCandidate,
+      reviewScopeCandidateScope: { toolName: 'write_file', operation: 'write', sessionId: 'session-1', lane: 'desktop', approvalLifetime: 'session', objects: [{ role: 'target', value: '/workspace/a.txt' }] }
+    }
+    const port = createAgentSdkConfirmationPort({
+      createChannel: () => ({ request: async (request) => {
+        expect(request.allowReuseOnce).toBe(true)
+        return { kind: 'approved', answererKind: 'user', cause: 'user-approved', reuse: 'once' }
+      }, cancel: vi.fn() }),
+      publish: vi.fn(), cancel: vi.fn(), onScopeApproved
+    })
+    await port({ call: { invocationId: 'inv', toolCallId: 'scope-once', toolName: 'write_file', input: {} }, confirmationId: 'scope-once', answerer: 'user', reasonCode: 'write-confirm', context: approvedContext })
+    expect(onScopeApproved).toHaveBeenCalledOnce()
+    expect(onScopeApproved.mock.calls[0]?.[2]).toMatchObject({ kind: 'approved', answererKind: 'user', cause: 'user-approved', reuse: 'once' })
+  })
+
   it('通过真实 channel 与 SDK port 保留 Agent 裁决和 fail-closed fallback 语义', async () => {
     const { AgentChannel } = await import('./agentChannel')
     const { resolveConfirmChannel } = await import('./channels')

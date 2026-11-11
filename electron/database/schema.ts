@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 124
+export const DB_SCHEMA_VERSION = 125
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -21,6 +21,29 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS review_scope_grants (
+  id INTEGER PRIMARY KEY,
+  format_version INTEGER NOT NULL CHECK (format_version = 1),
+  lane TEXT NOT NULL CHECK (lane IN ('desktop', 'feishu', 'wechat')),
+  subject_id TEXT NOT NULL,
+  domain TEXT NOT NULL CHECK (domain IN ('desktop', 'im')),
+  policy_revision INTEGER NOT NULL CHECK (policy_revision >= 0),
+  policy_epoch INTEGER NOT NULL CHECK (policy_epoch >= 0),
+  policy_version TEXT NOT NULL,
+  capability TEXT NOT NULL CHECK (capability IN ('file-read', 'file-write', 'grep', 'list-work-dirs')),
+  source TEXT NOT NULL CHECK (source IN ('agent', 'user')),
+  scope_json TEXT NOT NULL CHECK (json_valid(scope_json)),
+  lifetime TEXT NOT NULL CHECK (lifetime IN ('24h', '7d')),
+  issued_at_ms INTEGER NOT NULL CHECK (issued_at_ms >= 0),
+  expires_at_ms INTEGER NOT NULL,
+  CHECK (expires_at_ms - issued_at_ms = CASE lifetime WHEN '24h' THEN 86400000 ELSE 604800000 END),
+  CHECK ((lane = 'desktop' AND domain = 'desktop') OR (lane IN ('feishu', 'wechat') AND domain = 'im'))
+) STRICT;
+CREATE UNIQUE INDEX IF NOT EXISTS review_scope_grants_identity
+  ON review_scope_grants(domain, lane, subject_id, policy_revision, policy_epoch, policy_version,
+    capability, source, lifetime, scope_json);
+CREATE INDEX IF NOT EXISTS review_scope_grants_expiry ON review_scope_grants(expires_at_ms);
 
 CREATE TABLE IF NOT EXISTS im_workflow_state (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -1768,7 +1791,9 @@ export const SCHEMA_META_KEYS = {
   /** 用量统计一次性历史回填完成时间（C7）；缺失时启动重试，成功即写。 */
   usageStatsBackfillAt: 'usage_stats_backfill_at',
   imFactNextSeq: 'im_fact_next_seq',
-  imFactCoverageRevisionPrefix: 'im_fact_coverage_revision:'
+  imFactCoverageRevisionPrefix: 'im_fact_coverage_revision:',
+  reviewScopeDefaultLifetime: 'review_scope_default_lifetime',
+  reviewScopeWallFloorMs: 'review_scope_wall_floor_ms'
 } as const
 
 

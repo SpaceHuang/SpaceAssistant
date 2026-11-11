@@ -453,6 +453,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     reason: '工作目录内普通只读访问免确认'
   },
   {
+    id: 'grep-workdir-recursive-reusable',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'grep', actionClass: 'read', signals: ['path-target:workdir-normal', 'review-scope-candidate:eligible'] },
+    action: 'allow',
+    reviewCacheSources: ['user'],
+    reason: '普通工作目录内递归搜索可按用户批准范围复用'
+  },
+  {
     id: 'path-outside-readonly-allow',
     when: 'invocation',
     match: { lane: ['desktop'], actionClass: 'read', signals: ['path-target:outside-workdir'] },

@@ -461,6 +461,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         trustMcpToolName?: string
         memoryTier?: import('../../src/shared/confirmation/types').CacheKey
         memoryTierOptionId?: number
+        reuse?: 'once'
       }
     ): Promise<import('../toolConfirmRegistry').ToolConfirmSubmitResult> => {
       // H1：信任写入必须与 pending 确认挂钩——agent 裁决路径（AgentChannel）不登记 waiter，
@@ -660,7 +661,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         ? isMcpSessionTrusted(mcpTrustKey.sessionId, mcpTrustKey.serverId, mcpTrustKey.toolName)
         : false
       if (payload.approved && mcpTrustKey && !mcpTrustAlreadyPresent) rememberMcpSessionTrust(mcpTrustKey.sessionId, mcpTrustKey.serverId, mcpTrustKey.toolName)
-      const response = submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved, ownerSessionId)
+      const response = submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved, ownerSessionId, payload.reuse)
       if (mcpTrustKey && !mcpTrustAlreadyPresent && !response.accepted) forgetMcpSessionTrust(mcpTrustKey.sessionId, mcpTrustKey.serverId, mcpTrustKey.toolName)
       return response
       } catch (error) {

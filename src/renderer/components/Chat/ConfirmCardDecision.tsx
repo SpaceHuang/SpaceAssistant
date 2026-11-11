@@ -7,6 +7,8 @@ type Props = {
   actionSummary: string
   allowLabel: string
   denyLabel: string
+  onceLabel?: string
+  allowOnce?: boolean
   onConfirm: ToolConfirmHandler
   /** 行数、风险、写入等补充标签 */
   badges?: ReactNode
@@ -18,6 +20,8 @@ export function ConfirmCardDecision({
   actionSummary,
   allowLabel,
   denyLabel,
+  onceLabel,
+  allowOnce = false,
   onConfirm,
   badges,
   children
@@ -44,6 +48,7 @@ export function ConfirmCardDecision({
           >
             {denyLabel}
           </button>
+          {allowOnce && onceLabel ? <button type="button" className="write-confirm-card__action" onClick={() => onConfirm(true, { reuse: 'once' })}>{onceLabel}</button> : null}
           <button
             type="button"
             className="write-confirm-card__action write-confirm-card__action--allow"

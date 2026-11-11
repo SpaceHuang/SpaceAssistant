@@ -385,6 +385,7 @@ export class AgentChannel implements ConfirmationChannel {
             answererKind: 'agent',
             cause: 'agent-approved',
             reason: result.verdict.reason,
+            ...(result.verdict.reuse === 'once' ? { reuse: 'once' as const } : {}),
           }
         // R5：undetermined 是有效裁决「判不了」——映射为独立 cause（缺此分支会静默退化 agent-deny）
         : result.verdict.kind === 'undetermined'

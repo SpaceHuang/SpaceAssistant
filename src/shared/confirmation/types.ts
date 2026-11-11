@@ -160,6 +160,7 @@ export type ScriptPathDynamicKind =
   | 'binding-chain-broken' | 'path-analysis-unavailable'
 
 export type FactSignal =
+  | { kind: 'review-scope-candidate'; status: 'eligible' }
   | { kind: 'command-sequence'; commands: CommandFact[]; persistable?: boolean }
   | { kind: 'path-target'; path: string; zone: PathZone }
   | { kind: 'read-target-scope'; scope: 'single-target' | 'direct-entries' | 'subtree' }
@@ -376,6 +377,9 @@ export interface ConfirmRequest {
   modelJustificationTruncated?: boolean
   /** Host-created review-scope candidate; the host may register a bounded session grant after Agent approval. */
   reviewScopeCandidate?: ReviewScopeApprovalCandidate
+  /** Host-issued approval choice; free-form model text cannot set this. */
+  reviewScopeLifetime?: 'session' | 'process' | '24h' | '7d'
+  allowReuseOnce?: boolean
 }
 
 /** Bounded, in-memory script evidence shown to the approval model for this invocation. */
@@ -402,8 +406,8 @@ export interface ApprovalScriptEvidence {
 
 export interface ReviewScopeApprovalCandidate {
   readonly scopeCandidateDigest: string
-  readonly toolName: 'edit_file' | 'write_file' | 'grep'
-  readonly operation: 'edit' | 'write' | 'search'
+  readonly toolName: 'edit_file' | 'write_file' | 'grep' | 'list_work_dirs'
+  readonly operation: 'edit' | 'write' | 'search' | 'list'
   readonly objects: readonly { readonly role: string; readonly target: string }[]
 }
 
@@ -452,6 +456,7 @@ export type ApprovalVerdict =
       reason: ApprovalReason
       riskLevel?: ApprovalRiskDimension
       authorization?: ApprovalAuthorizationDimension
+      reuse?: 'once'
     }
   | {
       kind: 'deny'
@@ -567,6 +572,8 @@ export type ConfirmOutcome =
       reason?: ApprovalReason
       /** 本次批准的回答者；缺省视为 user（既有桌面 / IM 路径）。非 user 不得产生任何记忆写入（I3）。 */
       answererKind?: ConfirmAnswererKind
+      /** Explicit user choice to authorize only this invocation. */
+      reuse?: 'once'
       promptSendFailure?: ConfirmationPromptSendFailure
       cause: ConfirmOutcomeCause
     }
@@ -707,7 +714,7 @@ export interface SecurityAuditEvent {
     revision: number
     source: 'session-binding' | 'active-fallback'
   }
-  outcome?: 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
+  outcome?: 'approved' | 'approved-once' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
   /** require-confirm 决策的回答者（policy.decision；user=人工卡 / agent=审批 Agent）。 */
   answerer?: 'user' | 'agent'
   /** 裁决理由摘要（审批 Agent；脱敏由调用方保证，仅 summary 不落 evidence 原文）。 */
@@ -734,9 +741,11 @@ export interface SecurityAuditEvent {
   /** Host-only review-scope cache diagnostic; contains no candidate digest or object data. */
   reviewScopeOutcome?: 'created' | 'skipped' | 'hit' | 'miss'
   reviewScopeReasonCode?: 'grant_created' | 'candidate_missing' | 'review_material_incomplete' | 'candidate_digest_invalid' |
-    'unsupported_tool' | 'grant_duplicate_or_capacity' | 'grant_lookup_hit' | 'grant_lookup_miss'
+    'unsupported_tool' | 'grant_duplicate_or_capacity' | 'grant_lookup_hit' | 'grant_lookup_miss' |
+    'scope_cache_unavailable' | 'scope_task_unavailable' | 'scope_binding_unavailable' | 'scope_target_ineligible' |
+    'scope_target_unverified' | 'grant_registration_stale' | 'grant_policy_not_used'
   reviewScopeSource?: ReviewCacheSource
-  reviewScopeCandidateVersion?: 'review-scope-candidate-v1'
+  reviewScopeCandidateVersion?: 'review-scope-candidate-v1' | 'review-scope-candidate-v2'
   /** actor='agent' 时的归因细节（哪个 Profile / 模型 / 哪次审批调用）。 */
   actorRef?: { profileId: string; model?: string; invocationId?: string }
   /** 该事件的耗时（审批调用等有明确时长的动作，成本观测用）。 */

@@ -34,6 +34,7 @@ const EXPECTED_RULE_IDS = [
   'write-target-unsupported-deny',
   'feishu-media-boundary-deny',
   'feishu-media-boundary-unknown-deny',
+  'grep-workdir-recursive-reusable',
   'remote-sensitive-workdir-switch-deny',
   'remote-unknown-workdir-switch-deny',
   'script-network-deny-remote',
@@ -145,6 +146,13 @@ describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {
     expect(nonWriteFloor.locked).toBe(true)
     expect(nonWriteFloor.match?.signals).toContain('script-path-extraction:locked-path-review')
     expect(nonWriteFloor.match?.excludeSignals).toContain('script-path-extraction:write-target-only')
+  })
+
+  it('G-01 registers recursive work-directory grep as default allow and user-grant consumable', () => {
+    const grepReview = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'grep-workdir-recursive-reusable')!
+    expect(grepReview.action).toBe('allow')
+    expect(grepReview.reviewCacheSources).toEqual(['user'])
+    expect(grepReview.match?.toolName).toBe('grep')
   })
 
   it('wiki/远程/automation/敏感读 六条关键 locked 规则的 action 与匹配信号保持基线', () => {

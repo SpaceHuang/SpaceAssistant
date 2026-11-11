@@ -38,6 +38,22 @@ it('fails closed when an approval callback cannot issue the required execution p
 })
 
 describe('createAgentSdkSafetyPolicy', () => {
+  it('projects the registered directory disclosure digest into current gate facts', async () => {
+    const args = { ...baseArgs, toolName: 'list_work_dirs', toolInput: {} } as ToolCallGateArgs
+    let observed: ToolCallGateArgs | undefined
+    const listBinding = { ...binding, capabilityId: 'list_work_dirs', inputSnapshotHash: createHash('sha256').update('{}').digest('hex'),
+      capability: { state: 'known-authorized' as const, id: 'list_work_dirs' } }
+    const policy = createAgentSdkSafetyPolicy({
+      resolveGateArgs: async () => args,
+      resolveToolCall: () => ({ invocationId: listBinding.invocationId, toolCallId: listBinding.toolCallId, toolName: 'list_work_dirs', input: {} }),
+      resolveToolName: () => 'list_work_dirs',
+      getPreparedFacts: () => ({ reviewScopeDisclosureDigest: 'a'.repeat(64) }),
+      evaluateGate: async (gateArgs) => { observed = gateArgs; return result({ type: 'require-confirm', ruleId: 'list-review', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }) }
+    })
+    await expect(policy.evaluate(listBinding)).resolves.toMatchObject({ kind: 'ask', answerer: 'user' })
+    expect(observed?.reviewScopeDisclosureDigest).toBe('a'.repeat(64))
+  })
+
   it('carries the current run_shell justification and truncation marker into automation approval context', async () => {
     const toolInput = { command: 'pwd', justification: '核对工作目录', _justificationTruncated: true }
     const agentBinding = {
@@ -213,7 +229,7 @@ describe('createAgentSdkSafetyPolicy', () => {
     const args = { ...baseArgs, toolName: 'edit_file', toolInput: input, workDir: '/workspace' } as ToolCallGateArgs
     const testBinding = { ...binding, capabilityId: 'edit_file', inputSnapshotHash: createHash('sha256').update('{"new_string":"changed content","old_string":"original content","path":"approved.txt"}').digest('hex'), capability: { state: 'known-authorized' as const, id: 'edit_file' } }
     const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(replaced)
-    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, evaluateGate })
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, resolveToolCall: () => ({ invocationId: testBinding.invocationId, toolCallId: testBinding.toolCallId, toolName: 'edit_file', input: args.toolInput }), resolveToolName: () => 'edit_file', evaluateGate, onInitialGateResult: () => {}, onConfirmed: () => true })
 
     await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1' })).resolves.toMatchObject({ kind: 'ask', reasonCode: 'edit-confirm' })
     markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
@@ -223,6 +239,28 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1', phase: 'recheck' }))
       .resolves.toEqual({ kind: 'allow', authorizationVersion: 'edit-v1' })
     expect(evaluateGate).toHaveBeenCalledTimes(3)
+  })
+
+  it('allows a same-path reviewed write after content facts change when current policy grants scope', async () => {
+    const target = { rawPath: 'approved.txt', normalizedPath: '/workspace/approved.txt', zone: 'workdir-normal' as const,
+      targetKind: 'file' as const, parentReal: '/workspace', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 0, mtimeMs: 1, nlink: 2 },
+      identity: { dev: 1, ino: 3, mode: 0o100644, size: 16, mtimeMs: 1, nlink: 1 } }
+    const scope = { lane: 'desktop' as const, sessionId: 'req', subjectId: '/tmp', authorizationDomain: { id: 'desktop', revision: 0, epoch: 0 },
+      toolName: 'edit_file' as const, operation: 'edit' as const, objects: [{ role: 'target', value: target.normalizedPath }], environment: '/workspace',
+      policyVersion: 'desktop-policy-v1', exactParameters: {}, taskConstraint: '' }
+    const candidate = { scopeCandidateDigest: 'c'.repeat(64), toolName: 'edit_file' as const, operation: 'edit' as const,
+      objects: [{ role: 'target', target: target.normalizedPath }] }
+    const writeFacts = (text: string): ContentFacts => ({ toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text } })
+    const initial: ToolCallGateResult = { decision: { type: 'require-confirm', ruleId: 'edit-confirm', answerer: 'user', riskLevel: 'medium', facts: writeFacts('old'), memoryTiers: [], timeoutMs: 1000, disposition: 'human-required' },
+      facts: writeFacts('old'), approvedFactIds: [], writePathFact: target, reviewScopeCandidate: candidate, reviewScopeCandidateScope: scope, reviewScopeCandidateDigest: candidate.scopeCandidateDigest }
+    const next: ToolCallGateResult = { ...initial, decision: { type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1', reason: 'scope' }, facts: writeFacts('new') }
+    const args = { ...baseArgs, toolName: 'edit_file', toolInput: { path: 'approved.txt', old_string: 'old', new_string: 'new' }, workDir: '/workspace' } as ToolCallGateArgs
+    const testBinding = { ...binding, invocationId: 'inv', toolCallId: 'call', requestId: 'req', turnId: 'turn', phase: 'initial-compat' as const, capabilityId: 'edit_file', inputSnapshotHash: createHash('sha256').update('{"new_string":"new","old_string":"old","path":"approved.txt"}').digest('hex'), capability: { state: 'known-authorized' as const, id: 'edit_file' } }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(next)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, resolveToolCall: () => ({ invocationId: testBinding.invocationId, toolCallId: testBinding.toolCallId, toolName: 'edit_file', input: args.toolInput }), resolveToolName: () => 'edit_file', evaluateGate, onInitialGateResult: () => {}, onConfirmed: () => true })
+    await expect(policy.evaluate(testBinding)).resolves.toMatchObject({ kind: 'ask' })
+    markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
+    await expect(policy.evaluate({ ...testBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'allow' })
   })
 
   it('allows a confirmed edit when only sibling creation changes parent directory size and mtime', async () => {
@@ -243,7 +281,7 @@ describe('createAgentSdkSafetyPolicy', () => {
       inputSnapshotHash: createHash('sha256').update('{"new_string":"changed content","old_string":"original content","path":"approved.txt"}').digest('hex'),
       capability: { state: 'known-authorized' as const, id: 'edit_file' } }
     const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(rechecked)
-    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, evaluateGate })
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, resolveToolCall: () => ({ invocationId: 'inv', toolCallId: 'call', toolName: 'edit_file', input: args.toolInput }), resolveToolName: () => 'edit_file', evaluateGate })
 
     await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1' })).resolves.toMatchObject({ kind: 'ask', reasonCode: 'edit-confirm' })
     markAgentSdkSafetyDecisionConfirmed(policy, testBinding)

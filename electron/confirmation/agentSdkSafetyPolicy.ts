@@ -107,6 +107,13 @@ export function createAgentSdkSafetyPolicy(input: {
           }
           if (projection !== undefined) args.factsProvider = () => facts
         }
+        if (call?.toolName === 'list_work_dirs') {
+          const prepared = input.getPreparedFacts?.(call)
+          const digest = prepared && typeof prepared === 'object'
+            ? (prepared as { reviewScopeDisclosureDigest?: unknown }).reviewScopeDisclosureDigest
+            : undefined
+          if (typeof digest === 'string' && /^[a-f0-9]{64}$/.test(digest)) args.reviewScopeDisclosureDigest = digest
+        }
         const resolvedInputHash = createHash('sha256').update(stableSerialize(args.toolInput)).digest('hex')
         if (resolvedInputHash !== binding.inputSnapshotHash) return deny(binding, 'STALE_AUTHORIZATION')
         const gateArgs = buildToolCallGateArgs(args, {
@@ -143,11 +150,15 @@ export function createAgentSdkSafetyPolicy(input: {
           const sameWriteApprovalConfiguration = previous.result.facts.actionClass !== 'write' ||
             writeApprovalConfigurationSnapshot(previous.args) === writeApprovalConfigurationSnapshot(gateArgs)
           const sameConfirmedDecisionRule = decision.ruleId === previous.result.decision.ruleId ||
-            (decision.type === 'auto-allow' && decision.ruleId === 'cache-hit' && previous.result.decision.type === 'require-confirm')
+            (decision.type === 'auto-allow' && previous.result.decision.type === 'require-confirm' &&
+              ['cache-hit', 'review-cache-scope-grant-v1'].includes(decision.ruleId ?? ''))
+          const isApprovedWriteScope = previous.confirmed && decision.type === 'auto-allow' &&
+            decision.ruleId === 'review-cache-scope-grant-v1' && previous.result.reviewScopeCandidateScope?.toolName !== 'grep' &&
+            sameWriteTarget && samePolicyDependencies && sameWriteApprovalConfiguration
           const sameConfirmedDecision = previous.confirmed &&
             (decision.type === 'auto-allow' || decision.type === 'require-confirm') &&
-            sameConfirmedDecisionRule && sameFacts
-          const sameExecutionMaterials = sameFacts && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget &&
+            sameConfirmedDecisionRule && (sameFacts || isApprovedWriteScope)
+          const sameExecutionMaterials = (sameFacts || isApprovedWriteScope) && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget &&
             sameScriptApprovalBinding && sameWriteApprovalConfiguration
           if (!samePolicyDependencies && sameExecutionMaterials) {
             // A policy revision changes the decision authority, even when host facts and

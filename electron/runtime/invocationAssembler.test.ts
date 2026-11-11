@@ -535,7 +535,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
         decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'agent' }, lane: 'desktop',
         reviewScopeCandidate: candidate, reviewScopeCandidateScope: scope, reviewScopeCandidateDigest: digest } })
     expect(result).toMatchObject({ kind: 'approved', answerer: 'agent' })
-    expect(runtime.reviewScopeCache.state(scope)).toMatchObject({ source: 'agent', state: 'pending_first_write' })
+    expect(runtime.reviewScopeCache.state(scope)).toMatchObject({ source: 'agent', state: 'active' })
   })
 
   it('Agent 批准后真实 edit_file receipt 激活范围授权，第二次编辑命中缓存', async () => {

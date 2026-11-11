@@ -101,6 +101,23 @@ function hasHiddenSegment(searchRel: string): boolean {
   return rel.split('/').some((seg) => seg.startsWith('.'))
 }
 
+/** Same-root grants are exact; child inheritance rejects root-relative filter changes and default exclusions. */
+export function isGrepSubtreeSemanticallyContained(parentRoot: string, childRoot: string, options: {
+  includeIgnored: boolean
+  glob?: string
+}): boolean {
+  const relative = path.relative(parentRoot, childRoot)
+  if (relative === '') return true
+  if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) return false
+  if (!options.includeIgnored) {
+    const segments = toPosix(relative).split('/')
+    if (segments.some((segment) => segment.startsWith('.') || GREP_DEFAULT_IGNORES.some((ignored) => ignored.toLowerCase() === segment.toLowerCase()))) return false
+  }
+  const glob = options.glob
+  if (glob && (glob.startsWith('!') || /[\\/]/.test(glob) && !glob.startsWith('**/'))) return false
+  return true
+}
+
 /**
  * 一次 grep 调用的范围规划（rg / walk 共用）。
  * 不做安全判定——这里只产「哪些目录会被跳过、隐藏过滤开不开、敏感 glob 加不加」的范围事实。

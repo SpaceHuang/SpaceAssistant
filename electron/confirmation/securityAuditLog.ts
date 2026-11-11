@@ -43,10 +43,12 @@ export function sanitizeAuditEvent(event: SecurityAuditEvent): SecurityAuditEven
       ...(event.reviewScopeOutcome && ['created', 'skipped', 'hit', 'miss'].includes(event.reviewScopeOutcome)
         ? { reviewScopeOutcome: event.reviewScopeOutcome } : {}),
       ...(event.reviewScopeReasonCode && ['grant_created', 'candidate_missing', 'review_material_incomplete', 'candidate_digest_invalid',
-        'unsupported_tool', 'grant_duplicate_or_capacity', 'grant_lookup_hit', 'grant_lookup_miss'].includes(event.reviewScopeReasonCode)
+        'unsupported_tool', 'grant_duplicate_or_capacity', 'grant_lookup_hit', 'grant_lookup_miss', 'scope_cache_unavailable',
+        'scope_task_unavailable', 'scope_binding_unavailable', 'scope_target_ineligible', 'scope_target_unverified',
+        'grant_registration_stale', 'grant_policy_not_used'].includes(event.reviewScopeReasonCode)
         ? { reviewScopeReasonCode: event.reviewScopeReasonCode } : {}),
       ...(event.reviewScopeSource === 'agent' || event.reviewScopeSource === 'user' ? { reviewScopeSource: event.reviewScopeSource } : {}),
-      ...(event.reviewScopeCandidateVersion === 'review-scope-candidate-v1'
+      ...(event.reviewScopeCandidateVersion === 'review-scope-candidate-v1' || event.reviewScopeCandidateVersion === 'review-scope-candidate-v2'
         ? { reviewScopeCandidateVersion: event.reviewScopeCandidateVersion } : {})
     }
   }

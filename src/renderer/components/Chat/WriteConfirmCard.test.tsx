@@ -20,6 +20,13 @@ describe('WriteConfirmCard', () => {
     expect(screen.getByText('hello')).toBeDefined()
   })
 
+  it('仅在主进程标记候选范围时显示仅本次批准', () => {
+    const { rerender } = render(<WriteConfirmCard record={record()} onConfirm={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: '仅允许本次' })).toBeNull()
+    rerender(<WriteConfirmCard record={record({ allowReuseOnce: true })} onConfirm={vi.fn()} />)
+    expect(screen.getByRole('button', { name: '仅允许本次' })).toBeDefined()
+  })
+
   it('不局部渲染 fallback banner（§8.5：已提升到 ToolCallCard 确认态统一层级）', () => {
     render(
       <WriteConfirmCard

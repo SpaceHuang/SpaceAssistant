@@ -35,6 +35,11 @@ import type {
   PolicyEngineDeps
 } from '../../src/shared/confirmation/types'
 import os from 'os'
+import { isGrepSubtreeSemanticallyContained } from '../tools/grepScope'
+import { grepIgnoreContextDigest } from '../tools/grepIgnoreContext'
+import { getGrepExecutionProfile } from '../tools/grepExecutionProfile'
+import { normalizeGrepArgs } from '../tools/grepArgs'
+import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import { hasUnsupportedV1ReadTarget, runExtractors, runExtractorsWithReadPathFact } from './extractors/runExtractors'
 import { probeReadPathFact, ReadPathProbeError, type ReadPathFact } from './extractors/readPathFacts'
 import { probeFeishuMediaTarget, type FeishuMediaTargetFact } from './extractors/feishuMediaFacts'
@@ -126,7 +131,6 @@ import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 import { CONFIRMATION_LABELS } from '../../src/shared/confirmation/labels'
 import { createInvocationFactsSnapshot } from '../../src/shared/confirmation/invocationFactsSnapshot'
 import { ReviewScopeCache, type ReviewScopeCandidate } from './reviewScopeCache'
-import { verifyReviewFileReceipt } from '../safeAtomicWrite'
 import { isReviewScopeWriteEligible, projectReviewScopeEditResult } from './reviewScopeEligibility'
 
 
@@ -193,6 +197,8 @@ export interface ToolCallGateArgs {
   /** Positive host attestation that task and selected reference evidence reached the reviewer without clipping. */
   reviewScopeEvidenceComplete?: boolean
   reviewScopeCache?: ReviewScopeCache
+  /** Host-projected disclosure digest from the registered work-directory listing plan. */
+  reviewScopeDisclosureDigest?: string
   /** Host-resolved provenance for the MCP query/data scope; never read from model arguments. */
   mcpQuerySource?: 'public' | 'local-sensitive' | 'unknown'
   /** Host-resolved permission for the configured MCP account and referenced data scope. */
@@ -1165,15 +1171,47 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     for (const name of names) autoEvaluatorRoutes.set(name, rule.id)
   }
   const reviewScopeCandidate = await buildReviewScopeCandidate(args, lane, writePathFact, readPathFact)
+  if (reviewScopeCandidate?.toolName === 'grep') facts.signals.push({ kind: 'review-scope-candidate', status: 'eligible' })
   let reviewScopeEntry = reviewScopeCandidate ? args.reviewScopeCache?.lookup(reviewScopeCandidate) : null
-  if (reviewScopeCandidate && reviewScopeEntry?.receipt && writePathFact && !await verifyReviewFileReceipt(writePathFact.normalizedPath, reviewScopeEntry.receipt)) {
-    args.reviewScopeCache?.revoke(reviewScopeCandidate)
-    reviewScopeEntry = null
+  let grepParentScopeMaterial: import('./readExecutionPermit').GrepParentScope | undefined
+  if (reviewScopeEntry?.inheritedParentScope && reviewScopeCandidate?.toolName === 'grep' && readPathFact?.identity) {
+    const parentRoot = reviewScopeEntry.inheritedParentScope.root
+    const relative = path.relative(path.resolve(args.workDir), parentRoot)
+    const candidateRoot = readPathFact.normalizedPath
+    try {
+      const parentLstat = await fsPromises.lstat(parentRoot)
+      const parentRealPath = await fsPromises.realpath(parentRoot)
+      const parentStat = await fsPromises.stat(parentRoot)
+      const currentIgnoreDigest = await grepIgnoreContextDigest(args.workDir, parentRoot)
+      const executionProfile = await getGrepExecutionProfile()
+      const query = reviewScopeCandidate.exactParameters as { includeIgnored?: unknown; glob?: unknown }
+      if (parentLstat.isSymbolicLink() || !parentStat.isDirectory() || parentRealPath !== parentRoot ||
+        path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`) ||
+        !isGrepSubtreeSemanticallyContained(parentRoot, candidateRoot, {
+          includeIgnored: query.includeIgnored === true,
+          ...(typeof query.glob === 'string' ? { glob: query.glob } : {})
+        }) || currentIgnoreDigest !== reviewScopeEntry.inheritedParentScope.ignoreDigest ||
+        executionProfile?.engine !== reviewScopeEntry.inheritedParentScope.engine ||
+        executionProfile?.fingerprint !== reviewScopeEntry.inheritedParentScope.engineFingerprint) {
+        reviewScopeEntry = null
+      } else {
+        grepParentScopeMaterial = {
+          workDir: path.resolve(args.workDir),
+          normalizedPath: parentRoot,
+          identity: { dev: parentStat.dev, ino: parentStat.ino, mode: parentStat.mode },
+          ignoreDigest: reviewScopeEntry.inheritedParentScope.ignoreDigest,
+          engine: reviewScopeEntry.inheritedParentScope.engine,
+          engineFingerprint: reviewScopeEntry.inheritedParentScope.engineFingerprint,
+          extraExcludeDirNames: reviewScopeEntry.inheritedParentScope.extraExcludeDirNames
+        }
+      }
+    } catch { reviewScopeEntry = null }
   }
   if (reviewScopeCandidate) audit.record({ ts: Date.now(), event: 'confirm.review-scope', lane, sessionId: args.sessionId,
     requestId: args.requestId, invocationId: args.invocationId ?? args.requestId, toolUseId: args.toolUseId, toolName: args.toolName, actor: 'system',
     reviewScopeOutcome: reviewScopeEntry ? 'hit' : 'miss', reviewScopeReasonCode: reviewScopeEntry ? 'grant_lookup_hit' : 'grant_lookup_miss',
-    ...(reviewScopeEntry ? { reviewScopeSource: reviewScopeEntry.source } : {}), reviewScopeCandidateVersion: 'review-scope-candidate-v1' })
+    ...(reviewScopeEntry ? { reviewScopeSource: reviewScopeEntry.source } : {}), reviewScopeCandidateVersion:
+      reviewScopeCandidate?.toolName === 'grep' ? 'review-scope-candidate-v1' : 'review-scope-candidate-v2' })
   const reviewScopeGrant = reviewScopeEntry ? { source: reviewScopeEntry.source } : undefined
   const deps: PolicyEngineDeps = {
     cache,
@@ -1412,7 +1450,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       toolName: args.toolName as 'read_file' | 'grep' | 'list_directory',
       decisionRuleId: decision.ruleId,
       input: args.toolInput,
-      facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: permitTargetKind, ...(permitScope ? { scope: permitScope } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}), ...(readPathFact.vocabularyPath ? { vocabularyPath: readPathFact.vocabularyPath } : {}), ...(selectedDirectoryGrant ? { directoryGrant: { grantId: selectedDirectoryGrant.grantId, sessionId: selectedDirectoryGrant.sessionId, realPath: selectedDirectoryGrant.realPath, identity: selectedDirectoryGrant.identity } } : {}) }]
+      facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: permitTargetKind, ...(permitScope ? { scope: permitScope } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}), ...(grepParentScopeMaterial && args.toolName === 'grep' ? { grepParentScope: grepParentScopeMaterial } : {}), ...(readPathFact.vocabularyPath ? { vocabularyPath: readPathFact.vocabularyPath } : {}), ...(selectedDirectoryGrant ? { directoryGrant: { grantId: selectedDirectoryGrant.grantId, sessionId: selectedDirectoryGrant.sessionId, realPath: selectedDirectoryGrant.realPath, identity: selectedDirectoryGrant.identity } } : {}) }]
     })
   } else if (args.phase !== 'recheck' && readPathFact && isPermitReadTool && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
@@ -1667,16 +1705,63 @@ async function buildReviewScopeCandidate(
   writePathFact: WritePathFact | undefined,
   readPathFact: import('./extractors/readPathFacts').ReadPathFact | undefined
 ): Promise<ReviewScopeCandidate | undefined> {
-  if (!args.reviewScopeCache || args.taskDigestTruncated || args.reviewScopeEvidenceComplete !== true ||
-    typeof args.reviewScopeTaskIdentity !== 'string' || !args.reviewScopeTaskIdentity ||
-    Buffer.byteLength(args.reviewScopeTaskIdentity, 'utf8') > 64 * 1024 || !args.policyBinding || args.policyBinding.domain === 'automation') return undefined
-  if (lane === 'desktop' && args.toolName === 'grep' && readPathFact) {
+  if (!args.reviewScopeCache || args.reviewScopeEvidenceComplete !== true || !args.policyBinding || args.policyBinding.domain === 'automation') return undefined
+  const grepReviewRule = args.effectiveRules.find((rule) => rule.id === 'grep-workdir-recursive-reusable')
+  const grepReviewAction = grepReviewRule ? (args.policyBinding.domain === 'desktop'
+    ? effectiveActionFor(lane, args.lanePackage ?? 'standard', grepReviewRule)
+    : grepReviewRule.action) : undefined
+  if (['desktop', 'feishu', 'wechat'].includes(lane) && args.toolName === 'grep' && readPathFact &&
+    grepReviewRule?.userOverride === true && grepReviewAction === 'ask' && grepReviewRule.reviewCacheSources?.includes('user') &&
+    readPathFact.zone === 'workdir-normal' && readPathFact.targetKind === 'directory' &&
+    readPathFact.resolvedKind === 'directory' && readPathFact.identity && !readPathFact.vocabularyPath &&
+    (() => { const relative = path.relative(path.resolve(args.workDir), readPathFact.normalizedPath); return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`)) })()) {
+    const subjectId = lane === 'desktop' ? args.userDataDir : args.remoteContext?.authOwner
+    if (!subjectId) return undefined
+    if (lane !== 'desktop' && !args.remoteContext?.authOwner) return undefined
+    const normalized = normalizeGrepArgs(args.toolInput)
+    if (!normalized.ok || typeof args.toolInput.pattern !== 'string' || !args.toolInput.pattern) return undefined
+    const ignoreDigest = await grepIgnoreContextDigest(args.workDir, readPathFact.normalizedPath)
+    const executionProfile = await getGrepExecutionProfile()
+    if (!ignoreDigest || !executionProfile) return undefined
+    const extraExcludeDirNames = args.wikiConfig
+      ? [...new Set([WIKI_VOCABULARY_PREFIX, ...(args.wikiConfig.legacyRootAliases ?? [])])]
+      : []
+    if (extraExcludeDirNames.length > 32 || extraExcludeDirNames.some((name) => !name || name === '.' || name === '..' || /[\\/\0]/.test(name))) return undefined
     return {
-      lane, sessionId: args.sessionId, subjectId: args.userDataDir,
+      lane: lane as ReviewScopeCandidate['lane'], sessionId: args.sessionId, subjectId,
       authorizationDomain: { id: args.policyBinding.domain, revision: args.policyBinding.revision, epoch: args.policyBinding.epoch },
       toolName: 'grep', operation: 'search', objects: [{ role: 'root', value: readPathFact.normalizedPath }],
         environment: args.workDir, policyVersion: args.policyBinding.policyBehaviorVersion,
-        exactParameters: { recursive: args.toolInput.recursive === true }, taskConstraint: args.reviewScopeTaskIdentity
+        exactParameters: Object.fromEntries(Object.entries({
+          pattern: args.toolInput.pattern,
+          glob: normalized.args.glob,
+          outputMode: normalized.args.outputMode,
+          ignoreCase: normalized.args.ignoreCase,
+          showLineNumber: normalized.args.showLineNumber,
+          context: normalized.args.context ?? 0,
+          multiline: normalized.args.multiline,
+          headLimit: normalized.args.headLimit,
+          timeoutSeconds: Math.min(600, Math.max(5, normalized.args.timeoutSeconds ?? args.toolsConfig.grepTimeoutSec ?? 60)),
+          includeIgnored: normalized.args.includeIgnored,
+          searchGitignored: args.toolsConfig.grepSearchGitignored === true,
+          extraExcludeDirNames,
+          engine: executionProfile.engine,
+          engineFingerprint: executionProfile.fingerprint,
+          ignoreDigest,
+        }).filter(([, value]) => value !== undefined)),
+        taskConstraint: '', approvalLifetime: args.reviewScopeCache.getDefaultLifetime()
+    }
+  }
+  if (args.toolName === 'list_work_dirs' && (lane === 'feishu' || lane === 'wechat')) {
+    const subjectId = args.remoteContext?.authOwner
+    const disclosureDigest = args.reviewScopeDisclosureDigest
+    if (!subjectId || !disclosureDigest || !/^[a-f0-9]{64}$/.test(disclosureDigest)) return undefined
+    return {
+      lane, sessionId: args.sessionId, subjectId,
+      authorizationDomain: { id: args.policyBinding.domain, revision: args.policyBinding.revision, epoch: args.policyBinding.epoch },
+      toolName: 'list_work_dirs', operation: 'list', objects: [{ role: 'disclosure', value: disclosureDigest }],
+      environment: 'remote-work-dir-disclosure', policyVersion: args.policyBinding.policyBehaviorVersion,
+      exactParameters: {}, taskConstraint: '', approvalLifetime: args.reviewScopeCache.getDefaultLifetime()
     }
   }
   if (args.toolName !== 'edit_file' && args.toolName !== 'write_file') return undefined
@@ -1703,6 +1788,6 @@ async function buildReviewScopeCandidate(
     authorizationDomain: { id: args.policyBinding.domain, revision: args.policyBinding.revision, epoch: args.policyBinding.epoch },
     toolName, operation, objects: [{ role: 'target', value: writePathFact.normalizedPath }],
     environment: args.workDir, policyVersion: args.policyBinding.policyBehaviorVersion,
-    exactParameters, taskConstraint: args.reviewScopeTaskIdentity
+    exactParameters, taskConstraint: '', approvalLifetime: args.reviewScopeCache.getDefaultLifetime()
   }
 }

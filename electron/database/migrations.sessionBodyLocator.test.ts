@@ -24,7 +24,7 @@ describe('session body locator schema v117+', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(124)
+    expect(DB_SCHEMA_VERSION).toBe(125)
     expect(conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?').get('pre-migration-event'))
       .toMatchObject({ payload_json: expect.stringContaining('retained canonical history') })

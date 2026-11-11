@@ -236,6 +236,7 @@ export function buildWeChatConfirmPrompt(pending: ImPendingConfirm, progressPref
   const tool = pending.mcp ? `MCP ${pending.mcp.originalToolName}` : pending.toolName ?? 'unknown'
   const footer = formatImConfirmPromptFooter({
     trustEligible: pending.trustEligible === true,
+    allowReuseOnce: pending.allowReuseOnce === true,
     confirmId: pending.confirmId,
     memoryTiers: pending.memoryTiers
   })

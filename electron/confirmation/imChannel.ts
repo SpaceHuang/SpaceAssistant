@@ -24,6 +24,7 @@ export interface ImPendingConfirm {
   channel: 'feishu' | 'wechat'
   confirmId?: string
   trustEligible?: boolean
+  allowReuseOnce?: boolean
   authOwner?: string
   authorizationGeneration?: number
   /** 同一待确认项的提交尝试代次；回滚后重试必须单调递增。 */
@@ -149,9 +150,9 @@ function logPromptDiagnostic(log: ImChannelDeps['log'], event: string, fields: R
   try { log?.(event, fields) } catch { /* Diagnostics must never change fail-closed settlement. */ }
 }
 
-function toOutcome(decision: PendingDecision, _memoryTiers: MemoryTier[], memory?: MemoryTier): ConfirmOutcome {
+function toOutcome(decision: PendingDecision, _memoryTiers: MemoryTier[], memory?: MemoryTier, reuseOnce = false): ConfirmOutcome {
   if (decision === 'y') {
-    return { kind: 'approved', ...(memory ? { memory: memory.key } : {}), cause: 'user-approved' }
+    return { kind: 'approved', ...(memory ? { memory: memory.key } : {}), ...(reuseOnce ? { reuse: 'once' as const } : {}), cause: 'user-approved' }
   }
   if (decision === 'timeout') return { kind: 'timeout', cause: 'timeout' }
   if (decision === 'unavailable') return { kind: 'rejected', cause: 'unavailable' }
@@ -237,6 +238,7 @@ export class ImChannel {
     const now = Date.now()
     const entry: ImPendingConfirm = {
       ...pending,
+      allowReuseOnce: req.allowReuseOnce === true,
       channel: this.deps.lane,
       confirmId,
       memoryTiers: pending.memoryTiers ?? req.memoryTiers,
@@ -393,7 +395,7 @@ export class ImChannel {
       this.pendingMemory.delete(id)
       this.promptSendFailures.delete(id)
       this.emitConfirmOutcome(decision, entry, memory)
-      const outcome = toOutcome(decision, entry.memoryTiers, memory)
+      const outcome = toOutcome(decision, entry.memoryTiers, memory, this.reuseOnce.delete(id))
       return promptSendFailure && outcome.kind === 'rejected'
         ? { ...outcome, promptSendFailure }
         : outcome
@@ -461,7 +463,8 @@ export class ImChannel {
       this.resolve(match.id, 'y')
       return true
     }
-    const approved = parsed.kind === 'approve'
+    const approved = parsed.kind === 'approve' || parsed.kind === 'approve_once'
+    if (parsed.kind === 'approve_once' && !match.allowReuseOnce) return true
     if (this.deps.onCommit) {
       try {
         const result = normalizeCommitResult(this.deps.onCommit(match, { kind: 'decision', approved }))
@@ -476,6 +479,7 @@ export class ImChannel {
         return true
       }
     }
+    if (parsed.kind === 'approve_once') this.reuseOnce.add(match.id)
     this.resolve(match.id, approved ? 'y' : 'n')
     return true
   }
@@ -502,6 +506,7 @@ export class ImChannel {
   }
 
   private pendingMemory = new Map<string, MemoryTier | undefined>()
+  private reuseOnce = new Set<string>()
   private promptSendFailures = new Map<string, ConfirmationPromptSendFailure>()
 
   private emitConfirmOutcome(decision: PendingDecision, entry: ImPendingConfirm, memory?: MemoryTier): void {

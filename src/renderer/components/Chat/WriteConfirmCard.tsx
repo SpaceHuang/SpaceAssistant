@@ -75,6 +75,8 @@ export function WriteConfirmCard({ record, onConfirm }: Props) {
         actionSummary={actionSummary}
         allowLabel={t('confirm.write.allow')}
         denyLabel={t('confirm.write.deny')}
+        onceLabel={t('confirm.write.allowOnce')}
+        allowOnce={record.allowReuseOnce === true}
         onConfirm={handleConfirm}
         badges={
           add > 0 || remove > 0 ? (

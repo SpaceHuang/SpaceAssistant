@@ -76,6 +76,16 @@ describe('安全审计日志：脱敏', () => {
     expect(line).not.toContain('b'.repeat(64))
   })
 
+  it('accepts the file candidate version and bounded scope diagnostics', () => {
+    const line = auditLine({ ...baseEvent(), event: 'confirm.review-scope', reviewScopeOutcome: 'skipped',
+      reviewScopeReasonCode: 'scope_target_unverified', reviewScopeCandidateVersion: 'review-scope-candidate-v2',
+      reason: '/private/path and query secret text' })
+    expect(line).toContain('"reviewScopeReasonCode":"scope_target_unverified"')
+    expect(line).toContain('"reviewScopeCandidateVersion":"review-scope-candidate-v2"')
+    expect(line).not.toContain('/private/path')
+    expect(line).not.toContain('secret text')
+  })
+
   it('JSON 形态凭据字段打码（评审 B1）：序列化 params 流经摘要时不落明文', () => {
     const summary =
       'toolkit.call · action.mcp.add：添加 MCP 连接；参数 {"name":"scys","endpoint":"https://mcp.scys.com/mcp","accessToken":"ghp_secret123456","headerValue":"Bearer xyz","env":{"API_TOKEN":"tok_789"}}'
