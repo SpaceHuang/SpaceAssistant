@@ -714,7 +714,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       toolCallId: 'probe', capabilityId: 'probe-tool', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
       authorizationVersion: 'auth', phase: 'initial-compat' as const }
     const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: 'probe', toolName: 'probe-tool', input: {} })
-    expect(args.policyBinding).toEqual({ domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 1, epoch: 1 })
+    expect(args.policyBinding).toEqual({ domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 1, epoch: 2 })
     db.close()
   })
 
