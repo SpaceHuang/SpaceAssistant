@@ -177,6 +177,8 @@ describe('legacy IM policy migration at startup', () => {
 
     expect(() => ensureImPolicySnapshotAtStartup(db)).not.toThrow()
     expect(() => readImPolicySnapshot(getDbConnection(db), { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })).toThrow(/IM policy snapshot is missing/)
+    expect(readPolicyBehaviorSnapshot(getDbConnection(db), 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }))
+      .toMatchObject({ policyBehaviorVersion: 'desktop-v1', revision: 1, snapshot: { selectedPackage: 'standard', legacyDesktopPolicyDataMigrated: true } })
     db.close()
   })
 

@@ -10,7 +10,7 @@ const open = () => {
   const db = openSqliteDatabase(':memory:')
   databases.push(db)
   const conn = getDbConnection(db)
-  conn.prepare("INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('desktop',7)").run()
+  conn.prepare("INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('desktop',7) ON CONFLICT(domain) DO UPDATE SET epoch=excluded.epoch").run()
   return conn
 }
 const identity = (overrides: Record<string, unknown> = {}) => ({
@@ -32,20 +32,37 @@ describe('ReviewScopeGrantStore', () => {
     expect(store.getDefaultLifetime()).toBe('7d')
   })
 
-  it('migrates v124 metadata and grant storage atomically to v125', () => {
+  it('migrates v124 metadata and grant storage atomically through v126', () => {
     const db = open()
     db.exec(`DROP TABLE review_scope_grants;
       DELETE FROM schema_meta WHERE key IN ('${SCHEMA_META_KEYS.reviewScopeDefaultLifetime}','${SCHEMA_META_KEYS.reviewScopeWallFloorMs}');
       UPDATE schema_meta SET value='124' WHERE key='${SCHEMA_META_KEYS.schemaVersion}';`)
     runMigrations(db)
-    expect(DB_SCHEMA_VERSION).toBe(125)
-    expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '125' })
+    expect(DB_SCHEMA_VERSION).toBe(126)
+    expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '126' })
     expect(db.prepare("SELECT value FROM schema_meta WHERE key='review_scope_default_lifetime'").get()).toEqual({ value: 'session' })
     expect(db.prepare("SELECT value FROM schema_meta WHERE key='review_scope_wall_floor_ms'").get()).toMatchObject({ value: expect.stringMatching(/^\d+$/) })
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='review_scope_grants'").get()).toBeTruthy()
   })
 
-  it('rolls back only schema 125 and upgrades again without restoring old grants', () => {
+  it('initializes a missing desktop authorization epoch without reviving old review grants', () => {
+    const db = open()
+    const now = Date.now() + 1_000
+    const store = new ReviewScopeGrantStore(db, { now: () => now })
+    expect(store.grant({ ...identity(), lifetime: '24h' })).toBe(true)
+    db.exec(`DELETE FROM policy_authorization_epochs WHERE domain='desktop';
+      UPDATE schema_meta SET value='125' WHERE key='${SCHEMA_META_KEYS.schemaVersion}';`)
+
+    runMigrations(db)
+
+    expect(DB_SCHEMA_VERSION).toBe(126)
+    expect(db.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get()).toEqual({ epoch: 1 })
+    expect(db.prepare("SELECT COUNT(*) AS count FROM review_scope_grants WHERE domain='desktop'").get()).toEqual({ count: 0 })
+    expect(store.lookup(identity())).toBeNull()
+    expect(new ReviewScopeGrantStore(db, { now: () => now }).grant({ ...identity({ policyEpoch: 1 }), lifetime: '24h' })).toBe(true)
+  })
+
+  it('rolls back schema 126 to 124 and upgrades again without restoring old grants', () => {
     const db = open()
     db.exec(`DROP TRIGGER IF EXISTS review_scope_grants_epoch_invalidation; DROP TABLE IF EXISTS review_scope_grants;
       DELETE FROM schema_meta WHERE key IN ('${SCHEMA_META_KEYS.reviewScopeDefaultLifetime}','${SCHEMA_META_KEYS.reviewScopeWallFloorMs}');
@@ -57,7 +74,7 @@ describe('ReviewScopeGrantStore', () => {
     expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '124' })
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='review_scope_grants'").get()).toBeUndefined()
     runMigrations(db)
-    expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '125' })
+    expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '126' })
     expect(db.prepare('SELECT COUNT(*) AS count FROM review_scope_grants').get()).toEqual({ count: 0 })
   })
 

@@ -2562,6 +2562,18 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 125
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  // v125 → v126: establish the initial desktop authorization generation without reviving stale grants.
+  if (version === 125) runInTransaction(conn, () => {
+    if (hasTable(conn, 'policy_authorization_epochs') && hasTable(conn, 'review_scope_grants')) {
+      const desktopEpoch = conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get()
+      if (!desktopEpoch) {
+        conn.prepare("DELETE FROM review_scope_grants WHERE domain='desktop'").run()
+        conn.prepare("INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('desktop',1)").run()
+      }
+    }
+    version = 126
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {
@@ -2577,7 +2589,7 @@ export function runMigrations(conn: DatabaseSync): void {
 /** Release rollback only: caller must stop the app, hold an exclusive DB lock, and take a verified backup first. */
 export function rollbackReviewScopeGrantsV125(conn: DatabaseSync): void {
   const version = readSchemaVersion(conn)
-  if (version !== 125) throw new Error(`Review-scope rollback requires schema 125; found ${version ?? 'unknown'}`)
+  if (version !== 125 && version !== 126) throw new Error(`Review-scope rollback requires schema 125 or 126; found ${version ?? 'unknown'}`)
   runInTransaction(conn, () => {
     conn.exec('DROP TRIGGER IF EXISTS review_scope_grants_epoch_invalidation; DROP TABLE IF EXISTS review_scope_grants;')
     conn.prepare('DELETE FROM schema_meta WHERE key IN (?,?)')
