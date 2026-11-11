@@ -336,7 +336,7 @@ export function deriveCacheKeys(
 
 /**
  * 依据候选缓存键生成确认界面的记忆档位（默认最窄可用档）。
- * run_script 记忆封顶（§5.3）：含 network-api finding 或 script-uncertified 的调用
+ * run_script 记忆封顶（§5.3）：含 network-api finding 或非路径类分析 uncertainty 的调用
  * 强制"仅此一次"、不开放任何记忆档位，防止记忆绕过网络复核与未认证降级。
  */
 export function buildMemoryTiers(

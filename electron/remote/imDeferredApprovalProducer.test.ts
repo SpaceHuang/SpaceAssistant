@@ -29,8 +29,8 @@ import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 
 const TEST_USER_DATA_DIR = path.join(os.tmpdir(), 'spaceassistant-test-user-data')
 
-function seedImPolicy(db: ReturnType<typeof createMemoryAppDb>): void {
-  commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'producer-policy-seed' })
+function seedImPolicy(db: ReturnType<typeof createMemoryAppDb>, policyBehaviorVersion = 'im-standard-v2'): void {
+  commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion, snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'producer-policy-seed' })
 }
 
 describe('production IM deferred approval producer', () => {
@@ -700,7 +700,7 @@ describe('production IM deferred approval producer', () => {
     }
   })
 
-  it('replaces a clean certified script Agent candidate with a human todo when recheck finds its target symlinked to a system file', async () => {
+  it('routes a script with unresolved call behavior to a human todo without an Agent candidate', async () => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
     const sessionId = createSession(db, { name: 'script-candidate-recheck-session' }).id
@@ -729,7 +729,7 @@ describe('production IM deferred approval producer', () => {
     const policy = agentSdk.createSafetyPolicy(registered, (name) => name)
     const agentReview = vi.fn(async () => {
       await fs.symlink('/etc/hosts', `${workDir}/report.txt`)
-      return { ok: true as const, verdict: { kind: 'approve' as const, reason: { summary: 'certified clean script approved' } } }
+      return { ok: true as const, verdict: { kind: 'approve' as const, reason: { summary: 'complete clean script approved' } } }
     })
     const humanChannelRequest = vi.fn()
     const confirmation = agentSdk.createConfirmationPort(policy, {
@@ -747,48 +747,21 @@ describe('production IM deferred approval producer', () => {
     try {
       const initialBinding = await registered.prepareTool(call, { kind: 'initial' })
       const initialGate = await evaluateToolCallGate(await agentSdk.resolveGateArgs(initialBinding, call))
-      expect(initialGate).toMatchObject({ decision: { ruleId: 'script-unmodeled-path-ask', answerer: 'agent' } })
+      expect(initialGate).toMatchObject({ decision: { ruleId: 'script-uncertified-ask-remote', answerer: 'user' } })
       expect(initialGate.facts.signals).not.toContainEqual({ kind: 'script-uncertified' })
       const initialDecision = await safetyGate.evaluate(initialBinding)
-      expect(initialDecision).toMatchObject({ kind: 'ask', answerer: 'agent', reasonCode: 'script-unmodeled-path-ask' })
-      if (initialDecision.kind !== 'ask') throw new Error('EXPECTED_CERTIFIED_SCRIPT_AGENT_CANDIDATE')
-      await expect(confirmation({ call, confirmationId: initialDecision.confirmationId, answerer: initialDecision.answerer,
-        reasonCode: initialDecision.reasonCode, context: initialDecision.context })).resolves.toMatchObject({ kind: 'approved', answerer: 'agent' })
-
-      const recheckBinding = await registered.prepareTool(call, { kind: 'recheck', confirmation: { receipt: 'script-agent-receipt' } })
-      const recheckGate = await evaluateToolCallGate(await agentSdk.resolveGateArgs(recheckBinding, call))
-      expect(recheckGate).toMatchObject({ decision: { type: 'require-confirm', ruleId: 'script-system-dir-confirm', answerer: 'user' },
-        facts: { signals: expect.arrayContaining([expect.objectContaining({ kind: 'path-target', zone: 'system-dir' })]) } })
-      const humanDecision = await safetyGate.evaluate(recheckBinding)
-      expect(humanDecision).toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'script-system-dir-confirm',
+      expect(initialDecision).toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'script-uncertified-ask-remote',
         context: { decision: { disposition: 'human-required' } } })
-      if (humanDecision.kind !== 'ask') throw new Error('EXPECTED_DYNAMIC_SCRIPT_HUMAN_REQUIRED')
-      const deferred = await confirmation({ call, confirmationId: humanDecision.confirmationId, answerer: humanDecision.answerer,
-        reasonCode: humanDecision.reasonCode, context: humanDecision.context })
+      if (initialDecision.kind !== 'ask') throw new Error('EXPECTED_SCRIPT_HUMAN_REQUIRED')
+      const deferred = await confirmation({ call, confirmationId: initialDecision.confirmationId, answerer: initialDecision.answerer,
+        reasonCode: initialDecision.reasonCode, context: initialDecision.context })
       expect(deferred).toMatchObject({ kind: 'deferred', cause: 'human-required', executionState: 'not-executed' })
       if (deferred.kind !== 'deferred') throw new Error('EXPECTED_PERSISTED_SCRIPT_HUMAN_TODO')
       expect(envelopeStore.get(call.invocationId)).toMatchObject({ canonicalArgs: call.input,
-        executionContext: { ruleId: 'script-system-dir-confirm', toolName: 'run_script', toolInput: call.input } })
+        executionContext: { ruleId: 'script-uncertified-ask-remote', toolName: 'run_script', toolInput: call.input } })
       expect(notificationDelivery.list(deferred.todoId)).toMatchObject([{ state: 'delivered', trustedMessageId: 'script-recheck-notice' }])
-      expect(agentReview).toHaveBeenCalledOnce()
+      expect(agentReview).not.toHaveBeenCalled()
       expect(humanChannelRequest).not.toHaveBeenCalled()
-      expect(executor).not.toHaveBeenCalled()
-
-      const dispatch = vi.fn(async ({ todo, envelope }: { todo: { invocationId: string }; envelope: { requestId: string; canonicalArgs: unknown } }) => {
-        expect(todo.invocationId).toBe(call.invocationId)
-        expect(envelope.requestId).toBe(context.requestId)
-        expect(envelope.canonicalArgs).toEqual(call.input)
-        return { dispatched: true }
-      })
-      const bundle = createDeferredImBundleRuntime({ db, channel: 'feishu', todoStore, notificationDelivery, isEnabled: () => true,
-        getAuthorizationEpoch: () => 8, maxParallel: 1, isOwnerAuthorized: () => true,
-        recheckTask: (todo, envelope) => envelope.executionContext.workflowId === todo.workflowId && envelope.executionContext.taskId === todo.taskId,
-        dispatch, audit: vi.fn() })
-      const notification = notificationDelivery.list(deferred.todoId)[0]!
-      await expect(bundle.handleReply({ channel: 'feishu', identityKey: 'script-recheck-chat', ownerId: 'owner', messageId: 'script-recheck-reply',
-        replyToMessageId: notification.trustedMessageId!, text: `批准 ${notification.shortCode}` }))
-        .resolves.toMatchObject({ status: 'resume_requested', dispatch: [{ status: 'dispatched' }] })
-      expect(dispatch).toHaveBeenCalledOnce()
       expect(executor).not.toHaveBeenCalled()
     } finally {
       registered.discardPreparedTool(call)

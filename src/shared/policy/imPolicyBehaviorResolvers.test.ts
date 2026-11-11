@@ -32,6 +32,16 @@ const rules = [
 ]
 
 describe('version-pinned IM behavior candidates', () => {
+  it('retains shared script uncertainty matching when v3 excludes the network Agent candidate', () => {
+    const resolved = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v3', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const rule = resolved.find((item) => item.id === 'script-uncertified-ask-remote')
+    expect(rule?.match?.signals).toContain('script-analysis:uncertainty')
+    expect(rule?.match?.excludeSignals).toContain('im-script-network-review-candidate:complete')
+    const floor = resolveImPolicyFloorForVersion('im-standard-v3', 'standard').find((item) => item.id === 'script-uncertified-ask-remote')
+    expect(floor?.match?.signals).toContain('script-analysis:uncertainty')
+    expect(floor?.match?.excludeSignals).toContain('im-script-network-review-candidate:complete')
+  })
+
   it('keeps v3-only locked rules out of frozen v1.6 and v2 rule sets and floors', () => {
     const v3OnlyIds = [
       'im-outside-write-review-materials-incomplete-deny', 'im-shell-review-materials-incomplete-deny',

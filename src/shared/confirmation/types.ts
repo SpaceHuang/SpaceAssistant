@@ -250,8 +250,6 @@ export type FactSignal =
   | { kind: 'approval-review-materials'; status: 'complete' | 'incomplete' }
   | { kind: 'script-execution-environment'; status: 'complete'; digest: string }
   | { kind: 'script-execution-settings'; status: 'complete'; digest: string; interpreter: string }
-  /** 未通过 isScriptCertifiedRemoteSafe 认证时产出。 */
-  | { kind: 'script-uncertified' }
   /**
    * 浏览器动作事实：动作名 + 目标域名（act 时为当前页域名，由执行链路注入 env）+
    * 高危评估结论。dangerous 映射 suspicious 档（§5.1 裁决：问而非拒）。

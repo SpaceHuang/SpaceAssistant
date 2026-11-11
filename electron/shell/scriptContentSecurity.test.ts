@@ -336,6 +336,37 @@ describe('script uncertainty facts', () => {
     expect(result.uncertainties).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'binding-origin-unknown' })]))
   })
 
+  it.each([
+    ['dynamic f-string formatting', 'f"{value}"'],
+    ['dynamic subscript', 'value = obj[index]'],
+    ['dynamic iteration', 'for item in source:\n    pass'],
+    ['dynamic context manager', 'with manager():\n    pass'],
+    ['overloaded arithmetic', 'value = left + right'],
+    ['overloaded comparison', 'value = left < right'],
+    ['dynamic truthiness', 'if value:\n    pass'],
+    ['dynamic conditional truthiness', 'result = "yes" if value else "no"'],
+    ['dynamic attribute descriptor', 'result = value.field'],
+    ['dynamic mapping key hashing', 'mapping = {value: 1}'],
+    ['dynamic attribute setter', 'value.field = 1']
+  ])('reports uncertainty for implicit invocation: %s', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'implicit-call-unresolved', sourceStatus: 'unknown', dynamicAccess: true })]))
+  })
+
+  it('keeps literal and known builtin iteration operations complete', () => {
+    for (const code of [
+      'items = [1, 2]\nvalue = items[0]',
+      'for value in range(3):\n    print(value)',
+      'label = f"{42}"',
+      'value = 1 + 2'
+    ]) {
+      const result = analyzeScriptContent(code)
+      expect(result.coverage, code).toBe('complete')
+      expect(result.uncertainties, code).toEqual([])
+    }
+  })
+
   it('tracks both aliases produced by chained assignment before dangerous calls', () => {
     const code = "import os\nleft = right = os.system\nleft('id')\nright('id')"
     const ir = parsePythonModule(code)
@@ -352,10 +383,10 @@ describe('script uncertainty facts', () => {
 
   it.each([
     ['while statement', 'while True:\n    pass'],
-    ['f-string', 'value = f"{answer}"'],
+    ['literal f-string', 'value = f"{42}"'],
     ['with statement', 'with open("data.txt") as f:\n    data = f.read()'],
-    ['function definition', 'def helper(x):\n    return x * 2\nprint(helper(3))'],
-    ['conditional expression', 'value = "yes" if cond else "no"'],
+    ['function definition', 'def helper(x):\n    return 1 * 2\nprint(helper(3))'],
+    ['literal conditional expression', 'value = "yes" if True else "no"'],
     ['literal subscript', 'items = [1, 2, 3]\nitem = items[0]'],
     ['dynamic import target', 'import importlib\nimportlib.import_module(module_name)'],
     ['unclassified dangerous call', 'import os\nos.getcwd()', 'unclassified-dangerous-call'],
@@ -368,7 +399,7 @@ describe('script uncertainty facts', () => {
         : _name === 'unclassified dangerous call' ? 'unclassified-dangerous-call' : 'reflection-target-unresolved'
       expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: expectedKind, range: expect.any(Object) }))
     } else {
-      expect(result.coverage).toBe('complete')
+      expect(result.coverage, result.reason).toBe('complete')
       expect(result.uncertainties).toEqual([])
     }
   })
@@ -406,7 +437,7 @@ describe('script uncertainty facts', () => {
     ['dangerous capability without a modeled effect', 'import os\nos.getcwd()', 'unclassified-dangerous-call'],
     ['unresolved reflection target', 'getattr(obj, name)', 'reflection-target-unresolved'],
     ['unresolved dynamic import target', 'import importlib\nimportlib.import_module(name)', 'dynamic-import-target-unresolved']
-  ])('maps RemoteCertifier fail branch: %s', (_label, code, kind) => {
+  ])('maps script uncertainty collector branch: %s', (_label, code, kind) => {
     const result = analyzeScriptContent(code)
     expect(result.coverage).toBe('partial')
     expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind, range: expect.any(Object) }))

@@ -402,7 +402,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-unresolved-origin-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unmodeled-call', 'script-analysis:uncertainty:call-target-unresolved'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:uncertainty:call-target-unresolved', 'script-path-extraction:unmodeled-call'] },
     action: 'confirm-every-time', locked: true, reason: '脚本调用来源无法静态确认，必须逐次由真人确认'
   },
   {
@@ -420,13 +420,13 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-analysis-uncertainty-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:uncertainty:call-target-unresolved', 'script-analysis:partial'], excludeSignals: ['script-uncertified'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:uncertainty:call-target-unresolved', 'script-analysis:partial'] },
     action: 'confirm-every-time', locked: true, reason: '脚本调用来源无法静态确认，必须逐次由真人确认'
   },
   {
     id: 'script-analysis-incomplete-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['invocation-facts-completeness:partial'], excludeSignals: ['script-uncertified', 'script-analysis:uncertainty:call-target-unresolved'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:failed'] },
     action: 'confirm-every-time', locked: true, reason: '脚本内容分析不完整，必须由真人逐次确认'
   },
 
@@ -499,31 +499,33 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     denyClass: 'insufficient-info',
     action: 'ask', reason: '脚本发现类别需要策略审查'
   },
-  // 远程 clean 但未认证脚本降级为确认（script-uncertified 信号在未认证时产出）；fail-closed 兜底，locked
+  // 远程完整性或调用行为存在 uncertainty 时逐次真人确认；稳定 ID 保留给 floor/resolver/custom profile。
   {
     id: 'script-uncertified-ask-remote',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-uncertified'] },
+    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: [
+      'script-analysis:uncertainty', 'script-analysis:partial'
+    ], excludeSignals: ['im-script-network-review-candidate:complete'] },
     denyClass: 'insufficient-info',
     action: 'ask',
     locked: true,
-    reason: '未通过远程安全认证的脚本需确认'
+    reason: '远程脚本分析不完整或存在未确认行为，需逐次真人确认'
   },
-  // 远程 clean 已认证脚本：消费 remoteScriptRequiresConfirm 配置（迁移门控语义）
+  // 远程完整 clean 脚本：消费 remoteScriptRequiresConfirm 配置（迁移门控语义）
   {
     id: 'script-clean-certified-remote',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:complete'], excludeSignals: ['script-finding:non-allow', 'script-uncertified', 'script-analysis:uncertainty'] },
+    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:complete'], excludeSignals: ['script-finding:non-allow', 'script-analysis:uncertainty', 'script-analysis:partial', 'script-analysis:failed', 'invocation-facts-completeness:partial', 'invocation-facts-completeness:missing'] },
     denyClass: 'insufficient-info',
     action: 'ask',
     askUnless: { config: 'remoteScriptRequiresConfirm', equals: false, andMigrationComplete: true },
-    reason: '远程已认证且无需策略处置的脚本按 remoteScriptRequiresConfirm 配置决定是否确认（默认确认）'
+    reason: '远程完整且无需策略处置的脚本按 remoteScriptRequiresConfirm 配置决定是否确认（默认确认）'
   },
   // 桌面 clean 脚本免确认
   {
     id: 'script-clean-allow-desktop',
     when: 'invocation',
-    match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-analysis:complete'], excludeSignals: ['script-finding:non-allow', 'script-analysis:uncertainty'] },
+    match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-analysis:complete'], excludeSignals: ['script-finding:non-allow', 'script-analysis:uncertainty', 'script-analysis:partial', 'script-analysis:failed', 'invocation-facts-completeness:partial', 'invocation-facts-completeness:missing', 'extraction-failed'] },
     action: 'allow',
     reason: '桌面无需策略处置的完整脚本免确认直接执行'
   },

@@ -159,6 +159,15 @@ describe('pathClassifier', () => {
 })
 
 describe('scriptAnalysisExtractor', () => {
+  it('脚本分析只输出共同 uncertainty facts，不输出认证结论信号', () => {
+    const result = extractScriptSignals("print('hi')()", env)
+    expect(signalKinds(result.signals)).not.toContain('script-uncertified')
+    expect(result.signals.find((signal) => signal.kind === 'script-analysis')).toMatchObject({
+      kind: 'script-analysis', coverage: 'partial',
+      uncertainties: [expect.objectContaining({ kind: 'call-target-unresolved' })]
+    })
+  })
+
   it('clean 脚本产完整且无发现的 script-analysis facts', () => {
     const r = extractScriptSignals('x = 1', env)
     const sa = r.signals.find((s) => s.kind === 'script-analysis')
@@ -185,7 +194,7 @@ describe('scriptAnalysisExtractor', () => {
     expect(analysis).not.toHaveProperty('signal')
     expect(analysis).not.toHaveProperty('patterns')
     expect(result.signals).toContainEqual({ kind: 'script-network', patterns: ['A6'] })
-    expect(signalKinds(result.signals)).toContain('script-uncertified')
+    expect(signalKinds(result.signals)).not.toContain('script-uncertified')
   })
 
   it('命中缺失 IR 位置时作废整组 findings 并产生 extraction-failed', () => {
@@ -239,9 +248,11 @@ describe('scriptAnalysisExtractor', () => {
     expect(sa).not.toHaveProperty('signal')
   })
 
-  it('allow 但无法通过远程正白名单认证的脚本产 script-uncertified', () => {
+  it('动态调用只产分析不确定性，不产认证结论信号', () => {
     const r = extractScriptSignals("print('hi')()", env)
-    expect(signalKinds(r.signals)).toContain('script-uncertified')
+    expect(signalKinds(r.signals)).not.toContain('script-uncertified')
+    expect(r.signals.find((signal) => signal.kind === 'script-analysis')).toMatchObject({ coverage: 'partial',
+      uncertainties: [expect.objectContaining({ kind: 'call-target-unresolved' })] })
   })
 })
 

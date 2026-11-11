@@ -200,7 +200,7 @@ describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {
       locked: true, action: 'confirm-every-time', match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:uncertainty:call-target-unresolved', 'script-analysis:partial'] }
     })
     expect(byId.get('script-analysis-incomplete-confirm')).toMatchObject({
-      locked: true, action: 'confirm-every-time', match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['invocation-facts-completeness:partial'] }
+      locked: true, action: 'confirm-every-time', match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:failed'] }
     })
     expect(byId.get('script-analysis-incomplete-automation-deny')).toMatchObject({
       locked: true, action: 'deny', match: { lane: ['automation'], toolName: 'run_script', signals: ['invocation-facts-completeness:partial'] }

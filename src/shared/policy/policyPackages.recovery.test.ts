@@ -4,10 +4,10 @@ import { effectiveActionFor, LANE_PROFILES } from './policyPackages'
 import { imEffectiveActionFor } from './imPolicyBehavior'
 
 describe('恢复档位覆盖的安全 floor', () => {
-  it('desktop loose 档按云端语义放行未建模调用规则', () => {
+  it('desktop loose 档保留未建模调用确认，不提供档位放行', () => {
     const rule = DEFAULT_POLICY_RULES.find((candidate) => candidate.id === 'script-unmodeled-path-ask')
     expect(rule).toBeDefined()
-    expect(effectiveActionFor('desktop', 'loose', rule!)).toBe('allow')
+    expect(effectiveActionFor('desktop', 'loose', rule!)).toBe('ask')
     expect(effectiveActionFor('wechat', 'loose', rule!)).toBe('ask')
   })
 

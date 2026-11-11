@@ -1,8 +1,8 @@
 // P1-T1：脚本安全分析跨语言事实 IR（类型定义）。
 //
-// IR 是 tree-sitter 语法树（经 scriptIr 适配器）与既有 Analyzer / RemoteCertifier 规则层之间的
+// IR 是 tree-sitter 语法树（经 scriptIr 适配器）与既有 Analyzer / uncertainty collector 规则层之间的
 // 中间表示。设计约束：
-//  1. 覆盖 scriptContentSecurity.ts 中 Analyzer（A0–A9/B1–B11）与 RemoteCertifier 消费的事实全集；
+//  1. 覆盖 scriptContentSecurity.ts 中 Analyzer（A0–A9/B1–B11）与 uncertainty collector 消费的事实全集；
 //  2. 每个节点种类在适配器遍历时必须落入四分类之一（已建模 / 可忽略叶子 / 结构性穿透 / 抛
 //     IrCoverageError），禁止静默丢弃（§3 不变量 7）；
 //  3. 「语法能解析」≠「已建模」——未建模构造由适配器抛错落人工（fail-closed）；

@@ -26,9 +26,8 @@ export function deriveMemoryEligibility(
     reasons.push('outbound-never-remembered')
     return { eligibility: 'none', reasons }
   }
-  if (facts.signals.some((signal) => signal.kind === 'script-uncertified' ||
-      signal.kind === 'script-analysis' && signal.findings.some((finding) => finding.class === 'network-api'))) {
-    reasons.push('script-network-or-uncertified')
+  if (facts.signals.some((signal) => signal.kind === 'script-analysis' && signal.findings.some((finding) => finding.class === 'network-api'))) {
+    reasons.push('script-network-finding')
     return { eligibility: 'none', reasons }
   }
   if (facts.signals.some((signal) => signal.kind === 'path-target' &&

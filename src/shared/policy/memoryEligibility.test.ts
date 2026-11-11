@@ -95,7 +95,7 @@ describe('run_script 记忆资格按 findings 与 coverage 判定', () => {
         evidence: { kind: 'process-create' as const, module: 'os', attr: 'system' }
       }
       expect(deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', findings: [finding], coverage: 'complete', totalCount: 1 }), 'desktop'))
-        .toEqual({ eligibility: 'none', reasons: [findingClass === 'network-api' ? 'script-network-or-uncertified' : 'script-not-clean'] })
+        .toEqual({ eligibility: 'none', reasons: [findingClass === 'network-api' ? 'script-network-finding' : 'script-not-clean'] })
     }
   })
 

@@ -1,7 +1,7 @@
 /**
  * Python `run_script` content security analyzer.
  * P1-T3 起：解析前端为 tree-sitter-python（ScriptParserService）+ scriptIr 适配器产出的
- * 事实 IR；本文件保留 Analyzer（A0–A9/B1–B11）/ RemoteCertifier / 模式 ID 体系等全部
+ * 事实 IR；本文件保留 Analyzer（A0–A9/B1–B11）/ uncertainty collector / 模式 ID 体系等全部
  * 判定语义，消费对象自研 AST 换为 IR（§2.2 锚点契约逐条保持）。
  */
 import { scriptParserService } from './scriptParserService'
@@ -107,7 +107,7 @@ const ASYNCIO_PROCESS_ATTRS = new Set(['create_subprocess_exec', 'create_subproc
 const PROCESS_CREATION_CALLS = new Set(['Process', 'Pool', 'ProcessPoolExecutor'])
 const DESERIALIZATION_CALLS = new Set(['load', 'loads'])
 
-/** Reflection builtins that must never be certified remote-safe, regardless of args resolved. */
+/** Reflection builtins whose behavior remains uncertain, even when their arguments resolve. */
 const REFLECTION_NAMES = new Set(['getattr', 'hasattr', 'setattr', 'delattr', 'vars', 'globals', 'locals'])
 
 /** Bare builtin identifiers whose direct aliasing (`f = eval`) must still be tracked as dangerous. */
@@ -170,14 +170,96 @@ interface Scope {
   modules: Map<string, string>
   attrs: Map<string, Binding>
   unknownRoots: Set<string>
+  knownPrimitiveRoots: Set<string>
+  knownClassRoots: Set<string>
+  classBody: boolean
 }
 
 function createScope(parent?: Scope): Scope {
   return {
     modules: new Map(parent?.modules),
     attrs: new Map(parent?.attrs),
-    unknownRoots: new Set(parent?.unknownRoots)
+    unknownRoots: new Set(parent?.unknownRoots),
+    knownPrimitiveRoots: new Set(parent?.knownPrimitiveRoots),
+    knownClassRoots: new Set(parent?.knownClassRoots),
+    classBody: parent?.classBody ?? false
   }
+}
+
+function isKnownPrimitiveExpr(expr: IrExpr, scope: Scope): boolean {
+  switch (expr.kind) {
+    case 'string': case 'number': case 'bool': case 'none': case 'ellipsis': return true
+    case 'name': return scope.knownPrimitiveRoots.has(expr.id)
+    case 'f_string': return expr.interpolations.every((item) => isKnownPrimitiveExpr(item, scope))
+    case 'list': case 'tuple': case 'set': return expr.elts.every((item) => isKnownPrimitiveExpr(item, scope))
+    case 'dict': return expr.keys.every((item) => item === null || isKnownPrimitiveExpr(item, scope)) && expr.values.every((item) => isKnownPrimitiveExpr(item, scope))
+    case 'slice': return (!expr.lower || isKnownPrimitiveExpr(expr.lower, scope)) && (!expr.upper || isKnownPrimitiveExpr(expr.upper, scope)) && (!expr.step || isKnownPrimitiveExpr(expr.step, scope))
+    case 'binop': return isKnownPrimitiveExpr(expr.left, scope) && isKnownPrimitiveExpr(expr.right, scope)
+    case 'unaryop': return isKnownPrimitiveExpr(expr.operand, scope)
+    case 'compare': return isKnownPrimitiveExpr(expr.left, scope) && isKnownPrimitiveExpr(expr.right, scope)
+    case 'boolop': return expr.values.every((item) => isKnownPrimitiveExpr(item, scope))
+    case 'conditional': return isKnownPrimitiveExpr(expr.test, scope) && isKnownPrimitiveExpr(expr.body, scope) && isKnownPrimitiveExpr(expr.orelse, scope)
+    default: return false
+  }
+}
+
+function isKnownPrimitiveIterable(expr: IrExpr, scope: Scope): boolean {
+  if (isKnownPrimitiveExpr(expr, scope)) return true
+  if (expr.kind !== 'call' || expr.callee.kind !== 'name' || expr.callee.id !== 'range') return false
+  return expr.args.every((arg) => isKnownPrimitiveExpr(arg, scope)) && expr.kwargs.every((arg) => isKnownPrimitiveExpr(arg.value, scope))
+}
+
+function hasKnownAttributeOrigin(expr: IrExpr, scope: Scope): boolean {
+  const chain = resolveExprChain(expr, scope)
+  return Boolean(chain.root && (scope.modules.has(chain.root) || scope.attrs.has(chain.root) || scope.knownPrimitiveRoots.has(chain.root) || scope.knownClassRoots.has(chain.root)))
+}
+
+function setPrimitiveBinding(target: string, value: IrExpr, scope: Scope): void {
+  if (isKnownPrimitiveExpr(value, scope)) scope.knownPrimitiveRoots.add(target)
+  else scope.knownPrimitiveRoots.delete(target)
+}
+
+function walkIrExpressions(module: IrModule, visit: (expr: IrExpr) => void): void {
+  const expr = (node: IrExpr): void => {
+    visit(node)
+    switch (node.kind) {
+      case 'attr': expr(node.base); break
+      case 'call': expr(node.callee); node.args.forEach(expr); node.kwargs.forEach((kw) => expr(kw.value)); break
+      case 'binop': expr(node.left); expr(node.right); break
+      case 'unaryop': case 'starred': case 'await': expr(node.kind === 'unaryop' ? node.operand : node.value); break
+      case 'compare': expr(node.left); expr(node.right); break
+      case 'boolop': node.values.forEach(expr); break
+      case 'conditional': expr(node.test); expr(node.body); expr(node.orelse); break
+      case 'list': case 'tuple': case 'set': node.elts.forEach(expr); break
+      case 'dict': node.keys.forEach((item) => { if (item) expr(item) }); node.values.forEach(expr); break
+      case 'subscript': expr(node.value); expr(node.index); break
+      case 'slice': if (node.lower) expr(node.lower); if (node.upper) expr(node.upper); if (node.step) expr(node.step); break
+      case 'lambda': node.defaults.forEach(expr); expr(node.body); break
+      case 'yield': if (node.value) expr(node.value); break
+      case 'f_string': node.interpolations.forEach(expr); break
+      case 'comprehension': expr(node.elt); node.generators.forEach((generator) => { expr(generator.iter); generator.conditions.forEach(expr) }); break
+      case 'named_expr': expr(node.value); break
+      default: break
+    }
+  }
+  const stmts = (items: IrStmt[]): void => {
+    for (const stmt of items) switch (stmt.kind) {
+      case 'assign': case 'aug_assign': expr(stmt.value); break
+      case 'expr': expr(stmt.value); break
+      case 'if': expr(stmt.test); stmts(stmt.body); stmts(stmt.orelse); break
+      case 'while': expr(stmt.test); stmts(stmt.body); stmts(stmt.orelse); break
+      case 'for': expr(stmt.iter); stmts(stmt.body); stmts(stmt.orelse); break
+      case 'with': stmt.items.forEach((item) => expr(item.contextExpr)); stmts(stmt.body); break
+      case 'try': stmts(stmt.body); stmt.handlers.forEach((handler) => { if (handler.typeExpr) expr(handler.typeExpr); stmts(handler.body) }); stmts(stmt.orelse); stmts(stmt.finalbody); break
+      case 'function_def': stmt.decorators.forEach(expr); stmt.defaults.forEach(expr); stmts(stmt.body); break
+      case 'class_def': stmt.decorators.forEach(expr); stmt.bases.forEach(expr); stmts(stmt.body); break
+      case 'return': case 'raise': if (stmt.value) expr(stmt.value); break
+      case 'assert': expr(stmt.test); break
+      case 'delete': stmt.targets.forEach(expr); break
+      default: break
+    }
+  }
+  stmts(module.body)
 }
 
 export interface ResolvedChain {
@@ -257,6 +339,7 @@ function applyImportStmt(stmt: Extract<IrStmt, { kind: 'import' }>, scope: Scope
     const root = module.split('.')[0]!
     const bound = alias ?? root
     scope.unknownRoots.delete(bound)
+    scope.knownPrimitiveRoots.delete(bound)
     scope.modules.set(bound, root)
   }
 }
@@ -270,6 +353,7 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
     }
     const bound = alias ?? name
     scope.unknownRoots.delete(bound)
+    scope.knownPrimitiveRoots.delete(bound)
     scope.attrs.set(bound, { module: mod, attr: name })
     if (isDangerousAttr(name)) {
       scope.attrs.set(bound, { module: mod, attr: name })
@@ -284,6 +368,7 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
  */
 function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): void {
   scope.unknownRoots.delete(target)
+  setPrimitiveBinding(target, value, scope)
   const currentAttrBinding = scope.attrs.get(target)
   const pathAlias = (currentAttrBinding?.module === 'pathlib' && currentAttrBinding.attr === 'Path') || scope.modules.get(target) === 'pathlib'
   const sourceModuleBinding = value.kind === 'name' ? scope.modules.get(value.id) : undefined
@@ -386,16 +471,67 @@ function isExecImportCallee(callee: IrExpr): boolean {
 class Analyzer {
   private readonly hits: PatternHit[] = []
   private readonly uncertainties: ScriptUncertainty[] = []
+  private readonly knownPrimitiveFunctionParams = new Map<string, Set<string>>()
+  private readonly knownPrimitiveLambdaParams = new WeakSet<object>()
   private activeRange?: SourceRange
   private activeExpr?: IrExpr
   private activeScope?: Scope
 
   analyze(ast: IrModule): PatternHit[] {
+    this.inferKnownCallableParameters(ast)
     this.walkStmts(ast.body, createScope(), 0)
     return this.hits
   }
 
   getUncertainties(): ScriptUncertainty[] { return this.uncertainties }
+
+  private inferKnownCallableParameters(ast: IrModule): void {
+    const scope = createScope()
+    const functions = new Map<string, Extract<IrStmt, { kind: 'function_def' }>>()
+    const lambdas = new Map<string, Extract<IrExpr, { kind: 'lambda' }>>()
+    for (const stmt of ast.body) {
+      if (stmt.kind === 'import') applyImportStmt(stmt, scope)
+      else if (stmt.kind === 'from_import') applyFromImportStmt(stmt, scope)
+      else if (stmt.kind === 'assign') {
+        if (stmt.value.kind === 'lambda') for (const target of stmt.targets) lambdas.set(target, stmt.value)
+        for (const target of stmt.targets) applyAssignmentRebind(target, stmt.value, scope)
+        const implicitTarget = stmt.targets.some((target) => {
+          const bracket = target.indexOf('[')
+          if (bracket >= 0) return !scope.knownPrimitiveRoots.has(target.slice(0, bracket).trim())
+          return target.includes('.')
+        })
+        if (implicitTarget && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
+      } else if (stmt.kind === 'function_def') functions.set(stmt.name, stmt)
+    }
+    const calls: Array<Extract<IrExpr, { kind: 'call' }>> = []
+    walkIrExpressions(ast, (expr) => { if (expr.kind === 'call') calls.push(expr) })
+    for (const [name, definition] of functions) {
+      const directCalls = calls.filter((call) => call.callee.kind === 'name' && call.callee.id === name)
+      if (directCalls.length === 0) continue
+      const known = new Set<string>()
+      const firstDefault = definition.params.length - definition.defaults.length
+      definition.params.forEach((param, index) => {
+        const isKnownAtEveryCall = directCalls.every((call) => {
+          const kwarg = call.kwargs.find((item) => item.name === param)?.value
+          const value = kwarg ?? call.args[index] ?? (index >= firstDefault ? definition.defaults[index - firstDefault] : undefined)
+          return value !== undefined && isKnownPrimitiveExpr(value, scope)
+        })
+        if (isKnownAtEveryCall) known.add(param)
+      })
+      this.knownPrimitiveFunctionParams.set(name, known)
+    }
+    for (const [name, lambda] of lambdas) {
+      const directCalls = calls.filter((call) => call.callee.kind === 'name' && call.callee.id === name)
+      const known = lambda.params.length > 0 && directCalls.length > 0 && directCalls.every((call) =>
+        call.args[0] !== undefined && isKnownPrimitiveExpr(call.args[0], scope))
+      if (known) this.knownPrimitiveLambdaParams.add(lambda)
+    }
+    for (const call of calls) {
+      if (call.callee.kind !== 'name' || call.callee.id !== 'sorted' || !call.args[0] || !isKnownPrimitiveIterable(call.args[0], scope)) continue
+      const key = call.kwargs.find((item) => item.name === 'key')?.value
+      if (key?.kind === 'lambda' && key.params.length > 0) this.knownPrimitiveLambdaParams.add(key)
+    }
+  }
 
   private addHit(pattern: string, evidenceOverride?: ScriptFindingEvidence): void {
     const range = this.activeExpr?.range ?? this.activeRange
@@ -541,6 +677,7 @@ class Analyzer {
 
       if (stmt.kind === 'if') {
         // N14:if test 是 walrus 的典型位置——decode 登记必须进主链
+        if (!isKnownPrimitiveExpr(stmt.test, scope) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
         this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
         const child = createScope(scope)
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
@@ -550,10 +687,19 @@ class Analyzer {
 
       if (stmt.kind === 'for') {
         this.analyzeExpr(stmt.iter, scope, decodeBindings, stmtIndex)
+        if (!isKnownPrimitiveIterable(stmt.iter, scope) && stmt.range) {
+          this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
+        }
         const child = createScope(scope)
         child.modules.delete(stmt.target)
         child.attrs.delete(stmt.target)
-        child.unknownRoots.add(stmt.target)
+        if (isKnownPrimitiveIterable(stmt.iter, scope)) {
+          child.unknownRoots.delete(stmt.target)
+          child.knownPrimitiveRoots.add(stmt.target)
+        } else {
+          child.knownPrimitiveRoots.delete(stmt.target)
+          child.unknownRoots.add(stmt.target)
+        }
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
         // P0-3 评审修复：for...else 的 else 体在循环正常结束时真实执行——必须分析
         this.walkStmts(stmt.orelse, child, stmtIndex, decodeBindings)
@@ -563,12 +709,17 @@ class Analyzer {
       // —— IR 扩展语句（tree-sitter 全语法；判定语义保守对齐：体/表达式递归，不新增黑名单）——
       if (stmt.kind === 'aug_assign') {
         // i += 1：按赋值重绑同语义处理（value 为 os.system 等 attr 时保持别名追踪）
+        const bracket = stmt.target.indexOf('[')
+        if ((stmt.target.includes('.') || bracket >= 0 && !scope.knownPrimitiveRoots.has(stmt.target.slice(0, bracket).trim())) && stmt.range) {
+          this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
+        }
         applyAssignmentRebind(stmt.target, stmt.value, scope)
         if (isDecodeCall(stmt.value)) decodeBindings.push({ name: stmt.target, stmtOffset: stmtIndex, decodeFn: decodeFunctionName(stmt.value) })
         this.analyzeExpr(stmt.value, scope, decodeBindings, stmtIndex)
         continue
       }
       if (stmt.kind === 'while') {
+        if (!isKnownPrimitiveExpr(stmt.test, scope) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
         this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
         this.walkStmts(stmt.body, createScope(scope), stmtIndex, decodeBindings)
         // P1-1 评审修复（补全）：while...else 的 else 体在循环正常结束时真实执行——必须分析
@@ -576,10 +727,24 @@ class Analyzer {
         continue
       }
       if (stmt.kind === 'with') {
+        const child = createScope(scope)
         for (const item of stmt.items) {
+          const knownOpen = item.contextExpr.kind === 'call' && item.contextExpr.callee.kind === 'name' && item.contextExpr.callee.id === 'open'
+          if (!knownOpen && !isKnownPrimitiveExpr(item.contextExpr, scope) && item.contextExpr.range) {
+            this.uncertainties.push({ kind: 'implicit-call-unresolved', range: item.contextExpr.range, sourceStatus: 'unknown', dynamicAccess: true })
+          }
           this.analyzeExpr(item.contextExpr, scope, decodeBindings, stmtIndex)
+          for (const target of item.optionalVars) {
+            if (knownOpen) {
+              child.unknownRoots.delete(target)
+              child.knownPrimitiveRoots.add(target)
+            } else {
+              child.knownPrimitiveRoots.delete(target)
+              child.unknownRoots.add(target)
+            }
+          }
         }
-        this.walkStmts(stmt.body, createScope(scope), stmtIndex, decodeBindings)
+        this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
         continue
       }
       if (stmt.kind === 'try') {
@@ -597,18 +762,31 @@ class Analyzer {
         // P0-1 评审修复：默认参数值在 def 定义时真实执行——必须分析
         for (const dv of stmt.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
         // 函数体在定义作用域内静态可见：递归捕获（禁止 def 内危险调用逃逸）
-        this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        const child = createScope(scope)
+        const knownParams = this.knownPrimitiveFunctionParams.get(stmt.name) ?? new Set<string>()
+        for (const param of stmt.params) {
+          if (scope.classBody && param === stmt.params[0]) child.knownClassRoots.add(param)
+          else if (knownParams.has(param)) child.knownPrimitiveRoots.add(param)
+          else child.unknownRoots.add(param)
+        }
+        this.walkStmts(stmt.body, child, stmtIndex)
         continue
       }
       if (stmt.kind === 'class_def') {
         for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
         // P0-1 评审修复：基类/关键字参数表达式在 class 创建时真实执行——必须分析
         for (const b of stmt.bases) this.analyzeExpr(b, scope, decodeBindings, stmtIndex)
-        this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        scope.knownClassRoots.add(stmt.name)
+        const child = createScope(scope)
+        child.classBody = true
+        this.walkStmts(stmt.body, child, stmtIndex)
         continue
       }
       if (stmt.kind === 'return' || stmt.kind === 'assert' || stmt.kind === 'raise') {
-        if (stmt.kind === 'assert') this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
+        if (stmt.kind === 'assert') {
+          if (!isKnownPrimitiveExpr(stmt.test, scope) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
+          this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
+        }
         else if (stmt.value) this.analyzeExpr(stmt.value, scope, decodeBindings, stmtIndex)
         continue
       }
@@ -670,11 +848,17 @@ class Analyzer {
       return
     }
     if (expr.kind === 'binop') {
+      if ((!isKnownPrimitiveExpr(expr.left, scope) || !isKnownPrimitiveExpr(expr.right, scope)) && expr.range) {
+        this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
+      }
       this.analyzeExpr(expr.left, scope, decodeBindings, stmtIndex)
       this.analyzeExpr(expr.right, scope, decodeBindings, stmtIndex)
       return
     }
     if (expr.kind === 'attr') {
+      if (!hasKnownAttributeOrigin(expr, scope) && expr.range) {
+        this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
+      }
       this.analyzeExpr(expr.base, scope, decodeBindings, stmtIndex)
       return
     }
@@ -684,29 +868,41 @@ class Analyzer {
     }
     // —— IR 扩展表达式（递归保证调用不逃逸）——
     if (expr.kind === 'f_string') {
+      if (expr.interpolations.some((item) => !isKnownPrimitiveExpr(item, scope)) && expr.range) {
+        this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
+      }
       for (const interp of expr.interpolations) this.analyzeExpr(interp, scope, decodeBindings, stmtIndex)
       return
     }
     if (expr.kind === 'unaryop') {
+      if (!isKnownPrimitiveExpr(expr.operand, scope) && expr.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
       this.analyzeExpr(expr.operand, scope, decodeBindings, stmtIndex)
       return
     }
     if (expr.kind === 'compare') {
+      if ((!isKnownPrimitiveExpr(expr.left, scope) || !isKnownPrimitiveExpr(expr.right, scope)) && expr.range) {
+        this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
+      }
       this.analyzeExpr(expr.left, scope, decodeBindings, stmtIndex)
       this.analyzeExpr(expr.right, scope, decodeBindings, stmtIndex)
       return
     }
     if (expr.kind === 'boolop') {
+      if (expr.values.some((item) => !isKnownPrimitiveExpr(item, scope)) && expr.range) {
+        this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
+      }
       for (const v of expr.values) this.analyzeExpr(v, scope, decodeBindings, stmtIndex)
       return
     }
     if (expr.kind === 'conditional') {
+      if (!isKnownPrimitiveExpr(expr.test, scope) && expr.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.test.range, sourceStatus: 'unknown', dynamicAccess: true })
       this.analyzeExpr(expr.test, scope, decodeBindings, stmtIndex)
       this.analyzeExpr(expr.body, scope, decodeBindings, stmtIndex)
       this.analyzeExpr(expr.orelse, scope, decodeBindings, stmtIndex)
       return
     }
     if (expr.kind === 'subscript') {
+      if (!isKnownPrimitiveExpr(expr.value, scope) && expr.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
       this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
       this.analyzeExpr(expr.index, scope, decodeBindings, stmtIndex)
       return
@@ -718,11 +914,21 @@ class Analyzer {
       return
     }
     if (expr.kind === 'dict') {
+      if (expr.keys.some((key) => key !== null && !isKnownPrimitiveExpr(key, scope)) && expr.range) {
+        this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
+      }
       for (const k of expr.keys) if (k) this.analyzeExpr(k, scope, decodeBindings, stmtIndex)
       for (const v of expr.values) this.analyzeExpr(v, scope, decodeBindings, stmtIndex)
       return
     }
     if (expr.kind === 'starred' || expr.kind === 'await') {
+      const knownAsyncioSleep = expr.kind === 'await' && expr.value.kind === 'call' && (() => {
+        const chain = resolveExprChain(expr.value.callee, scope)
+        return chain.module === 'asyncio' && chain.attrs.at(-1) === 'sleep'
+      })()
+      if (!knownAsyncioSleep && !isKnownPrimitiveExpr(expr.value, scope) && expr.range) {
+        this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
+      }
       this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
       return
     }
@@ -741,18 +947,36 @@ class Analyzer {
       return
     }
     if (expr.kind === 'comprehension') {
-      this.analyzeExpr(expr.elt, scope, decodeBindings, stmtIndex)
+      const child = createScope(scope)
+      for (const generator of expr.generators) {
+        const knownIterable = isKnownPrimitiveIterable(generator.iter, child)
+        if (!knownIterable && generator.iter.range) {
+          this.uncertainties.push({ kind: 'implicit-call-unresolved', range: generator.iter.range, sourceStatus: 'unknown', dynamicAccess: true })
+        }
+        if (knownIterable) {
+          child.unknownRoots.delete(generator.target)
+          child.knownPrimitiveRoots.add(generator.target)
+        } else {
+          child.knownPrimitiveRoots.delete(generator.target)
+          child.unknownRoots.add(generator.target)
+        }
+        for (const condition of generator.conditions) this.analyzeExpr(condition, child, decodeBindings, stmtIndex)
+      }
+      this.analyzeExpr(expr.elt, child, decodeBindings, stmtIndex)
       for (const g of expr.generators) {
         this.analyzeExpr(g.iter, scope, decodeBindings, stmtIndex)
-        // v4:条件子句进入分析(条件内调用不逃逸)
-        for (const cond of g.conditions) this.analyzeExpr(cond, scope, decodeBindings, stmtIndex)
       }
       return
     }
     if (expr.kind === 'lambda') {
       // P0-1 评审修复：lambda 默认值在定义时真实执行——必须分析
       for (const dv of expr.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
-      this.analyzeExpr(expr.body, scope, decodeBindings, stmtIndex)
+      const child = createScope(scope)
+      for (const param of expr.params) {
+        if (this.knownPrimitiveLambdaParams.has(expr)) child.knownPrimitiveRoots.add(param)
+        else child.unknownRoots.add(param)
+      }
+      this.analyzeExpr(expr.body, child, decodeBindings, stmtIndex)
       return
     }
     // string/number/name/bool/none/ellipsis：叶子，无子表达式
@@ -1180,23 +1404,13 @@ function buildScriptFindings(code: string, hits: PatternHit[]): ScriptFinding[] 
   }))
 }
 
-// --- Remote positive-allowlist certification (WP3) ---
-//
-// The hit-based Analyzer above reports recognized syntax facts. Remote certification remains
-// a separate positive allowlist check; policy decides how either result affects execution.
-//
-// RemoteCertifier is a positive allowlist walker: it requires every statement/expression it
-// sees to be one of a small set of explicitly-modeled, safe shapes. Any call whose target
-// cannot be statically resolved to a name/attribute chain, any reflection or dynamic-import
-// or eval/exec call, and any call that resolves into a dangerous module without matching an
-// explicit safe-capability entry, marks the whole script as *not* remote-certified. A script
-// A script that fails certification remains independently marked uncertified for policy.
+// --- Unmodeled behavior facts ---
 function isForcedAskName(name: string | null): boolean {
   return !!name && (REFLECTION_NAMES.has(name) || EXEC_IMPORT_NAMES.has(name))
 }
 
-/** Explicit remote safe-capability whitelist for calls that touch a DANGEROUS_MODULES root. */
-function isCertifiedSafeDangerousCall(
+/** Calls whose effect is represented by the shared Analyzer do not need a duplicate uncertainty. */
+function hasModeledDangerousCallEffect(
   chain: ResolvedChain,
   callee: IrExpr,
   call: IrExpr & { kind: 'call' },
@@ -1211,7 +1425,7 @@ function isCertifiedSafeDangerousCall(
     return folded !== null && classifyPath(folded) === 'relative'
   }
   // Constructing a Path(...) object has no side effect by itself; safety is enforced at the
-  // write_text/write_bytes call site below (unlink is never certifiable — mirrors A2 ask).
+  // write_text/write_bytes call site below (unlink remains an A2 finding).
   if (chain.module === 'pathlib' && lastAttr === 'Path') {
     return true
   }
@@ -1222,21 +1436,18 @@ function isCertifiedSafeDangerousCall(
   return false
 }
 
-class RemoteCertifier {
-  private safe = true
+class ScriptUncertaintyCollector {
   private readonly uncertainties: ScriptUncertainty[] = []
   private locationUnavailable = false
 
-  certify(ast: IrModule): boolean {
+  collect(ast: IrModule): void {
     this.walkStmts(ast.body, createScope())
-    return this.safe
   }
 
   getUncertainties(): ScriptUncertainty[] { return this.uncertainties }
   hasUnlocatedFailure(): boolean { return this.locationUnavailable }
 
   private fail(kind: string, range?: SourceRange, sourceStatus: ScriptUncertainty['sourceStatus'] = 'unknown', dynamicAccess = true): void {
-    this.safe = false
     if (!range) {
       this.locationUnavailable = true
       return
@@ -1286,7 +1497,7 @@ class RemoteCertifier {
           child.attrs.delete(stmt.target)
           child.unknownRoots.add(stmt.target)
           this.walkStmts(stmt.body, child)
-          // P0-3 评审修复：else 体不遍历会让藏在其中的未建模/危险构造逃过认证（remote fail-open）
+          // P0-3 评审修复：漏遍历 else 体会丢失未建模/危险行为事实（remote fail-open）。
           this.walkStmts(stmt.orelse, child)
           break
         }
@@ -1333,7 +1544,7 @@ class RemoteCertifier {
         case 'pass':
           break
         default:
-          // Unmodeled AST node — never certify.
+          // Unmodeled AST nodes lower coverage and record uncertainty.
           this.fail('unmodeled-statement', (stmt as IrStmt).range)
       }
     }
@@ -1430,8 +1641,7 @@ class RemoteCertifier {
       const innerName = innerCall?.callee.kind === 'name' ? innerCall.callee.id
         : innerCall?.callee.kind === 'attr' ? innerCall.callee.attr : undefined
       const alreadyObserved = !!innerName && (REFLECTION_NAMES.has(innerName) || EXEC_IMPORT_NAMES.has(innerName))
-      if (alreadyObserved) this.safe = false
-      else this.fail('call-target-unresolved', call.range, 'unresolved', true)
+      if (!alreadyObserved) this.fail('call-target-unresolved', call.range, 'unresolved', true)
       return
     }
 
@@ -1450,14 +1660,12 @@ class RemoteCertifier {
       const targetArg = call.args[isReflection ? 1 : 0]
       const unresolvedTarget = isReflection && targetArg !== undefined && targetArg.kind !== 'string'
       if (unresolvedTarget) this.fail('reflection-target-unresolved', call.range, 'unresolved', true)
-      else this.safe = false
       return
     }
     // importlib.import_module(...) — dynamic import, always forced ask.
     if (chain.module === 'importlib' && lastAttr === 'import_module') {
       const moduleArg = call.args[0]
       if (!moduleArg || foldStringExpr(moduleArg) === null) this.fail('dynamic-import-target-unresolved', call.range, 'unresolved', true)
-      else this.safe = false
       return
     }
     // Call chain didn't resolve to any statically-known root — unmodeled/variable-borne call.
@@ -1465,19 +1673,11 @@ class RemoteCertifier {
       this.fail('binding-origin-unknown', call.range, 'unknown', true)
       return
     }
-    if (isDangerousModule(chain.module) && !isCertifiedSafeDangerousCall(chain, callee, call, scope)) {
+    if (isDangerousModule(chain.module) && !hasModeledDangerousCallEffect(chain, callee, call, scope)) {
       this.fail('unclassified-dangerous-call', call.range, 'resolved', false)
       return
     }
   }
-}
-
-/**
- * Independent positive allowlist certification used to produce the `script-uncertified` fact.
- * The policy layer owns the resulting action; certification itself emits no verdict.
- */
-export function isScriptCertifiedRemoteSafe(ast: IrModule): boolean {
-  return new RemoteCertifier().certify(ast)
 }
 
 export function analyzeScriptContent(
@@ -1499,24 +1699,28 @@ export function analyzeScriptContent(
       }
     }
 
-    const certifier = new RemoteCertifier()
-    certifier.certify(ast)
-    if (certifier.hasUnlocatedFailure()) {
+    const uncertaintyCollector = new ScriptUncertaintyCollector()
+    uncertaintyCollector.collect(ast)
+    if (uncertaintyCollector.hasUnlocatedFailure()) {
       return { reason: 'script-analysis-location-unavailable', findings, coverage: 'failed', totalCount: findings.length, uncertainties: [] }
     }
     const findingAtRange = (uncertainty: ScriptUncertainty, classes?: readonly ScriptFinding['class'][]): boolean => findings.some((finding) =>
       finding.range.startLine === uncertainty.range.startLine && finding.range.startCol === uncertainty.range.startCol &&
       finding.range.endLine === uncertainty.range.endLine && finding.range.endCol === uncertainty.range.endCol &&
       (!classes || classes.includes(finding.class)))
-    const certifierUncertainties = certifier.getUncertainties().filter((uncertainty) =>
+    const collectorUncertainties = uncertaintyCollector.getUncertainties().filter((uncertainty) =>
       uncertainty.kind === 'unclassified-dangerous-call'
         ? !findingAtRange(uncertainty)
         : uncertainty.kind !== 'call-target-unresolved' || !findingAtRange(uncertainty, ['dynamic-dispatch', 'reflection', 'dynamic-execution', 'dynamic-import']))
-    const uncertainties = [...analyzer.getUncertainties(), ...certifierUncertainties]
+    const uncertainties = [...analyzer.getUncertainties(), ...collectorUncertainties]
       .filter((uncertainty, index, all) => all.findIndex((candidate) =>
         candidate.kind === uncertainty.kind && candidate.range?.startLine === uncertainty.range?.startLine &&
         candidate.range?.startCol === uncertainty.range?.startCol && candidate.range?.endLine === uncertainty.range?.endLine &&
         candidate.range?.endCol === uncertainty.range?.endCol) === index)
+      .filter((uncertainty) => uncertainty.kind !== 'implicit-call-unresolved' || !findings.some((finding) =>
+        finding.class === 'dynamic-dispatch' && finding.range.startLine === uncertainty.range.startLine &&
+        finding.range.startCol === uncertainty.range.startCol && finding.range.endLine === uncertainty.range.endLine &&
+        finding.range.endCol >= uncertainty.range.endCol))
     return { findings, coverage: uncertainties.length ? 'partial' : 'complete', totalCount: findings.length, uncertainties }
   } catch {
     return {

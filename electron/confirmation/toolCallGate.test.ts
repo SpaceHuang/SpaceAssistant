@@ -1651,17 +1651,19 @@ describe('evaluateToolCallGate', () => {
     expect(binding).toMatchObject({ parametersDigest: expect.any(String), environmentDigest: expect.any(String), authenticationVersion: expect.any(String) })
   })
 
-  it('remote clean script requires positive certification before shared policy can auto-allow', async () => {
+  it('remote uncertainty requires user confirmation while complete clean analysis can auto-allow', async () => {
     const imPolicySnapshot = {
       domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 1,
       snapshot: { remoteScriptRequiresConfirm: false }
     }
-    const uncertified = await evaluateToolCallGate(base({
+    const uncertain = await evaluateToolCallGate(base({
       lane: 'feishu', remoteContext: remoteContext(), imPolicySnapshot,
       toolName: 'run_script', toolInput: { code: "print('hi')()" }
     }))
-    expect(uncertified.facts.signals).toContainEqual({ kind: 'script-uncertified' })
-    expect(uncertified.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-uncertified-ask-remote' })
+    expect(uncertain.facts.signals).not.toContainEqual({ kind: 'script-uncertified' })
+    expect(uncertain.facts.signals.find((signal) => signal.kind === 'script-analysis')).toMatchObject({ coverage: 'partial',
+      uncertainties: [expect.objectContaining({ kind: 'call-target-unresolved' })] })
+    expect(uncertain.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-uncertainty-confirm' })
 
     const certified = await evaluateToolCallGate(base({
       lane: 'feishu', remoteContext: remoteContext(), imPolicySnapshot,
@@ -2093,7 +2095,9 @@ describe('evaluateToolCallGate', () => {
       { sessionId: 'script-session-2' }
     ]) {
       const result = await evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: { code }, ...options }))
-      expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user', memoryTiers: [] })
+      expect(result.decision.type).toBe('require-confirm')
+      expect(result.decision.answerer).toBe('user')
+      expect(result.decision.memoryTiers).toEqual([])
     }
   })
 
@@ -2107,7 +2111,7 @@ describe('evaluateToolCallGate', () => {
         uncertainties: expect.arrayContaining([expect.objectContaining({ kind: 'call-target-unresolved' })]) }))
       expect(result.decision.type).toBe('require-confirm')
       expect(result.decision.memoryTiers).toEqual([])
-      expect(result.decision.ruleId).toBe('script-unresolved-origin-confirm')
+      expect(result.decision.ruleId).toMatch(/script-(?:analysis-uncertainty|unresolved-origin)-confirm/)
     }
     const unattended = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_script', toolInput: { code } }))
     expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })

@@ -6,7 +6,7 @@ import type {
   PolicyEngineDeps
 } from '../confirmation/types'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
-import { buildMemoryTiers, decide, decideIngress, deriveInvocationPolicyConstraints, resolvePolicyOutcome, signalTokenSet } from './policyEngine'
+import { buildMemoryTiers, decide, decideIngress, deriveInvocationPolicyConstraints, resolvePolicyOutcome, ruleMatchesInvocation, signalTokenSet } from './policyEngine'
 import { effectiveActionFor, resolvePolicyRules } from './policyPackages'
 import { imEffectiveActionFor } from './policyPackages'
 import { resolveImPolicyRulesForVersion } from './policyPackages'
@@ -455,16 +455,17 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
     expect(d.type === 'deny' && d.ruleId).toBe('script-network-deny-remote')
   })
 
-  it('远程 clean+script-uncertified 必确认（即使 remoteScriptRequiresConfirm=false）', () => {
-    const d = decide(
-      mkFacts('run_script', 'execute', [
-        { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
-        { kind: 'script-uncertified' }
-      ], 'high'),
-      mkContext('wechat'),
-      DEFAULT_POLICY_RULES,
-      deps({ config: { remoteScriptRequiresConfirm: false }, migrationComplete: true })
-    )
+  it('远程脚本分析不确定性必确认', () => {
+    const facts = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', findings: [], coverage: 'partial', totalCount: 0,
+          uncertainties: [{ kind: 'unmodeled-statement', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 12 } }] },
+        { kind: 'invocation-facts-completeness', completeness: 'partial' },
+        { kind: 'path-target', path: 'script.py', zone: 'workdir-normal' }
+      ], 'high')
+    const d = decide(facts, mkContext('wechat'), DEFAULT_POLICY_RULES, deps())
+    expect([...signalTokenSet(facts)]).toEqual(expect.arrayContaining(['script-analysis:partial', 'script-analysis:uncertainty', 'invocation-facts-completeness:partial']))
+    const rule = DEFAULT_POLICY_RULES.find((item) => item.id === 'script-uncertified-ask-remote')!
+    expect(ruleMatchesInvocation(rule, facts, mkContext('wechat'), deps())).toBe(true)
     expect(d.type).toBe('require-confirm')
     expect(d.type === 'require-confirm' && d.ruleId).toBe('script-uncertified-ask-remote')
   })
@@ -1263,10 +1264,10 @@ describe('buildMemoryTiers：run_script 记忆封顶（§5.3）', () => {
     expect(buildMemoryTiers(facts)).toEqual([])
   })
 
-  it('携带 script-uncertified 信号的调用强制"仅此一次"，不开放记忆档位', () => {
+  it('携带脚本分析不确定性事实的调用强制"仅此一次"，不开放记忆档位', () => {
     const facts = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
-      { kind: 'script-uncertified' },
+      { kind: 'script-analysis', findings: [], coverage: 'partial', totalCount: 0,
+        uncertainties: [{ kind: 'call-target-unresolved', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 12 }, sourceStatus: 'unresolved', dynamicAccess: true }] },
       { kind: 'path-target', path: 'out/report.txt', zone: 'workdir-normal' }
     ], 'high')
     expect(buildMemoryTiers(facts)).toEqual([])
@@ -1505,11 +1506,11 @@ describe('script finding and path classification tokens', () => {
     const legacyGoldenCases = [
       { id: 'a01-print-literal', oldVerdict: 'allow', oldPattern: 'A0', finding: undefined,
         expected: { desktop: 'auto-allow', wechat: 'require-confirm', feishu: 'require-confirm' } },
-      { id: 'a13-subprocess-run', oldVerdict: 'ask', oldPattern: 'A1', finding: { pattern: 'A1', class: 'process-creation' as const }, uncertified: true,
+      { id: 'a13-subprocess-run', oldVerdict: 'ask', oldPattern: 'A1', finding: { pattern: 'A1', class: 'process-creation' as const },
         expected: { desktop: 'require-confirm', wechat: 'require-confirm', feishu: 'require-confirm' } },
-      { id: 'a25-ctypes-cdll', oldVerdict: 'deny', oldPattern: 'A5', finding: { pattern: 'A5', class: 'native-code-load' as const }, uncertified: true,
+      { id: 'a25-ctypes-cdll', oldVerdict: 'deny', oldPattern: 'A5', finding: { pattern: 'A5', class: 'native-code-load' as const },
         expected: { desktop: 'deny', wechat: 'deny', feishu: 'deny' } },
-      { id: 'a28-requests-get', oldVerdict: 'ask', oldPattern: 'A6', finding: { pattern: 'A6', class: 'network-api' as const }, uncertified: true,
+      { id: 'a28-requests-get', oldVerdict: 'ask', oldPattern: 'A6', finding: { pattern: 'A6', class: 'network-api' as const },
         expected: { desktop: 'require-confirm', wechat: 'deny', feishu: 'deny' } }
     ] as const
     for (const sample of legacyGoldenCases) {
@@ -1520,7 +1521,6 @@ describe('script finding and path classification tokens', () => {
             : sample.finding.class === 'native-code-load' ? { kind: 'native-code', module: 'ctypes' }
               : { kind: 'network', module: 'requests', attr: 'get' } }] : []
       }]
-      if ('uncertified' in sample && sample.uncertified) signals.push({ kind: 'script-uncertified' })
       for (const lane of ['desktop', 'wechat', 'feishu'] as const) {
         const result = decide(mkFacts('run_script', 'execute', signals, 'high'), mkContext(lane), DEFAULT_POLICY_RULES, deps())
         expect(result.type, `${sample.id} legacy ${sample.oldVerdict}/${sample.oldPattern} on ${lane}`).toBe(sample.expected[lane])
