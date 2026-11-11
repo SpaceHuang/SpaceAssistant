@@ -50,14 +50,15 @@ export function hasStaticNetworkReviewCandidate(code: string): boolean {
 export function extractScriptSignals(
   code: string,
   _env: EnvFacts,
-  preParsedIr?: IrModule
+  preParsedIr?: IrModule,
+  parseFailureReason?: 'parse_error' | 'script-analysis-ir-uncovered' | 'script-parser-unavailable'
 ): { signals: FactSignal[]; summary: ConfirmSummary } {
   const signals: FactSignal[] = []
 
   // 单次解析（M8 / P1-T3）：IR 同时供 findings 提取与独立远程认证态检查。
   let ir: IrModule | null = preParsedIr ?? null
-  let parseFailed = false
-  if (!ir) {
+  let parseFailed = Boolean(parseFailureReason)
+  if (!ir && !parseFailureReason) {
     try {
       ir = parsePythonModule(code)
     } catch {
@@ -67,18 +68,20 @@ export function extractScriptSignals(
 
   const analysis = ir
     ? analyzeScriptContent(code, ir)
-    : { reason: 'parse_error', findings: [], coverage: 'failed' as const, totalCount: 0 }
+    : { reason: parseFailureReason ?? 'parse_error', findings: [], coverage: 'failed' as const, totalCount: 0, uncertainties: [] }
+  const coverage = analysis.coverage === 'complete' && analysis.uncertainties.length > 0 ? 'partial' : analysis.coverage
   signals.push({
     kind: 'script-analysis',
     findings: analysis.findings,
-    coverage: analysis.coverage,
-    totalCount: analysis.totalCount
+    coverage,
+    totalCount: analysis.totalCount,
+    uncertainties: analysis.uncertainties
   })
 
   if (parseFailed || !ir) {
-    signals.push({ kind: 'extraction-failed', reason: 'parse_error' })
+    signals.push({ kind: 'extraction-failed', reason: parseFailureReason ?? 'parse_error' })
   } else {
-    if (analysis.coverage === 'failed') {
+    if (coverage === 'failed') {
       signals.push({ kind: 'extraction-failed', reason: analysis.reason ?? 'script-analysis-location-unavailable' })
     }
     if (analysis.findings.some((finding) => finding.class === 'network-api')) {

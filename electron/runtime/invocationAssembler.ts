@@ -221,6 +221,7 @@ function scriptContentMemoryKey(value: unknown): CacheKey | undefined {
   if (!value || typeof value !== 'object') return undefined
   const candidate = value as Partial<Extract<CacheKey, { kind: 'script-content' }>>
   return candidate.kind === 'script-content' && typeof candidate.sessionId === 'string' &&
+    typeof candidate.extractorVersion === 'string' && candidate.extractorVersion.trim().length > 0 &&
     typeof candidate.digest === 'string' && /^[a-f0-9]{64}$/.test(candidate.digest) &&
     typeof candidate.workdirDigest === 'string' && /^[a-f0-9]{64}$/.test(candidate.workdirDigest)
     ? candidate as Extract<CacheKey, { kind: 'script-content' }>

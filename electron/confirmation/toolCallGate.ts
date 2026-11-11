@@ -5,11 +5,12 @@ import { constants as fsConstants } from 'node:fs'
 import path from 'node:path'
 import { decide, ruleMatchesInvocation } from '../../src/shared/policy/policyEngine'
 import { createImAttachmentFacts } from '../../src/shared/confirmation/imAttachmentFacts'
+import { createInvocationExtractorVersion } from '../../src/shared/confirmation/extractorVersion'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { resolveImPolicyFloorForVersion, validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
 import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
-import { parsePythonModule } from '../shell/scriptContentSecurity'
-import type { IrModule } from '../shell/scriptIr/types'
+import { parsePythonModule, ScriptParseUnavailableError } from '../shell/scriptContentSecurity'
+import { IrCoverageError, type IrModule } from '../shell/scriptIr/types'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import type {
   AutoApproveFallback,
@@ -665,11 +666,15 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     const requestedLanguage = typeof args.toolInput.language === 'string' ? args.toolInput.language : 'python'
     const pythonLanguage = requestedLanguage === 'python'
     let preParsedIr: IrModule | undefined
+    let scriptParseFailure: 'parse_error' | 'script-analysis-ir-uncovered' | 'script-parser-unavailable' | undefined
     if (pythonLanguage) {
       try {
         preParsedIr = parsePythonModule(code)
-      } catch {
-        // 解析失败（语法错误 / 服务未就绪 / IrCoverageError）：下游 fail-closed。
+      } catch (error) {
+        const errorRecord = error && typeof error === 'object' ? error as { name?: string; reason?: string } : undefined
+        scriptParseFailure = errorRecord?.name === 'IrCoverageError' ? 'script-analysis-ir-uncovered'
+          : errorRecord?.name === 'ScriptParseUnavailableError' && errorRecord.reason === 'not_initialized' ? 'script-parser-unavailable'
+            : 'parse_error'
       }
     }
     const language: 'python' | 'javascript' | 'typescript' | 'powershell' | 'unknown' = requestedLanguage === 'python' || requestedLanguage === 'javascript' || requestedLanguage === 'typescript' || requestedLanguage === 'powershell'
@@ -680,7 +685,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         paths: [], completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', dynamicKinds: ['path-analysis-unavailable'], unknownEvidence: []
       }
       : extractScriptPathFacts(code, language)
-    const pythonSignals = pythonLanguage ? extractScriptSignals(code, env, preParsedIr) : undefined
+    const pythonSignals = pythonLanguage ? extractScriptSignals(code, env, preParsedIr, scriptParseFailure) : undefined
     const signals: FactSignal[] = pythonLanguage
       ? pythonSignals!.signals
       : [{ kind: 'script-language-analysis' as const, language: language === 'python' ? 'unknown' as const : language, status: 'unverified' as const }]
@@ -712,7 +717,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       workdirDigest: createHash('sha256').update(path.resolve(args.workDir), 'utf8').digest('hex'),
       parametersDigest: createHash('sha256').update(JSON.stringify({ ...args.toolInput, code }), 'utf8').digest('hex'),
       environmentDigest: stableScriptMaterialDigest({ workDir: path.resolve(args.workDir), userDataDir: path.resolve(args.userDataDir), lane, scriptEnvironmentDigest }),
-      authenticationVersion: 'script-certifier-v1'
+      authenticationVersion: 'script-analysis-v2'
     })
     let scriptPathHint: string | undefined
     if (scriptPaths.completeness === 'unknown') {
@@ -1289,6 +1294,36 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   facts.factSources = factSources
   facts.factsProviderDeclared = args.factsProvider !== undefined
 
+  const completenessSignals: Array<'complete' | 'partial' | 'missing' | 'authentication-missing' | 'capability-description-stale'> = facts.signals.flatMap((signal) => {
+    if (signal.kind === 'mcp-invocation') return [signal.completeness]
+    if (signal.kind === 'browser-action' || signal.kind === 'lark-subcommand') return signal.completeness ? [signal.completeness] : []
+    return []
+  })
+  const scriptAnalysis = facts.signals.find((signal) => signal.kind === 'script-analysis')
+  const extractorCompleteness = facts.signals.some((signal) => signal.kind === 'extraction-failed' && signal.reason === 'parse_error')
+    ? 'parse-failed' as const
+    : facts.signals.some((signal) => signal.kind === 'extraction-failed' && signal.reason === 'script-analysis-ir-uncovered')
+      ? 'partial' as const
+    : scriptAnalysis?.kind === 'script-analysis' && scriptAnalysis.coverage === 'failed'
+      ? 'missing' as const
+      : scriptAnalysis?.kind === 'script-analysis' && scriptAnalysis.coverage === 'partial'
+        ? 'partial' as const
+        : facts.signals.some((signal) => signal.kind === 'extraction-failed')
+          ? 'missing' as const
+          : undefined
+  const invocationCompleteness = extractorCompleteness === 'parse-failed' ? 'parse-failed'
+    : completenessSignals.includes('missing') || extractorCompleteness === 'missing' ? 'missing'
+      : completenessSignals.includes('partial') || extractorCompleteness === 'partial' ? 'partial'
+        : completenessSignals.includes('authentication-missing') ? 'authentication-missing'
+          : completenessSignals.includes('capability-description-stale') ? 'capability-description-stale'
+            : 'complete'
+  facts.signals.push({ kind: 'invocation-facts-completeness', completeness: invocationCompleteness })
+  const scriptFactsPresent = facts.signals.some((signal) => signal.kind === 'script-analysis' || signal.kind === 'script-language-analysis')
+  facts.extractorVersion = createInvocationExtractorVersion({
+    'invocation-facts': 'v1',
+    ...(scriptFactsPresent ? { 'script-analysis': 'v2', 'script-path-extraction': 'v2' } : {})
+  })
+
   // 写路径事实必须先于桌面写快通道。快通道只能消费已探测事实，不能自行重做路径分类。
   let fileAutoApprove: boolean | undefined
   if ((args.phase !== 'recheck' || args.evaluateFastTrackOnRecheck) && lane === 'desktop' && (args.toolName === 'write_file' || args.toolName === 'edit_file')) {
@@ -1501,30 +1536,13 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       actor: 'system'
     })
   }
-  const reportedCompleteness = facts.signals.flatMap((signal) => {
-    if (signal.kind === 'mcp-invocation') return [signal.completeness]
-    if (signal.kind === 'browser-action' || signal.kind === 'lark-subcommand') return signal.completeness ? [signal.completeness] : []
-    return []
-  })
-  const factsCompleteness = reportedCompleteness.includes('missing') ? 'missing'
-    : reportedCompleteness.includes('partial') ? 'partial'
-      : reportedCompleteness.includes('capability-description-stale') ? 'capability-description-stale'
-        : reportedCompleteness.length > 0 && reportedCompleteness.every((value) => value === 'complete') ? 'complete' : 'unknown'
-  const reportedSnapshotCompleteness = facts.signals.some((signal) => signal.kind === 'mcp-invocation' && signal.completeness === 'missing')
-    ? 'missing' as const
-    : facts.signals.some((signal) => signal.kind === 'mcp-invocation' && signal.completeness === 'capability-description-stale')
-      ? 'capability-description-stale' as const
-      : facts.signals.some((signal) => signal.kind === 'extraction-failed' ||
-          signal.kind === 'shell-analysis-completeness' && signal.completeness === 'partial' ||
-          signal.kind === 'mcp-invocation' && signal.completeness === 'partial')
-        ? 'partial' as const
-        : 'complete' as const
+  const factsCompleteness = invocationCompleteness
   const factsSnapshot = await createInvocationFactsSnapshot({
     invocationId: args.requestId ?? args.sessionId,
     envelope: { toolName: args.toolName, toolInput: args.toolInput, toolUseId: args.toolUseId ?? '' },
     facts,
-    extractorVersion: 'host-tool-facts-v1',
-    completeness: reportedSnapshotCompleteness,
+    extractorVersion: facts.extractorVersion,
+    completeness: invocationCompleteness,
     evidenceReferences: [],
     environmentVersion: `${env.os}:${env.workDir}`,
     policyVersion: args.policyBinding?.policyBehaviorVersion ?? args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',

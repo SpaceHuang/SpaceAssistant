@@ -579,7 +579,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
       policyBehaviorVersion: 'im-standard-v2',
       policyRevision: 17,
       decision: result.decision.type,
-      factsCompleteness: 'unknown',
+      factsCompleteness: 'complete',
       reviewPath: 'deterministic-policy'
     })
     expect(event).not.toHaveProperty('fallbackCause')
@@ -604,7 +604,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
       imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 2, snapshot: {} },
       mcpEntry: { serverId: 'server', toolName: 'read', inputSchema: {}, annotations: {} } as never }))
     expect(audit.events.find((entry) => entry.event === 'policy.decision')?.factsCompleteness).toBe('capability-description-stale')
-    expect(audit.events.find((entry) => entry.event === 'policy.decision')).toMatchObject({ factsSnapshotId: expect.stringMatching(/^fact-[0-9a-f]{24}$/), extractorVersion: 'host-tool-facts-v1', factsRevision: 1, decisionId: expect.stringMatching(/^decision-[0-9a-f]{24}$/), policyDependencyFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/), decisionRuleIds: expect.any(Array) })
+    expect(audit.events.find((entry) => entry.event === 'policy.decision')).toMatchObject({ factsSnapshotId: expect.stringMatching(/^fact-[0-9a-f]{24}$/), extractorVersion: '{"invocation-facts":"v1"}', factsRevision: 1, decisionId: expect.stringMatching(/^decision-[0-9a-f]{24}$/), policyDependencyFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/), decisionRuleIds: expect.any(Array) })
   })
 
   it('assigns the same snapshot id to result and policy decision audit without logging the envelope', async () => {
@@ -612,7 +612,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
     const result = await evaluateToolCallGate(base({ audit, toolInput: { path: 'secret-token=sk-1234567890abcdefghijklmnop' } }))
     const event = audit.events.find((entry) => entry.event === 'policy.decision')!
     expect(event.factsSnapshotId).toBe(result.factsSnapshot?.factId)
-    expect(event.extractorVersion).toBe('host-tool-facts-v1')
+    expect(event.extractorVersion).toBe('{"invocation-facts":"v1"}')
     expect(event.factsRevision).toBe(1)
     expect(JSON.stringify(event)).not.toContain('sk-1234567890abcdefghijklmnop')
   })
@@ -1834,7 +1834,7 @@ describe('evaluateToolCallGate', () => {
     const changedArgs = readBinding(parameterChanged)
     const changedCode = readBinding(codeChanged)
     const changedEnvironment = readBinding(environmentChanged)
-    expect(initial).toMatchObject({ contentDigest: expect.any(String), parametersDigest: expect.any(String), environmentDigest: expect.any(String), authenticationVersion: 'script-certifier-v1' })
+    expect(initial).toMatchObject({ contentDigest: expect.any(String), parametersDigest: expect.any(String), environmentDigest: expect.any(String), authenticationVersion: 'script-analysis-v2' })
     expect(changedArgs).toMatchObject({ contentDigest: initial.contentDigest, environmentDigest: initial.environmentDigest })
     expect(changedArgs.parametersDigest).not.toBe(initial.parametersDigest)
     expect(changedCode.contentDigest).not.toBe(initial.contentDigest)
@@ -1916,19 +1916,31 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('V3 run_script 路径分析不可用时桌面逐次真人确认、automation lane 拒绝', async () => {
+  it('D6 parse-failed 在交互和 automation lane 均拒绝', async () => {
     const root = await fs.realpath(await makeTempDir('script-facts-root-'))
     const toolInput = { code: 'def broken(:\n pass' }
     try {
       const desktop = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(desktop.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown' }))
       expect(desktop.scriptPathHint).toContain('脚本含动态执行面：')
-      expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user', memoryTiers: [] })
+      expect(desktop.decision).toMatchObject({ type: 'deny', ruleId: 'script-analysis-parse-failed-deny' })
+      expect(desktop.factsSnapshot?.completeness).toBe('parse-failed')
 
       const unattended = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
-      expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
+      expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'script-analysis-parse-failed-deny' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('D6 parse-failed 在所有 lane 进入策略前统一拒绝', async () => {
+    const toolInput = { code: 'def broken(:\n pass' }
+    for (const lane of ['desktop', 'wechat', 'feishu', 'automation'] as const) {
+      const result = await evaluateToolCallGate(base({ lane, toolName: 'run_script', toolInput,
+        ...(lane === 'desktop' ? {} : { remoteContext: remoteContext() }) }))
+      expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'script-analysis-parse-failed-deny' })
+      expect(result.factsSnapshot?.completeness).toBe('parse-failed')
+      expect(result.facts.signals).toContainEqual({ kind: 'invocation-facts-completeness', completeness: 'parse-failed' })
     }
   })
 
@@ -2011,7 +2023,7 @@ describe('evaluateToolCallGate', () => {
     ['delete', 'import os\nos.remove(target)', 'unresolved-destructive-target'],
     ['transfer', 'import shutil\nshutil.move(source, target)', 'unresolved-transfer-target'],
     ['binding-chain break', 'import os\nos = fake\nopen("/tmp/out.txt", "r")', 'binding-chain-broken'],
-    ['analysis unavailable', 'def broken(:\n pass', 'path-analysis-unavailable'],
+    ['analysis unavailable', 'def f(x):\n    match x:\n        case 1:\n            return 1', 'path-analysis-unavailable'],
     ['eval', 'eval(source)', 'dynamic-code-execution'],
     ['process creation', 'import subprocess\nsubprocess.run(command)', 'dynamic-code-execution'],
     ['dynamic import', 'import importlib\nimportlib.import_module(module_name)', 'dynamic-code-execution']
@@ -2072,8 +2084,8 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('路径分析不可用的脚本不提供记忆档位且每次都需真人确认', async () => {
-    const code = 'def broken(:\n pass'
+  it('合法但 IR 未覆盖的脚本不提供记忆档位且每次都需真人确认', async () => {
+    const code = 'def f(x):\n    match x:\n        case 1:\n            return 1'
     for (const options of [
       {},
       { workDir: path.join(base().workDir, 'other') },
@@ -2082,6 +2094,65 @@ describe('evaluateToolCallGate', () => {
     ]) {
       const result = await evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: { code }, ...options }))
       expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user', memoryTiers: [] })
+    }
+  })
+
+  it('computed call uncertainty 在交互 lane 明确逐次确认，automation 明确拒绝', async () => {
+    await scriptParserService.ensureInitialized()
+    const code = 'factory()()'
+    for (const lane of ['desktop', 'wechat', 'feishu'] as const) {
+      const result = await evaluateToolCallGate(base({ lane, ...(lane === 'desktop' ? {} : { remoteContext: remoteContext({ source: lane }) }),
+        toolName: 'run_script', toolInput: { code } }))
+      expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial',
+        uncertainties: expect.arrayContaining([expect.objectContaining({ kind: 'call-target-unresolved' })]) }))
+      expect(result.decision.type).toBe('require-confirm')
+      expect(result.decision.memoryTiers).toEqual([])
+      expect(result.decision.ruleId).toBe('script-unresolved-origin-confirm')
+    }
+    const unattended = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_script', toolInput: { code } }))
+    expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
+  })
+
+  it('来源已解析的未建模路径经真实 SQLite session tier 写入并由同一 gate 命中', async () => {
+    await scriptParserService.ensureInitialized()
+    const db = openDb()
+    const root = await fs.realpath(await makeTempDir('script-versioned-memory-'))
+    try {
+      const input = { code: 'customApi()' }
+      const args = base({ appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'), sessionId: 'script-memory-session', lanePackage: 'custom',
+        toolName: 'run_script', toolInput: input })
+      const first = await evaluateToolCallGate(args)
+      expect(first.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'user' })
+      expect(first.decision.type).toBe('require-confirm')
+      if (first.decision.type !== 'require-confirm') throw new Error('expected confirmation decision')
+      const tier = first.decision.memoryTiers.find((item) => item.key.kind === 'script-content')
+      expect(tier?.key).toMatchObject({ kind: 'script-content', extractorVersion: first.facts.extractorVersion,
+        digest: expect.any(String), workdirDigest: expect.any(String), sessionId: 'script-memory-session' })
+      if (!tier) throw new Error('expected script-content memory tier')
+      recordUserAnswerFromDecision({ db, lane: 'desktop', sessionId: 'script-memory-session', key: tier.key,
+        decision: first.decision, answererKind: 'user', source: 'user-confirm' })
+      const second = await evaluateToolCallGate(args)
+      expect(second.decision).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit', cacheKey: tier.key })
+
+      const otherVersion = { ...first.facts, extractorVersion: 'script-analysis-v-next' }
+      const { decide } = await import('../../src/shared/policy/policyEngine')
+      const versionMiss = decide(otherVersion, { lane: 'desktop', origin: { kind: 'direct-owner' }, sessionId: 'script-memory-session', policyTier: 'standard' },
+        args.effectiveRules, { cache: new SqliteDecisionCache(getDbConnection(db)), config: {}, migrationComplete: true })
+      expect(versionMiss).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
+      if (versionMiss.type === 'require-confirm') expect(versionMiss.memoryTiers.some((item) => item.key.kind === 'script-content' &&
+        item.key.extractorVersion === 'script-analysis-v-next' && item.key.sessionId === 'script-memory-session')).toBe(true)
+
+      const missingVersion = { ...first.facts, extractorVersion: undefined }
+      const missingVersionDecision = decide(missingVersion, { lane: 'desktop', origin: { kind: 'direct-owner' }, sessionId: 'script-memory-session', policyTier: 'standard' },
+        args.effectiveRules, { cache: new SqliteDecisionCache(getDbConnection(db)), config: {}, migrationComplete: true })
+      expect(missingVersionDecision.type).toBe('require-confirm')
+      if (missingVersionDecision.type === 'require-confirm') expect(missingVersionDecision.memoryTiers).toEqual([])
+
+      const otherSession = await evaluateToolCallGate(base({ appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'),
+        sessionId: 'script-memory-other-session', lanePackage: 'custom', toolName: 'run_script', toolInput: input }))
+      expect(otherSession.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
     }
   })
 
@@ -3742,5 +3813,21 @@ describe('automation result directory write permission', () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('D4 脚本记忆键绑定事实提取版本', () => {
+  it('版本化脚本事实派生 extractorVersion 四元组键，缺版本不派生旧三元组', async () => {
+    const { deriveCacheKeys } = await import('../../src/shared/policy/policyEngine')
+    const extractorVersion = '{"invocation-facts":"v1","script-analysis":"v2"}'
+    const facts = {
+      toolName: 'run_script', actionClass: 'execute' as const, baseRiskLevel: 'high' as const, summary: { text: 'script' }, extractorVersion,
+      signals: [
+        { kind: 'script-analysis' as const, findings: [], coverage: 'complete' as const, totalCount: 0, uncertainties: [{ kind: 'path-analysis-unmodeled-call' as const, range: { startLine: 1, startCol: 1, endLine: 1, endCol: 4 }, sourceStatus: 'resolved' as const, dynamicAccess: false }] },
+        { kind: 'script-path-extraction' as const, completeness: 'unknown' as const, unknownReason: 'unmodeled-call' as const, dynamicAccess: false, contentDigest: 'a'.repeat(64), workdirDigest: 'b'.repeat(64) }
+      ]
+    }
+    expect(deriveCacheKeys(facts, 'session-1', 'desktop')).toContainEqual({ kind: 'script-content', extractorVersion, digest: 'a'.repeat(64), workdirDigest: 'b'.repeat(64), sessionId: 'session-1' })
+    expect(deriveCacheKeys({ ...facts, extractorVersion: undefined }, 'session-1', 'desktop')).toEqual([])
   })
 })

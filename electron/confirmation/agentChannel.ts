@@ -75,7 +75,8 @@ export function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<Approv
         sha256: s.contentDigest,
         parametersSha256: s.parametersDigest,
         environmentSha256: s.environmentDigest,
-        certifier: s.authenticationVersion ?? 'unknown'
+        certifier: s.authenticationVersion ?? 'unknown',
+        ...(facts.extractorVersion ? { extractorVersion: facts.extractorVersion } : {})
       }
     }
     if (s.kind === 'grep-invocation' && !extras.grepQuery) {

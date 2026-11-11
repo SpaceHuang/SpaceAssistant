@@ -287,21 +287,28 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'automation-script-path-unknown-deny',
     when: 'invocation',
-    match: { lane: ['automation'], toolName: 'run_script', signals: ['script-path-extraction:unknown'] },
+    match: { lane: ['automation'], toolName: 'run_script', signals: ['script-path-extraction:unknown'], excludeSignals: ['invocation-facts-completeness:parse-failed'] },
     denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无人值守调用无法确认脚本访问路径'
   },
   {
     id: 'automation-script-permission-missing-deny',
     when: 'invocation',
-    match: { lane: ['automation'], toolName: 'run_script', signals: ['automation-script-permission:missing'] },
+    match: { lane: ['automation'], toolName: 'run_script', signals: ['automation-script-permission:missing'], excludeSignals: ['invocation-facts-completeness:parse-failed'] },
     denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '定时任务未获得覆盖脚本工作目录和访问路径的 run_script 授权'
   },
   {
+    id: 'script-analysis-parse-failed-deny',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu', 'automation'], toolName: 'run_script', signals: ['invocation-facts-completeness:parse-failed'] },
+    denyClass: 'forbidden', action: 'deny', locked: true,
+    reason: '脚本解析失败，无法形成可复核事实，已拒绝执行'
+  },
+  {
     id: 'script-analysis-incomplete-automation-deny',
     when: 'invocation',
-    match: { lane: ['automation'], toolName: 'run_script', signals: ['extraction-failed'] },
+    match: { lane: ['automation'], toolName: 'run_script', signals: ['invocation-facts-completeness:partial'], excludeSignals: ['invocation-facts-completeness:parse-failed', 'script-path-extraction:unknown'] },
     denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无人值守脚本内容分析不完整，已拒绝执行'
   },
@@ -393,10 +400,16 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     reason: '脚本声明仅读工作目录且与分析交叉一致（设置开启后免确认）'
   },
   {
+    id: 'script-unresolved-origin-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unmodeled-call', 'script-analysis:uncertainty:call-target-unresolved'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本调用来源无法静态确认，必须逐次由真人确认'
+  },
+  {
     id: 'script-unmodeled-path-ask',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unmodeled-call'] },
-    action: 'ask', denyClass: 'insufficient-info', cacheableAsk: true, reason: '脚本含未建模调用；可选择仅在本会话信任相同脚本'
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unmodeled-call'], excludeSignals: ['script-analysis:uncertainty:call-target-unresolved'] },
+    action: 'ask', denyClass: 'insufficient-info', cacheableAsk: true, reason: '脚本含已定位来源的路径未建模调用；可选择仅在本会话信任相同脚本'
   },
   {
     id: 'script-unverified-language-confirm',
@@ -405,9 +418,15 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'confirm-every-time', locked: true, reason: '该脚本语言尚未接入完整内容安全分析，需真人确认'
   },
   {
+    id: 'script-analysis-uncertainty-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:uncertainty:call-target-unresolved', 'script-analysis:partial'], excludeSignals: ['script-uncertified'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本调用来源无法静态确认，必须逐次由真人确认'
+  },
+  {
     id: 'script-analysis-incomplete-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['extraction-failed'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['invocation-facts-completeness:partial'], excludeSignals: ['script-uncertified', 'script-analysis:uncertainty:call-target-unresolved'] },
     action: 'confirm-every-time', locked: true, reason: '脚本内容分析不完整，必须由真人逐次确认'
   },
 
@@ -494,7 +513,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-clean-certified-remote',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:complete'], excludeSignals: ['script-finding:non-allow', 'script-uncertified'] },
+    match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:complete'], excludeSignals: ['script-finding:non-allow', 'script-uncertified', 'script-analysis:uncertainty'] },
     denyClass: 'insufficient-info',
     action: 'ask',
     askUnless: { config: 'remoteScriptRequiresConfirm', equals: false, andMigrationComplete: true },
@@ -504,7 +523,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-clean-allow-desktop',
     when: 'invocation',
-    match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-analysis:complete'], excludeSignals: ['script-finding:non-allow'] },
+    match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-analysis:complete'], excludeSignals: ['script-finding:non-allow', 'script-analysis:uncertainty'] },
     action: 'allow',
     reason: '桌面无需策略处置的完整脚本免确认直接执行'
   },

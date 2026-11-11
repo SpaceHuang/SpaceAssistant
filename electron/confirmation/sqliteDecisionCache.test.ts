@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { getDbConnection, openSqliteDatabase } from '../database'
 import type { AppDatabase } from '../database'
-import { SqliteDecisionCache, canonicalKeyJson } from './sqliteDecisionCache'
+import { SqliteDecisionCache, canonicalKeyJson, parseCacheKey } from './sqliteDecisionCache'
 import { clearAllMcpSessionTrust, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
 import type { CacheKey, DecisionCacheEntry } from '../../src/shared/confirmation/types'
 
@@ -46,6 +46,20 @@ function entry(overrides: Partial<DecisionCacheEntry> = {}): DecisionCacheEntry 
 }
 
 describe('SqliteDecisionCache', () => {
+  it('script-content 仅接受 extractorVersion 四元组，迁移前无版本键不会命中', () => {
+    const { cache, raw } = open()
+    const legacy = { kind: 'script-content', digest: 'a'.repeat(64), workdirDigest: 'b'.repeat(64), sessionId: 's1' }
+    expect(parseCacheKey(JSON.stringify(legacy))).toBeNull()
+    const now = Date.now()
+    raw.prepare('INSERT INTO decision_cache(id,key_json,decision,lane,scope,source,created_at,last_hit_at,hit_count) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run('legacy-script', JSON.stringify(legacy), 'allow', 'desktop', 'session', 'user-confirm', now, now, 0)
+    const current = { kind: 'script-content' as const, extractorVersion: '{"invocation-facts":"v1","script-analysis":"v2"}', digest: 'a'.repeat(64), workdirDigest: 'b'.repeat(64), sessionId: 's1' }
+    expect(cache.lookup(current, 'desktop')).toBeNull()
+    cache.record({ ...entry(), key: current, lane: 'desktop', scope: 'session' })
+    expect(cache.lookup(current, 'desktop')).toMatchObject({ key: current, decision: 'allow' })
+    expect(cache.list().some((candidate) => candidate.id === 'legacy-script')).toBe(false)
+  })
+
   it('record 后能被 lookup 命中，命中递增 hit_count', () => {
     const { cache } = open()
     cache.record(entry())

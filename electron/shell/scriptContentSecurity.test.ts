@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeScriptContent } from './scriptContentSecurity'
+import { analyzeScriptContent, DANGEROUS_MODULES, parsePythonModule } from './scriptContentSecurity'
 
 type Expectation = { patternIds?: string[] }
 
@@ -327,4 +327,123 @@ describe('scriptContentSecurity — List A (baseline)', () => {
     })
   })
 
+})
+
+describe('script uncertainty facts', () => {
+  it('does not trust a loop target as an imported module root', () => {
+    const result = analyzeScriptContent('for x in range(3):\n    x()')
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'binding-origin-unknown' })]))
+  })
+
+  it('tracks both aliases produced by chained assignment before dangerous calls', () => {
+    const code = "import os\nleft = right = os.system\nleft('id')\nright('id')"
+    const ir = parsePythonModule(code)
+    expect(ir.body[1]).toMatchObject({ kind: 'assign', targets: ['left', 'right'] })
+    const result = analyzeScriptContent(code, ir)
+    expect(result.findings.filter((finding) => finding.class === 'process-creation')).toHaveLength(2)
+  })
+
+  it('reports a stable uncertainty for unresolved calls instead of complete clean facts', () => {
+    const result = analyzeScriptContent('factory()()')
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toEqual([expect.objectContaining({ kind: 'call-target-unresolved', sourceStatus: 'unresolved', range: expect.any(Object) })])
+  })
+
+  it.each([
+    ['while statement', 'while True:\n    pass'],
+    ['f-string', 'value = f"{answer}"'],
+    ['with statement', 'with open("data.txt") as f:\n    data = f.read()'],
+    ['function definition', 'def helper(x):\n    return x * 2\nprint(helper(3))'],
+    ['conditional expression', 'value = "yes" if cond else "no"'],
+    ['literal subscript', 'items = [1, 2, 3]\nitem = items[0]'],
+    ['dynamic import target', 'import importlib\nimportlib.import_module(module_name)'],
+    ['unclassified dangerous call', 'import os\nos.getcwd()', 'unclassified-dangerous-call'],
+    ['unknown reflection target', 'getattr(obj, name)', 'reflection-target-unresolved']
+  ] as const)('%s does not become incomplete solely from a supported IR shape', (_name, code) => {
+    const result = analyzeScriptContent(code)
+    if (_name === 'dynamic import target' || _name === 'unclassified dangerous call' || _name === 'unknown reflection target') {
+      expect(result.coverage).toBe('partial')
+      const expectedKind = _name === 'dynamic import target' ? 'dynamic-import-target-unresolved'
+        : _name === 'unclassified dangerous call' ? 'unclassified-dangerous-call' : 'reflection-target-unresolved'
+      expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: expectedKind, range: expect.any(Object) }))
+    } else {
+      expect(result.coverage).toBe('complete')
+      expect(result.uncertainties).toEqual([])
+    }
+  })
+
+  it('continues after one certification failure and records every distinct incomplete site', () => {
+    const result = analyzeScriptContent('import os\nos.getcwd()\nvalue = getattr(obj, name)')
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties.map((item) => item.kind)).toEqual(expect.arrayContaining([
+      'unclassified-dangerous-call', 'reflection-target-unresolved'
+    ]))
+  })
+
+  it('represents an unclassified call for every dangerous module root', () => {
+    for (const root of DANGEROUS_MODULES) {
+      const result = analyzeScriptContent(`import ${root}\n${root}.unmodeled_capability()`)
+      expect(result.findings.length + result.uncertainties.length, root).toBeGreaterThan(0)
+      if (result.findings.length === 0) {
+        expect(result.uncertainties, root).toContainEqual(expect.objectContaining({ kind: 'unclassified-dangerous-call' }))
+      }
+    }
+  })
+
+  it('records an unresolved computed callee when the IR carries no statically resolvable root', () => {
+    const ir = parsePythonModule('f()')
+    const statement = ir.body[0]
+    if (!statement || statement.kind !== 'expr' || statement.value.kind !== 'call') throw new Error('expected call expression IR')
+    statement.value.callee = { kind: 'none', range: statement.value.callee.range }
+    const result = analyzeScriptContent('f()', ir)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'call-target-unresolved', sourceStatus: 'unresolved' }))
+  })
+
+  it.each([
+    ['unknown binding origin', '(left + right).run()', 'binding-origin-unknown'],
+    ['dangerous capability without a modeled effect', 'import os\nos.getcwd()', 'unclassified-dangerous-call'],
+    ['unresolved reflection target', 'getattr(obj, name)', 'reflection-target-unresolved'],
+    ['unresolved dynamic import target', 'import importlib\nimportlib.import_module(name)', 'dynamic-import-target-unresolved']
+  ])('maps RemoteCertifier fail branch: %s', (_label, code, kind) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind, range: expect.any(Object) }))
+  })
+
+  it('maps unknown future IR statement and expression variants to explicit partial facts', () => {
+    const statementIr = parsePythonModule('pass')
+    statementIr.body[0] = { kind: 'future_statement', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 5 } } as never
+    const statementResult = analyzeScriptContent('pass', statementIr)
+    expect(statementResult.coverage).toBe('partial')
+    expect(statementResult.uncertainties).toContainEqual(expect.objectContaining({ kind: 'unmodeled-statement' }))
+
+    const expressionIr = parsePythonModule('f()')
+    const expressionStatement = expressionIr.body[0]
+    if (!expressionStatement || expressionStatement.kind !== 'expr') throw new Error('expected expression statement')
+    expressionStatement.value = { kind: 'future_expression', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 4 } } as never
+    const expressionResult = analyzeScriptContent('f()', expressionIr)
+    expect(expressionResult.coverage).toBe('partial')
+    expect(expressionResult.uncertainties).toContainEqual(expect.objectContaining({ kind: 'unmodeled-expression' }))
+  })
+})
+
+describe('D3 行为类别补齐', () => {
+  it.each([
+    ['multiprocessing.Process', 'import multiprocessing\nmultiprocessing.Process(target=print)', 'process-creation'],
+    ['ProcessPoolExecutor', 'from concurrent.futures import ProcessPoolExecutor\nProcessPoolExecutor()', 'process-creation'],
+    ['pickle.load', 'import pickle\npickle.load(stream)', 'dynamic-execution'],
+    ['marshal.loads', 'import marshal\nmarshal.loads(data)', 'dynamic-execution'],
+    ['ftplib', 'import ftplib\nftplib.FTP(host)', 'network-api'],
+    ['smtplib', 'import smtplib\nsmtplib.SMTP(host)', 'network-api'],
+    ['xmlrpc', 'import xmlrpc.client\nxmlrpc.client.ServerProxy(url)', 'network-api'],
+    ['telnetlib', 'import telnetlib\ntelnetlib.Telnet(host)', 'network-api']
+  ] as const)('%s produces %s finding', (_name, code, findingClass) => {
+    expect(analyzeScriptContent(code).findings.map((finding) => finding.class)).toContain(findingClass)
+  })
+
+  it('does not label ThreadPoolExecutor as process creation', () => {
+    expect(analyzeScriptContent('from concurrent.futures import ThreadPoolExecutor\nThreadPoolExecutor()').findings.map((finding) => finding.class)).not.toContain('process-creation')
+  })
 })

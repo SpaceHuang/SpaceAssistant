@@ -30,8 +30,15 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
   const hasVerifiedReadOnlyMcpDescriptor = facts.signals.some((signal) => signal.kind === 'mcp-readonly')
   for (const signal of facts.signals) {
     switch (signal.kind) {
+      case 'invocation-facts-completeness':
+        tokens.add(`invocation-facts-completeness:${signal.completeness}`)
+        break
       case 'script-analysis':
         tokens.add(`script-analysis:${signal.coverage}`)
+        for (const uncertainty of signal.uncertainties ?? []) {
+          tokens.add('script-analysis:uncertainty')
+          tokens.add(`script-analysis:uncertainty:${uncertainty.kind}`)
+        }
         for (const finding of signal.findings ?? []) {
           tokens.add(`script-finding:${finding.class}`)
           const pathClass = 'pathClass' in finding.evidence ? finding.evidence.pathClass : undefined
@@ -249,6 +256,9 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
     }
   }
+  if (!facts.signals.some((signal) => signal.kind === 'invocation-facts-completeness') && facts.signals.some((signal) => signal.kind === 'extraction-failed' && signal.reason === 'parse_error')) {
+    tokens.add('invocation-facts-completeness:parse-failed')
+  }
   return tokens
 }
 
@@ -306,8 +316,8 @@ export function deriveCacheKeys(
         keys.push({ kind: 'path', path: signal.path, level: 'file' })
         break
       case 'script-path-extraction':
-        if (signal.completeness === 'unknown' && signal.unknownReason === 'unmodeled-call' && !signal.dynamicAccess && signal.contentDigest && /^[a-f0-9]{64}$/.test(signal.contentDigest) && signal.workdirDigest && /^[a-f0-9]{64}$/.test(signal.workdirDigest) && sessionId) {
-          keys.push({ kind: 'script-content', digest: signal.contentDigest, workdirDigest: signal.workdirDigest, sessionId })
+        if (facts.extractorVersion && facts.extractorVersion.trim() && signal.completeness === 'unknown' && signal.unknownReason === 'unmodeled-call' && !signal.dynamicAccess && signal.contentDigest && /^[a-f0-9]{64}$/.test(signal.contentDigest) && signal.workdirDigest && /^[a-f0-9]{64}$/.test(signal.workdirDigest) && sessionId) {
+          keys.push({ kind: 'script-content', extractorVersion: facts.extractorVersion, digest: signal.contentDigest, workdirDigest: signal.workdirDigest, sessionId })
         }
         break
       default:

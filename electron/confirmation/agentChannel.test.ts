@@ -469,6 +469,7 @@ describe('AgentChannel 任务声明透传（D：可信证据）', () => {
 
   it('把 grep 查询参数与 run_script 主机计算 hash 放入审批线索', async () => {
     const facts: ConfirmRequest['facts'] = {
+      extractorVersion: 'script-extractor-v2',
       toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
       signals: [
         { kind: 'grep-invocation', path: '/workspace/src', pattern: 'TODO', glob: '*.ts', outputMode: 'content', ignoreCase: false },
@@ -479,7 +480,7 @@ describe('AgentChannel 任务声明透传（D：可信证据）', () => {
     const extras = deriveClueExtras(facts)
 
     expect(extras.grepQuery).toContain('path=/workspace/src; pattern=TODO; glob=*.ts; output_mode=content')
-    expect(extras.scriptApprovalBinding).toEqual({ sha256: 'a'.repeat(64), parametersSha256: 'b'.repeat(64), environmentSha256: 'c'.repeat(64), certifier: 'script-certifier-v1' })
+    expect(extras.scriptApprovalBinding).toEqual({ sha256: 'a'.repeat(64), parametersSha256: 'b'.repeat(64), environmentSha256: 'c'.repeat(64), certifier: 'script-certifier-v1', extractorVersion: 'script-extractor-v2' })
   })
 
   it('把脚本逐条原文发现和结构化证据绑定到本次审批线索', async () => {

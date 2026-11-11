@@ -127,6 +127,13 @@ export interface ScriptFinding {
   evidence: ScriptFindingEvidence
 }
 
+export interface ScriptUncertainty {
+  kind: string
+  range: ScriptSourceRange
+  sourceStatus: 'resolved' | 'unknown' | 'unresolved'
+  dynamicAccess?: boolean
+}
+
 /** Transient facts passed to the audit writer; raw snippets must never be serialized. */
 export interface ScriptAuditInput {
   turnId: string
@@ -160,6 +167,7 @@ export type ScriptPathDynamicKind =
   | 'binding-chain-broken' | 'path-analysis-unavailable'
 
 export type FactSignal =
+  | { kind: 'invocation-facts-completeness'; completeness: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale' }
   | { kind: 'command-sequence'; commands: CommandFact[]; persistable?: boolean }
   | { kind: 'path-target'; path: string; zone: PathZone }
   | { kind: 'read-target-scope'; scope: 'single-target' | 'direct-entries' | 'subtree' }
@@ -235,6 +243,7 @@ export type FactSignal =
       findings: ScriptFinding[]
       coverage: 'complete' | 'partial' | 'failed'
       totalCount: number
+      uncertainties?: ScriptUncertainty[]
     }
   /** Complete, static HTTP target facts for the isolated standard IM script review candidate. */
   | { kind: 'im-script-network-review-candidate'; status: 'complete'; host: string; method: 'GET' | 'HEAD'; url: string }
@@ -332,6 +341,8 @@ export interface ContentFacts {
   baseRiskLevel: RiskLevel
   signals: FactSignal[]
   summary: ConfirmSummary
+  /** Canonical invocation-wide facts extractor generation. Script cache keys require this value. */
+  extractorVersion?: string
   /** Exact bounded materials shown to the approval model for reviewable IM candidates. */
   reviewMaterials?: ApprovalReviewMaterials
   /** P5：事实来源标注（信号 kind → 来源半区：工具契约 / 宿主环境）；审计可回答「结论基于谁提供的事实」。 */
@@ -487,7 +498,7 @@ export interface ApprovalCluePack {
   command?: string
   grepQuery?: string
   /** Host-computed digests binding the exact script and parameters reviewed for this invocation. */
-  scriptApprovalBinding?: { sha256: string; parametersSha256: string; environmentSha256: string; certifier: string }
+  scriptApprovalBinding?: { sha256: string; parametersSha256: string; environmentSha256: string; certifier: string; extractorVersion?: string }
   /** Optional, bounded raw script findings for independent review during this invocation. */
   scriptEvidence?: ApprovalScriptEvidence
   /** Provenance of the exact facts reviewed by policy and approval; contains no raw input. */
@@ -616,7 +627,7 @@ export type CacheKey =
       sessionId?: string
     }
   | { kind: 'remote-write'; sessionId: string }
-  | { kind: 'script-content'; digest: string; workdirDigest: string; sessionId: string }
+  | { kind: 'script-content'; extractorVersion: string; digest: string; workdirDigest: string; sessionId: string }
 
 /** Provenance of a session review-scope grant; it is never inferred from a cached allow. */
 export type ReviewCacheSource = 'agent' | 'user'

@@ -7,12 +7,13 @@
 import { scriptParserService } from './scriptParserService'
 import { adaptPythonModule, foldStringIr } from './scriptIr/pythonAdapter'
 import { type IrExpr, type IrModule, type IrStmt, type SourceRange } from './scriptIr/types'
-import type { ScriptFinding, ScriptFindingEvidence } from '../../src/shared/confirmation/types'
+import type { ScriptFinding, ScriptFindingEvidence, ScriptUncertainty } from '../../src/shared/confirmation/types'
 
 export interface ScriptAnalysisResult {
   findings: ScriptFinding[]
   coverage: 'complete' | 'partial' | 'failed'
   totalCount: number
+  uncertainties: ScriptUncertainty[]
   reason?: string
 }
 
@@ -40,7 +41,8 @@ export const DANGEROUS_MODULES = new Set([
   'shutil',
   'pathlib',
   'sys',
-  'asyncio'
+  'asyncio',
+  'multiprocessing', 'concurrent', 'pickle', 'marshal', 'ftplib', 'smtplib', 'xmlrpc', 'telnetlib'
 ])
 
 export const NETWORK_MODULES = new Set([
@@ -48,7 +50,7 @@ export const NETWORK_MODULES = new Set([
   'urllib',
   'http',
   'requests',
-  'httpx'
+  'httpx', 'ftplib', 'smtplib', 'xmlrpc', 'telnetlib'
 ])
 
 export const DANGEROUS_ATTRS = new Set([
@@ -102,6 +104,8 @@ const OS_SPAWN_ATTRS = new Set([
 
 /** asyncio.create_subprocess_* attrs — merged into the A1 (process creation) ask bucket. */
 const ASYNCIO_PROCESS_ATTRS = new Set(['create_subprocess_exec', 'create_subprocess_shell'])
+const PROCESS_CREATION_CALLS = new Set(['Process', 'Pool', 'ProcessPoolExecutor'])
+const DESERIALIZATION_CALLS = new Set(['load', 'loads'])
 
 /** Reflection builtins that must never be certified remote-safe, regardless of args resolved. */
 const REFLECTION_NAMES = new Set(['getattr', 'hasattr', 'setattr', 'delattr', 'vars', 'globals', 'locals'])
@@ -165,12 +169,14 @@ interface Binding {
 interface Scope {
   modules: Map<string, string>
   attrs: Map<string, Binding>
+  unknownRoots: Set<string>
 }
 
 function createScope(parent?: Scope): Scope {
   return {
     modules: new Map(parent?.modules),
-    attrs: new Map(parent?.attrs)
+    attrs: new Map(parent?.attrs),
+    unknownRoots: new Set(parent?.unknownRoots)
   }
 }
 
@@ -189,7 +195,9 @@ export function resolveExprChain(expr: IrExpr, scope: Scope): ResolvedChain {
 
   if (cur.kind === 'name') {
     root = cur.id
-    if (scope.modules.has(cur.id)) {
+    if (scope.unknownRoots.has(cur.id)) {
+      module = null
+    } else if (scope.modules.has(cur.id)) {
       module = scope.modules.get(cur.id)!
     } else if (scope.attrs.has(cur.id)) {
       const b = scope.attrs.get(cur.id)!
@@ -207,12 +215,7 @@ export function resolveExprChain(expr: IrExpr, scope: Scope): ResolvedChain {
     module = base.module
     root = base.root
     const mod = module ?? base.root
-    return {
-      root,
-      module: mod,
-      attrs,
-      fullName: mod ? mod + '.' + attrs.join('.') : null
-    }
+    return { root, module: mod, attrs, fullName: mod ? mod + '.' + attrs.join('.') : null }
   }
 
   if (cur.kind === 'call') {
@@ -253,18 +256,20 @@ function applyImportStmt(stmt: Extract<IrStmt, { kind: 'import' }>, scope: Scope
   for (const { module, alias } of stmt.names) {
     const root = module.split('.')[0]!
     const bound = alias ?? root
+    scope.unknownRoots.delete(bound)
     scope.modules.set(bound, root)
   }
 }
 
 function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, scope: Scope): void {
-  const mod = stmt.module.split('.')[0]!
+  const mod = stmt.module
   for (const { name, alias } of stmt.names) {
     if (name === '*') {
       scope.modules.set(mod, mod)
       continue
     }
     const bound = alias ?? name
+    scope.unknownRoots.delete(bound)
     scope.attrs.set(bound, { module: mod, attr: name })
     if (isDangerousAttr(name)) {
       scope.attrs.set(bound, { module: mod, attr: name })
@@ -278,6 +283,7 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
  * `g = getattr`) which are never registered via import/from-import scope tracking.
  */
 function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): void {
+  scope.unknownRoots.delete(target)
   const currentAttrBinding = scope.attrs.get(target)
   const pathAlias = (currentAttrBinding?.module === 'pathlib' && currentAttrBinding.attr === 'Path') || scope.modules.get(target) === 'pathlib'
   const sourceModuleBinding = value.kind === 'name' ? scope.modules.get(value.id) : undefined
@@ -288,6 +294,12 @@ function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): voi
     scope.attrs.delete(target)
   }
   if (value.kind === 'name') {
+    if (scope.unknownRoots.has(value.id)) {
+      scope.modules.delete(target)
+      scope.attrs.delete(target)
+      scope.unknownRoots.add(target)
+      return
+    }
     if (sourceModuleBinding) {
       scope.modules.set(target, sourceModuleBinding)
       return
@@ -370,8 +382,10 @@ function isExecImportCallee(callee: IrExpr): boolean {
 
 // --- Analyzer ---
 
+
 class Analyzer {
   private readonly hits: PatternHit[] = []
+  private readonly uncertainties: ScriptUncertainty[] = []
   private activeRange?: SourceRange
   private activeExpr?: IrExpr
   private activeScope?: Scope
@@ -380,6 +394,8 @@ class Analyzer {
     this.walkStmts(ast.body, createScope(), 0)
     return this.hits
   }
+
+  getUncertainties(): ScriptUncertainty[] { return this.uncertainties }
 
   private addHit(pattern: string, evidenceOverride?: ScriptFindingEvidence): void {
     const range = this.activeExpr?.range ?? this.activeRange
@@ -501,8 +517,8 @@ class Analyzer {
 
       if (stmt.kind === 'assign') {
         const modName = this.extractImportModuleName(stmt.value)
-        if (modName && stmt.targets.length === 1) {
-          scope.modules.set(stmt.targets[0]!, modName)
+        if (modName) {
+          for (const target of stmt.targets) scope.modules.set(target, modName)
           if (isDangerousModule(modName)) {
             const importEvidence: ScriptFindingEvidence = { kind: 'dynamic-import', moduleName: modName, boundName: stmt.targets[0]! }
             this.addHit('B4', importEvidence)
@@ -510,9 +526,7 @@ class Analyzer {
           }
         }
         // Same-scope rebind: x = os / y = os.system / z = o (alias) / w = y (callable alias)
-        if (stmt.targets.length === 1) {
-          applyAssignmentRebind(stmt.targets[0]!, stmt.value, scope)
-        }
+        for (const target of stmt.targets) applyAssignmentRebind(target, stmt.value, scope)
         if (isDecodeCall(stmt.value) && stmt.targets.length === 1) {
           decodeBindings.push({ name: stmt.targets[0]!, stmtOffset: stmtIndex, decodeFn: decodeFunctionName(stmt.value) })
         }
@@ -537,7 +551,9 @@ class Analyzer {
       if (stmt.kind === 'for') {
         this.analyzeExpr(stmt.iter, scope, decodeBindings, stmtIndex)
         const child = createScope(scope)
-        child.attrs.set(stmt.target, { module: stmt.target, attr: undefined })
+        child.modules.delete(stmt.target)
+        child.attrs.delete(stmt.target)
+        child.unknownRoots.add(stmt.target)
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
         // P0-3 评审修复：for...else 的 else 体在循环正常结束时真实执行——必须分析
         this.walkStmts(stmt.orelse, child, stmtIndex, decodeBindings)
@@ -765,6 +781,10 @@ class Analyzer {
     const calleeChain = resolveExprChain(callee, scope)
     const calleeName = calleeChain.attrs[calleeChain.attrs.length - 1] ?? calleeChain.module ?? (callee.kind === 'name' ? callee.id : null)
 
+    if (callee.kind === 'call' && call.range && (!calleeName || (!REFLECTION_NAMES.has(calleeName) && !EXEC_IMPORT_NAMES.has(calleeName)))) {
+      this.uncertainties.push({ kind: 'call-target-unresolved', range: call.range, sourceStatus: 'unresolved', dynamicAccess: true })
+    }
+
     if (calleeName === 'getattr' || calleeName === 'hasattr') {
       const viaBuiltins =
         calleeChain.module === 'builtins' ||
@@ -873,6 +893,17 @@ class Analyzer {
       }
     }
 
+    // Process creation and process pools; ThreadPoolExecutor is intentionally excluded.
+    if ((chain.module === 'multiprocessing' && lastAttr && PROCESS_CREATION_CALLS.has(lastAttr)) ||
+        (chain.module?.startsWith('concurrent.') && chain.module === 'concurrent.futures' && lastAttr === 'ProcessPoolExecutor')) {
+      this.addHit('A1')
+      return
+    }
+    if ((chain.module === 'pickle' || chain.module === 'marshal') && lastAttr && DESERIALIZATION_CALLS.has(lastAttr)) {
+      this.addHit('A3', { kind: 'dynamic-exec', entry: `${chain.module}.${lastAttr}` })
+      return
+    }
+
     // subprocess.* / pty.* (any attr, including aliased imports)
     if (chain.module === 'subprocess' || chain.module === 'pty') {
       if (chain.root && scope.modules.has(chain.root) && chain.root !== chain.module) {
@@ -935,9 +966,9 @@ class Analyzer {
       if (binding?.attr && isDangerousAttr(binding.attr)) {
         const viaAlias = callee.id !== binding.attr
         this.addHit(viaAlias ? 'B7' : 'B6')
-        if (binding.module === 'os' && A1_OS_ATTRS.has(binding.attr)) {
+        if (binding.module.split('.')[0] === 'os' && A1_OS_ATTRS.has(binding.attr)) {
           this.addHit('A1')
-        } else if (binding.module === 'subprocess') {
+        } else if (binding.module.split('.')[0] === 'subprocess') {
           this.addHit('A1')
         } else if (['remove', 'unlink', 'rmdir', 'rmtree'].includes(binding.attr)) {
           this.addHit('A2')
@@ -1172,6 +1203,7 @@ function isCertifiedSafeDangerousCall(
   scope: Scope
 ): boolean {
   const lastAttr = chain.attrs[chain.attrs.length - 1]
+  if (chain.module === 'asyncio' && lastAttr === 'sleep') return true
   // os.chdir(<static relative literal>) — mirrors A9, but re-validates the path statically
   // since the hit-based A9 rule allows unconditionally.
   if (chain.module === 'os' && lastAttr === 'chdir') {
@@ -1192,19 +1224,30 @@ function isCertifiedSafeDangerousCall(
 
 class RemoteCertifier {
   private safe = true
+  private readonly uncertainties: ScriptUncertainty[] = []
+  private locationUnavailable = false
 
   certify(ast: IrModule): boolean {
     this.walkStmts(ast.body, createScope())
     return this.safe
   }
 
-  private fail(): void {
+  getUncertainties(): ScriptUncertainty[] { return this.uncertainties }
+  hasUnlocatedFailure(): boolean { return this.locationUnavailable }
+
+  private fail(kind: string, range?: SourceRange, sourceStatus: ScriptUncertainty['sourceStatus'] = 'unknown', dynamicAccess = true): void {
     this.safe = false
+    if (!range) {
+      this.locationUnavailable = true
+      return
+    }
+    if (this.uncertainties.some((item) => item.kind === kind && item.range.startLine === range.startLine &&
+      item.range.startCol === range.startCol && item.range.endLine === range.endLine && item.range.endCol === range.endCol)) return
+    this.uncertainties.push({ kind, range, sourceStatus, dynamicAccess })
   }
 
   private walkStmts(stmts: IrStmt[], scope: Scope): void {
     for (const stmt of stmts) {
-      if (!this.safe) return
       switch (stmt.kind) {
         case 'import':
           applyImportStmt(stmt, scope)
@@ -1214,7 +1257,10 @@ class RemoteCertifier {
           break
         case 'assign':
           this.walkExpr(stmt.value, scope)
-          if (stmt.targets.length === 1) applyAssignmentRebind(stmt.targets[0]!, stmt.value, scope)
+          for (const target of stmt.targets) applyAssignmentRebind(target, stmt.value, scope)
+          break
+        case 'aug_assign':
+          this.walkExpr(stmt.value, scope)
           break
         case 'expr':
           this.walkExpr(stmt.value, scope)
@@ -1226,26 +1272,74 @@ class RemoteCertifier {
           this.walkStmts(stmt.orelse, child)
           break
         }
+        case 'while': {
+          this.walkExpr(stmt.test, scope)
+          const child = createScope(scope)
+          this.walkStmts(stmt.body, child)
+          this.walkStmts(stmt.orelse, child)
+          break
+        }
         case 'for': {
           this.walkExpr(stmt.iter, scope)
           const child = createScope(scope)
-          child.attrs.set(stmt.target, { module: stmt.target, attr: undefined })
+          child.modules.delete(stmt.target)
+          child.attrs.delete(stmt.target)
+          child.unknownRoots.add(stmt.target)
           this.walkStmts(stmt.body, child)
           // P0-3 评审修复：else 体不遍历会让藏在其中的未建模/危险构造逃过认证（remote fail-open）
           this.walkStmts(stmt.orelse, child)
           break
         }
+        case 'with': {
+          for (const item of stmt.items) this.walkExpr(item.contextExpr, scope)
+          this.walkStmts(stmt.body, createScope(scope))
+          break
+        }
+        case 'try': {
+          this.walkStmts(stmt.body, createScope(scope))
+          for (const handler of stmt.handlers) {
+            if (handler.typeExpr) this.walkExpr(handler.typeExpr, scope)
+            this.walkStmts(handler.body, createScope(scope))
+          }
+          this.walkStmts(stmt.orelse, createScope(scope))
+          this.walkStmts(stmt.finalbody, createScope(scope))
+          break
+        }
+        case 'function_def': {
+          for (const decorator of stmt.decorators) this.walkExpr(decorator, scope)
+          for (const value of stmt.defaults) this.walkExpr(value, scope)
+          this.walkStmts(stmt.body, createScope(scope))
+          break
+        }
+        case 'class_def': {
+          for (const decorator of stmt.decorators) this.walkExpr(decorator, scope)
+          for (const base of stmt.bases) this.walkExpr(base, scope)
+          this.walkStmts(stmt.body, createScope(scope))
+          break
+        }
+        case 'return':
+        case 'raise':
+          if (stmt.value) this.walkExpr(stmt.value, scope)
+          break
+        case 'assert':
+          this.walkExpr(stmt.test, scope)
+          break
+        case 'delete':
+          for (const target of stmt.targets) this.walkExpr(target, scope)
+          break
+        case 'global_nonlocal':
+        case 'break':
+        case 'continue':
         case 'pass':
           break
         default:
           // Unmodeled AST node — never certify.
-          this.fail()
+          this.fail('unmodeled-statement', (stmt as IrStmt).range)
       }
     }
   }
 
   private walkExpr(expr: IrExpr, scope: Scope): void {
-    if (!this.safe) return
     switch (expr.kind) {
       case 'string':
       case 'number':
@@ -1262,13 +1356,68 @@ class RemoteCertifier {
         return
       case 'list':
       case 'tuple':
+      case 'set':
         for (const e of expr.elts) this.walkExpr(e, scope)
+        return
+      case 'dict':
+        for (const key of expr.keys) if (key) this.walkExpr(key, scope)
+        for (const value of expr.values) this.walkExpr(value, scope)
+        return
+      case 'f_string':
+        for (const interpolation of expr.interpolations) this.walkExpr(interpolation, scope)
+        return
+      case 'unaryop':
+        this.walkExpr(expr.operand, scope)
+        return
+      case 'compare':
+        this.walkExpr(expr.left, scope)
+        this.walkExpr(expr.right, scope)
+        return
+      case 'boolop':
+        for (const value of expr.values) this.walkExpr(value, scope)
+        return
+      case 'conditional':
+        this.walkExpr(expr.test, scope)
+        this.walkExpr(expr.body, scope)
+        this.walkExpr(expr.orelse, scope)
+        return
+      case 'subscript':
+        this.walkExpr(expr.value, scope)
+        this.walkExpr(expr.index, scope)
+        return
+      case 'slice':
+        if (expr.lower) this.walkExpr(expr.lower, scope)
+        if (expr.upper) this.walkExpr(expr.upper, scope)
+        if (expr.step) this.walkExpr(expr.step, scope)
+        return
+      case 'lambda':
+        for (const value of expr.defaults) this.walkExpr(value, scope)
+        this.walkExpr(expr.body, scope)
+        return
+      case 'await':
+      case 'starred':
+        this.walkExpr(expr.value, scope)
+        return
+      case 'yield':
+        if (expr.value) this.walkExpr(expr.value, scope)
+        return
+      case 'comprehension':
+        for (const generator of expr.generators) {
+          this.walkExpr(generator.iter, scope)
+          for (const condition of generator.conditions) this.walkExpr(condition, scope)
+        }
+        this.walkExpr(expr.elt, scope)
+        return
+      case 'named_expr':
+        this.walkExpr(expr.value, scope)
+        return
+      case 'ellipsis':
         return
       case 'call':
         this.walkCall(expr, scope)
         return
       default:
-        this.fail()
+        this.fail('unmodeled-expression', (expr as IrExpr).range)
     }
   }
 
@@ -1276,17 +1425,19 @@ class RemoteCertifier {
     const callee = call.callee
 
     if (callee.kind !== 'name' && callee.kind !== 'attr') {
-      // Call target is itself computed (call-of-call, binop, ...) — variable-borne / unmodeled
-      // call object. Never certify.
-      this.fail()
+      // Computed call targets have no statically provable source.
+      const innerCall = callee.kind === 'call' ? callee : undefined
+      const innerName = innerCall?.callee.kind === 'name' ? innerCall.callee.id
+        : innerCall?.callee.kind === 'attr' ? innerCall.callee.attr : undefined
+      const alreadyObserved = !!innerName && (REFLECTION_NAMES.has(innerName) || EXEC_IMPORT_NAMES.has(innerName))
+      if (alreadyObserved) this.safe = false
+      else this.fail('call-target-unresolved', call.range, 'unresolved', true)
       return
     }
 
     if (callee.kind === 'attr') this.walkExpr(callee.base, scope)
-    if (!this.safe) return
     for (const a of call.args) this.walkExpr(a, scope)
     for (const kw of call.kwargs) this.walkExpr(kw.value, scope)
-    if (!this.safe) return
 
     const chain = resolveExprChain(callee, scope)
     const lastAttr = chain.attrs[chain.attrs.length - 1] ?? null
@@ -1295,21 +1446,27 @@ class RemoteCertifier {
     // getattr/hasattr/setattr/delattr/vars/globals/locals/eval/exec/compile/__import__ —
     // always forced ask on remote, regardless of whether args fold to literals.
     if (isForcedAskName(directName) || isForcedAskName(lastAttr)) {
-      this.fail()
+      const isReflection = REFLECTION_NAMES.has(directName ?? '') || REFLECTION_NAMES.has(lastAttr ?? '')
+      const targetArg = call.args[isReflection ? 1 : 0]
+      const unresolvedTarget = isReflection && targetArg !== undefined && targetArg.kind !== 'string'
+      if (unresolvedTarget) this.fail('reflection-target-unresolved', call.range, 'unresolved', true)
+      else this.safe = false
       return
     }
     // importlib.import_module(...) — dynamic import, always forced ask.
     if (chain.module === 'importlib' && lastAttr === 'import_module') {
-      this.fail()
+      const moduleArg = call.args[0]
+      if (!moduleArg || foldStringExpr(moduleArg) === null) this.fail('dynamic-import-target-unresolved', call.range, 'unresolved', true)
+      else this.safe = false
       return
     }
     // Call chain didn't resolve to any statically-known root — unmodeled/variable-borne call.
     if (chain.module === null) {
-      this.fail()
+      this.fail('binding-origin-unknown', call.range, 'unknown', true)
       return
     }
     if (isDangerousModule(chain.module) && !isCertifiedSafeDangerousCall(chain, callee, call, scope)) {
-      this.fail()
+      this.fail('unclassified-dangerous-call', call.range, 'resolved', false)
       return
     }
   }
@@ -1329,24 +1486,45 @@ export function analyzeScriptContent(
 ): ScriptAnalysisResult {
   try {
     const ast = preParsedIr ?? parsePythonModule(code)
-    const hits = collectPatternHits(ast)
+    const analyzer = new Analyzer()
+    const hits = analyzer.analyze(ast)
     const findings = buildScriptFindings(code, hits)
     if (!findings) {
       return {
         reason: 'script-analysis-location-unavailable',
         findings: [],
         coverage: 'failed',
-        totalCount: 0
+        totalCount: 0,
+        uncertainties: []
       }
     }
 
-    return { findings, coverage: 'complete', totalCount: findings.length }
+    const certifier = new RemoteCertifier()
+    certifier.certify(ast)
+    if (certifier.hasUnlocatedFailure()) {
+      return { reason: 'script-analysis-location-unavailable', findings, coverage: 'failed', totalCount: findings.length, uncertainties: [] }
+    }
+    const findingAtRange = (uncertainty: ScriptUncertainty, classes?: readonly ScriptFinding['class'][]): boolean => findings.some((finding) =>
+      finding.range.startLine === uncertainty.range.startLine && finding.range.startCol === uncertainty.range.startCol &&
+      finding.range.endLine === uncertainty.range.endLine && finding.range.endCol === uncertainty.range.endCol &&
+      (!classes || classes.includes(finding.class)))
+    const certifierUncertainties = certifier.getUncertainties().filter((uncertainty) =>
+      uncertainty.kind === 'unclassified-dangerous-call'
+        ? !findingAtRange(uncertainty)
+        : uncertainty.kind !== 'call-target-unresolved' || !findingAtRange(uncertainty, ['dynamic-dispatch', 'reflection', 'dynamic-execution', 'dynamic-import']))
+    const uncertainties = [...analyzer.getUncertainties(), ...certifierUncertainties]
+      .filter((uncertainty, index, all) => all.findIndex((candidate) =>
+        candidate.kind === uncertainty.kind && candidate.range?.startLine === uncertainty.range?.startLine &&
+        candidate.range?.startCol === uncertainty.range?.startCol && candidate.range?.endLine === uncertainty.range?.endLine &&
+        candidate.range?.endCol === uncertainty.range?.endCol) === index)
+    return { findings, coverage: uncertainties.length ? 'partial' : 'complete', totalCount: findings.length, uncertainties }
   } catch {
     return {
       reason: 'parse_error',
       findings: [],
       coverage: 'failed',
-      totalCount: 0
+      totalCount: 0,
+      uncertainties: []
     }
   }
 }

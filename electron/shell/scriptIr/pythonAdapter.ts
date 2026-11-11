@@ -467,7 +467,15 @@ function adaptAssignment(node: TsNode): IrStmt {
   const right = fieldNode(node, 'right')
   if (!left || !right) throw new IrCoverageError(node.type, 'assignment missing operands')
   const targets = splitAssignmentTargets(left)
-  return { kind: 'assign', targets, value: adaptExpr(right) }
+  let valueNode = right
+  while (valueNode.type === 'assignment') {
+    const chainedLeft = fieldNode(valueNode, 'left')
+    const chainedRight = fieldNode(valueNode, 'right')
+    if (!chainedLeft || !chainedRight) throw new IrCoverageError(valueNode.type, 'chained assignment missing operands')
+    targets.push(...splitAssignmentTargets(chainedLeft))
+    valueNode = chainedRight
+  }
+  return { kind: 'assign', targets, value: adaptExpr(valueNode) }
 }
 
 function splitAssignmentTargets(left: TsNode): string[] {
@@ -775,7 +783,7 @@ function adaptCall(node: TsNode): IrExpr {
       }
     }
   }
-  return { kind: 'call', callee: callee ? adaptExpr(callee) : { kind: 'none' }, args, kwargs }
+  return { kind: 'call', callee: callee ? adaptExpr(callee) : { kind: 'none' }, args, kwargs, range: sourceRange(node) }
 }
 
 function adaptComprehension(node: TsNode): IrExpr {

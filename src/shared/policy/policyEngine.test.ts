@@ -327,46 +327,49 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
     expect(decide(facts, mkContext('automation'), DEFAULT_POLICY_RULES, deps({ cache: allowCacheForRequestedKey('automation') })))
       .toMatchObject({ type: 'deny', ruleId: 'automation-mcp-permission-missing-deny' })
   })
-  it('unmodeled-call 只提供同会话 exact-content 记忆；动态执行仍逐次真人确认', () => {
+  it('unmodeled-call 只有来源已解析的窄 uncertainty 可提供同会话记忆；来源不明逐次确认', () => {
     const digest = 'a'.repeat(64)
     const unknownScript = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
+      { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0,
+        uncertainties: [{ kind: 'path-analysis-unmodeled-call', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, sourceStatus: 'resolved', dynamicAccess: false }] },
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
     ], 'high')
+    unknownScript.extractorVersion = '{"invocation-facts":"v1"}'
     const decision = decide(unknownScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
     expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'user' })
     expect(decision.type === 'require-confirm' && decision.memoryTiers).toEqual([
-      expect.objectContaining({ key: { kind: 'script-content', digest, workdirDigest: 'd'.repeat(64), sessionId: 's1' } })
+      expect.objectContaining({ key: { kind: 'script-content', extractorVersion: '{"invocation-facts":"v1"}', digest, workdirDigest: 'd'.repeat(64), sessionId: 's1' } })
     ])
 
     const dynamicScript = mkFacts('run_script', 'execute', [
-      { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
+      { kind: 'script-analysis', findings: [], coverage: 'partial', totalCount: 0,
+        uncertainties: [{ kind: 'call-target-unresolved', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, sourceStatus: 'unresolved', dynamicAccess: true }] },
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
     ], 'high')
     const dynamic = decide(dynamicScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
-    expect(dynamic).toMatchObject({ type: 'require-confirm', ruleId: 'script-dynamic-execution-confirm', answerer: 'user', memoryTiers: [] })
+    expect(dynamic).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-uncertainty-confirm', answerer: 'user', memoryTiers: [] })
   })
 
   it('脚本内容记忆只在当前会话按完全相同的 SHA-256 键查找', () => {
     const digest = 'b'.repeat(64)
-    const facts = mkFacts('run_script', 'execute', [
+    const facts = { ...mkFacts('run_script', 'execute', [
       { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 },
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'e'.repeat(64) }
-    ], 'high')
+    ], 'high'), extractorVersion: '{"invocation-facts":"v1"}' }
     const lookups: Array<{ kind: string; digest?: string; sessionId?: string }> = []
     const cache: DecisionCacheView = {
       lookup: (key) => {
         lookups.push(key as typeof lookups[number])
-        return key.kind === 'script-content' && key.digest === digest && key.workdirDigest === 'e'.repeat(64) && key.sessionId === 's1'
+        return key.kind === 'script-content' && key.extractorVersion === facts.extractorVersion && key.digest === digest && key.workdirDigest === 'e'.repeat(64) && key.sessionId === 's1'
           ? { id: 'script-memory', key, decision: 'allow', lane: 'desktop', scope: 'session', createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' }
           : null
       }
     }
     expect(decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache }))).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
-    expect(lookups).toContainEqual(expect.objectContaining({ kind: 'script-content', digest, workdirDigest: 'e'.repeat(64), sessionId: 's1' }))
+    expect(lookups).toContainEqual(expect.objectContaining({ kind: 'script-content', extractorVersion: facts.extractorVersion, digest, workdirDigest: 'e'.repeat(64), sessionId: 's1' }))
     lookups.length = 0
     expect(decide(facts, { ...mkContext('desktop'), sessionId: 's2' }, DEFAULT_POLICY_RULES, deps({ cache }))).toMatchObject({ type: 'require-confirm' })
-    expect(lookups).toContainEqual(expect.objectContaining({ kind: 'script-content', digest, workdirDigest: 'e'.repeat(64), sessionId: 's2' }))
+    expect(lookups).toContainEqual(expect.objectContaining({ kind: 'script-content', extractorVersion: facts.extractorVersion, digest, workdirDigest: 'e'.repeat(64), sessionId: 's2' }))
   })
 
   it('可疑脚本、动态执行和缺少分类/摘要时都不提供记忆且不消费缓存', () => {
@@ -464,6 +467,27 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
     )
     expect(d.type).toBe('require-confirm')
     expect(d.type === 'require-confirm' && d.ruleId).toBe('script-uncertified-ask-remote')
+  })
+
+  it.each(['desktop', 'wechat', 'feishu'] as const)('%s 的 uncertainty facts 在没有认证标签时仍逐次真人确认', (lane) => {
+    const facts = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', findings: [], coverage: 'partial', totalCount: 0,
+        uncertainties: [{ kind: 'unclassified-dangerous-call', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 12 }, sourceStatus: 'resolved', dynamicAccess: false }] },
+      { kind: 'invocation-facts-completeness', completeness: 'partial' }
+    ], 'high')
+    const decision = decide(facts, mkContext(lane), DEFAULT_POLICY_RULES, deps({ config: { remoteScriptRequiresConfirm: false }, migrationComplete: true }))
+    expect(decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+  })
+
+  it('automation uncertainty facts deny without the legacy certification signal', () => {
+    const facts = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', findings: [], coverage: 'partial', totalCount: 0,
+        uncertainties: [{ kind: 'unclassified-dangerous-call', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 12 }, sourceStatus: 'resolved', dynamicAccess: false }] },
+      { kind: 'invocation-facts-completeness', completeness: 'partial' }
+    ], 'high')
+    expect(decide(facts, mkContext('automation'), DEFAULT_POLICY_RULES, deps())).toMatchObject({
+      type: 'deny', ruleId: 'script-analysis-incomplete-automation-deny'
+    })
   })
 
   it('远程 clean 已认证 + remoteScriptRequiresConfirm=false + 迁移完成 → 免确认', () => {
@@ -1156,10 +1180,7 @@ describe('decide：extraction-failed 一律问用户', () => {
 describe('脚本分析位置/扫描失败的锁定裁决', () => {
   const incomplete = mkFacts('run_script', 'execute', [
     { kind: 'script-analysis', findings: [], coverage: 'failed', totalCount: 0 },
-    { kind: 'script-analysis', findings: [{ pattern: 'A6', class: 'network-api', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, snippet: 'network', evidence: { kind: 'network', module: 'requests', attr: 'get' } }], coverage: 'complete', totalCount: 1 },
-    { kind: 'script-uncertified' },
-    { kind: 'script-language-analysis', language: 'unknown', status: 'unverified' },
-    { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false },
+    { kind: 'invocation-facts-completeness', completeness: 'partial' },
     { kind: 'extraction-failed', reason: 'script-analysis-location-unavailable' }
   ], 'high')
 
@@ -1195,12 +1216,12 @@ describe('脚本分析位置/扫描失败的锁定裁决', () => {
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' }
     ] as ContentFacts['signals'], 'high')
     expect(decide(unknownPath, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())).toMatchObject({
-      type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user'
+      type: 'require-confirm', answerer: 'user'
     })
   })
 
   it('无人值守脚本分析失败明确拒绝', () => {
-    const automationFailure = mkFacts('run_script', 'execute', incomplete.signals.filter((signal) => signal.kind !== 'script-language-analysis'), 'high')
+    const automationFailure = mkFacts('run_script', 'execute', incomplete.signals, 'high')
     expect(decide(automationFailure, mkContext('automation'), DEFAULT_POLICY_RULES, deps())).toMatchObject({
       type: 'deny', ruleId: 'script-analysis-incomplete-automation-deny'
     })

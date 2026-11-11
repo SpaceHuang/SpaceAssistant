@@ -63,13 +63,31 @@ export function deriveMemoryEligibility(
     const analysis = facts.signals.find((signal): signal is Extract<FactSignal, { kind: 'script-analysis' }> =>
       signal.kind === 'script-analysis'
     )
-    if (!analysis || analysis.coverage !== 'complete' ||
+    if (!analysis || (analysis.coverage !== 'complete' && !(analysis.coverage === 'partial' && (analysis.uncertainties?.length ?? 0) > 0)) ||
       analysis.totalCount !== analysis.findings.length) {
       reasons.push('script-analysis-incomplete')
       return { eligibility: 'none', reasons }
     }
     if (analysis.findings.length > 0) {
       reasons.push('script-not-clean')
+      return { eligibility: 'none', reasons }
+    }
+    const uncertainties = analysis.uncertainties ?? []
+    if (uncertainties.length > 0) {
+      const resolvedPathOnly = uncertainties.every((uncertainty) => uncertainty.kind === 'path-analysis-unmodeled-call' &&
+        uncertainty.sourceStatus === 'resolved' && uncertainty.dynamicAccess === false)
+      if (!resolvedPathOnly || !incompleteScript || incompleteScript.unknownReason !== 'unmodeled-call' || incompleteScript.dynamicAccess ||
+        !incompleteScript.workdirDigest || !/^[a-f0-9]{64}$/.test(incompleteScript.workdirDigest) ||
+        !incompleteScript.contentDigest || !/^[a-f0-9]{64}$/.test(incompleteScript.contentDigest) ||
+        !facts.extractorVersion || !facts.extractorVersion.trim()) {
+        reasons.push('script-analysis-incomplete')
+        return { eligibility: 'none', reasons }
+      }
+      reasons.push('script-content-session-only')
+      return { eligibility: 'session', reasons }
+    }
+    if (!facts.extractorVersion || !facts.extractorVersion.trim()) {
+      reasons.push('script-extractor-version-missing')
       return { eligibility: 'none', reasons }
     }
   }

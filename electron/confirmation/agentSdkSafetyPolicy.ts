@@ -140,6 +140,8 @@ export function createAgentSdkSafetyPolicy(input: {
           const sameReadTarget = stableSerialize(previous.result.readPathFact) === stableSerialize(result.readPathFact)
           const sameFeishuMediaTarget = stableSerialize(previous.result.feishuMediaFact) === stableSerialize(result.feishuMediaFact)
           const sameScriptApprovalBinding = matchesScriptApprovalBinding(previous.result, result)
+          const scriptExtractorChanged = previous.result.facts.toolName === 'run_script'
+            && previous.result.facts.extractorVersion !== result.facts.extractorVersion
           const sameWriteApprovalConfiguration = previous.result.facts.actionClass !== 'write' ||
             writeApprovalConfigurationSnapshot(previous.args) === writeApprovalConfigurationSnapshot(gateArgs)
           const sameConfirmedDecisionRule = decision.ruleId === previous.result.decision.ruleId ||
@@ -175,6 +177,16 @@ export function createAgentSdkSafetyPolicy(input: {
               !sameFacts || !sameWriteTarget || !sameReadTarget || !sameFeishuMediaTarget || !sameScriptApprovalBinding ||
               !sameWriteApprovalConfiguration || !sameConfirmedDecision
             )
+            if (scriptExtractorChanged && decision.type === 'require-confirm') {
+              const refreshed = decision.answerer === 'user' && decision.disposition === 'human-required'
+                ? result
+                : { ...result, decision: { ...decision, answerer: 'user' as const, disposition: 'human-required' as const } }
+              if (await input.onReapprovalRequired?.(structuredClone(binding), structuredClone(refreshed), gateArgs) === false) {
+                return deny(binding, 'MISSING_MATERIAL')
+              }
+              initial.set(key, { binding: structuredClone(binding), result: structuredClone(refreshed), args: gateArgs, confirmed: false })
+              return ask(binding, refreshed, gateArgs)
+            }
             const humanBottomLine = decision.type === 'require-confirm' && (
               decision.answerer === 'user' && decision.disposition === 'human-required' ||
               previous.confirmedAnswerer === 'agent' && decision.answerer === 'agent' && decision.disposition === 'auto-eligible'
@@ -345,6 +357,8 @@ function matchesScriptApprovalBinding(previous: ToolCallGateResult, current: Too
   const prior = binding(previous)
   const latest = binding(current)
   return prior?.kind === 'script-path-extraction' && latest?.kind === 'script-path-extraction'
+    && Boolean(previous.facts.extractorVersion && current.facts.extractorVersion)
+    && previous.facts.extractorVersion === current.facts.extractorVersion
     && Boolean(prior.contentDigest && prior.parametersDigest && prior.environmentDigest)
     && prior.contentDigest === latest.contentDigest
     && prior.parametersDigest === latest.parametersDigest
