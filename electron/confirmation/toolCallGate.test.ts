@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { ReviewScopeCache } from './reviewScopeCache'
+import { ReviewScopeGrantStore } from './reviewScopeGrantStore'
 import { captureFileIdentity, safeAtomicWrite } from '../safeAtomicWrite'
 import fs from 'fs/promises'
 import os from 'os'
@@ -118,7 +119,200 @@ describe('buildToolCallGateArgs', () => {
 })
 
 describe('review scope cache gate integration', () => {
-  it('binds trusted tasks and produces a candidate without bypassing current gate checks', async () => {
+  it('only offers recursive directory grep reuse for a verified ordinary work-directory root', async () => {
+    const root = await fs.realpath(await makeTempDir('grep-review-root-'))
+    vi.stubEnv('HOME', root)
+    try {
+      await fs.mkdir(path.join(root, 'child'))
+      await fs.writeFile(path.join(root, 'child', 'note.txt'), 'needle')
+      const common = { lane: 'wechat' as const, workDir: root, userDataDir: '/data', sessionId: 'grep-review-session',
+        remoteContext: { source: 'wechat', messageId: 'm1', userId: 'owner', authOwner: 'owner', authorizationGeneration: 1 } as unknown as RemoteContext,
+        policyBinding: { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v2', revision: 2, epoch: 4 },
+        reviewScopeEvidenceComplete: true, reviewScopeCache: new ReviewScopeCache() }
+      const disabled = await evaluateToolCallGate(base({ ...common, effectiveRules: DEFAULT_POLICY_RULES, toolName: 'grep', toolInput: { path: '.', pattern: 'needle' } }))
+      expect(disabled.reviewScopeCandidateScope).toBeUndefined()
+      const rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'grep-workdir-recursive-reusable'
+        ? { ...rule, action: 'ask' as const, userOverride: true as const } : rule)
+      for (const action of ['deny', 'ask'] as const) {
+        const overriddenRules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'grep-workdir-recursive-reusable'
+          ? { ...rule, action, userOverride: true as const } : rule)
+        const overridden = await evaluateToolCallGate(base({ ...common, effectiveRules: overriddenRules,
+          reviewScopeEvidenceComplete: action === 'deny', toolName: 'grep', toolInput: { path: '.', pattern: 'needle' } }))
+        expect(overridden.reviewScopeCandidate).toBeUndefined()
+        expect(overridden.decision.type).toBe(action === 'deny' ? 'deny' : 'require-confirm')
+      }
+      const approvedParent = await evaluateToolCallGate(base({ ...common, effectiveRules: rules, toolName: 'grep', toolInput: { path: '.', pattern: 'needle' } }))
+      expect(approvedParent.decision).toMatchObject({ type: 'require-confirm', ruleId: 'grep-workdir-recursive-reusable', answerer: 'user' })
+      expect(approvedParent.reviewScopeCandidateScope).toBeDefined()
+      const askCache = new ReviewScopeCache()
+      const askCommon = { ...common, effectiveRules: rules, reviewScopeCache: askCache }
+      const parent = await evaluateToolCallGate(base({ ...askCommon, toolName: 'grep', toolInput: { path: '.', pattern: 'needle' } }))
+      const equivalentDefaults = await evaluateToolCallGate(base({ ...askCommon, toolName: 'grep', toolInput: {
+        path: '.', pattern: 'needle', output_mode: 'files_with_matches', context: 0, multiline: false,
+        show_line_number: false, recursive: true
+      } }))
+      expect(equivalentDefaults.reviewScopeCandidateDigest).toBe(parent.reviewScopeCandidateDigest)
+      const differentOutputLimit = await evaluateToolCallGate(base({ ...askCommon, toolName: 'grep', toolInput: { path: '.', pattern: 'needle', head_limit: 20 } }))
+      expect(differentOutputLimit.reviewScopeCandidateDigest).not.toBe(parent.reviewScopeCandidateDigest)
+      const parentScope = parent.reviewScopeCandidateScope!
+      expect(askCache.grant({ scope: parentScope, source: 'user', scopeCandidateDigest: parent.reviewScopeCandidateDigest! })).toBe(true)
+      const recursive = await evaluateToolCallGate(base({ ...askCommon, toolName: 'grep', toolInput: { path: 'child', pattern: 'needle', recursive: true } }))
+      expect(recursive.reviewScopeCandidate).toMatchObject({ toolName: 'grep', operation: 'search', objects: [{ role: 'root', target: path.join(root, 'child') }] })
+      expect(askCache.lookup(recursive.reviewScopeCandidateScope!)).toMatchObject({
+        source: 'user', inheritedParentScope: { root, ignoreDigest: expect.stringMatching(/^[a-f0-9]{64}$/) }
+      })
+      expect(recursive.decision).toMatchObject({ type: 'auto-allow', cause: 'review-cache-scope-grant-v1' })
+      expect(recursive.readExecutionPermit?.targets[0]?.grepParentScope).toMatchObject({ normalizedPath: root, ignoreDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+      const file = await evaluateToolCallGate(base({ ...common, toolName: 'grep', toolInput: { path: 'child/note.txt', pattern: 'needle', recursive: true } }))
+      expect(file.reviewScopeCandidate).toBeUndefined()
+      await fs.writeFile(path.join(root, 'child', '.gitignore'), 'private/\n')
+      const changedIgnoreContext = await evaluateToolCallGate(base({ ...askCommon, toolName: 'grep', toolInput: { path: 'child', pattern: 'needle', recursive: true } }))
+      expect(changedIgnoreContext.decision.type).toBe('require-confirm')
+      expect(changedIgnoreContext.readExecutionPermit?.targets[0]?.grepParentScope).toBeUndefined()
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it.each(['desktop', 'feishu', 'wechat'] as const)('G-01 creates a user-only candidate through the normal %s gate', async (lane) => {
+    const root = await fs.realpath(await makeTempDir(`grep-review-${lane}-`))
+    try {
+      await fs.mkdir(path.join(root, 'child'))
+      const remoteContext = lane === 'desktop' ? undefined : {
+        source: lane, messageId: 'message-1', authOwner: 'authenticated-owner', authorizationGeneration: 1
+      } as unknown as RemoteContext
+      const policyBinding = { domain: lane === 'desktop' ? 'desktop' as const : 'im' as const,
+        policyBehaviorVersion: lane === 'desktop' ? 'desktop-policy-v1' : 'im-standard-v2', revision: 3, epoch: 8 }
+      const rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'grep-workdir-recursive-reusable'
+        ? { ...rule, action: 'ask' as const, userOverride: true as const } : rule)
+      const result = await evaluateToolCallGate(base({ lane, workDir: root, userDataDir: '/data', sessionId: `grep-${lane}`,
+        ...(remoteContext ? { remoteContext } : {}), policyBinding, lanePackage: 'custom', effectiveRules: rules, toolName: 'grep',
+        toolInput: { path: '.', pattern: 'needle' }, reviewScopeEvidenceComplete: true, reviewScopeCache: new ReviewScopeCache() }))
+      expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'grep-workdir-recursive-reusable', answerer: 'user' })
+      expect(result.reviewScopeCandidateScope).toMatchObject({ lane, subjectId: lane === 'desktop' ? '/data' : 'authenticated-owner' })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('R4: expired Agent grant cannot stay alive through a longer user grant in the old cache', async () => {
+    const db = openDb()
+    const conn = getDbConnection(db)
+    conn.prepare("INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('desktop',7) ON CONFLICT(domain) DO UPDATE SET epoch=7").run()
+    const root = await fs.realpath(await makeTempDir('same-file-r4-source-'))
+    await fs.writeFile(path.join(root, 'notes.txt'), 'before')
+    let now = Date.now() + 1_000
+    const store = new ReviewScopeGrantStore(conn, { now: () => now })
+    const cache = new ReviewScopeCache({ grantStore: store })
+    const args = base({ lane: 'desktop', sessionId: 'r4-session', requestId: 'r4', toolUseId: 'r4-user', toolName: 'write_file',
+      toolInput: { path: 'notes.txt', content: 'after' }, workDir: root, userDataDir: '/profile',
+      policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 1, epoch: 7 },
+      reviewScopeEvidenceComplete: true, reviewScopeCache: cache, toolsConfig: DEFAULT_TOOLS_CONFIG,
+      effectiveRules: DEFAULT_POLICY_RULES, lanePackage: 'standard' })
+    expect(store.setDefaultLifetime('7d')).toBe(true)
+    const first = await evaluateToolCallGate(args)
+    expect(first.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(cache.grantDigest({ lane: 'desktop', sessionId: 'r4-session', source: 'user', scope: first.reviewScopeCandidateScope!,
+      scopeCandidateDigest: first.reviewScopeCandidateDigest!, lifetime: '7d' })).toBe(true)
+    expect(store.setDefaultLifetime('24h')).toBe(true)
+    const second = await evaluateToolCallGate({ ...args, toolUseId: 'r4-agent' })
+    expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(cache.grantDigest({ lane: 'desktop', sessionId: 'r4-session', source: 'agent', scope: second.reviewScopeCandidateScope!,
+      scopeCandidateDigest: second.reviewScopeCandidateDigest!, lifetime: '24h' })).toBe(true)
+    expect((await evaluateToolCallGate({ ...args, toolUseId: 'r4-before' })).decision.type).toBe('auto-allow')
+    now += 86_400_000
+    const fresh = await evaluateToolCallGate({ ...args, toolUseId: 'r4-fresh', reviewScopeCache: new ReviewScopeCache({ grantStore: store }) })
+    expect(fresh.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    const oldCache = await evaluateToolCallGate({ ...args, toolUseId: 'r4-after' })
+    expect(oldCache.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+  })
+
+  it('R5: a valid Agent grant from session B supersedes session A user cache without losing expiry', async () => {
+    const db = openDb()
+    const conn = getDbConnection(db)
+    conn.prepare("INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('desktop',7) ON CONFLICT(domain) DO UPDATE SET epoch=7").run()
+    const root = await fs.realpath(await makeTempDir('same-file-r5-cross-session-'))
+    await fs.writeFile(path.join(root, 'notes.txt'), 'before')
+    let now = Date.now() + 1_000
+    const store = new ReviewScopeGrantStore(conn, { now: () => now })
+    const cache = new ReviewScopeCache({ grantStore: store })
+    const args = base({ lane: 'desktop', sessionId: 'r5-session-a', requestId: 'r5', toolUseId: 'r5-user', toolName: 'write_file',
+      toolInput: { path: 'notes.txt', content: 'after' }, workDir: root, userDataDir: '/profile',
+      policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 1, epoch: 7 },
+      reviewScopeEvidenceComplete: true, reviewScopeCache: cache, toolsConfig: DEFAULT_TOOLS_CONFIG,
+      effectiveRules: DEFAULT_POLICY_RULES, lanePackage: 'standard' })
+    expect(store.setDefaultLifetime('session')).toBe(true)
+    const first = await evaluateToolCallGate(args)
+    expect(first.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(cache.grantDigest({ lane: 'desktop', sessionId: 'r5-session-a', source: 'user', scope: first.reviewScopeCandidateScope!,
+      scopeCandidateDigest: first.reviewScopeCandidateDigest!, lifetime: 'session' })).toBe(true)
+    expect(store.setDefaultLifetime('24h')).toBe(true)
+    const second = await evaluateToolCallGate({ ...args, sessionId: 'r5-session-b', toolUseId: 'r5-agent' })
+    expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(cache.grantDigest({ lane: 'desktop', sessionId: 'r5-session-b', source: 'agent', scope: second.reviewScopeCandidateScope!,
+      scopeCandidateDigest: second.reviewScopeCandidateDigest!, lifetime: '24h' })).toBe(true)
+    const fresh = await evaluateToolCallGate({ ...args, toolUseId: 'r5-fresh', reviewScopeCache: new ReviewScopeCache({ grantStore: store }) })
+    expect(fresh.decision).toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+    const original = await evaluateToolCallGate({ ...args, toolUseId: 'r5-original-cache' })
+    expect(original.decision).toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+    now += 86_400_000
+    const freshExpired = await evaluateToolCallGate({ ...args, toolUseId: 'r5-fresh-expired', reviewScopeCache: new ReviewScopeCache({ grantStore: store }) })
+    expect(freshExpired.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    const originalExpired = await evaluateToolCallGate({ ...args, toolUseId: 'r5-original-expired' })
+    expect(originalExpired.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+  })
+
+  it('reuses a same-path ordinary directory grant after the directory is recreated', async () => {
+    const root = await fs.realpath(await makeTempDir('grep-review-recreated-root-'))
+    const rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'grep-workdir-recursive-reusable'
+      ? { ...rule, action: 'ask' as const, userOverride: true as const } : rule)
+    const cache = new ReviewScopeCache()
+    const common = { lane: 'desktop' as const, workDir: root, userDataDir: '/profile', sessionId: 'grep-recreated-session',
+      policyBinding: { domain: 'desktop' as const, policyBehaviorVersion: 'desktop-v1', revision: 4, epoch: 7 },
+      lanePackage: 'custom', effectiveRules: rules, reviewScopeEvidenceComplete: true, reviewScopeCache: cache }
+    try {
+      await fs.writeFile(path.join(root, 'note.txt'), 'needle')
+      const first = await evaluateToolCallGate(base({ ...common, toolName: 'grep', toolInput: { path: '.', pattern: 'needle' } }))
+      expect(cache.grant({ scope: first.reviewScopeCandidateScope!, source: 'user', scopeCandidateDigest: first.reviewScopeCandidateDigest! })).toBe(true)
+      await fs.rm(root, { recursive: true, force: true })
+      await fs.mkdir(root, { recursive: true })
+      await fs.writeFile(path.join(root, 'fresh.txt'), 'needle')
+
+      const recreated = await evaluateToolCallGate(base({ ...common, toolName: 'grep', toolInput: { path: '.', pattern: 'needle' } }))
+      expect(recreated.decision).toMatchObject({ type: 'auto-allow', cause: 'review-cache-scope-grant-v1' })
+      expect(recreated.readExecutionPermit?.targets[0]?.identity?.ino).not.toBe(first.readExecutionPermit?.targets[0]?.identity?.ino)
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('G-01 does not create an IM candidate without an authenticated owner', async () => {
+    const root = await fs.realpath(await makeTempDir('grep-review-no-owner-'))
+    try {
+      const rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'grep-workdir-recursive-reusable'
+        ? { ...rule, action: 'ask' as const, userOverride: true as const } : rule)
+      const result = await evaluateToolCallGate(base({ lane: 'feishu', workDir: root, userDataDir: '/data', sessionId: 'grep-no-owner',
+        remoteContext: { source: 'feishu', messageId: 'message-1' } as unknown as RemoteContext,
+        policyBinding: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 3, epoch: 8 }, effectiveRules: rules,
+        toolName: 'grep', toolInput: { path: '.', pattern: 'needle' }, reviewScopeEvidenceComplete: true, reviewScopeCache: new ReviewScopeCache() }))
+      expect(result.reviewScopeCandidateScope).toBeUndefined()
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('creates and consumes the remote work-directory disclosure grant only for an authenticated owner and identical disclosure', async () => {
+    const cache = new ReviewScopeCache()
+    const rule = { id: 'work-dir-list-review', when: 'invocation' as const,
+      match: { lane: ['feishu', 'wechat'] as const, toolName: 'list_work_dirs' }, action: 'ask' as const,
+      answerer: 'user' as const, reviewCacheSources: ['user'] as const, reason: 'review directory disclosure' }
+    const args = base({ lane: 'feishu', toolName: 'list_work_dirs', toolInput: {}, sessionId: 'remote-list-session',
+      remoteContext: { source: 'feishu', messageId: 'm1', chatId: 'chat', authOwner: 'owner-a' } as unknown as RemoteContext,
+      policyBinding: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 2, epoch: 4 },
+      effectiveRules: [...DEFAULT_POLICY_RULES, rule], reviewScopeEvidenceComplete: true, reviewScopeDisclosureDigest: 'a'.repeat(64), reviewScopeCache: cache })
+    const first = await evaluateToolCallGate(args)
+    expect(first.decision).toMatchObject({ type: 'require-confirm', ruleId: 'work-dir-list-review', answerer: 'user' })
+    expect(first.reviewScopeCandidate).toMatchObject({ toolName: 'list_work_dirs', operation: 'list', objects: [{ role: 'disclosure', target: 'a'.repeat(64) }] })
+    expect(cache.grant({ scope: first.reviewScopeCandidateScope!, source: 'user', scopeCandidateDigest: first.reviewScopeCandidateDigest! })).toBe(true)
+    const next = await evaluateToolCallGate({ ...args, remoteContext: { ...args.remoteContext, messageId: 'm2' } as RemoteContext })
+    expect(next.decision).toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+    expect((await evaluateToolCallGate({ ...args, remoteContext: { ...args.remoteContext, authOwner: undefined } as RemoteContext })).reviewScopeCandidate).toBeUndefined()
+    expect((await evaluateToolCallGate({ ...args, reviewScopeDisclosureDigest: 'b'.repeat(64) })).decision).toMatchObject({ type: 'require-confirm' })
+  })
+
+  it('uses host-derived scope facts without binding grants to task text', async () => {
     const dir = await fs.realpath(await makeTempDir('gate-review-scope-'))
     try {
       const target = path.join(dir, 'note.txt')
@@ -138,17 +332,17 @@ describe('review scope cache gate integration', () => {
       const differentReplacement = await evaluateToolCallGate({ ...args, toolInput: { path: 'note.txt', old_string: 'before', new_string: 'rephrased' } })
       expect(differentReplacement.reviewScopeCandidateDigest).toBe(result.reviewScopeCandidateDigest)
       expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'default-write-execute-ask', answerer: 'agent' })
-      expect(await evaluateToolCallGate({ ...args, reviewScopeTaskIdentity: JSON.stringify({ task: 'Instead, modify unrelated files.', context: [] }) })).not.toMatchObject({ reviewScopeCandidate: result.reviewScopeCandidate })
+      expect((await evaluateToolCallGate({ ...args, reviewScopeTaskIdentity: JSON.stringify({ task: 'Instead, modify unrelated files.', context: [] }) })).reviewScopeCandidateDigest).toBe(result.reviewScopeCandidateDigest)
       const collidingDisplayDigest = await evaluateToolCallGate({ ...args, taskDigest: taskConstraint,
         reviewScopeTaskIdentity: JSON.stringify({ task: 'Update note.txt for the requested\nrelease.', context: [] }) })
-      expect(collidingDisplayDigest.reviewScopeCandidateDigest).not.toBe(result.reviewScopeCandidateDigest)
+      expect(collidingDisplayDigest.reviewScopeCandidateDigest).toBe(result.reviewScopeCandidateDigest)
       const differentReferent = await evaluateToolCallGate({ ...args, taskDigest: taskConstraint,
         reviewScopeTaskIdentity: JSON.stringify({ task: 'continue', context: [{ role: 'assistant', content: 'Update the release notes.' }] }) })
       const otherReferent = await evaluateToolCallGate({ ...args, taskDigest: taskConstraint,
         reviewScopeTaskIdentity: JSON.stringify({ task: 'continue', context: [{ role: 'assistant', content: 'Delete the draft.' }] }) })
-      expect(differentReferent.reviewScopeCandidateDigest).not.toBe(otherReferent.reviewScopeCandidateDigest)
-      expect((await evaluateToolCallGate({ ...args, reviewScopeTaskIdentity: 'x'.repeat(64 * 1024 + 1) })).reviewScopeCandidate).toBeUndefined()
-      expect((await evaluateToolCallGate({ ...args, reviewScopeTaskIdentity: undefined })).reviewScopeCandidate).toBeUndefined()
+      expect(differentReferent.reviewScopeCandidateDigest).toBe(otherReferent.reviewScopeCandidateDigest)
+      expect((await evaluateToolCallGate({ ...args, reviewScopeTaskIdentity: 'x'.repeat(64 * 1024 + 1) })).reviewScopeCandidateDigest).toBe(result.reviewScopeCandidateDigest)
+      expect((await evaluateToolCallGate({ ...args, reviewScopeTaskIdentity: undefined })).reviewScopeCandidateDigest).toBe(result.reviewScopeCandidateDigest)
       const excluded = await Promise.all([
         evaluateToolCallGate({ ...args, toolName: 'write_file', toolInput: { path: 'script.py', content: 'ordinary text' } }),
         evaluateToolCallGate({ ...args, toolName: 'write_file', toolInput: { path: 'program.bin', content: '#!/bin/sh\necho hi' } }),
@@ -174,7 +368,7 @@ describe('review scope cache gate integration', () => {
 })
 
 describe('review scope cache gate integration', () => {
-  it('binds the candidate to complete trusted task and host-derived object', async () => {
+  it('binds the candidate to approval scope and host-derived object, independent of task text', async () => {
     const dir = await fs.realpath(await makeTempDir('gate-review-scope-'))
     try {
       await fs.writeFile(path.join(dir, 'note.txt'), 'before')
@@ -184,15 +378,15 @@ describe('review scope cache gate integration', () => {
       const result = await evaluateToolCallGate(args)
       expect(result.reviewScopeCandidate).toMatchObject({ toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: path.join(dir, 'note.txt') }] })
       expect(result.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
-      expect((await evaluateToolCallGate({ ...args, taskDigestTruncated: true })).reviewScopeCandidate).toBeUndefined()
       expect((await evaluateToolCallGate({ ...args, reviewScopeEvidenceComplete: false })).reviewScopeCandidate).toBeUndefined()
-      expect((await evaluateToolCallGate({ ...args, reviewScopeTaskIdentity: undefined })).reviewScopeCandidate).toBeUndefined()
+      expect((await evaluateToolCallGate({ ...args, taskDigestTruncated: true, reviewScopeTaskIdentity: undefined })).reviewScopeCandidateDigest)
+        .toBe(result.reviewScopeCandidateDigest)
     } finally { await fs.rm(dir, { recursive: true, force: true }) }
   })
 })
 
-describe('review scope receipt final-check', () => {
-  it('consumes only a current file receipt and revokes after external content changes', async () => {
+describe('review scope final-check', () => {
+  it('keeps the approved path scope after external content changes and rechecks current file facts', async () => {
     const dir = await fs.realpath(await makeTempDir('gate-review-receipt-'))
     const target = path.join(dir, 'note.txt')
     try {
@@ -206,16 +400,15 @@ describe('review scope receipt final-check', () => {
       const digest = candidate.reviewScopeCandidateDigest!
       expect(cache.grant({ scope, source: 'agent', scopeCandidateDigest: digest })).toBe(true)
       const identity = await captureFileIdentity(target)
-      const write = await safeAtomicWrite({ targetPath: target, parentReal: dir, body: 'after', expectedIdentity: identity, captureReceipt: true })
-      expect(cache.activateFirstWrite(scope, digest, write.receipt!)).toBe(true)
+      await safeAtomicWrite({ targetPath: target, parentReal: dir, body: 'after', expectedIdentity: identity })
       const nextEditArgs = { ...args, toolInput: { path: 'note.txt', old_string: 'after', new_string: 'final' } }
       const hit = await evaluateToolCallGate(nextEditArgs)
       expect(hit.decision).toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
       expect(hit.writePathFact).toBeDefined()
       await fs.writeFile(target, 'after external')
       const miss = await evaluateToolCallGate(nextEditArgs)
-      expect(miss.decision.type).toBe('require-confirm')
-      expect(cache.state(scope)).toBeNull()
+      expect(miss.decision).toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+      expect(cache.state(scope)).toMatchObject({ source: 'agent', state: 'active' })
     } finally { await fs.rm(dir, { recursive: true, force: true }) }
   })
 })
@@ -1752,8 +1945,35 @@ describe('evaluateToolCallGate', () => {
 
       const existingPath = path.join(root, 'existing.md')
       await fs.writeFile(existingPath, 'prior')
-      const overwrite = await evaluateToolCallGate(makeArgs({ path: existingPath, content: 'replacement' }))
-      expect(overwrite.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'agent', disposition: 'auto-eligible' })
+      const overwriteCache = new ReviewScopeCache()
+      const overwriteArgs = (content: string) => makeArgs({ path: existingPath, content }, {
+        remoteContext: remoteContext({ authOwner: 'authenticated-owner', authorizationGeneration: 1 }),
+        policyBinding: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, epoch: 0 },
+        reviewScopeEvidenceComplete: true, reviewScopeCache: overwriteCache
+      })
+      const overwrite = await evaluateToolCallGate(overwriteArgs('replacement'))
+      expect(overwrite.facts.signals).toEqual(expect.arrayContaining([
+        { kind: 'write-target-existing' },
+        { kind: 'path-target', path: existingPath, zone: 'workdir-normal' },
+        { kind: 'write-target-scope', scope: 'inside-workdir' }
+      ]))
+      expect(overwrite.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-low-risk-edit', answerer: 'agent', disposition: 'auto-eligible' })
+      expect(overwrite.reviewScopeCandidate).toMatchObject({ toolName: 'write_file', operation: 'write', objects: [{ role: 'target', target: existingPath }] })
+      expect(overwriteCache.grant({ scope: overwrite.reviewScopeCandidateScope!, source: 'agent',
+        scopeCandidateDigest: overwrite.reviewScopeCandidateDigest! })).toBe(true)
+      expect((await evaluateToolCallGate(overwriteArgs('second replacement'))).decision)
+        .toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+      await fs.writeFile(existingPath, 'second replacement')
+      const crossToolEdit = await evaluateToolCallGate(base({ lane: 'feishu',
+        remoteContext: remoteContext({ authOwner: 'authenticated-owner', authorizationGeneration: 1 }),
+        workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'edit_file',
+        toolInput: { path: existingPath, old_string: 'second replacement', new_string: 'cross-tool edit' },
+        effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard',
+          rules: loadEffectivePolicyRules(candidateDb, 'feishu') }), imPolicySnapshot: imSnapshot,
+        policyBinding: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, epoch: 0 },
+        reviewScopeEvidenceComplete: true, reviewScopeCache: overwriteCache }))
+      expect(crossToolEdit.reviewScopeCandidateDigest).toBe(overwrite.reviewScopeCandidateDigest)
+      expect(crossToolEdit.decision).toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
 
       const editCandidate = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(), workDir: root,
         userDataDir: path.join(root, '.userdata'), toolName: 'edit_file',

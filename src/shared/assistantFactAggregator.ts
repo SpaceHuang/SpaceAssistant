@@ -92,6 +92,7 @@ type AssistantFactEventPayload =
       lane?: import('./confirmation/types').ExecutionLane
       confirmId?: string
       memoryTiers?: ToolCallRecord['memoryTiers']
+      allowReuseOnce?: ToolCallRecord['allowReuseOnce']
       confirmDiff?: ToolCallRecord['confirmDiff']
       shellSecurityHints?: ToolCallRecord['shellSecurityHints']
       scriptPathHint?: ToolCallRecord['scriptPathHint']
@@ -283,6 +284,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
           status: 'confirming',
           riskLevel: event.riskLevel,
           ...(event.memoryTiers ? { memoryTiers: event.memoryTiers } : {}),
+          ...(event.allowReuseOnce !== undefined ? { allowReuseOnce: event.allowReuseOnce } : {}),
           ...(event.confirmDiff ? { confirmDiff: event.confirmDiff } : {}),
           ...(event.shellSecurityHints ? { shellSecurityHints: event.shellSecurityHints } : {}),
           ...(event.scriptPathHint ? { scriptPathHint: event.scriptPathHint } : {}),

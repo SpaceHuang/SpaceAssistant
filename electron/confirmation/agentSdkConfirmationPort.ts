@@ -37,6 +37,7 @@ export function mapAgentSdkConfirmationOutcome(outcome: ConfirmOutcome, requeste
   if (outcome.kind === 'approved' && (outcome.cause === 'user-approved' || outcome.cause === 'agent-approved')) {
     return {
       kind: 'approved', receipt: `confirmation:${randomUUID()}`, ...attribution, ...reason,
+      ...('reuse' in outcome && outcome.reuse === 'once' ? { reuse: 'once' as const } : {}),
       ...(outcome.memory ? { selectedMemory: outcome.memory } : {})
     }
   }
@@ -98,7 +99,11 @@ export function createAgentSdkConfirmationPort(input: {
       ...(confirmation.context.modelJustificationTruncated === true ? { modelJustificationTruncated: true } : {}),
       ...(confirmation.context.reviewScopeCandidate && typeof confirmation.context.reviewScopeCandidate === 'object'
         ? { reviewScopeCandidate: confirmation.context.reviewScopeCandidate as ConfirmRequest['reviewScopeCandidate'] }
-        : {})
+        : {}),
+      ...(confirmation.context.reviewScopeCandidate && confirmation.answerer === 'user' ? { allowReuseOnce: true } : {}),
+      ...(confirmation.context.reviewScopeCandidateScope && typeof confirmation.context.reviewScopeCandidateScope === 'object'
+        ? { reviewScopeLifetime: (confirmation.context.reviewScopeCandidateScope as { approvalLifetime?: ConfirmRequest['reviewScopeLifetime'] }).approvalLifetime }
+        : {}),
     }
     const lane = confirmation.context.lane
     const imHumanApproval = confirmation.answerer === 'user' && confirmation.context.decision.disposition === 'human-required' &&
@@ -188,9 +193,12 @@ export function createAgentSdkConfirmationPort(input: {
         if (deferred) return deferred
       }
       if (outcome.kind === 'approved') input.onApproved?.(confirmation.call, outcome, confirmation, confirmation.context as GateConfirmationContext, outcome.selectedMemory)
-      if (!confirmation.signal?.aborted && outcome.kind === 'approved' && outcome.answerer === 'agent' &&
-        'outcome' in result && result.outcome.kind === 'approved' && result.outcome.answererKind === 'agent') {
-        input.onScopeApproved?.(confirmation.call, confirmation.context as GateConfirmationContext, result.outcome)
+      if (!confirmation.signal?.aborted && outcome.kind === 'approved') {
+        const answererKind = outcome.answerer === 'agent' ? 'agent' : 'user'
+        input.onScopeApproved?.(confirmation.call, confirmation.context as GateConfirmationContext, {
+          kind: 'approved', answererKind, cause: answererKind === 'agent' ? 'agent-approved' : 'user-approved',
+          ...('reuse' in outcome && outcome.reuse === 'once' ? { reuse: 'once' as const } : {})
+        })
       }
       if (outcome.kind === 'denied' && outcome.answerer === 'user' && normalizedTarget) {
         explicitDenials.set(JSON.stringify([confirmation.modelTurn, confirmation.call.toolName, normalizedTarget]), {

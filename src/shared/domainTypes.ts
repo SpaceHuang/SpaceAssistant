@@ -755,6 +755,8 @@ export interface ToolCallRecord {
   riskLevel: ToolRiskLevel
   /** 确认卡片可选的"记忆档位"（由主进程决策引擎下发，无则不展示选择器）。 */
   memoryTiers?: import('./confirmation/types').MemoryTier[]
+  /** Only-once same-file approval is offered only for a validated review scope candidate. */
+  allowReuseOnce?: boolean
   /** 确认阶段由主进程下发的 diff，仅会话内使用 */
   confirmDiff?: { oldContent: string; newContent: string; oldPath: string }
   /** run_shell 路径/安全警示（确认卡片展示） */

@@ -207,6 +207,7 @@
     },
     "write": {
       "allow": "允许写入",
+      "allowOnce": "仅允许本次",
       "deny": "拒绝写入",
       "editAction": "编辑「{{fileName}}」",
       "writeAction": "写入「{{fileName}}」",

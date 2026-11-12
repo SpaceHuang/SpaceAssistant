@@ -932,13 +932,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
               sessionMessageRuntimeGeneration: `process:${process.pid}:${db ? currentProcessGeneration(getDbConnection(db)) : 0}`
             }))
           }
-          if (result.reviewScopeCandidateScope && result.reviewScopeCandidateDigest) {
-            registered.updateExecutionContext(call, (context) => {
-              context.reviewScopeCache = getDefaultAgentRuntime().reviewScopeCache
-              context.reviewScopeCandidateScope = result.reviewScopeCandidateScope
-              context.reviewScopeCandidateDigest = result.reviewScopeCandidateDigest
-            })
-          }
         },
         onConfirmed: (binding, result, args, answerer, selectedMemory) => {
           const permitReady = permitHandoff.onConfirmed?.(binding, result, args, answerer)
@@ -1177,6 +1170,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           confirmId: confirmationId,
           riskLevel: request.riskLevel === 'low' ? 'medium' : request.riskLevel,
           ...(request.memoryTiers.length ? { memoryTiers: request.memoryTiers } : {}),
+          ...(request.allowReuseOnce ? { allowReuseOnce: true } : {}),
           ...(confirmDiff ? { confirmDiff } : {}),
           ...(confirmationDecision.answerer === 'agent' ? { autoAnswerer: true } : {}),
           ...(confirmationDecision.answerer === 'user' && details.autoApproveFallback ? { autoAnswerer: false } : {}),
@@ -1212,22 +1206,22 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       return createAgentSdkConfirmationPort({
       ...confirmationAdapter,
       onScopeApproved: (call, context, primaryOutcome) => {
-        if (primaryOutcome.kind !== 'approved' || primaryOutcome.answererKind !== 'agent') return
+        if (primaryOutcome.kind !== 'approved' || primaryOutcome.reuse === 'once') return
         const cache = getDefaultAgentRuntime().reviewScopeCache
         const recordScopeAudit = (outcome: 'created' | 'skipped', reasonCode: NonNullable<import('../../src/shared/confirmation/types').SecurityAuditEvent['reviewScopeReasonCode']>) => {
           getSecurityAuditLog().record({ ts: Date.now(), event: 'confirm.review-scope', lane: materialsLane,
             sessionId: materials.sessionId, requestId: materials.requestId, invocationId: call.invocationId,
             toolUseId: call.toolCallId, toolName: call.toolName, actor: 'system', reviewScopeOutcome: outcome, reviewScopeReasonCode: reasonCode,
-            reviewScopeSource: 'agent', reviewScopeCandidateVersion: 'review-scope-candidate-v1' })
+            reviewScopeSource: primaryOutcome.answererKind === 'agent' ? 'agent' : 'user', reviewScopeCandidateVersion:
+              candidateScope?.toolName === 'grep' ? 'review-scope-candidate-v1' : 'review-scope-candidate-v2' })
         }
         const candidate = context.reviewScopeCandidate as import('../../src/shared/confirmation/types').ReviewScopeApprovalCandidate | undefined
         const candidateScope = context.reviewScopeCandidateScope as import('../confirmation/reviewScopeCache').ReviewScopeCandidate | undefined
         if (!candidate || !candidateScope) { recordScopeAudit('skipped', 'candidate_missing'); return }
-        if (!materials.approvalReviewScopeEvidenceComplete || !materials.approvalTaskDigest?.trim() || materials.approvalTaskDigestTruncated ||
-          !materials.approvalReviewScopeTaskIdentity?.trim() || Buffer.byteLength(materials.approvalReviewScopeTaskIdentity, 'utf8') > 64 * 1024) {
+        if (!materials.approvalReviewScopeEvidenceComplete) {
           recordScopeAudit('skipped', 'review_material_incomplete'); return
         }
-        if (!['desktop', 'feishu', 'wechat'].includes(materialsLane) || !['edit_file', 'write_file', 'grep'].includes(call.toolName) ||
+        if (!['desktop', 'feishu', 'wechat'].includes(materialsLane) || !['edit_file', 'write_file', 'grep', 'list_work_dirs'].includes(call.toolName) ||
           candidate.toolName !== call.toolName || candidateScope.toolName !== call.toolName) {
           recordScopeAudit('skipped', 'unsupported_tool'); return
         }
@@ -1245,8 +1239,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           recordScopeAudit('skipped', 'candidate_digest_invalid'); return
         }
         const created = cache.grantDigest({ lane: materialsLane as 'desktop' | 'feishu' | 'wechat',
-          sessionId: materials.sessionId, source: 'agent', scopeCandidateDigest: digest,
-          firstWrite: candidateScope.toolName !== 'grep' })
+          sessionId: materials.sessionId, source: primaryOutcome.answererKind === 'agent' ? 'agent' : 'user', scopeCandidateDigest: digest,
+          scope: candidateScope,
+          lifetime: candidateScope.approvalLifetime })
         recordScopeAudit(created ? 'created' : 'skipped', created ? 'grant_created' : 'grant_duplicate_or_capacity')
       },
       subscribeAuthorizationChange: confirmationAdapter.subscribeAuthorizationChange ?? ((call, listener) =>
@@ -1274,7 +1269,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         // publishing either the fact or floating notification so IPC can never race an absent waiter.
         const userResponse = userChannel.request({
           facts: context.facts, riskLevel: context.decision.riskLevel,
-          memoryTiers: context.decision.memoryTiers, timeoutMs: null
+          memoryTiers: context.decision.memoryTiers, timeoutMs: null,
+          ...(context.reviewScopeCandidate ? { allowReuseOnce: true } : {})
         })
         try {
           const confirmDiff = await buildConfirmationDiff(
@@ -1287,6 +1283,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             riskLevel: context.decision.riskLevel,
             memoryTiers: context.decision.memoryTiers,
             timeoutMs: null
+            ,...(context.reviewScopeCandidate ? { allowReuseOnce: true } : {})
           }, confirmation.confirmationId, {
             ...context,
             decision: { ...context.decision, answerer: 'user' },

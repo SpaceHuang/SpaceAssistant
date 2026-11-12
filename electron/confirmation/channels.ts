@@ -13,7 +13,7 @@ import type {
 import { waitForToolConfirm } from '../toolConfirmRegistry'
 import { ImChannel, type ImPendingInput } from './imChannel'
 
-export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
+export type ToolConfirmOutcome = 'approved' | 'approved-once' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
 
 /** IM defaults to Agent review; human-required policy decisions still select the user explicitly. */
 export function selectConfirmationAnswerer(input: { lane: ExecutionLane }): ConfirmAnswererPolicy {
@@ -28,7 +28,7 @@ export interface AuditSink {
 }
 
 function mapToolOutcome(outcome: ToolConfirmOutcome): ConfirmOutcome {
-  if (outcome === 'approved') return { kind: 'approved', cause: 'user-approved' }
+  if (outcome === 'approved' || outcome === 'approved-once') return { kind: 'approved', cause: 'user-approved', ...(outcome === 'approved-once' ? { reuse: 'once' as const } : {}) }
   if (outcome === 'timeout') return { kind: 'timeout', cause: 'timeout' }
   if (outcome === 'cancelled') return { kind: 'rejected', cause: 'cancelled' }
   if (outcome === 'unavailable') return { kind: 'rejected', cause: 'unavailable' }
@@ -133,7 +133,8 @@ export class DesktopChannel implements ConfirmationChannel {
         sessionId: this.deps.sessionId,
         ...trustScope
       },
-      req.timeoutMs ?? undefined
+      req.timeoutMs ?? undefined,
+      req.allowReuseOnce === true
     )
     const mapped = mapToolOutcome(outcome)
     this.deps.audit?.record({
@@ -143,7 +144,7 @@ export class DesktopChannel implements ConfirmationChannel {
       outcome: outcome,
       cause: mapped.cause,
       // 超时无回答动作，actor 如实为 system；批准/拒绝归因桌面用户（B1）
-      actor: outcome === 'approved' || outcome === 'rejected' ? 'user' : 'system'
+      actor: outcome === 'approved' || outcome === 'approved-once' || outcome === 'rejected' ? 'user' : 'system'
     })
     return mapped
   }

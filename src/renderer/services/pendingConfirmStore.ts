@@ -27,6 +27,7 @@ export type PendingConfirmItem = {
   confirmationReady?: boolean
   confirmationSnapshot?: ConfirmationSnapshot
   memoryTiers?: MemoryTier[]
+  allowReuseOnce?: boolean
   turnId?: string
   turnVersion?: number
   /** 来源投影中的助手消息与顺序；恢复卡片时用于回到原消息位置。 */
@@ -54,6 +55,7 @@ function sameItemPayload(a: ConfirmPayloadFields, b: ConfirmPayloadFields): bool
     && a.autoApproveFallback === b.autoApproveFallback
     && a.currentPageUrl === b.currentPageUrl
     && a.sessionTrustedHint === b.sessionTrustedHint
+    && a.allowReuseOnce === b.allowReuseOnce
     && JSON.stringify(a.input ?? null) === JSON.stringify(b.input ?? null)
     && JSON.stringify(a.diff ?? null) === JSON.stringify(b.diff ?? null)
     && JSON.stringify(a.shellSecurityHints ?? null) === JSON.stringify(b.shellSecurityHints ?? null)
@@ -154,6 +156,7 @@ class PendingConfirmStore {
         toolName: tool.toolName,
         input: tool.input,
         ...(tool.memoryTiers ? { memoryTiers: tool.memoryTiers } : {}),
+        ...(tool.allowReuseOnce ? { allowReuseOnce: true } : {}),
         riskLevel: tool.riskLevel,
         ...(tool.confirmDiff ? { diff: tool.confirmDiff } : {}),
         ...(tool.shellSecurityHints ? { shellSecurityHints: tool.shellSecurityHints } : {}),
@@ -306,6 +309,7 @@ class PendingConfirmStore {
       ...(options?.trustMcpServerId ? { trustMcpServerId: options.trustMcpServerId } : {}),
       ...(options?.trustMcpToolName ? { trustMcpToolName: options.trustMcpToolName } : {})
       ,...(options?.memoryTierOptionId !== undefined ? { memoryTierOptionId: options.memoryTierOptionId } : {}),
+      ...(options?.reuse === 'once' ? { reuse: 'once' as const } : {}),
       ...(current?.sessionId ?? sessionId ? { sessionId: current?.sessionId ?? sessionId } : {})
     })
     if (current) this.notify()

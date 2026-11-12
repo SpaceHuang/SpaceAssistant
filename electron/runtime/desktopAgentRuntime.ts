@@ -13,6 +13,9 @@ import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
 import type { AnthropicRouteProfile } from '@spaceassistant/agent-provider-pi-ai'
 import { createDesktopAnthropicProvider } from '../piAiAnthropicBridge'
 import { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
+import type { DatabaseSync } from 'node:sqlite'
+import { ReviewScopeCache } from '../confirmation/reviewScopeCache'
+import { ReviewScopeGrantStore } from '../confirmation/reviewScopeGrantStore'
 
 /**
  * 桌面宿主 runtime 组装(P0 修复,评审 batch3-runtime-admission-sdk-review):
@@ -21,7 +24,7 @@ import { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
  * 独立模块纪律:本模块 import builtinExecutors 大链,**不得**被六原模块(经 defaults)
  * 在模块加载期触达——只有 main.ts 与测试显式 import,无 CJS 环。
  */
-export function createDesktopAgentRuntime(): ReturnType<typeof createAgentRuntime> {
+export function createDesktopAgentRuntime(db?: DatabaseSync): ReturnType<typeof createAgentRuntime> {
   const modelProviders = new ModelProviderRegistry()
   const anthropicProfiles: AnthropicRouteProfile[] = Object.entries(MODEL_BASELINE)
     .filter(([, baseline]) => baseline.sourceProvider === 'anthropic')
@@ -52,6 +55,7 @@ export function createDesktopAgentRuntime(): ReturnType<typeof createAgentRuntim
     }, anthropicProvider)
   }
   return createAgentRuntime({
+    ...(db ? { reviewScopeCache: new ReviewScopeCache({ grantStore: new ReviewScopeGrantStore(db) }) } : {}),
     // 审计惰性构造:agentLogger 目录未就绪时降级 NOOP(与原 singleton 语义一致)
     auditFactory: () => {
       const logDir = resolveSecurityAuditLogDir()

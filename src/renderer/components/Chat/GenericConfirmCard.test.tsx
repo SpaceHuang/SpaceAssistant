@@ -55,6 +55,15 @@ describe('GenericConfirmCard（confirming 批准入口兜底，全工具守卫�
     expect(screen.getByText(/…$/)).toBeDefined()
   })
 
+  it.each(['grep', 'list_work_dirs'])('%s 候选显示仅本次按钮并提交单次选择', (toolName) => {
+    const onConfirm = vi.fn()
+    const record = { id: `once-${toolName}`, toolName, status: 'confirming', allowReuseOnce: true,
+      input: { path: '.', pattern: 'needle' } } as unknown as ToolCallRecord
+    render(<GenericConfirmCard record={record} onConfirm={onConfirm} />)
+    fireEvent.click(screen.getByRole('button', { name: 'confirm.write.allowOnce' }))
+    expect(onConfirm).toHaveBeenCalledWith(true, { reuse: 'once' })
+  })
+
   it('页面恢复确认展示完整最终正文，不截断用户需要核对的材料', () => {
     const markdown = `# 最终页面\n\n${'恢复正文。'.repeat(100)}`
     const record = {

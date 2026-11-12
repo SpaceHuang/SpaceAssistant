@@ -228,11 +228,11 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     expect(readPolicyPackages(d).desktop).toBe('custom')
     expect(loadEffectivePolicyRules(d, 'desktop').find((rule) => rule.id === 'remote-shell-disabled'))
       .toMatchObject({ action: 'allow', userOverride: true })
-    expect(conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get()).toEqual({ epoch: 1 })
+    expect(conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get()).toEqual({ epoch: 2 })
     expect(commitDesktopPolicySnapshot(conn, {
       expectedRevision: 0, policyBehaviorVersion: 'desktop-v1', snapshot: {}, updatedAt: 2, eventId: 'desktop-stale'
     })).toEqual({ status: 'conflict', currentRevision: 1 })
-    expect(conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get()).toEqual({ epoch: 1 })
+    expect(conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get()).toEqual({ epoch: 2 })
   })
 
   it('desktop rule view exposes known migration source IDs from the snapshot', () => {

@@ -21,6 +21,25 @@ function hash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
+/** Scope identity includes disclosed configuration only; session bindings are recomputed on every call. */
+export function workDirDisclosureDigest(result: ToolExecutorResult): string | undefined {
+  if (!result.success || !result.data || typeof result.data !== 'object' || Array.isArray(result.data)) return undefined
+  const data = result.data as { directories?: unknown }
+  if (!Array.isArray(data.directories)) return undefined
+  const directories: Array<{ id: string; name: string; path: string; isDefault: boolean; isSensitive: boolean; aliases: string[] }> = []
+  for (const item of data.directories) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined
+    const row = item as Record<string, unknown>
+    if (typeof row.id !== 'string' || !row.id || typeof row.name !== 'string' || typeof row.path !== 'string' ||
+      typeof row.isDefault !== 'boolean' || typeof row.isSensitive !== 'boolean' ||
+      !Array.isArray(row.aliases) || !row.aliases.every((alias) => typeof alias === 'string')) return undefined
+    directories.push({ id: row.id, name: row.name, path: row.path, isDefault: row.isDefault, isSensitive: row.isSensitive,
+      aliases: [...row.aliases as string[]].sort() })
+  }
+  directories.sort((a, b) => a.id.localeCompare(b.id))
+  return hash(directories)
+}
+
 function callerBinding(runtime: RuntimeExecutionContext): Readonly<Record<string, unknown>> {
   return {
     sessionId: runtime.sessionId,
@@ -74,7 +93,10 @@ export function createListWorkDirsRegisteredTool(executor: ToolExecutor): Regist
       if (hash(latest) !== prepared.snapshotHash) throw new Error('LIST_WORKDIRS_PREPARED_SNAPSHOT_CHANGED')
     },
     execute: async (prepared) => structuredClone(prepared.result),
-    facts: ({ callerBinding: caller, snapshotHash }) => ({ callerBindingHash: hash(caller), snapshotHash }),
+    facts: ({ callerBinding: caller, snapshotHash, result }) => {
+      const reviewScopeDisclosureDigest = workDirDisclosureDigest(result)
+      return { callerBindingHash: hash(caller), snapshotHash, ...(reviewScopeDisclosureDigest ? { reviewScopeDisclosureDigest } : {}) }
+    },
     display: ({ result }) => {
       const data = result.data as { directories?: readonly unknown[]; currentBoundId?: string } | undefined
       return { directoryCount: data?.directories?.length ?? 0, currentBoundId: data?.currentBoundId }

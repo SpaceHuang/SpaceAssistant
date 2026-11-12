@@ -6,7 +6,7 @@ describe('runtime trigger protocol v1 contracts', () => {
   it('pins lifecycle limits as explicit finite fixture values, not production defaults', () => {
     const fixtureLimits = { callbackTimeoutMs: 1000, maxPauseMs: 2000 }
     expect(Object.values(fixtureLimits).every((value) => Number.isFinite(value) && value > 0)).toBe(true)
-    expect(DB_SCHEMA_VERSION).toBe(124)
+    expect(DB_SCHEMA_VERSION).toBe(126)
     expect(SCHEMA_META_KEYS.schemaVersion).toBe('schema_version')
     expect(SCHEMA_META_KEYS.imFactNextSeq).toBe('im_fact_next_seq')
     expect(SCHEMA_META_KEYS.imFactCoverageRevisionPrefix).toBe('im_fact_coverage_revision:')

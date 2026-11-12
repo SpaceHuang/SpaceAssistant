@@ -53,6 +53,10 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`read-target-kind:${signal.targetKind}`)
         break
+      case 'review-scope-candidate':
+        tokens.add(signal.kind)
+        tokens.add(`review-scope-candidate:${signal.status}`)
+        break
       case 'write-target-scope':
         tokens.add(signal.kind)
         tokens.add(`write-target-scope:${signal.scope}`)
@@ -489,7 +493,9 @@ function applyDefault(
     )
   }
   // 缺元数据 / 无信号一律按"信息不足宁可多问"处理
-  if (facts.actionClass === 'read' || facts.actionClass === 'outbound') {
+  // A verified grep review candidate must pass through its narrowly scoped rule,
+  // so a user override of `grep-workdir-recursive-reusable` to ask can take effect.
+  if ((facts.actionClass === 'read' && !tokens.has('review-scope-candidate:eligible')) || facts.actionClass === 'outbound') {
     return autoAllow('default-read-outbound-allow', facts)
   }
   // default-write-execute-ask 照常参与档位变换（desktop standard → auto-evaluator，§5.2）：
@@ -508,7 +514,7 @@ function applyDefault(
       facts.signals.some((signal) => signal.kind === 'path-target' && signal.zone === 'workdir-normal')
     if (regularWorkspaceFile && deps.reviewScopeGrant && defaultWriteReviewRule.reviewCacheSources.includes(deps.reviewScopeGrant.source)) {
       return { type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1',
-        cause: 'review-cache-current-task-constraint-v1', reason: 'approved review scope matched' }
+        cause: 'review-cache-scope-grant-v1', reason: 'approved review scope matched' }
     }
     if (deps.autoEvaluator) {
       const res = deps.autoEvaluator(facts, context)
@@ -674,11 +680,12 @@ export function decide(
     (action === 'ask' || action === 'auto-evaluator' || action === 'confirm-every-time') && !askUnlessHolds(rule, deps)
   )
   if (deps.reviewScopeGrant && effectiveReviewRules.length > 0 && effectiveReviewRules.every(({ rule }) =>
-    !rule.humanRequired && !rule.userOverride && !rule.locked &&
+    !rule.humanRequired && !rule.locked &&
+    (!rule.userOverride || rule.id === 'grep-workdir-recursive-reusable' && rule.userOverride && rule.action === 'ask' && deps.reviewScopeGrant!.source === 'user') &&
     rule.reviewCacheSources?.includes(deps.reviewScopeGrant!.source) === true
   )) {
     return { type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1',
-      cause: 'review-cache-current-task-constraint-v1', reason: 'approved review scope matched' }
+      cause: 'review-cache-scope-grant-v1', reason: 'approved review scope matched' }
   }
 
   if (selectedAsk && !(onlyExplicitlyCacheableAsks && cacheHit?.type === 'auto-allow')) {

@@ -110,6 +110,15 @@ describe('AgentChannel（P2-3）', () => {
     expect(await mismatch.request(req({ reviewScopeCandidate: candidate }))).toMatchObject({ kind: 'approved' })
   })
 
+  it('将冻结的范围期限传入实际审批线索', async () => {
+    const invokeApproval = vi.fn(async (): Promise<ApprovalInvocationResult> => ({ ok: true, verdict: APPROVE }))
+    const { ch } = channel({ lane: 'desktop', invokeApproval })
+    await ch.request(req({ reviewScopeLifetime: '7d', reviewScopeCandidate: {
+      scopeCandidateDigest: 'a'.repeat(64), toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: '/work/a.txt' }]
+    } }))
+    expect(invokeApproval.mock.calls[0]?.[0].clue).toMatchObject({ reviewScopeLifetime: '7d' })
+  })
+
   it('任务或前序证据不完整时仍保留本次 approve，由宿主跳过缓存登记', async () => {
     const digest = 'e'.repeat(64)
     const candidate = { scopeCandidateDigest: digest, toolName: 'edit_file', operation: 'edit' as const,

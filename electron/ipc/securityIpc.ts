@@ -138,7 +138,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     const securityStorage = ctx.securitySettingsStorage
     if (!securityStorage) throw new Error('security settings storage is not configured')
     const tools = readToolsConfig(ctx.db)
-    return model.buildSettingsSecurityModel({
+    return { ...model.buildSettingsSecurityModel({
       packages: runtime.readPolicyPackages(ctx.db),
       policyRevisions: { desktop: runtime.readDesktopPolicyRevision(ctx.db) },
       deniedTools: tools.deniedTools,
@@ -151,7 +151,25 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       ),
       retentionDays: runtime.readSecurityAuditRetentionDays(ctx.db),
       haveAuditLog: auditMod.getSecurityAuditLogDir() != null
-    })
+    }), reviewScopeLifetime: getDefaultAgentRuntime().reviewScopeCache.getDefaultLifetime() }
+  })
+
+  ipcMain.handle('security:set-review-scope-lifetime', async (_e, payload: { lifetime?: unknown }) => {
+    const lifetime = payload?.lifetime
+    if (lifetime !== 'session' && lifetime !== 'process' && lifetime !== '24h' && lifetime !== '7d') {
+      return { ok: false as const, error: 'invalid review scope lifetime' }
+    }
+    const reviewScopeCache = getDefaultAgentRuntime().reviewScopeCache
+    const before = reviewScopeCache.getDefaultLifetime()
+    const saved = reviewScopeCache.setDefaultLifetime(lifetime)
+    if (!saved) return { ok: false as const, error: 'failed to save review scope lifetime' }
+    ctx.db.flushSave()
+    try {
+      const { recordSettingsChange } = await import('../confirmation/settingsAudit')
+      recordSettingsChange(getSecurityAuditLog(), { kind: 'policy-change', lane: 'desktop', sessionId: 'settings',
+        key: 'reviewScope.defaultLifetime', before, after: lifetime })
+    } catch { /* settings value is already committed */ }
+    return { ok: true as const }
   })
 
   ipcMain.handle(
@@ -316,6 +334,13 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     // 清除即"下次再问"（§7 第 4 区）；单条/全部均落 cache.clear 审计
     const key = payload?.key && typeof payload.key === 'object' ? (payload.key as never) : null
     const cleared = key ? cache.clearDecisionCache(key) : cache.clearAllDecisionCache()
+    let reviewScopeCleared = false
+    if (!key) {
+      const scopeCache = getDefaultAgentRuntime().reviewScopeCache
+      scopeCache.clearAll()
+      reviewScopeCleared = scopeCache.clearPersistentGrants()
+      if (!reviewScopeCleared) throw new Error('Failed to clear reusable approval grants')
+    }
     // B6/B7：decision_cache 与旧信任存储（shell 信任命令 / 浏览器域名信任）双源生效，
     // 清除必须联动撤销旧存储，否则信任永久生效、不可见、不可撤销（fail-open）。
     const legacyRevoked = key
@@ -331,7 +356,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       reason: key ? undefined : 'clear-all',
       actor: 'user'
     })
-    return { ok: true as const, cleared, legacyRevoked }
+    return { ok: true as const, cleared, legacyRevoked, reviewScopeCleared }
   })
 
   ipcMain.handle('security:query-audit', async (_e, payload: unknown) => {

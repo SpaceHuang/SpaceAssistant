@@ -5,6 +5,8 @@ import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import { buildReadExecutionPermit, type ReadPermitIdentity } from './readExecutionPermit'
 import { resolveReadPermitTarget } from './readPermitExecutor'
+import { grepIgnoreContextDigest } from '../tools/grepIgnoreContext'
+import { getGrepExecutionProfile } from '../tools/grepExecutionProfile'
 import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 
 const dirIdentity = (stat: { dev: number; ino: number; mode: number; size: number; mtimeMs: number }): ReadPermitIdentity =>
@@ -170,6 +172,51 @@ describe('resolveReadPermitTarget', () => {
       })
       await expect(resolveReadPermitTarget('grep', input, { requestId: 'r-sub', toolUseId: 't-sub', readExecutionPermit: permit } as never)).resolves.toMatchObject({ ok: false, caseId: 'permit-target-scope-mismatch', failureClass: 'mechanism' })
     } finally { await fs.rm(dir, { recursive: true, force: true }) }
+  })
+
+  it('G-02 inherited grep permit rechecks the approved parent identity and constrains the child root', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'grep-parent-permit-')))
+    vi.stubEnv('HOME', parent)
+    const child = path.join(parent, 'src')
+    await fs.mkdir(child)
+    try {
+      const input = { path: child, pattern: 'needle' }
+      const parentStat = await fs.stat(parent)
+      const childStat = await fs.stat(child)
+      const ignoreDigest = await grepIgnoreContextDigest(parent, parent)
+      const executionProfile = await getGrepExecutionProfile()
+      expect(ignoreDigest).toMatch(/^[a-f0-9]{64}$/)
+      expect(executionProfile).toBeDefined()
+      const permit = buildReadExecutionPermit({
+        requestId: 'r-inherited', toolUseId: 't-inherited', toolName: 'grep', input,
+        facts: [{ factId: `fact-${child}`, decisionRuleId: 'grep-workdir-recursive-reusable', normalizedPath: child,
+          zone: 'workdir-normal', targetKind: 'directory', scope: 'subtree', identity: dirIdentity(childStat),
+          grepParentScope: { workDir: parent, normalizedPath: parent, identity: { dev: parentStat.dev, ino: parentStat.ino, mode: parentStat.mode }, ignoreDigest: ignoreDigest!, engine: executionProfile!.engine, engineFingerprint: executionProfile!.fingerprint, extraExcludeDirNames: [] } }]
+      })
+      await expect(resolveReadPermitTarget('grep', input, { requestId: 'r-inherited', toolUseId: 't-inherited', workDir: parent, readExecutionPermit: permit } as never))
+        .resolves.toMatchObject({ ok: true, path: child, targetKind: 'directory' })
+      await fs.writeFile(path.join(child, '.gitignore'), 'private/\n')
+      await expect(resolveReadPermitTarget('grep', input, { requestId: 'r-inherited', toolUseId: 't-inherited', workDir: parent, readExecutionPermit: permit } as never))
+        .resolves.toMatchObject({ ok: false, caseId: 'read-grep-parent-scope-mismatch', failureClass: 'mechanism' })
+      await fs.rm(path.join(child, '.gitignore'))
+      const changedParent = buildReadExecutionPermit({
+        requestId: 'r-inherited', toolUseId: 't-inherited', toolName: 'grep', input,
+        facts: [{ factId: `fact-${child}`, decisionRuleId: 'grep-workdir-recursive-reusable', normalizedPath: child,
+          zone: 'workdir-normal', targetKind: 'directory', scope: 'subtree', identity: dirIdentity(childStat),
+          grepParentScope: { workDir: parent, normalizedPath: parent, identity: { dev: parentStat.dev, ino: parentStat.ino, mode: parentStat.mode + 1 }, ignoreDigest: ignoreDigest!, engine: executionProfile!.engine, engineFingerprint: executionProfile!.fingerprint, extraExcludeDirNames: [] } }]
+      })
+      await expect(resolveReadPermitTarget('grep', input, { requestId: 'r-inherited', toolUseId: 't-inherited', workDir: parent, readExecutionPermit: changedParent } as never))
+        .resolves.toMatchObject({ ok: false, caseId: 'read-grep-parent-identity-changed', failureClass: 'mechanism' })
+      const changedEngine = buildReadExecutionPermit({
+        requestId: 'r-inherited', toolUseId: 't-inherited', toolName: 'grep', input,
+        facts: [{ factId: `fact-${child}`, decisionRuleId: 'grep-workdir-recursive-reusable', normalizedPath: child,
+          zone: 'workdir-normal', targetKind: 'directory', scope: 'subtree', identity: dirIdentity(childStat),
+          grepParentScope: { workDir: parent, normalizedPath: parent, identity: { dev: parentStat.dev, ino: parentStat.ino, mode: parentStat.mode },
+            ignoreDigest: (await grepIgnoreContextDigest(parent, parent))!, engine: executionProfile!.engine, engineFingerprint: 'f'.repeat(64), extraExcludeDirNames: [] } }]
+      })
+      await expect(resolveReadPermitTarget('grep', input, { requestId: 'r-inherited', toolUseId: 't-inherited', workDir: parent, readExecutionPermit: changedEngine } as never))
+        .resolves.toMatchObject({ ok: false, caseId: 'read-grep-engine-changed', failureClass: 'mechanism' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
   })
 
   it('按绑定许可返回目标路径，并拒绝变更的请求或输入', async () => {

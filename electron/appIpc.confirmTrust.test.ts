@@ -137,6 +137,19 @@ describe('tool:confirm-response 信任写入与 pending 确认挂钩（H1）', (
   const invoke = (payload: Record<string, unknown>) =>
     ipc.getHandler('tool:confirm-response')?.(null, payload) as Promise<void>
 
+  it('仅本次与记忆档位冲突时拒绝组合提交，且不写入旧记忆', async () => {
+    const writer = await import('./confirmation/decisionCacheWriter')
+    const tier = { key: { kind: 'path' as const, path: '/work/a.txt', level: 'file' as const }, label: '记住此文件' }
+    const pending = waitForToolConfirm('req-once-memory', 'tu-once-memory', [tier],
+      { toolName: 'write_file', lane: 'desktop', sessionId: 's1' })
+    try {
+      await invoke({ requestId: 'req-once-memory', toolUseId: 'tu-once-memory', sessionId: 's1', approved: true,
+        reuse: 'once', memoryTierOptionId: 1 })
+      await expect(pending).resolves.toBe('rejected')
+      expect(writer.recordUserAnswerFromMemoryTiers).not.toHaveBeenCalled()
+    } finally { clearToolCancel('req-once-memory', 'tu-once-memory') }
+  })
+
   it('无 pending 确认时：trustCommand 不写入（残留卡片点击是空操作）', async () => {
     await invoke({
       requestId: 'req-no-pending',

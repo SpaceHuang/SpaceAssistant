@@ -39,6 +39,8 @@ export function GenericConfirmCard({ record, onConfirm }: Props) {
         actionSummary={actionSummary}
         allowLabel={t('confirm.generic.allow')}
         denyLabel={t('confirm.generic.deny')}
+        onceLabel={t('confirm.write.allowOnce')}
+        allowOnce={record.allowReuseOnce === true}
         onConfirm={onConfirm}
       >
         {paramsPreview ? (

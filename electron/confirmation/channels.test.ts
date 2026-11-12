@@ -88,7 +88,8 @@ describe('DesktopChannel', () => {
       'tool-to',
       [],
       { toolName: 'run_shell', lane: 'desktop', sessionId: 's' },
-      30000
+      30000,
+      false
     )
   })
 })

@@ -18,6 +18,13 @@ describe('parseImConfirmReply', () => {
     expect(parseImConfirmReply('yes 07')).toEqual({ kind: 'approve', confirmId: '07' })
   })
 
+  it('accepts only an explicit one-time approval bound to a confirm id', () => {
+    expect(parseImConfirmReply('仅本次 07')).toEqual({ kind: 'approve_once', confirmId: '07' })
+    expect(parseImConfirmReply('仅本次')).toEqual({ kind: 'usage_hint' })
+    expect(formatImConfirmPromptFooter({ confirmId: '07', allowReuseOnce: true })).toContain('仅本次 07')
+    expect(formatImConfirmPromptFooter({ confirmId: '07' })).not.toContain('仅本次')
+  })
+
   it('approves and trusts with confirmId', () => {
     expect(parseImConfirmReply('Y 07 TRUST')).toEqual({
       kind: 'approve_and_trust',

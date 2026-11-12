@@ -144,6 +144,8 @@ const api: SpaceAssistantApi = {
 
   // ===== 「安全策略」设置页（§7 五区，P4）=====
   securityGetSettingsModel: () => ipcRenderer.invoke('security:get-settings-model'),
+  securitySetReviewScopeLifetime: (payload: { lifetime: 'session' | 'process' | '24h' | '7d' }) =>
+    ipcRenderer.invoke('security:set-review-scope-lifetime', payload),
   securityReadPolicyForLane: (payload) => ipcRenderer.invoke('policy:read-for-lane', payload),
   securityWritePolicy: (payload) => ipcRenderer.invoke('policy:write', payload),
   securitySetPolicyPackage: (payload) => ipcRenderer.invoke('security:set-policy-package', payload),

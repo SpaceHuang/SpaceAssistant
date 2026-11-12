@@ -453,6 +453,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     reason: '工作目录内普通只读访问免确认'
   },
   {
+    id: 'grep-workdir-recursive-reusable',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'grep', actionClass: 'read', signals: ['path-target:workdir-normal', 'read-target-scope:subtree'] },
+    action: 'allow',
+    reviewCacheSources: ['user'],
+    reason: '普通工作目录内递归搜索可按用户批准范围复用'
+  },
+  {
     id: 'path-outside-readonly-allow',
     when: 'invocation',
     match: { lane: ['desktop'], actionClass: 'read', signals: ['path-target:outside-workdir'] },
@@ -760,11 +768,11 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'im-low-risk-edit',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'edit_file', signals: ['write-target-existing', 'write-target-scope:inside-workdir', 'path-target:workdir-normal'] },
+    match: { lane: ['wechat', 'feishu'], toolName: ['edit_file', 'write_file'], signals: ['write-target-existing', 'write-target-scope:inside-workdir', 'path-target:workdir-normal'] },
     denyClass: 'insufficient-info',
     action: 'ask',
     reviewCacheSources: ['agent'],
-    reason: '普通工作区内既有文件编辑属于 IM standard 审核候选'
+    reason: '普通工作区内既有文件编辑或覆盖属于 IM standard 审核候选'
   },
   // 高危路径具有人审底线，独立于 IM standard 的兜底自动审核，且在任何缓存/审核器之前执行。
   {
