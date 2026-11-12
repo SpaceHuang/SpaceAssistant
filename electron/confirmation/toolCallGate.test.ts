@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { ReviewScopeCache } from './reviewScopeCache'
+import { ReviewScopeGrantStore } from './reviewScopeGrantStore'
 import { captureFileIdentity, safeAtomicWrite } from '../safeAtomicWrite'
 import fs from 'fs/promises'
 import os from 'os'
@@ -188,6 +189,38 @@ describe('review scope cache gate integration', () => {
       expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'grep-workdir-recursive-reusable', answerer: 'user' })
       expect(result.reviewScopeCandidateScope).toMatchObject({ lane, subjectId: lane === 'desktop' ? '/data' : 'authenticated-owner' })
     } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('R4: expired Agent grant cannot stay alive through a longer user grant in the old cache', async () => {
+    const db = openDb()
+    const conn = getDbConnection(db)
+    conn.prepare("INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('desktop',7) ON CONFLICT(domain) DO UPDATE SET epoch=7").run()
+    const root = await fs.realpath(await makeTempDir('same-file-r4-source-'))
+    await fs.writeFile(path.join(root, 'notes.txt'), 'before')
+    let now = Date.now() + 1_000
+    const store = new ReviewScopeGrantStore(conn, { now: () => now })
+    const cache = new ReviewScopeCache({ grantStore: store })
+    const args = base({ lane: 'desktop', sessionId: 'r4-session', requestId: 'r4', toolUseId: 'r4-user', toolName: 'write_file',
+      toolInput: { path: 'notes.txt', content: 'after' }, workDir: root, userDataDir: '/profile',
+      policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 1, epoch: 7 },
+      reviewScopeEvidenceComplete: true, reviewScopeCache: cache, toolsConfig: DEFAULT_TOOLS_CONFIG,
+      effectiveRules: DEFAULT_POLICY_RULES, lanePackage: 'standard' })
+    expect(store.setDefaultLifetime('7d')).toBe(true)
+    const first = await evaluateToolCallGate(args)
+    expect(first.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(cache.grantDigest({ lane: 'desktop', sessionId: 'r4-session', source: 'user', scope: first.reviewScopeCandidateScope!,
+      scopeCandidateDigest: first.reviewScopeCandidateDigest!, lifetime: '7d' })).toBe(true)
+    expect(store.setDefaultLifetime('24h')).toBe(true)
+    const second = await evaluateToolCallGate({ ...args, toolUseId: 'r4-agent' })
+    expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(cache.grantDigest({ lane: 'desktop', sessionId: 'r4-session', source: 'agent', scope: second.reviewScopeCandidateScope!,
+      scopeCandidateDigest: second.reviewScopeCandidateDigest!, lifetime: '24h' })).toBe(true)
+    expect((await evaluateToolCallGate({ ...args, toolUseId: 'r4-before' })).decision.type).toBe('auto-allow')
+    now += 86_400_000
+    const fresh = await evaluateToolCallGate({ ...args, toolUseId: 'r4-fresh', reviewScopeCache: new ReviewScopeCache({ grantStore: store }) })
+    expect(fresh.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    const oldCache = await evaluateToolCallGate({ ...args, toolUseId: 'r4-after' })
+    expect(oldCache.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
   })
 
   it('reuses a same-path ordinary directory grant after the directory is recreated', async () => {

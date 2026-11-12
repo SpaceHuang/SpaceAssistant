@@ -180,10 +180,10 @@ export class ReviewScopeGrantStore {
     if (now === null) return null
     try {
       const row = this.db.prepare(`SELECT id,source,lifetime,issued_at_ms,expires_at_ms,scope_json FROM review_scope_grants
-        WHERE domain=? AND lane=? AND subject_id=? AND policy_revision=? AND policy_epoch=? AND policy_version=? AND capability=? AND scope_json=?
+        WHERE domain=? AND lane=? AND subject_id=? AND policy_revision=? AND policy_epoch=? AND policy_version=? AND capability=? AND source=? AND scope_json=?
           AND expires_at_ms>? ORDER BY issued_at_ms DESC,id DESC LIMIT 1`)
         .get(input.domain, input.lane, input.subjectId, input.policyRevision, input.policyEpoch, input.policyVersion,
-          input.capability, scopeJson, now) as { id: number; source: ReviewScopeSource; lifetime: '24h' | '7d'; issued_at_ms: number; expires_at_ms: number; scope_json: string } | undefined
+          input.capability, input.source, scopeJson, now) as { id: number; source: ReviewScopeSource; lifetime: '24h' | '7d'; issued_at_ms: number; expires_at_ms: number; scope_json: string } | undefined
       if (!row) return null
       return Object.freeze({ source: row.source, lifetime: row.lifetime, issuedAtMs: row.issued_at_ms, expiresAtMs: row.expires_at_ms, scope: JSON.parse(row.scope_json) as unknown })
     } catch { return null }

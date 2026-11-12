@@ -91,6 +91,19 @@ describe('ReviewScopeGrantStore', () => {
     expect(restarted.lookup(identity({ sessionId: 'session-c' }))).toBeNull()
   })
 
+  it('keeps exact persistent lookup bound to the requested source when grants overlap', () => {
+    const db = open()
+    let now = Date.now() + 1_000
+    const store = new ReviewScopeGrantStore(db, { now: () => now })
+    expect(store.grant({ ...identity({ source: 'user' }), lifetime: '7d' })).toBe(true)
+    expect(store.grant({ ...identity({ source: 'agent' }), lifetime: '24h' })).toBe(true)
+    expect(store.lookup(identity({ source: 'agent' }))).toMatchObject({ source: 'agent', lifetime: '24h' })
+    expect(store.lookup(identity({ source: 'user' }))).toMatchObject({ source: 'user', lifetime: '7d' })
+    now += 86_400_000
+    expect(store.lookup(identity({ source: 'agent' }))).toBeNull()
+    expect(store.lookup(identity({ source: 'user' }))).toMatchObject({ source: 'user', lifetime: '7d' })
+  })
+
   it('enforces volatile lifetimes by session or process and never restores them after restart', () => {
     const db = open()
     const store = new ReviewScopeGrantStore(db)

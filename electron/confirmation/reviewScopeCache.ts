@@ -388,7 +388,8 @@ export class ReviewScopeCache {
       this.revokeEntry(entry)
       return false
     }
-    if (this.grantStore.lookup(this.storeIdentity(scope, entry.source))) return true
+    const durable = this.grantStore.lookup(this.storeIdentity(scope, entry.source))
+    if (durable?.source === entry.source) return true
     this.revokeEntry(entry)
     return false
   }
