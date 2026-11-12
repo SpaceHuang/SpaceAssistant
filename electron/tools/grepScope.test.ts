@@ -1,7 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
@@ -34,11 +34,28 @@ describe('grep subtree grant containment', () => {
     fs.mkdirSync(path.join(root, 'private'))
     fs.writeFileSync(path.join(root, ignoreFile), 'private/\n')
     fs.writeFileSync(path.join(root, 'private', 'a.txt'), 'needle\n')
-    fs.writeFileSync(path.join(root, 'public.txt'), 'needle\n')
-    const parentMatches = execFileSync('rg', ['--hidden', '--no-ignore-vcs', '--files-with-matches', 'needle', '.'], { cwd: root, encoding: 'utf8' })
-    const childMatches = execFileSync('rg', ['--hidden', '--no-ignore-vcs', '--files-with-matches', 'needle', 'private'], { cwd: root, encoding: 'utf8' })
-    expect(parentMatches).not.toContain('private/a.txt')
-    expect(childMatches).toContain('private/a.txt')
+    // includeIgnored only disables VCS ignores; these ripgrep-specific files can still
+    // make an explicit child-root invocation wider than the approved parent search.
+    // Keep the engine comparison when system rg is installed; CI need not install a global binary.
+    let hasSystemRipgrep = true
+    try {
+      execFileSync('rg', ['--version'], { stdio: 'ignore' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      hasSystemRipgrep = false
+    }
+    if (hasSystemRipgrep) {
+      const runRipgrep = (searchRoot: string) => {
+        const result = spawnSync('rg', ['--hidden', '--no-ignore-vcs', '--files-with-matches', 'needle', searchRoot], { cwd: root, encoding: 'utf8' })
+        expect(result.error).toBeUndefined()
+        expect([0, 1]).toContain(result.status)
+        return result.stdout
+      }
+      const parentMatches = runRipgrep('.')
+      const childMatches = runRipgrep('private')
+      expect(parentMatches).not.toContain('private/a.txt')
+      expect(childMatches).toContain('private/a.txt')
+    }
     expect(isGrepSubtreeSemanticallyContained(root, path.join(root, 'private'), { includeIgnored: true })).toBe(false)
     fs.rmSync(root, { recursive: true, force: true })
   })
