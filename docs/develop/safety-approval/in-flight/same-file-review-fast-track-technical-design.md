@@ -419,7 +419,7 @@ ON review_scope_grants (expires_at_ms);
 - **范围编码。** `scope_json` 是有界 UTF-8 规范 JSON，沿用范围缓存的稳定键序和拒绝非法值语义，大小沿用范围缓存单项上限。文件读写使用 `{workDir, target}`，其中两项为本次事实生成的规范绝对路径。搜索使用 `{workDir, root, query, options, ignoreDigest}`，其中 `query/options` 保存原搜索的归一查询及影响读取、过滤和输出的参数，子目录包含关系按 G-01 验证。工作目录清单使用 `{disclosureDigest}`，值是 P0 定义的目录披露快照按配置 ID 排序后规范编码的 SHA-256。按能力拒绝缺字段、未知字段和不受支持的形状。范围数据仅在本机使用，日志不得输出路径、查询和摘要。
 - **查询与容量。** 用身份索引前缀按域、渠道、主体、版本和能力取候选，丢弃到期记录和不获当前规则允许的来源。精确范围比较规范编码。搜索仅在该候选集上按 G-01 验证范围，不能按字符串前缀授予访问。多条同时命中时按签发时间倒序、ID 倒序选首条，保持原截止时间。新批准按唯一身份覆盖对应旧记录，单纯命中不写入签发或截止时间。持久记录复用现有全局缓存容量上限，登记前先删过期和失配代次，再按签发时间、ID 升序回收超额最旧记录。
 - **元数据与设置。** 在现有 `schema_meta` 用 `review_scope_wall_floor_ms` 保存时间下限，值为十进制毫秒字符串，缺失且授权表为空时初始化为当前时间。表非空时缺失或无效则拒绝恢复并先清理。设置使用同表键 `review_scope_default_lifetime`，值为 `session | process | 24h | 7d`，旧数据缺省为 `session`。读取已有 `security:get-settings-model` 响应新增可选 `reviewScopeLifetime`，主进程保存入口新增 `security:set-review-scope-lifetime`，入参仅 `{ lifetime }`，响应沿用安全设置成功和失败形状。preload、共享 API 类型与设置页同步更新。非法输入拒绝，保存成功后新发起审批读取新值，在途审批沿用发起时冻结值，已有记录不重算。该新增 IPC 是已确认设置的实现载体，旧设置客户端忽略可选字段。
-- **升级。** 124 → 125 在同一事务创建表和索引、初始化设置及有效时间下限、最后写 schema 125。失败整体回滚。初始化数据库按同一迁移链到 125。原 `decision_cache`、会话、消息、授权代次均不迁入或改写。若实施前基线已前进，按真实下一个版本更新迁移编号和配套回退目标，保留本迁移只涉及本功能数据的边界。
+- **升级。** 124 → 125 在同一事务创建表和索引、初始化设置及有效时间下限，最后写 schema 125；125 → 126 在同一事务检查桌面授权代次，仅缺失时删除该域可能残留的旧授权并初始化 epoch 1，最后写 schema 126。失败整体回滚。初始化数据库按同一迁移链到 126。原 `decision_cache`、会话和消息不迁入或改写。若 desktop epoch 缺失，旧桌面批准不复活；IM epoch 已存在时不变。启动策略迁移还会为没有快照的新安装建立 `desktop-v1` 默认快照并递增 desktop epoch。回退入口接受 schema 125/126，先删除本功能授权表及元数据，再写回 schema 124；未知更高版本拒绝回退。
 - **登记与消费。** 每次落盘登记和消费在事务中核对当前域 epoch 与有效规则绑定，推进已保存时间下限。登记同时写批准行，提交成功才对后续调用可见。消费提交后仍走本次策略和许可检查。启动读取并清理过期、无效及失配记录。检测到回拨时按上表清除持久批准，仍可按当前规则重新审批。读写失败则停用持久复用，本次已获准操作仍走既有许可。
 - **清空与并发。** 全量清除在已有清理入口内冻结查找和登记，事务删除持久批准及原清理涉及的数据库记录。提交后清内存并作废清除前发出的待登记材料，再返回成功。事务失败不返回成功。执行前复检不能接受已清除批准对应的未派发许可，已经开始的文件写入沿用既有执行边界。时间下限与期限设置保留。
 - **回退。** 源码中旧迁移器拒绝较高 schema 版本，回退流程不可直接用 124 打开 125。发布回退入口先退出应用并独占数据库，备份后校验 schema 恰为 125，在单事务内删除授权表和两个元数据键，最后把 schema 写回 124。索引随表移除，既有批准缓存、会话与消息保留。任一步失败回滚并中止回退。未知更高版本不得执行该逆迁移。再次升级走空表迁移，旧批准不会恢复。
@@ -519,7 +519,7 @@ AC-P0 增加正常确认入口的仅本次、按设置复用、缺材料及错�
 - **基线门禁（2026-11-11，HEAD `7f9f4971`）**：`npm run check:agent-sdk`、`npm run typecheck:agent-sdk`、`npm run check:session-storage-boundary`、`npm run check:session-storage-cleanup-boundary`、`npm run check:message-fact-ownership`、`npm run typecheck:shared` 均退出 0。会话模块图覆盖 814 个文件和 31 个非法依赖探针。实施后复跑，并验证旧三态审批记录、旧规则配置、旧 SDK 调用方和 schema 124 会话数据库升级后仍可读写。现有会话数据不迁入授权表。
 - **基线差异复查**：`git diff --stat ce1f382e..7f9f4971 -- electron/runtime/invocationAssembler.ts electron/database/schema.ts` 命中两处。装配器新增固定工作目录和会话消息端口，当前匹配按本次解析目录，见 AC-03。数据库版本已是 124，P0 迁移从 124 起步。F-1 仍是历史样本。F-2 至 F-5、F-P0 和 F-G1 的源码定位仍有对应入口，grep 远程候选限制未变。
 - **U-1**　样本安装包身份已通过实际候选包构建身份与 SHA-256 关联；包内签名验证通过。证据及命令见本附录「2026-11-11 实施与真实入口验收」。
-- **U-2**　定向源码回归、增量构建、共享类型检查、系统不变量登记检查及全量测试通过；飞书真实入口已验。桌面正常入口已尝试，但后续写入仍各触发 Agent 审核且日志为 `candidate_missing`，未证明复用；需在干净会话复核。微信按用户选择保持待验。
+- **U-2**　飞书与桌面真实入口已验；桌面首次审核建立批准后，同一会话的第二条消息命中 `review-cache-scope-grant-v1`。为使干净桌面 profile 能构造候选，schema 126 补齐缺失的 desktop epoch，启动策略迁移为新安装建立默认 `desktop-v1` 快照。定向回归及系统不变量登记检查通过；最终全量测试见 2026-11-12 补充。微信按用户选择保持待验。
 
 ### 人层与规格对账【机｜人工可跳过】
 
@@ -615,17 +615,17 @@ R-1 至 R-3 已获复审关闭。R-4 修订将三个 IPC 提交边界的改动�
 | B-2 | 三渠道可交付规则、来源、优先级和真实配置路径验收 | 负责人已批准，三渠道待验 |
 | B-3 | 持久批准、INV-G1 与验收均采用路径和搜索范围。新增同路径普通目录重新生成后的复用正例。 | 文档矛盾已修正，运行待验 |
 
-### 2026-11-11 实施与真实入口验收【机｜人工可跳过】
+### 2026-11-11 至 2026-11-12 实施与真实入口验收【机｜人工可跳过】
 
 | 验收项 | 证据与结果 |
 | --- | --- |
 | TDD 修复 | `electron/confirmation/toolCallGate.test.ts` 先复现既有路径 `write_file` 被路由到通用 Agent 确认、没有 `write-target-existing` 的失败；实现后覆盖候选生成、同工具正文变化复用及 `write_file` → `edit_file` 跨工具复用。定向命令：`npm exec vitest run -- electron/confirmation/toolCallGate.test.ts src/shared/policy/policyEngine.test.ts`；追加跨工具用例后：`npm exec vitest run -- electron/confirmation/toolCallGate.test.ts electron/confirmation/reviewScopeCache.test.ts -t 'routes only a new ordinary in-workspace IM write|normalizes edit and write grants'`。 |
 | 代码提交 | `8d93a0f5`（修复）独立提交；此前方案实现提交为 `271027a6`。 |
 | 构建与边界 | `npm run build:electron:incremental`、`npm run typecheck:shared`、`npm run check:system-invariant-registry` 均通过。 |
-| 候选安装包 | `npm run pack:mac` 成功；DMG SHA-256：`61d8c957515807cce75b035e38eefb304e467dda47a405c74bdfc1e9bdfb5e10`。`codesign --verify --deep --strict --verbose=1 release/mac-arm64/SpaceAssistant.app` 返回有效签名。候选使用隔离 user-data-dir，并挂载现有模型及飞书应用配置；IM 策略为 `im-standard-v2` revision 2。 |
+| 候选安装包 | 首轮包 SHA-256：`61d8c957515807cce75b035e38eefb304e467dda47a405c74bdfc1e9bdfb5e10`。桌面初始化修复后的最终候选包 SHA-256：`a69c9ac518c05474bd9a8fdb9a3f5aa65b16bfe2f7fb3f79b4c11f541995f5f0`；`npm run pack:mac` 成功，`codesign --verify --deep --strict --verbose=1 release/mac-arm64/SpaceAssistant.app` 返回有效签名。使用隔离 user-data-dir `/tmp/sa-fasttrack-e2e/profile`，复用模型配置；数据库迁移至 schema 126，desktop 快照为 `desktop-v1` revision 1、epoch 2，IM 为 `im-standard-v2` revision 2、epoch 2。 |
 | 真实飞书 | 私聊正常入口首次对隔离夹具文件执行 `write_file`，仅一次 Agent 审核并建立范围批准；下一条独立消息再次 `write_file`、再下一条消息以 `edit_file` 修改同一文件，均命中 `review-cache-scope-grant-v1`，没有新增 `confirm.request`。SecurityAudit 记录首次 miss/审核/登记，后两次 hit 与最终策略裁决。测试会话 ID：`1e87f97c-87a1-4fc9-85ac-8d50df22209a`；结果文件位于 `.fast-track-e2e/workspace/fast-track-e2e.txt`。 |
-| 真实桌面 | 隔离候选包桌面聊天入口已调用 `read_file` 和 `write_file`。复用测试会话的后续两次 `write_file` 均重新触发 Agent 审核，审计各有 `confirm.request`，授权登记结果为 `confirm.review-scope skipped / candidate_missing`，未出现 `grant_created` 或后续 cache hit。首条输入发生 UI 中文输入截断并引发额外搜索，因此这组会话不能作为干净上下文的最终验收；随后用清晰 ASCII 指令复测仍触发审核。Mac 再次锁定，尚未能创建干净会话确认。当前桌面验收结论为未通过 / 待复核，不记作已完成。 |
+| 真实桌面 | 首轮会话因干净 profile 缺 desktop epoch 和策略快照，出现 `candidate_missing`；据此增加 schema 126 epoch 初始化及启动默认快照迁移。修复包启动后使用全新桌面会话 `a66082a2-ed38-4bcd-8d7a-27ab8cf85048`：首次请求读取并覆盖隔离夹具 `fast-track-e2e.txt`，审计为 `confirm.request` → Agent 批准 → `confirm.review-scope created/grant_created`。同一会话下一条独立消息再次覆盖该文件，`policy.decision` 为 `review-cache-scope-grant-v1` / `auto-allow`，`confirm.review-scope hit/grant_lookup_hit`，没有第二次 `confirm.request`。文件最终内容为 `desktop-v126-two`。日志：`.fast-track-e2e/workspace/.agent/logs/SecurityAudit-20261112.log`。 |
 | 微信 | 候选配置显示 SDK 已就绪但未绑定。用户明确选择“不绑定，WeChat 保持待验”，因此不进行账号绑定，微信真实入口待验。 |
-| 全量测试 | 首次 `npm test` 发现两条“新建目标在审批期间出现”的已有断言仍期望旧 fallback 规则 ID；安全行为仍将目标变化升级为真人确认。已同步更新断言，两个关联用例通过。最终 `npm test` 退出码 0：1290 个测试文件通过、1 个跳过；12721 项通过、140 项跳过（总计 12861 项）。 |
+| 全量测试 | 首轮 `npm test` 发现两条“新建目标在审批期间出现”的已有断言仍期望旧 fallback 规则 ID；安全行为仍将目标变化升级为真人确认。已同步更新断言，两个关联用例通过。桌面默认策略快照落地后，又更新启动 revision/epoch 和审计条数的既有预期。一次全量复跑仅因 `editDiagnosis` 性能比例测得 15.60、略超 15 的门槛失败；该用例独立运行通过，随后最终 `npm test` 退出码 0：1290 个测试文件通过、1 个跳过；12722 项通过、140 项跳过（总计 12862 项）。 |
 
-复核真实入口日志可在隔离夹具工作目录的 `.agent/logs/SecurityAudit-20261111.log` 与 `.agent/logs/FeishuCli-20261111.log` 完成；测试文件内容只作隔离夹具证据。不要将消息正文或真实用户文件路径写入安全审计日志。
+复核真实入口日志可在隔离夹具工作目录的 `.agent/logs/SecurityAudit-20261111.log`、`.agent/logs/SecurityAudit-20261112.log` 与 `.agent/logs/FeishuCli-20261111.log` 完成；测试文件内容只作隔离夹具证据。不要将消息正文或真实用户文件路径写入安全审计日志。
