@@ -1704,6 +1704,30 @@ describe('evaluateToolCallGate', () => {
     expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'script-network-deny-remote' })
   })
 
+  it.each([
+    'from external_module import obj\nsorted([1], key=lambda x, y=obj: y + 1)',
+    'from external_module import obj\nvalue = [1]\nvalue[obj]',
+    'items = [1]\nitems[0] = 2',
+    'items = [1]\ndel items[0]',
+    'from external_module import decorator\n@decorator\ndef f():\n    pass',
+    'from external_module import decorator\n@decorator()\ndef f():\n    pass',
+    'from external_module import decorator\n@decorator\nclass C:\n    pass',
+    'from external_module import base\nclass C(base):\n    pass'
+  ])('隐式行为反例跨交互渠道不可 clean allow: %s', async (code) => {
+    for (const lane of ['desktop', 'feishu'] as const) {
+      const result = await evaluateToolCallGate(base({ lane,
+        ...(lane === 'feishu' ? { remoteContext: remoteContext({ source: 'feishu' }),
+          imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } } } : {}),
+        toolName: 'run_script', toolInput: { code }, lanePackage: 'standard' }))
+      expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial' }))
+      expect(result.decision.type).toBe('require-confirm')
+      if (result.decision.type === 'require-confirm') {
+        expect(result.decision.answerer).toBe('user')
+        expect(result.decision.memoryTiers).toEqual([])
+      }
+    }
+  })
+
   it('applies the version-pinned IM standard candidate map in the real policy gate', async () => {
     const legacy = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(),
       toolName: 'browser', toolInput: { action: 'navigate', url: 'https://example.com' },

@@ -2,5 +2,8 @@
   "id": "b20-subscript-write",
   "group": "previously-failed",
   "patternIds": [],
-  "coverage": "complete"
+  "coverage": "partial",
+  "uncertaintyKinds": [
+    "implicit-call-unresolved"
+  ]
 }

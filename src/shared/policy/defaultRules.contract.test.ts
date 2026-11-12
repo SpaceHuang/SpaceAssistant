@@ -197,7 +197,10 @@ describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {
   it('脚本内容分析失败固定要求真人确认并拒绝无人值守执行', () => {
     const byId = new Map(DEFAULT_POLICY_RULES.map((rule) => [rule.id, rule]))
     expect(byId.get('script-analysis-uncertainty-confirm')).toMatchObject({
-      locked: true, action: 'confirm-every-time', match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:uncertainty:call-target-unresolved', 'script-analysis:partial'] }
+      locked: true, action: 'confirm-every-time', match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-analysis:partial'] }
+    })
+    expect(byId.get('script-uncertified-ask-remote')).toMatchObject({
+      locked: true, action: 'ask', match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:uncertainty', 'script-analysis:partial'] }
     })
     expect(byId.get('script-analysis-incomplete-confirm')).toMatchObject({
       locked: true, action: 'confirm-every-time', match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:failed'] }

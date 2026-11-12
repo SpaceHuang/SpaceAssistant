@@ -508,3 +508,45 @@ describe('D3 行为类别补齐', () => {
     expect(analyzeScriptContent('from concurrent.futures import ThreadPoolExecutor\nThreadPoolExecutor()').findings.map((finding) => finding.class)).not.toContain('process-creation')
   })
 })
+
+describe('隐式调用完整性复审 R1-R3', () => {
+  it.each([
+    ['sorted 未知默认参数', 'from external_module import obj\nsorted([1], key=lambda x, y=obj: y + 1)'],
+    ['sorted 调用后的绑定', 'from external_module import obj\nx = obj\nsorted(x, key=lambda item: item + 1)\nx = [1]'],
+    ['sorted 被遮蔽', 'from external_module import obj\nsorted = obj\nsorted([1], key=lambda item: item + 1)']
+  ] as const)('%s 不会证明 lambda 参数是原始值', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it.each([
+    ['list index protocol', 'from external_module import obj\nvalue = [1]\nvalue[obj]'],
+    ['dict key protocol', 'from external_module import obj\nvalue = {1: 2}\nvalue[obj]'],
+    ['slice boundary protocol', 'from external_module import obj\nvalue = [1, 2]\nvalue[obj:2]'],
+    ['indexed assignment protocol', 'items = [1]\nitems[0] = 2'],
+    ['indexed augmented assignment protocol', 'items = [1]\nitems[0] += 2'],
+    ['indexed deletion protocol', 'items = [1]\ndel items[0]']
+  ] as const)('%s 被记为隐式调用不确定事实', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it.each([
+    ['bare function decorator', 'from external_module import decorator\n@decorator\ndef f():\n    pass'],
+    ['decorator factory', 'from external_module import decorator\n@decorator()\ndef f():\n    pass'],
+    ['class decorator', 'from external_module import decorator\n@decorator\nclass C:\n    pass'],
+    ['unknown class base', 'from external_module import base\nclass C(base):\n    pass']
+  ] as const)('%s 在定义/创建时形成隐式调用不确定事实', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it('保留纯字面量内置容器索引的完整分析', () => {
+    const result = analyzeScriptContent('items = [1, 2]\nvalue = items[0]')
+    expect(result.coverage).toBe('complete')
+    expect(result.uncertainties).toEqual([])
+  })
+})

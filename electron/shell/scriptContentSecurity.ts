@@ -219,49 +219,6 @@ function setPrimitiveBinding(target: string, value: IrExpr, scope: Scope): void 
   else scope.knownPrimitiveRoots.delete(target)
 }
 
-function walkIrExpressions(module: IrModule, visit: (expr: IrExpr) => void): void {
-  const expr = (node: IrExpr): void => {
-    visit(node)
-    switch (node.kind) {
-      case 'attr': expr(node.base); break
-      case 'call': expr(node.callee); node.args.forEach(expr); node.kwargs.forEach((kw) => expr(kw.value)); break
-      case 'binop': expr(node.left); expr(node.right); break
-      case 'unaryop': case 'starred': case 'await': expr(node.kind === 'unaryop' ? node.operand : node.value); break
-      case 'compare': expr(node.left); expr(node.right); break
-      case 'boolop': node.values.forEach(expr); break
-      case 'conditional': expr(node.test); expr(node.body); expr(node.orelse); break
-      case 'list': case 'tuple': case 'set': node.elts.forEach(expr); break
-      case 'dict': node.keys.forEach((item) => { if (item) expr(item) }); node.values.forEach(expr); break
-      case 'subscript': expr(node.value); expr(node.index); break
-      case 'slice': if (node.lower) expr(node.lower); if (node.upper) expr(node.upper); if (node.step) expr(node.step); break
-      case 'lambda': node.defaults.forEach(expr); expr(node.body); break
-      case 'yield': if (node.value) expr(node.value); break
-      case 'f_string': node.interpolations.forEach(expr); break
-      case 'comprehension': expr(node.elt); node.generators.forEach((generator) => { expr(generator.iter); generator.conditions.forEach(expr) }); break
-      case 'named_expr': expr(node.value); break
-      default: break
-    }
-  }
-  const stmts = (items: IrStmt[]): void => {
-    for (const stmt of items) switch (stmt.kind) {
-      case 'assign': case 'aug_assign': expr(stmt.value); break
-      case 'expr': expr(stmt.value); break
-      case 'if': expr(stmt.test); stmts(stmt.body); stmts(stmt.orelse); break
-      case 'while': expr(stmt.test); stmts(stmt.body); stmts(stmt.orelse); break
-      case 'for': expr(stmt.iter); stmts(stmt.body); stmts(stmt.orelse); break
-      case 'with': stmt.items.forEach((item) => expr(item.contextExpr)); stmts(stmt.body); break
-      case 'try': stmts(stmt.body); stmt.handlers.forEach((handler) => { if (handler.typeExpr) expr(handler.typeExpr); stmts(handler.body) }); stmts(stmt.orelse); stmts(stmt.finalbody); break
-      case 'function_def': stmt.decorators.forEach(expr); stmt.defaults.forEach(expr); stmts(stmt.body); break
-      case 'class_def': stmt.decorators.forEach(expr); stmt.bases.forEach(expr); stmts(stmt.body); break
-      case 'return': case 'raise': if (stmt.value) expr(stmt.value); break
-      case 'assert': expr(stmt.test); break
-      case 'delete': stmt.targets.forEach(expr); break
-      default: break
-    }
-  }
-  stmts(module.body)
-}
-
 export interface ResolvedChain {
   root: string | null
   module: string | null
@@ -315,9 +272,10 @@ function isNetworkModule(name: string | null): boolean {
   return name !== null && NETWORK_MODULES.has(name.split('.')[0]!)
 }
 
-function implicitAssignmentTarget(target: string, scope: Scope): boolean {
+function implicitAssignmentTarget(target: string): boolean {
   const bracket = target.indexOf('[')
-  if (bracket >= 0) return !scope.knownPrimitiveRoots.has(target.slice(0, bracket).trim())
+  // The IR does not prove the concrete receiver protocol at an indexed write target.
+  if (bracket >= 0) return true
   return target.includes('.')
 }
 
@@ -477,39 +435,16 @@ function isExecImportCallee(callee: IrExpr): boolean {
 class Analyzer {
   private readonly hits: PatternHit[] = []
   private readonly uncertainties: ScriptUncertainty[] = []
-  private readonly knownPrimitiveLambdaParams = new WeakSet<object>()
   private activeRange?: SourceRange
   private activeExpr?: IrExpr
   private activeScope?: Scope
 
   analyze(ast: IrModule): PatternHit[] {
-    this.inferKnownPrimitiveLambdaParameters(ast)
     this.walkStmts(ast.body, createScope(), 0)
     return this.hits
   }
 
   getUncertainties(): ScriptUncertainty[] { return this.uncertainties }
-
-  private inferKnownPrimitiveLambdaParameters(ast: IrModule): void {
-    const scope = createScope()
-    for (const stmt of ast.body) {
-      if (stmt.kind === 'import') applyImportStmt(stmt, scope)
-      else if (stmt.kind === 'from_import') applyFromImportStmt(stmt, scope)
-      else if (stmt.kind === 'assign') {
-        for (const target of stmt.targets) applyAssignmentRebind(target, stmt.value, scope)
-      }
-    }
-    const calls: Array<Extract<IrExpr, { kind: 'call' }>> = []
-    walkIrExpressions(ast, (expr) => { if (expr.kind === 'call') calls.push(expr) })
-    // Standalone defs and named lambdas are externally callable or can escape through imports;
-    // local call-site scans cannot prove that their parameter origins are closed-world.
-    // Only keep the narrow builtin sorted(key=...) case with a known primitive iterable.
-    for (const call of calls) {
-      if (call.callee.kind !== 'name' || call.callee.id !== 'sorted' || !call.args[0] || !isKnownPrimitiveIterable(call.args[0], scope)) continue
-      const key = call.kwargs.find((item) => item.name === 'key')?.value
-      if (key?.kind === 'lambda' && key.params.length > 0) this.knownPrimitiveLambdaParams.add(key)
-    }
-  }
 
   private addHit(pattern: string, evidenceOverride?: ScriptFindingEvidence): void {
     const range = this.activeExpr?.range ?? this.activeRange
@@ -734,6 +669,7 @@ class Analyzer {
         continue
       }
       if (stmt.kind === 'function_def') {
+        if (stmt.decorators.length > 0 && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
         for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
         // P0-1 评审修复：默认参数值在 def 定义时真实执行——必须分析
         for (const dv of stmt.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
@@ -747,6 +683,7 @@ class Analyzer {
         continue
       }
       if (stmt.kind === 'class_def') {
+        if ((stmt.decorators.length > 0 || stmt.bases.length > 0) && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
         for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
         // P0-1 评审修复：基类/关键字参数表达式在 class 创建时真实执行——必须分析
         for (const b of stmt.bases) this.analyzeExpr(b, scope, decodeBindings, stmtIndex)
@@ -775,7 +712,7 @@ class Analyzer {
   }
 
   private checkImplicitAssignmentTargets(targets: string[], range: SourceRange | undefined, scope: Scope): void {
-    if (targets.some((target) => implicitAssignmentTarget(target, scope)) && range) {
+    if (targets.some((target) => implicitAssignmentTarget(target)) && range) {
       this.uncertainties.push({ kind: 'implicit-call-unresolved', range, sourceStatus: 'unknown', dynamicAccess: true })
     }
   }
@@ -882,7 +819,9 @@ class Analyzer {
       return
     }
     if (expr.kind === 'subscript') {
-      if (!isKnownPrimitiveExpr(expr.value, scope) && expr.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
+      if ((!isKnownPrimitiveExpr(expr.value, scope) || !isKnownPrimitiveExpr(expr.index, scope)) && expr.range) {
+        this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
+      }
       this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
       this.analyzeExpr(expr.index, scope, decodeBindings, stmtIndex)
       return
@@ -953,8 +892,7 @@ class Analyzer {
       for (const dv of expr.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
       const child = createScope(scope)
       for (const param of expr.params) {
-        if (this.knownPrimitiveLambdaParams.has(expr)) child.knownPrimitiveRoots.add(param)
-        else child.unknownRoots.add(param)
+        child.unknownRoots.add(param)
       }
       this.analyzeExpr(expr.body, child, decodeBindings, stmtIndex)
       return
@@ -1447,12 +1385,12 @@ class ScriptUncertaintyCollector {
           applyFromImportStmt(stmt, scope)
           break
         case 'assign':
-          if (stmt.targets.some((target) => implicitAssignmentTarget(target, scope)) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
+          if (stmt.targets.some((target) => implicitAssignmentTarget(target)) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           this.walkExpr(stmt.value, scope)
           for (const target of stmt.targets) applyAssignmentRebind(target, stmt.value, scope)
           break
         case 'aug_assign':
-          if (implicitAssignmentTarget(stmt.target, scope) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
+          if (implicitAssignmentTarget(stmt.target) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           this.walkExpr(stmt.value, scope)
           break
         case 'expr':
@@ -1499,12 +1437,14 @@ class ScriptUncertaintyCollector {
           break
         }
         case 'function_def': {
+          if (stmt.decorators.length > 0 && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           for (const decorator of stmt.decorators) this.walkExpr(decorator, scope)
           for (const value of stmt.defaults) this.walkExpr(value, scope)
           this.walkStmts(stmt.body, createScope(scope))
           break
         }
         case 'class_def': {
+          if ((stmt.decorators.length > 0 || stmt.bases.length > 0) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           for (const decorator of stmt.decorators) this.walkExpr(decorator, scope)
           for (const base of stmt.bases) this.walkExpr(base, scope)
           this.walkStmts(stmt.body, createScope(scope))
