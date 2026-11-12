@@ -1722,7 +1722,11 @@ describe('evaluateToolCallGate', () => {
     ['nested mutable allocation', 'from external_module import obj, mutate\nt = ([1],)\nmutate(t, obj)\nf"{t}"', 'partial'],
     ['conditional mutable allocation', 'from external_module import obj, mutate\na = [1] if True else [2]\nmutate(a, obj)\nf"{a}"', 'partial'],
     ['binary mutable allocation', 'from external_module import obj, mutate\na = [1] + [2]\nmutate(a, obj)\nf"{a}"', 'partial'],
-    ['while next condition carries rebound value', 'from external_module import obj\nx = 1\nwhile x:\n    x = obj', 'partial']
+    ['while next condition carries rebound value', 'from external_module import obj\nx = 1\nwhile x:\n    x = obj', 'partial'],
+    ['for transitive loop-carried read', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2, 3]:\n    f"{x}"\n    x = y\n    y = obj', 'partial'],
+    ['for transitive loop exit value', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2]:\n    x = y\n    y = obj\nf"{x}"', 'partial'],
+    ['for else overwrites body primitive', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = 1\nelse:\n    x = obj\nf"{x}"', 'partial'],
+    ['while transitive loop-carried read', 'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj', 'partial']
   ] as const)('真实 Gate 阻止 %s 获得 clean allow 或记忆档位', async (_name, code, expectedFact) => {
     for (const lane of ['desktop', 'feishu'] as const) {
       const lookup = vi.fn(() => null)
@@ -2257,6 +2261,37 @@ describe('evaluateToolCallGate', () => {
       const otherSession = await evaluateToolCallGate(base({ appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'),
         sessionId: 'script-memory-other-session', lanePackage: 'custom', toolName: 'run_script', toolInput: input }))
       expect(otherSession.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('循环传递失效事实不提供 SQLite session tier 且每次都重新真人确认', async () => {
+    await scriptParserService.ensureInitialized()
+    const db = openDb()
+    const root = await fs.realpath(await makeTempDir('script-loop-facts-no-memory-'))
+    try {
+      const cases = [
+        'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2, 3]:\n    f"{x}"\n    x = y\n    y = obj',
+        'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2]:\n    x = y\n    y = obj\nf"{x}"',
+        'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = 1\nelse:\n    x = obj\nf"{x}"',
+        'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj'
+      ]
+      for (const [index, code] of cases.entries()) {
+        const sessionId = `loop-facts-no-memory-${index}`
+        const cache = new SqliteDecisionCache(getDbConnection(db))
+        const args = base({ appDb: db, lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }),
+          imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } },
+          workDir: root, userDataDir: path.join(root, '.userdata'), sessionId, lanePackage: 'standard', toolName: 'run_script', toolInput: { code }, decisionCache: cache })
+        const first = await evaluateToolCallGate(args)
+        expect(first.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial',
+          uncertainties: expect.arrayContaining([expect.objectContaining({ kind: 'implicit-call-unresolved' })]) }))
+        expect(first.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+        const lookup = vi.spyOn(cache, 'lookup')
+        const second = await evaluateToolCallGate(args)
+        expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+        expect(lookup).not.toHaveBeenCalled()
+      }
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

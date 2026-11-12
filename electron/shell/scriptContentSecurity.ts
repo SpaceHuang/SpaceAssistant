@@ -349,28 +349,6 @@ function writtenNames(stmts: IrStmt[]): Set<string> {
   return names
 }
 
-// facts: preserve only bindings whose loop-carried values remain statically primitive.
-function stablePrimitiveLoopWrites(stmts: IrStmt[], scope: Scope): Set<string> {
-  const candidates = new Set([...writtenNames(stmts)].filter((name) => scope.knownPrimitiveRoots.has(name)))
-  const unstable = new Set<string>()
-  const scanExpr = (expr?: IrExpr | null) => { if (expr) collectExprWrites(expr, unstable) }
-  const scan = (items: IrStmt[]) => { for (const stmt of items) {
-    if (stmt.kind === 'assign') { for (const raw of stmt.targets) for (const name of bindingNames(raw)) if (stmt.unpacksValue || !isKnownPrimitiveExpr(stmt.value, scope)) unstable.add(name); scanExpr(stmt.value) }
-    else if (stmt.kind === 'aug_assign') { if (!isKnownPrimitiveExpr(stmt.targetExpr, scope) || !isKnownPrimitiveExpr(stmt.value, scope)) unstable.add(stmt.target); scanExpr(stmt.value) }
-    else if (stmt.kind === 'if' || stmt.kind === 'while') { scanExpr(stmt.test); scan([...stmt.body, ...stmt.orelse]) }
-    else if (stmt.kind === 'for') { bindingNames(stmt.target).forEach((name) => unstable.add(name)); scanExpr(stmt.iter); scan([...stmt.body, ...stmt.orelse]) }
-    else if (stmt.kind === 'with') { stmt.items.flatMap((item) => item.optionalVars).forEach((name) => unstable.add(name)); scan(stmt.body) }
-    else if (stmt.kind === 'try') scan([...stmt.body, ...stmt.handlers.flatMap((h) => h.body), ...stmt.orelse, ...stmt.finalbody])
-    else if (stmt.kind === 'expr') scanExpr(stmt.value)
-    else if (stmt.kind === 'function_def' || stmt.kind === 'class_def') unstable.add(stmt.name)
-    else if (stmt.kind === 'import') stmt.names.forEach((item) => unstable.add(item.alias ?? item.module.split('.')[0]!))
-    else if (stmt.kind === 'from_import') stmt.names.forEach((item) => { if (item.name !== '*') unstable.add(item.alias ?? item.name) })
-    else if (stmt.kind === 'delete') stmt.targets.forEach((target) => { if (target.kind === 'name') unstable.add(target.id) })
-  } }
-  scan(stmts)
-  return new Set([...candidates].filter((name) => !unstable.has(name)))
-}
-
 function invalidateBranchWrites(stmts: IrStmt[], scope: Scope, preserve: ReadonlySet<string> = new Set()): void {
   for (const name of writtenNames(stmts)) if (!preserve.has(name)) invalidateBinding(name, scope)
 }
@@ -808,13 +786,13 @@ class Analyzer {
             child.unknownRoots.add(target)
           }
         }
-        const stableWrites = stablePrimitiveLoopWrites(stmt.body, child)
-        invalidateBranchWrites(stmt.body, child, stableWrites)
+        const loopWrites = writtenNames(stmt.body)
+        invalidateBranchWrites(stmt.body, child)
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
         // P0-3 评审修复：for...else 的 else 体在循环正常结束时真实执行——必须分析
         this.walkStmts(stmt.orelse, child, stmtIndex, decodeBindings)
         if (stmt.targetUnpacks && !isKnownPrimitiveIterable(stmt.iter, scope) && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
-        invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope, stableWrites)
+        invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope)
         continue
       }
 
@@ -838,15 +816,96 @@ class Analyzer {
       }
       if (stmt.kind === 'while') {
         const loopState = createScope(scope)
-        const stableWrites = stablePrimitiveLoopWrites([...stmt.body, ...stmt.orelse], loopState)
-        invalidateBranchWrites([...stmt.body, ...stmt.orelse], loopState, stableWrites)
-        if (!isKnownPrimitiveExpr(stmt.test, loopState) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
+        const loopWrites = writtenNames([...stmt.body, ...stmt.orelse])
+        const bodyWrites = writtenNames(stmt.body)
+        const elseWrites = writtenNames(stmt.orelse)
+        const stableLoopWrites = new Set<string>()
+        const assignments = new Map<string, IrExpr[]>()
+        const primitiveSelfUpdates = new Set<string>()
+        const collectAssignments = (items: IrStmt[]) => { for (const item of items) {
+          if (item.kind === 'assign') for (const target of item.targets) for (const name of bindingNames(target)) {
+            assignments.set(name, [...assignments.get(name) ?? [], item.value])
+            if (item.targets.length === 1 && item.targets.every((value) => !value.includes(',')) && item.value.kind === 'binop' &&
+              ((item.value.left.kind === 'name' && item.value.left.id === name && isKnownPrimitiveExpr(item.value.right, scope)) ||
+               (item.value.right.kind === 'name' && item.value.right.id === name && isKnownPrimitiveExpr(item.value.left, scope)))) primitiveSelfUpdates.add(name)
+          }
+          else if (item.kind === 'aug_assign') {
+            assignments.set(item.target, [...assignments.get(item.target) ?? [], item.value])
+            if (isKnownPrimitiveExpr(item.targetExpr, scope) && isKnownPrimitiveExpr(item.value, scope)) primitiveSelfUpdates.add(item.target)
+          }
+          else if (item.kind === 'if' || item.kind === 'while' || item.kind === 'for') collectAssignments([...item.body, ...item.orelse])
+          else if (item.kind === 'try') collectAssignments([...item.body, ...item.handlers.flatMap((handler) => handler.body), ...item.orelse, ...item.finalbody])
+          else if (item.kind === 'with') collectAssignments(item.body)
+          else if (item.kind === 'function_def' || item.kind === 'class_def') assignments.set(item.name, [...assignments.get(item.name) ?? [], { kind: 'name', id: item.name }])
+          else if (item.kind === 'import') for (const imported of item.names) { const name = imported.alias ?? imported.module.split('.')[0]!; assignments.set(name, [...assignments.get(name) ?? [], { kind: 'name', id: name }]) }
+          else if (item.kind === 'from_import') { for (const imported of item.names) if (imported.name !== '*') { const name = imported.alias ?? imported.name; assignments.set(name, [...assignments.get(name) ?? [], { kind: 'name', id: name }]) } }
+          else if (item.kind === 'delete') for (const target of item.targets) if (target.kind === 'name') assignments.set(target.id, [...assignments.get(target.id) ?? [], { kind: 'name', id: target.id }])
+        } }
+        collectAssignments(stmt.body)
+        collectAssignments(stmt.orelse)
+        const readNamesIn = (expr: IrExpr): Set<string> => {
+          const readNames = new Set<string>()
+          const collectReads = (node: IrExpr) => {
+            if (node.kind === 'name') { readNames.add(node.id); return }
+            const visit = (value: IrExpr | null | undefined) => { if (value) collectReads(value) }
+            switch (node.kind) {
+              case 'f_string': node.interpolations.forEach(visit); break
+              case 'list': case 'tuple': case 'set': node.elts.forEach(visit); break
+              case 'dict': node.keys.forEach(visit); node.values.forEach(visit); break
+              case 'slice': visit(node.lower); visit(node.upper); visit(node.step); break
+              case 'subscript': visit(node.value); visit(node.index); break
+              case 'binop': case 'compare': visit(node.left); visit(node.right); break
+              case 'unaryop': case 'await': case 'starred': visit(node.kind === 'unaryop' ? node.operand : node.value); break
+              case 'boolop': node.values.forEach(visit); break
+              case 'conditional': visit(node.test); visit(node.body); visit(node.orelse); break
+              case 'call': visit(node.callee); node.args.forEach(visit); node.kwargs.forEach((kw) => visit(kw.value)); break
+              case 'comprehension': visit(node.elt); node.generators.forEach((generator) => { visit(generator.iter); generator.conditions.forEach(visit) }); break
+              case 'lambda': node.defaults.forEach(visit); visit(node.body); break
+              case 'named_expr': visit(node.value); break
+              case 'yield': visit(node.value); break
+              default: break
+            }
+          }
+          collectReads(expr)
+          return readNames
+        }
+        const dependsOnLoopWrite = (expr: IrExpr, target: string): boolean => {
+          const reads = readNamesIn(expr)
+          for (const name of reads) {
+            if (!loopWrites.has(name) || (primitiveSelfUpdates.has(name) && name === target)) continue
+            return true
+          }
+          return false
+        }
+        const mayRemainPrimitive = (name: string): boolean => {
+          const values = assignments.get(name) ?? []
+          return values.length > 0 && values.every((value) => isKnownPrimitiveExpr(value, scope) && !dependsOnLoopWrite(value, name))
+        }
+        for (const name of loopWrites) {
+          if (scope.knownPrimitiveRoots.has(name) && (!bodyWrites.has(name) || mayRemainPrimitive(name)) && (!elseWrites.has(name) || mayRemainPrimitive(name))) stableLoopWrites.add(name)
+        }
+        invalidateBranchWrites([...stmt.body, ...stmt.orelse], loopState, stableLoopWrites)
+        const testNames = new Set<string>()
+        const collectTestNames = (node: IrExpr) => {
+          if (node.kind === 'name') { testNames.add(node.id); return }
+          const visit = (value: IrExpr | null | undefined) => { if (value) collectTestNames(value) }
+          switch (node.kind) {
+            case 'compare': case 'binop': visit(node.left); visit(node.right); break
+            case 'unaryop': visit(node.operand); break
+            case 'boolop': node.values.forEach(visit); break
+            case 'conditional': visit(node.test); visit(node.body); visit(node.orelse); break
+            default: break
+          }
+        }
+        collectTestNames(stmt.test)
+        const primitiveLoopCondition = isKnownPrimitiveExpr(stmt.test, scope) && [...testNames].every((name) => !loopWrites.has(name) || stableLoopWrites.has(name))
+        if (!primitiveLoopCondition && !isKnownPrimitiveExpr(stmt.test, loopState) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
         this.analyzeExpr(stmt.test, loopState, decodeBindings, stmtIndex)
         this.walkStmts(stmt.body, loopState, stmtIndex, decodeBindings)
-        if (!isKnownPrimitiveExpr(stmt.test, loopState) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
+        if (!primitiveLoopCondition && !isKnownPrimitiveExpr(stmt.test, loopState) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
         // P1-1 评审修复（补全）：while...else 的 else 体在循环正常结束时真实执行——必须分析
         this.walkStmts(stmt.orelse, loopState, stmtIndex, decodeBindings)
-        invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope, stableWrites)
+        invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope, stableLoopWrites)
         continue
       }
       if (stmt.kind === 'with') {

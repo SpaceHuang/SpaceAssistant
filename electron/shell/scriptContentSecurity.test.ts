@@ -332,6 +332,20 @@ describe('scriptContentSecurity — List A (baseline)', () => {
 
 describe('script uncertainty facts', () => {
   it.each([
+    ['loop-carried dependency before next body read', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2, 3]:\n    f"{x}"\n    x = y\n    y = obj'],
+    ['loop-carried dependency at for exit', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2]:\n    x = y\n    y = obj\nf"{x}"'],
+    ['reverse assignment order still invalidates dependency', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2]:\n    y = obj\n    x = y\nf"{x}"'],
+    ['three-link dependency closure', 'from external_module import obj\nx = 1\ny = 1\nz = 1\nfor _ in [1, 2, 3]:\n    x = y\n    y = z\n    z = obj\nf"{x}"'],
+    ['primitive increment loop remains fully modeled', 'total = 0\nfor item in [1, 2, 3]:\n    total += item\nf"{total}"'],
+    ['for else overwrite at exit', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = 1\nelse:\n    x = obj\nf"{x}"'],
+    ['loop-carried dependency at while body read', 'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj']
+  ])('fails closed for transitive loop invalidation: %s', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it.each([
     ['assert message', 'assert False, __import__("os").system("id")'],
     ['raise cause', 'raise ValueError() from __import__("os").system("id")'],
     ['parameter annotation', 'def f(x: __import__("os").system("id")): pass'],
