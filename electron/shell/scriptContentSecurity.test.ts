@@ -352,7 +352,17 @@ describe('script uncertainty facts', () => {
     ['lambda parameter shadows primitive', 'x = 1\nf = lambda x: x + 1\nfrom external_module import obj\nf(obj)'],
     ['walrus block write invalidates outer binding', 'from external_module import obj\nx = 1\nif True:\n    (x := obj)\nf"{x}"'],
     ['for else write invalidates outer binding', 'from external_module import obj\nx = 1\nfor _ in []:\n    pass\nelse:\n    x = obj\nf"{x}"'],
-    ['bare mutator invalidates container alias', 'from external_module import obj, mutate\na = [1]\nmutate(a, obj)\nf"{a}"']
+    ['bare mutator invalidates container alias', 'from external_module import obj, mutate\na = [1]\nmutate(a, obj)\nf"{a}"'],
+    ['for loop carried write before next iteration', 'from external_module import obj\nx = 1\nfor _ in [1, 2]:\n    f"{x}"\n    x = obj'],
+    ['while loop carried write before next iteration', 'from external_module import obj\nx = 1\nwhile flag:\n    f"{x}"\n    x = obj'],
+    ['mutable inside tuple passed to mutator', 'from external_module import obj, mutate\na = [1]\nt = (a,)\nmutate(t, obj)\nf"{a}"'],
+    ['mutable inside literal wrapper passed to mutator', 'from external_module import obj, mutate\na = [1]\nmutate([a], obj)\nf"{a}"'],
+    ['mutable inside starred wrapper passed to mutator', 'from external_module import obj, mutate\na = [1]\nt = (a,)\nmutate(*t, marker=obj)\nf"{a}"'],
+    ['branch method effect reaches outer binding', 'from external_module import obj\na = [1]\nif True:\n    a.append(obj)\nf"{a}"'],
+    ['function method effect reaches outer binding', 'from external_module import obj\na = [1]\ndef change():\n    a.append(obj)\nchange()\nf"{a}"'],
+    ['sorted callback effect reaches outer binding', 'from external_module import obj\na = [1]\ndef key(x):\n    a.append(obj)\n    return 0\nsorted(a, key=key)\nf"{a}"'],
+    ['rebound builtin name is not trusted', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(a, obj)\nf"{a}"'],
+    ['rebound builtin remains unknown without mutable argument', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(obj)\nf"{a}"']
   ])('fails closed for systematic-review case: %s', (_label, code) => {
     const result = analyzeScriptContent(code)
     expect(result.coverage).not.toBe('complete')

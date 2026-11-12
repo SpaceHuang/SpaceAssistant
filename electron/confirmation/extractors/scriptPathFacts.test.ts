@@ -22,7 +22,16 @@ describe('extractScriptPathFacts', () => {
     'x = 1\nf = lambda x: x + 1\nfrom external_module import obj\nf(obj)',
     'from external_module import obj\nx = 1\nif True:\n    (x := obj)\nopen(str(x))',
     'from external_module import obj\nx = 1\nfor _ in []:\n    pass\nelse:\n    x = obj\nopen(x)',
-    'from external_module import obj, mutate\na = ["/tmp/safe"]\nmutate(a, obj)\nopen(a[0])'
+    'from external_module import obj, mutate\na = ["/tmp/safe"]\nmutate(a, obj)\nopen(a[0])',
+    'from external_module import obj\nx = 1\nfor _ in [1, 2]:\n    f"{x}"\n    x = obj',
+    'from external_module import obj\nx = 1\nwhile flag:\n    f"{x}"\n    x = obj',
+    'from external_module import obj, mutate\na = ["/tmp/safe"]\nt = (a,)\nmutate(t, obj)\nopen(a[0])',
+    'from external_module import obj, mutate\na = ["/tmp/safe"]\nmutate([a], obj)\nopen(a[0])',
+    'from external_module import obj, mutate\na = ["/tmp/safe"]\nt = (a,)\nmutate(*t, marker=obj)\nopen(a[0])',
+    'from external_module import obj\na = ["/tmp/safe"]\nif True:\n    a.append(obj)\nopen(a[0])',
+    'from external_module import obj\na = ["/tmp/safe"]\ndef change():\n    a.append(obj)\nchange()\nopen(a[0])',
+    'from external_module import obj\na = ["/tmp/safe"]\ndef key(x):\n    a.append(obj)\n    return 0\nsorted(a, key=key)\nopen(a[0])',
+    'from external_module import obj, factory\nprint = factory()\na = ["/tmp/safe"]\nprint(a, obj)\nopen(a[0])'
   ])('marks path extraction incomplete when executable facts include an unmodeled protocol: %s', (code) => {
     expect(extractScriptPathFacts(code, 'python').completeness).toBe('unknown')
   })

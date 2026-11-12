@@ -1707,18 +1707,34 @@ describe('evaluateToolCallGate', () => {
     ['lambda parameter shadowing', 'x = 1\nf = lambda x: x + 1\nfrom external_module import obj\nf(obj)', 'partial'],
     ['walrus block write', 'from external_module import obj\nx = 1\nif True:\n    (x := obj)\nf"{x}"', 'partial'],
     ['for else write', 'from external_module import obj\nx = 1\nfor _ in []:\n    pass\nelse:\n    x = obj\nf"{x}"', 'partial'],
-    ['bare mutable argument call', 'from external_module import obj, mutate\na = [1]\nmutate(a, obj)\nf"{a}"', 'partial']
+    ['bare mutable argument call', 'from external_module import obj, mutate\na = [1]\nmutate(a, obj)\nf"{a}"', 'partial'],
+    ['for loop carried state', 'from external_module import obj\nx = 1\nfor _ in [1, 2]:\n    f"{x}"\n    x = obj', 'partial'],
+    ['while loop carried state', 'from external_module import obj\nx = 1\nwhile True:\n    f"{x}"\n    x = obj', 'partial'],
+    ['wrapped mutable positional argument', 'from external_module import obj, mutate\na = [1]\nt = (a,)\nmutate(t, obj)\nf"{a}"', 'partial'],
+    ['wrapped mutable literal argument', 'from external_module import obj, mutate\na = [1]\nmutate([a], obj)\nf"{a}"', 'partial'],
+    ['wrapped mutable star argument', 'from external_module import obj, mutate\na = [1]\nt = (a,)\nmutate(*t, marker=obj)\nf"{a}"', 'partial'],
+    ['wrapped mutable keyword argument', 'from external_module import obj, mutate\na = [1]\nmutate(value={"nested": (a,)}, marker=obj)\nf"{a}"', 'partial'],
+    ['branch heap effect', 'from external_module import obj\na = [1]\nif True:\n    a.append(obj)\nf"{a}"', 'partial'],
+    ['function heap effect', 'from external_module import obj\na = [1]\ndef change():\n    a.append(obj)\nchange()\nf"{a}"', 'partial'],
+    ['callback heap effect', 'from external_module import obj\na = [1]\ndef key(x):\n    a.append(obj)\n    return 0\nsorted(a, key=key)\nf"{a}"', 'partial'],
+    ['rebound builtin identity', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(a, obj)\nf"{a}"', 'partial'],
+    ['rebound builtin with no container argument', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(obj)\nf"{a}"', 'partial']
   ] as const)('真实 Gate 阻止 %s 获得 clean allow 或记忆档位', async (_name, code, expectedFact) => {
     for (const lane of ['desktop', 'feishu'] as const) {
+      const lookup = vi.fn(() => null)
+      const record = vi.fn(() => undefined)
       const result = await evaluateToolCallGate(base({ lane,
         ...(lane === 'feishu' ? { remoteContext: remoteContext({ source: 'feishu' }),
           imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } } } : {}),
-        toolName: 'run_script', toolInput: { code }, lanePackage: 'standard' }))
+        toolName: 'run_script', toolInput: { code }, lanePackage: 'standard',
+        decisionCache: { lookup, record, clear: () => 0, clearAllSession: () => 0, expireDormant: () => 0 } }))
       const analysis = result.facts.signals.find((signal) => signal.kind === 'script-analysis')
       if (expectedFact === 'partial') expect(analysis, `${lane}: ${_name}`).toMatchObject({ coverage: 'partial' })
       else expect(analysis, `${lane}: ${_name}`).toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ class: expectedFact })]) })
       expect(result.decision.type, `${lane}: ${_name}`).not.toBe('auto-allow')
       if (result.decision.type === 'require-confirm') expect(result.decision.memoryTiers, `${lane}: ${_name}`).toEqual([])
+      expect(lookup, `${lane}: ${_name}`).not.toHaveBeenCalled()
+      expect(record, `${lane}: ${_name}`).not.toHaveBeenCalled()
     }
   })
 

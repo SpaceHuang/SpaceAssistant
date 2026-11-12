@@ -166,13 +166,19 @@ interface Binding {
   attr?: string
 }
 
+/** Facts-stage heap escape state: shared by lexical child scopes; invalidation is monotonic for this analysis. */
+interface HeapFacts {
+  invalidatedObjects: Set<number>
+  nextObjectId: number
+}
+
 interface Scope {
   modules: Map<string, string>
   attrs: Map<string, Binding>
   unknownRoots: Set<string>
   knownPrimitiveRoots: Set<string>
-  knownMutableRoots: Set<string>
-  mutableAliasGroups: Map<string, Set<string>>
+  mutableObjectIds: Map<string, Set<number>>
+  heap: HeapFacts
   knownClassRoots: Set<string>
   classBody: boolean
 }
@@ -183,8 +189,8 @@ function createScope(parent?: Scope): Scope {
     attrs: new Map(parent?.attrs),
     unknownRoots: new Set(parent?.unknownRoots),
     knownPrimitiveRoots: new Set(parent?.knownPrimitiveRoots),
-    knownMutableRoots: new Set(parent?.knownMutableRoots),
-    mutableAliasGroups: new Map([...parent?.mutableAliasGroups ?? []].map(([key, aliases]) => [key, new Set(aliases)])),
+    mutableObjectIds: new Map([...parent?.mutableObjectIds ?? []].map(([key, ids]) => [key, new Set(ids)])),
+    heap: parent?.heap ?? { invalidatedObjects: new Set(), nextObjectId: 1 },
     knownClassRoots: new Set(parent?.knownClassRoots),
     classBody: parent?.classBody ?? false
   }
@@ -193,7 +199,8 @@ function createScope(parent?: Scope): Scope {
 function isKnownPrimitiveExpr(expr: IrExpr, scope: Scope): boolean {
   switch (expr.kind) {
     case 'string': case 'number': case 'bool': case 'none': case 'ellipsis': return true
-    case 'name': return scope.knownPrimitiveRoots.has(expr.id)
+    case 'name': return scope.knownPrimitiveRoots.has(expr.id) &&
+      [...(scope.mutableObjectIds.get(expr.id) ?? [])].every((id) => !scope.heap.invalidatedObjects.has(id))
     case 'f_string': return expr.interpolations.every((item) => isKnownPrimitiveExpr(item, scope))
     case 'list': case 'tuple': case 'set': return expr.elts.every((item) => isKnownPrimitiveExpr(item, scope))
     case 'dict': return expr.keys.every((item) => item === null || isKnownPrimitiveExpr(item, scope)) && expr.values.every((item) => isKnownPrimitiveExpr(item, scope))
@@ -219,21 +226,12 @@ function hasKnownAttributeOrigin(expr: IrExpr, scope: Scope): boolean {
 }
 
 function setPrimitiveBinding(target: string, value: IrExpr, scope: Scope): void {
-  const sourceAlias = value.kind === 'name' ? scope.mutableAliasGroups.get(value.id) : undefined
-  scope.mutableAliasGroups.delete(target)
+  const objectIds = mutableObjectsReachable(value, scope)
+  if (value.kind === 'list' || value.kind === 'dict' || value.kind === 'set') objectIds.add(scope.heap.nextObjectId++)
+  if (objectIds.size) scope.mutableObjectIds.set(target, objectIds)
+  else scope.mutableObjectIds.delete(target)
   if (isKnownPrimitiveExpr(value, scope)) scope.knownPrimitiveRoots.add(target)
   else scope.knownPrimitiveRoots.delete(target)
-  if (value.kind === 'list' || value.kind === 'dict' || value.kind === 'set') {
-    const aliases = new Set([target])
-    scope.mutableAliasGroups.set(target, aliases)
-    scope.knownMutableRoots.add(target)
-  } else if (sourceAlias) {
-    sourceAlias.add(target)
-    scope.mutableAliasGroups.set(target, sourceAlias)
-    scope.knownMutableRoots.add(target)
-  } else {
-    scope.knownMutableRoots.delete(target)
-  }
 }
 
 function invalidateBinding(name: string, scope: Scope): void {
@@ -242,12 +240,7 @@ function invalidateBinding(name: string, scope: Scope): void {
   scope.modules.delete(key)
   scope.attrs.delete(key)
   scope.knownPrimitiveRoots.delete(key)
-  scope.knownMutableRoots.delete(key)
-  const aliases = scope.mutableAliasGroups.get(key)
-  if (aliases) {
-    aliases.delete(key)
-    scope.mutableAliasGroups.delete(key)
-  }
+  scope.mutableObjectIds.delete(key)
   scope.knownClassRoots.delete(key)
   scope.unknownRoots.add(key)
 }
@@ -304,12 +297,32 @@ function invalidateBranchWrites(stmts: IrStmt[], scope: Scope): void {
   for (const name of writtenNames(stmts)) invalidateBinding(name, scope)
 }
 
-function isKnownSafeCall(expr: Extract<IrExpr, { kind: 'call' }>, scope: Scope): boolean {
-  if (expr.callee.kind !== 'name') return false
-  const name = expr.callee.id
-  return !scope.unknownRoots.has(name) && !scope.modules.has(name) && !scope.attrs.has(name) && new Set([
-    'print', 'range', 'len', 'str', 'int', 'float', 'bool', 'bytes', 'enumerate', 'zip', 'min', 'max', 'sum', 'abs', 'sorted', 'any', 'all', 'repr', 'type', 'isinstance'
-  ]).has(name)
+function mutableObjectsReachable(expr: IrExpr, scope: Scope, output = new Set<number>()): Set<number> {
+  const visit = (item: IrExpr | null | undefined) => { if (item) mutableObjectsReachable(item, scope, output) }
+  switch (expr.kind) {
+    case 'name': {
+      const ids = scope.mutableObjectIds.get(expr.id)
+      if (ids) for (const id of ids) output.add(id)
+      break
+    }
+    case 'list': case 'tuple': case 'set': expr.elts.forEach(visit); break
+    case 'dict': expr.keys.forEach(visit); expr.values.forEach(visit); break
+    case 'attr': visit(expr.base); break
+    case 'subscript': visit(expr.value); visit(expr.index); break
+    case 'slice': visit(expr.lower); visit(expr.upper); visit(expr.step); break
+    case 'starred': case 'await': visit(expr.value); break
+    case 'call': visit(expr.callee); expr.args.forEach(visit); expr.kwargs.forEach((kw) => visit(kw.value)); break
+    case 'binop': case 'compare': visit(expr.left); visit(expr.right); break
+    case 'unaryop': visit(expr.operand); break
+    case 'boolop': expr.values.forEach(visit); break
+    case 'conditional': visit(expr.test); visit(expr.body); visit(expr.orelse); break
+    case 'f_string': expr.interpolations.forEach(visit); break
+    case 'lambda': expr.defaults.forEach(visit); break
+    case 'comprehension': visit(expr.elt); expr.generators.forEach((g) => { visit(g.iter); g.conditions.forEach(visit) }); break
+    case 'named_expr': visit(expr.value); break
+    case 'yield': visit(expr.value); break
+  }
+  return output
 }
 
 export interface ResolvedChain {
@@ -397,7 +410,7 @@ function applyImportStmt(stmt: Extract<IrStmt, { kind: 'import' }>, scope: Scope
     const bound = alias ?? root
     scope.unknownRoots.delete(bound)
     scope.knownPrimitiveRoots.delete(bound)
-    scope.knownMutableRoots.delete(bound)
+    scope.mutableObjectIds.delete(bound)
     scope.knownClassRoots.delete(bound)
     scope.attrs.delete(bound)
     scope.modules.set(bound, root)
@@ -414,7 +427,7 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
     const bound = alias ?? name
     scope.unknownRoots.delete(bound)
     scope.knownPrimitiveRoots.delete(bound)
-    scope.knownMutableRoots.delete(bound)
+    scope.mutableObjectIds.delete(bound)
     scope.knownClassRoots.delete(bound)
     scope.modules.delete(bound)
     scope.attrs.set(bound, { module: mod, attr: name })
@@ -468,6 +481,7 @@ function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): voi
     }
     return
   }
+  if (value.kind === 'call' || value.kind === 'lambda' || value.kind === 'comprehension') scope.unknownRoots.add(target)
 }
 
 /** Extract a static Path(...) constructor literal path, if resolvable, for write-path checks. */
@@ -703,7 +717,7 @@ class Analyzer {
         for (const target of bindingNames(stmt.target)) {
           child.modules.delete(target)
           child.attrs.delete(target)
-          child.knownMutableRoots.delete(target)
+          child.mutableObjectIds.delete(target)
           if (isKnownPrimitiveIterable(stmt.iter, scope)) {
             child.unknownRoots.delete(target)
             child.knownPrimitiveRoots.add(target)
@@ -713,6 +727,9 @@ class Analyzer {
           }
         }
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
+        const nextIteration = createScope(child)
+        invalidateBranchWrites(stmt.body, nextIteration)
+        this.walkStmts(stmt.body, nextIteration, stmtIndex, decodeBindings)
         // P0-3 评审修复：for...else 的 else 体在循环正常结束时真实执行——必须分析
         this.walkStmts(stmt.orelse, child, stmtIndex, decodeBindings)
         if (stmt.targetUnpacks && !isKnownPrimitiveIterable(stmt.iter, scope) && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
@@ -742,6 +759,9 @@ class Analyzer {
         if (!isKnownPrimitiveExpr(stmt.test, scope) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
         this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
         this.walkStmts(stmt.body, createScope(scope), stmtIndex, decodeBindings)
+        const loopState = createScope(scope)
+        invalidateBranchWrites(stmt.body, loopState)
+        this.walkStmts(stmt.body, loopState, stmtIndex, decodeBindings)
         // P1-1 评审修复（补全）：while...else 的 else 体在循环正常结束时真实执行——必须分析
         this.walkStmts(stmt.orelse, createScope(scope), stmtIndex, decodeBindings)
         invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope)
@@ -792,7 +812,7 @@ class Analyzer {
           child.modules.delete(param)
           child.attrs.delete(param)
           child.knownPrimitiveRoots.delete(param)
-          child.knownMutableRoots.delete(param)
+          child.mutableObjectIds.delete(param)
           child.knownClassRoots.delete(param)
           if (scope.classBody && param === stmt.params[0]) child.knownClassRoots.add(param)
           else child.unknownRoots.add(param)
@@ -882,19 +902,12 @@ class Analyzer {
   ): void {
     if (expr.kind === 'call') {
       this.analyzeCall(expr, scope, decodeBindings, stmtIndex)
-      const mutableArgs = [...expr.args, ...expr.kwargs.map((item) => item.value)].filter((arg) => arg.kind === 'name' && scope.knownMutableRoots.has(arg.id))
-      if (mutableArgs.length && !isKnownSafeCall(expr, scope)) {
+      const mutableObjectIds = new Set<number>()
+      for (const arg of [...expr.args, ...expr.kwargs.map((item) => item.value)]) mutableObjectsReachable(arg, scope, mutableObjectIds)
+      if (expr.callee.kind === 'attr') mutableObjectsReachable(expr.callee.base, scope, mutableObjectIds)
+      if (mutableObjectIds.size) {
         if (expr.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
-        for (const arg of mutableArgs) if (arg.kind === 'name') {
-          const aliases = scope.mutableAliasGroups.get(arg.id)
-          for (const alias of [...(aliases ?? new Set([arg.id]))]) invalidateBinding(alias, scope)
-        }
-      }
-      if (expr.callee.kind === 'attr') {
-        for (const root of [...scope.knownMutableRoots]) {
-          const aliases = scope.mutableAliasGroups.get(root)
-          for (const alias of [...(aliases ?? new Set([root]))]) invalidateBinding(alias, scope)
-        }
+        for (const id of mutableObjectIds) scope.heap.invalidatedObjects.add(id)
       }
       return
     }
@@ -1008,7 +1021,7 @@ class Analyzer {
           this.uncertainties.push({ kind: 'implicit-call-unresolved', range: generator.iter.range, sourceStatus: 'unknown', dynamicAccess: true })
         }
         for (const target of bindingNames(generator.target)) {
-          child.knownMutableRoots.delete(target)
+          child.mutableObjectIds.delete(target)
           if (knownIterable) {
             child.unknownRoots.delete(target)
             child.knownPrimitiveRoots.add(target)
@@ -1708,7 +1721,7 @@ class ScriptUncertaintyCollector {
           for (const target of bindingNames(generator.target)) {
             child.modules.delete(target)
             child.attrs.delete(target)
-            child.knownMutableRoots.delete(target)
+            child.mutableObjectIds.delete(target)
             if (knownIterable) { child.unknownRoots.delete(target); child.knownPrimitiveRoots.add(target) }
             else { child.knownPrimitiveRoots.delete(target); child.unknownRoots.add(target) }
           }
