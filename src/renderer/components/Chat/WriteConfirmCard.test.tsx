@@ -27,6 +27,16 @@ describe('WriteConfirmCard', () => {
     expect(screen.getByRole('button', { name: '仅允许本次' })).toBeDefined()
   })
 
+  it('选择记忆档位后点击仅本次，不提交旧记忆档位', () => {
+    const onConfirm = vi.fn()
+    render(<WriteConfirmCard record={record({ allowReuseOnce: true, memoryTiers: [
+      { key: { kind: 'path', path: '/work/notes.txt', level: 'file' }, label: '记住此文件' }
+    ] as never })} onConfirm={onConfirm} />)
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '1' } })
+    fireEvent.click(screen.getByRole('button', { name: '仅允许本次' }))
+    expect(onConfirm).toHaveBeenCalledWith(true, { reuse: 'once' })
+  })
+
   it('不局部渲染 fallback banner（§8.5：已提升到 ToolCallCard 确认态统一层级）', () => {
     render(
       <WriteConfirmCard

@@ -84,6 +84,16 @@ describe('ReviewScopeCache', () => {
     expect(cache.lookup(candidate)).toMatchObject({ state: 'active', source: 'agent' })
   })
 
+  it('allows a newly approved agent source after the same candidate was approved by the user', () => {
+    const cache = new ReviewScopeCache()
+    const candidate = scope()
+    const digest = cache.candidateDigest(candidate)
+    expect(cache.grant({ scope: candidate, source: 'user', scopeCandidateDigest: digest })).toBe(true)
+    expect(cache.grant({ scope: candidate, source: 'agent', scopeCandidateDigest: digest })).toBe(true)
+    expect(cache.lookup(candidate)).toMatchObject({ source: 'agent' })
+    expect(cache.grant({ scope: candidate, source: 'agent', scopeCandidateDigest: digest })).toBe(false)
+  })
+
   it('keeps sessions isolated and clearing a session destroys its lookup key', () => {
     const cache = new ReviewScopeCache()
     const first = scope()

@@ -238,6 +238,7 @@ export class AgentChannel implements ConfirmationChannel {
       ...(req.factsProvenance ? { factsProvenance: { ...req.factsProvenance } } : {}),
       ...deriveClueExtras(req.facts),
       ...(req.reviewScopeCandidate ? { reviewScopeCandidate: structuredClone(req.reviewScopeCandidate) } : {}),
+      ...(req.reviewScopeCandidate && req.reviewScopeLifetime ? { reviewScopeLifetime: req.reviewScopeLifetime } : {}),
       ...(req.modelJustification ? { modelJustification: req.modelJustification } : {}),
       ...(req.modelJustificationTruncated ? { modelJustificationTruncated: true } : {}),
       ...(this.deps.taskDigest ? {

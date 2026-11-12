@@ -173,6 +173,16 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(fallback).not.toHaveBeenCalled()
   })
 
+  it('把 gate 冻结的审核范围期限传入 ConfirmRequest', async () => {
+    const channel: ConfirmationChannel = { request: vi.fn(async () => ({ kind: 'approved' as const, answererKind: 'agent' as const, cause: 'agent-approved' as const })), cancel: vi.fn() }
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: vi.fn(), cancel: vi.fn() })
+    await port({ call: { invocationId: 'inv', toolCallId: 'lifetime', toolName: 'edit_file', input: {} }, confirmationId: 'lifetime', answerer: 'agent', reasonCode: 'agent-approval',
+      context: { ...context, lane: 'desktop', reviewScopeCandidate: { scopeCandidateDigest: 'a'.repeat(64), toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: '/work/a.txt' }] },
+        reviewScopeCandidateScope: { approvalLifetime: '7d' } } })
+    expect(channel.request).toHaveBeenCalledOnce()
+    expect(channel.request).toHaveBeenCalledWith(expect.objectContaining({ reviewScopeLifetime: '7d' }))
+  })
+
   it('Desktop Agent 无法判定时进入人工 fallback，最终由真人审批', async () => {
     const channel = { request: vi.fn(async () => ({ kind: 'rejected' as const, cause: 'agent-undetermined' as const, answererKind: 'agent' as const })), cancel: vi.fn() }
     const fallback = vi.fn(async () => ({ kind: 'approved' as const, answerer: 'user' as const, cause: 'user-approved' as const, receipt: 'user-receipt' }))

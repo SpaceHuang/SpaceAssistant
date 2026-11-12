@@ -486,6 +486,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       if (!ownerGeneration || !ownerRevision) return { accepted: false, outcome: 'missing' }
       // 先一次性消费 pending，再进行任何异步导入/持久化；避免确认超时或被并发响应消费后仍落信任。
       const pendingMemoryTiers = getPendingMemoryTiers(payload.requestId, payload.toolUseId, ownerSessionId)
+      if (payload.approved && payload.reuse === 'once' && (payload.memoryTierOptionId !== undefined || payload.memoryTier !== undefined || payload.trustCommand?.trim() || payload.trustDomain?.trim() || payload.trustActDomain?.trim() || payload.trustMcpServerId || payload.trustMcpToolName)) {
+        return submitToolConfirmResponse(payload.requestId, payload.toolUseId, false, ownerSessionId)
+      }
       const pendingToolName = getPendingConfirmToolName(payload.requestId, payload.toolUseId, ownerSessionId)
       const commandTrustAllowed = !payload.trustCommand?.trim() || !pendingToolName || (pendingToolName === 'run_shell' && isPendingTrust(payload.requestId, payload.toolUseId, 'command', payload.trustCommand.trim(), undefined, ownerSessionId))
       const domainTrustAllowed = !payload.trustDomain?.trim() || !pendingToolName || (pendingToolName === 'browser' && isPendingTrust(payload.requestId, payload.toolUseId, 'domain', payload.trustDomain.trim(), undefined, ownerSessionId))

@@ -100,10 +100,10 @@ export function createAgentSdkConfirmationPort(input: {
       ...(confirmation.context.reviewScopeCandidate && typeof confirmation.context.reviewScopeCandidate === 'object'
         ? { reviewScopeCandidate: confirmation.context.reviewScopeCandidate as ConfirmRequest['reviewScopeCandidate'] }
         : {}),
+      ...(confirmation.context.reviewScopeCandidate && confirmation.answerer === 'user' ? { allowReuseOnce: true } : {}),
       ...(confirmation.context.reviewScopeCandidateScope && typeof confirmation.context.reviewScopeCandidateScope === 'object'
         ? { reviewScopeLifetime: (confirmation.context.reviewScopeCandidateScope as { approvalLifetime?: ConfirmRequest['reviewScopeLifetime'] }).approvalLifetime }
         : {}),
-      ...(confirmation.context.reviewScopeCandidate && confirmation.answerer === 'user' ? { allowReuseOnce: true } : {})
     }
     const lane = confirmation.context.lane
     const imHumanApproval = confirmation.answerer === 'user' && confirmation.context.decision.disposition === 'human-required' &&

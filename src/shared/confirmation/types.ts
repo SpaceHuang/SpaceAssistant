@@ -480,6 +480,8 @@ export interface ApprovalCluePack {
   toolUseId?: string
   /** Host-created and complete candidate range, shown as untrusted target facts to the reviewer. */
   reviewScopeCandidate?: ReviewScopeApprovalCandidate
+  /** Frozen host-selected lifetime for the candidate scope, shown to the reviewer. */
+  reviewScopeLifetime?: 'session' | 'process' | '24h' | '7d'
   actionClass: ActionClass
   riskLevel: RiskLevel
   /** ConfirmSummary 纯文本摘要。 */

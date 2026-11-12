@@ -1307,4 +1307,21 @@ describe('R5 护栏：审批提示词与 Skill 三态合同一致性（防漂移
     expect(rendered).toContain('/work/a.txt')
     expect(getBundledSecurityApprovalSkill('high').content).toContain('不得输出缓存开关、候选摘要')
   })
+
+  it.each([
+    ['session', 'edit_file', 'edit'], ['process', 'edit_file', 'edit'], ['24h', 'edit_file', 'edit'], ['7d', 'edit_file', 'edit'],
+    ['session', 'write_file', 'write'], ['process', 'write_file', 'write'], ['24h', 'write_file', 'write'], ['7d', 'write_file', 'write']
+  ] as const)('审核提示对 %s 的 %s 候选揭示期限及跨工具写入范围', async (lifetime, toolName, operation) => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const rendered = renderCluePackForTest(clue({ reviewScopeCandidate: {
+      scopeCandidateDigest: 'f'.repeat(64), toolName, operation,
+      objects: [{ role: 'target', target: '/work/a.txt' }]
+    }, reviewScopeLifetime: lifetime }))
+    expect(rendered).toContain(lifetime === 'session' ? '当前会话期间' : lifetime === 'process' ? '当前应用进程期间' : lifetime === '24h' ? '24 小时' : '7 天')
+    expect(rendered).toContain(lifetime === 'session' ? '仅当前会话' : lifetime === 'process' ? '当前应用进程期间' : '可跨会话')
+    expect(rendered).toMatch(/write_file|整文件写入/)
+    expect(rendered).toMatch(/edit_file|局部编辑/)
+    expect(rendered).toMatch(/跨消息/)
+    expect(rendered).toContain('不产生记忆或范围授权')
+  })
 })

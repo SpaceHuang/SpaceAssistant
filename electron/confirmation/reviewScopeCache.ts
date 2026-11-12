@@ -36,7 +36,7 @@ export interface ReviewScopeEntryView {
 interface ReviewScopeEntry {
   readonly digest: string
   readonly sessionKey: string
-  readonly source: ReviewScopeSource
+  source: ReviewScopeSource
   state: ReviewScopeState
   generation: number
   touchedAt: number
@@ -202,9 +202,17 @@ export class ReviewScopeCache {
     const state: ReviewScopeState = 'active'
     const estimatedBytes = Buffer.byteLength(JSON.stringify({ digest, key, source: input.source, state, generation: this.generation + 1 }))
     if (estimatedBytes > this.maxEntryBytes) return false
-    if (this.entries.has(digest)) return false
+    const existing = this.entries.get(digest)
+    if (existing && (existing.source !== 'user' || input.source !== 'agent')) return false
     if (!this.makeRoom(key)) return false
     if (this.grantStore && !this.grantStore.grant({ ...this.storeIdentity(input.scope, input.source), lifetime: input.lifetime ?? input.scope.approvalLifetime ?? this.grantStore.getDefaultLifetime() })) return false
+    if (existing) {
+      existing.source = 'agent'
+      existing.generation = ++this.generation
+      existing.touchedAt = this.now()
+      this.scopes.set(digest, input.scope)
+      return true
+    }
     this.entries.set(digest, {
       digest,
       sessionKey: key,
@@ -225,8 +233,16 @@ export class ReviewScopeCache {
     if (!this.sessionSecrets.has(key)) return false
     const state: ReviewScopeState = 'active'
     const estimatedBytes = Buffer.byteLength(JSON.stringify({ digest, key, source: input.source, state, generation: this.generation + 1 }))
-    if (estimatedBytes > this.maxEntryBytes || this.entries.has(digest) || !this.makeRoom(key)) return false
+    const existing = this.entries.get(digest)
+    if (estimatedBytes > this.maxEntryBytes || (existing && (existing.source !== 'user' || input.source !== 'agent')) || !this.makeRoom(key)) return false
     if (this.grantStore && input.scope && !this.grantStore.grant({ ...this.storeIdentity(input.scope, input.source), lifetime: input.lifetime ?? input.scope.approvalLifetime ?? this.grantStore.getDefaultLifetime() })) return false
+    if (existing) {
+      existing.source = 'agent'
+      existing.generation = ++this.generation
+      existing.touchedAt = this.now()
+      if (input.scope) this.scopes.set(digest, input.scope)
+      return true
+    }
     this.entries.set(digest, { digest, sessionKey: key, source: input.source, state, generation: ++this.generation, touchedAt: this.now() })
     if (input.scope) this.scopes.set(digest, input.scope)
     return true

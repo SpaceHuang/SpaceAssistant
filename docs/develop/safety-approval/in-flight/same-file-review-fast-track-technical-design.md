@@ -650,3 +650,13 @@ R-1 至 R-3 已获复审关闭。R-4 修订将三个 IPC 提交边界的改动�
 | 验证汇总 | 路径祖先检查收敛后的定向复核：4 文件、294 项通过；此前功能集定向 10 文件、574 项也通过。最终 `npm test`：1290 个测试文件通过、1 个跳过；12739 项通过、140 项跳过。`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run i18n:check`、`npm run check:agent-sdk`、`npm run check:system-invariant-registry` 和 `npm run build:electron:incremental` 均通过。 |
 
 复核真实入口日志可在隔离夹具工作目录的 `.agent/logs/SecurityAudit-20261111.log`、`.agent/logs/SecurityAudit-20261112.log` 与 `.agent/logs/FeishuCli-20261111.log` 完成；测试文件内容只作隔离夹具证据。不要将消息正文或真实用户文件路径写入安全审计日志。
+
+### 第三轮系统复审核销（R3）
+
+| 问题 | 修订与边界 | 回归证据 |
+| --- | --- | --- |
+| R3-01：仅本次仍可写入旧记忆 | 确认卡点击“仅允许本次”不携带已选记忆档位；IPC 对 once 与记忆/信任写入组合 fail closed，拒绝组合提交，不能产生其他持久授权。 | `WriteConfirmCard.test.tsx` 覆盖选档后点击；`appIpc.confirmTrust.test.ts` 覆盖真实 IPC waiter 与记忆 writer 未调用。 |
+| R3-02：人工批准占用同摘要索引 | 同一候选的重复来源批准仍拒绝；仅允许已有人类来源、随后收到的新 Agent 批准提升内存索引来源，且只有存储层成功登记后才更新。Agent 重复回调不续期。 | `reviewScopeCache.test.ts` 覆盖 user→agent 登记、来源命中及重复 Agent 拒绝。 |
+| R3-03：审核材料未揭示实际授权范围 | 冻结的期限随 gate 上下文进入 `ConfirmRequest` 和模型线索；提示列出期限，并说明普通文件批准在该期限内可跨消息用于同路径局部编辑与整文件写入。仅本次不产生记忆或范围授权。 | `agentSdkConfirmationPort.test.ts`、`agentChannel.test.ts` 与 `approvalAgent.test.ts` 分别覆盖冻结期限传递、线索承载和最终提示文本。 |
+
+这些变化不增加配置项、持久化字段或新授权能力；修正提交约束、来源索引与审核时可见的现有授权含义。真实模型及 IM/桌面链路没有因本轮单测而视为重新验收。
