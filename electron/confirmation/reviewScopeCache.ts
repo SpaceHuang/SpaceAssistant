@@ -236,11 +236,13 @@ export class ReviewScopeCache {
     let digest: string
     try { digest = this.candidateDigest(scope) } catch { return null }
     let entry = this.entries.get(digest)
+    if (entry && !this.isCachedEntryValid(entry)) entry = undefined
     let inheritedParentScope: ReviewScopeEntryView['inheritedParentScope']
     if (!entry && scope.toolName === 'grep') {
       const key = sessionKey(scope.lane, scope.sessionId)
       const parent = [...this.entries.values()]
         .filter((candidate) => candidate.sessionKey === key && candidate.state === 'active' && candidate.source === 'user')
+        .filter((candidate) => this.isCachedEntryValid(candidate))
         .sort((a, b) => b.touchedAt - a.touchedAt || b.generation - a.generation)
         .map((candidate) => this.scopes.get(candidate.digest))
         .find((candidate): candidate is ReviewScopeCandidate => Boolean(candidate && candidate.toolName === 'grep' && canInheritGrepRoot(candidate, scope)))
@@ -359,6 +361,16 @@ export class ReviewScopeCache {
       policyRevision: scope.authorizationDomain.revision, policyEpoch: scope.authorizationDomain.epoch,
       policyVersion: scope.policyVersion, capability, source, scope: safeScope, sessionId: scope.sessionId
     }
+  }
+
+  /** final-check: the grant store owns expiry and revocation; memory entries are indexes, never authority. */
+  private isCachedEntryValid(entry: ReviewScopeEntry): boolean {
+    if (!this.grantStore) return true
+    const scope = this.scopes.get(entry.digest)
+    if (!scope) return false
+    if (this.grantStore.lookup(this.storeIdentity(scope, entry.source))) return true
+    this.revokeEntry(entry)
+    return false
   }
 
   private makeRoom(key: string): boolean {

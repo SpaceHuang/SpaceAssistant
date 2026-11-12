@@ -135,6 +135,59 @@ describe('ReviewScopeGrantStore', () => {
     expect(restartedCache.lookup(nextScope)).toMatchObject({ state: 'active', source: 'agent' })
   })
 
+  it('revalidates an in-memory durable grant at its original deadline', () => {
+    const db = open()
+    let now = Date.now() + 10_000
+    const store = new ReviewScopeGrantStore(db, { now: () => now })
+    const cache = new ReviewScopeCache({ grantStore: store })
+    const scope = {
+      lane: 'desktop' as const, sessionId: 'session-a', subjectId: 'profile-a',
+      authorizationDomain: { id: 'desktop', revision: 4, epoch: 7 }, toolName: 'write_file' as const, operation: 'write' as const,
+      objects: [{ role: 'target', value: '/work/a.txt' }], environment: '/work', policyVersion: 'policy-v3',
+      exactParameters: { content: 'replacement' }, taskConstraint: '', approvalLifetime: '24h' as const
+    }
+    expect(cache.grant({ scope, source: 'user', scopeCandidateDigest: cache.candidateDigest(scope), lifetime: '24h' })).toBe(true)
+    now += 86_400_000 - 1
+    expect(cache.lookup(scope)).toMatchObject({ source: 'user', state: 'active' })
+    now += 1
+    expect(cache.lookup(scope)).toBeNull()
+  })
+
+  it('does not restore an expired durable grant into a new in-memory cache', () => {
+    const db = open()
+    let now = Date.now() + 10_000
+    const firstStore = new ReviewScopeGrantStore(db, { now: () => now })
+    const firstCache = new ReviewScopeCache({ grantStore: firstStore })
+    const scope = {
+      lane: 'desktop' as const, sessionId: 'session-a', subjectId: 'profile-a',
+      authorizationDomain: { id: 'desktop', revision: 4, epoch: 7 }, toolName: 'write_file' as const, operation: 'write' as const,
+      objects: [{ role: 'target', value: '/work/a.txt' }], environment: '/work', policyVersion: 'policy-v3',
+      exactParameters: { content: 'replacement' }, taskConstraint: '', approvalLifetime: '7d' as const
+    }
+    expect(firstCache.grant({ scope, source: 'user', scopeCandidateDigest: firstCache.candidateDigest(scope), lifetime: '7d' })).toBe(true)
+    now += 7 * 86_400_000
+    const restored = new ReviewScopeCache({ grantStore: new ReviewScopeGrantStore(db, { now: () => now }) })
+    expect(restored.lookup(scope)).toBeNull()
+  })
+
+  it('does not inherit a child search from an expired parent still indexed in memory', () => {
+    const db = open()
+    let now = Date.now() + 10_000
+    const store = new ReviewScopeGrantStore(db, { now: () => now })
+    const cache = new ReviewScopeCache({ grantStore: store })
+    const parent = {
+      lane: 'desktop' as const, sessionId: 'session-a', subjectId: 'profile-a',
+      authorizationDomain: { id: 'desktop', revision: 4, epoch: 7 }, toolName: 'grep' as const, operation: 'search' as const,
+      objects: [{ role: 'root', value: '/work/project' }], environment: '/work', policyVersion: 'policy-v3',
+      exactParameters: { pattern: 'needle', includeIgnored: true, engine: 'walk', engineFingerprint: 'e'.repeat(64), ignoreDigest: 'c'.repeat(64) },
+      taskConstraint: '', approvalLifetime: '24h' as const
+    }
+    expect(cache.grant({ scope: parent, source: 'user', scopeCandidateDigest: cache.candidateDigest(parent), lifetime: '24h' })).toBe(true)
+    now += 86_400_000
+    const child = { ...parent, objects: [{ role: 'root', value: '/work/project/lib' }] }
+    expect(cache.lookup(child)).toBeNull()
+  })
+
   it('persists only a remote directory disclosure digest for cross-session listing reuse', () => {
     const db = open()
     db.prepare("INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('im',4)").run()

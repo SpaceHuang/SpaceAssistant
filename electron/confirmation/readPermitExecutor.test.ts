@@ -176,6 +176,7 @@ describe('resolveReadPermitTarget', () => {
 
   it('G-02 inherited grep permit rechecks the approved parent identity and constrains the child root', async () => {
     const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'grep-parent-permit-')))
+    vi.stubEnv('HOME', parent)
     const child = path.join(parent, 'src')
     await fs.mkdir(child)
     try {
@@ -196,7 +197,8 @@ describe('resolveReadPermitTarget', () => {
         .resolves.toMatchObject({ ok: true, path: child, targetKind: 'directory' })
       await fs.writeFile(path.join(child, '.gitignore'), 'private/\n')
       await expect(resolveReadPermitTarget('grep', input, { requestId: 'r-inherited', toolUseId: 't-inherited', workDir: parent, readExecutionPermit: permit } as never))
-        .resolves.toMatchObject({ ok: false, caseId: 'read-grep-parent-range-changed', failureClass: 'mechanism' })
+        .resolves.toMatchObject({ ok: false, caseId: 'read-grep-parent-scope-mismatch', failureClass: 'mechanism' })
+      await fs.rm(path.join(child, '.gitignore'))
       const changedParent = buildReadExecutionPermit({
         requestId: 'r-inherited', toolUseId: 't-inherited', toolName: 'grep', input,
         facts: [{ factId: `fact-${child}`, decisionRuleId: 'grep-workdir-recursive-reusable', normalizedPath: child,

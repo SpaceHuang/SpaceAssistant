@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   GREP_DEFAULT_IGNORES,
+  isGrepSubtreeSemanticallyContained,
   grepSensitiveExcludes,
   planGrepInvocation,
   formatGrepNoMatchOutput,
@@ -14,6 +15,19 @@ import {
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-grep-scope-'))
 }
+
+describe('grep subtree grant containment', () => {
+  it('does not inherit a parent grant when a local ignore rule can widen an explicit child-root search', () => {
+    const root = tempDir()
+    fs.mkdirSync(path.join(root, 'private'))
+    fs.writeFileSync(path.join(root, '.gitignore'), 'private/\n')
+    fs.writeFileSync(path.join(root, 'private', 'a.txt'), 'needle\n')
+
+    expect(isGrepSubtreeSemanticallyContained(root, path.join(root, 'private'), { includeIgnored: false })).toBe(false)
+
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+})
 
 describe('grepSensitiveExcludes（两引擎共用同一份规则生成，C1 配套硬要求 2）', () => {
   it('覆盖 .env / .env.* / secrets/ 三类敏感形态', () => {

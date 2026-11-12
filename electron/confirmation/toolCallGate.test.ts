@@ -120,6 +120,7 @@ describe('buildToolCallGateArgs', () => {
 describe('review scope cache gate integration', () => {
   it('only offers recursive directory grep reuse for a verified ordinary work-directory root', async () => {
     const root = await fs.realpath(await makeTempDir('grep-review-root-'))
+    vi.stubEnv('HOME', root)
     try {
       await fs.mkdir(path.join(root, 'child'))
       await fs.writeFile(path.join(root, 'child', 'note.txt'), 'needle')
