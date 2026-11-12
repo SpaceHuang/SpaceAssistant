@@ -1700,7 +1700,14 @@ describe('evaluateToolCallGate', () => {
     ['comprehension truthiness', 'from external_module import obj\n[i for i in [1] if obj]', 'partial'],
     ['set comprehension hash', 'from external_module import obj\n{obj for i in [1]}', 'partial'],
     ['dict comprehension key hash', 'from external_module import obj\n{obj: 1 for i in [1]}', 'partial'],
-    ['unpack iteration', 'from external_module import obj\na, b = obj', 'partial']
+    ['unpack iteration', 'from external_module import obj\na, b = obj', 'partial'],
+    ['chained unpack iteration', 'from external_module import obj\na = b, c = obj', 'partial'],
+    ['annotation-only binding', 'from external_module import obj\nx = obj\nx: int\nf"{x}"', 'partial'],
+    ['augmented assignment old receiver', 'from external_module import obj\nx = obj\nx += 1\nf"{x}"', 'partial'],
+    ['lambda parameter shadowing', 'x = 1\nf = lambda x: x + 1\nfrom external_module import obj\nf(obj)', 'partial'],
+    ['walrus block write', 'from external_module import obj\nx = 1\nif True:\n    (x := obj)\nf"{x}"', 'partial'],
+    ['for else write', 'from external_module import obj\nx = 1\nfor _ in []:\n    pass\nelse:\n    x = obj\nf"{x}"', 'partial'],
+    ['bare mutable argument call', 'from external_module import obj, mutate\na = [1]\nmutate(a, obj)\nf"{a}"', 'partial']
   ] as const)('真实 Gate 阻止 %s 获得 clean allow 或记忆档位', async (_name, code, expectedFact) => {
     for (const lane of ['desktop', 'feishu'] as const) {
       const result = await evaluateToolCallGate(base({ lane,

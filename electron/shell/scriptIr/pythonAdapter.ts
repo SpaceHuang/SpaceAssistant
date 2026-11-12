@@ -159,14 +159,17 @@ function adaptStmtCore(node: TsNode): IrStmt | null {
       const annotation = fieldNode(node, 'type')
       const right = fieldNode(node, 'right')
       if (!left || !annotation) throw new IrCoverageError(type, 'annotated assignment missing fields')
-      return { kind: 'assign', targets: splitAssignmentTargets(left), value: right ? adaptExpr(right) : { kind: 'none' }, annotation: adaptExpr(annotation), ...(left.type === 'pattern_list' || left.type === 'tuple' ? { unpacksValue: true } : {}) }
+      const targets = splitAssignmentTargets(left)
+      if (!right) return { kind: 'annotation', targets, annotation: adaptExpr(annotation) }
+      return { kind: 'assign', targets, value: adaptExpr(right), annotation: adaptExpr(annotation), ...(left.type === 'pattern_list' || left.type === 'tuple' ? { unpacksValue: true } : {}) }
     }
     case 'augmented_assignment': {
       const left = fieldNode(node, 'left')
       const right = fieldNode(node, 'right')
       if (!left || !right) throw new IrCoverageError(type, 'augmented_assignment missing operands')
       const target = assignTargetName(left)
-      return { kind: 'aug_assign', target, value: adaptExpr(right) }
+      const operator = fieldNode(node, 'operator') ?? operatorToken(node)
+      return { kind: 'aug_assign', target, targetExpr: adaptExpr(left), op: operator ? nodeText(operator) : '?', value: adaptExpr(right) }
     }
     case 'if_statement': {
       const cond = fieldNode(node, 'condition')
@@ -489,15 +492,18 @@ function adaptAssignment(node: TsNode): IrStmt {
   const annotation = fieldNode(node, 'type')
   if (!left || (!right && !annotation)) throw new IrCoverageError(node.type, 'assignment missing operands')
   const targets = splitAssignmentTargets(left)
+  let unpacksValue = left.type === 'pattern_list' || left.type === 'tuple'
+  if (annotation && !right) return { kind: 'annotation', targets, annotation: adaptExpr(annotation) }
   let valueNode = right
   while (valueNode?.type === 'assignment') {
     const chainedLeft = fieldNode(valueNode, 'left')
     const chainedRight = fieldNode(valueNode, 'right')
     if (!chainedLeft || !chainedRight) throw new IrCoverageError(valueNode.type, 'chained assignment missing operands')
+    if (chainedLeft.type === 'pattern_list' || chainedLeft.type === 'tuple') unpacksValue = true
     targets.push(...splitAssignmentTargets(chainedLeft))
     valueNode = chainedRight
   }
-  return { kind: 'assign', targets, value: valueNode ? adaptExpr(valueNode) : { kind: 'none' }, ...(annotation ? { annotation: adaptExpr(annotation) } : {}), ...(left.type === 'pattern_list' || left.type === 'tuple' ? { unpacksValue: true } : {}) }
+  return { kind: 'assign', targets, value: valueNode ? adaptExpr(valueNode) : { kind: 'none' }, ...(annotation ? { annotation: adaptExpr(annotation) } : {}), ...(unpacksValue ? { unpacksValue: true } : {}) }
 }
 
 function splitAssignmentTargets(left: TsNode): string[] {

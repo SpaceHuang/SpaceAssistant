@@ -100,7 +100,8 @@ type IrStmtShape =
   | { kind: 'import'; names: IrImportName[] }
   | { kind: 'from_import'; module: string; names: Array<{ name: string; alias?: string }> }
   | { kind: 'assign'; targets: string[]; value: IrExpr; annotation?: IrExpr | null; unpacksValue?: boolean }
-  | { kind: 'aug_assign'; target: string; value: IrExpr }
+  | { kind: 'aug_assign'; target: string; targetExpr: IrExpr; op: string; value: IrExpr }
+  | { kind: 'annotation'; targets: string[]; annotation: IrExpr }
   | { kind: 'expr'; value: IrExpr }
   | { kind: 'if'; test: IrExpr; body: IrStmt[]; orelse: IrStmt[] }
   | { kind: 'for'; target: string; iter: IrExpr; targetUnpacks?: boolean; body: IrStmt[]; orelse: IrStmt[] }

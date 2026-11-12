@@ -345,7 +345,14 @@ describe('script uncertainty facts', () => {
     ['comprehension truthiness', 'from external_module import obj\n[i for i in [1] if obj]'],
     ['set comprehension hash', 'from external_module import obj\n{obj for i in [1]}'],
     ['dict comprehension key hash', 'from external_module import obj\n{obj: 1 for i in [1]}'],
-    ['unpack iteration', 'from external_module import obj\na, b = obj']
+    ['unpack iteration', 'from external_module import obj\na, b = obj'],
+    ['chained unpack iteration', 'from external_module import obj\na = b, c = obj'],
+    ['annotation-only preserves runtime binding', 'from external_module import obj\nx = obj\nx: int\nf"{x}"'],
+    ['augmented assignment reads old receiver', 'from external_module import obj\nx = obj\nx += 1\nf"{x}"'],
+    ['lambda parameter shadows primitive', 'x = 1\nf = lambda x: x + 1\nfrom external_module import obj\nf(obj)'],
+    ['walrus block write invalidates outer binding', 'from external_module import obj\nx = 1\nif True:\n    (x := obj)\nf"{x}"'],
+    ['for else write invalidates outer binding', 'from external_module import obj\nx = 1\nfor _ in []:\n    pass\nelse:\n    x = obj\nf"{x}"'],
+    ['bare mutator invalidates container alias', 'from external_module import obj, mutate\na = [1]\nmutate(a, obj)\nf"{a}"']
   ])('fails closed for systematic-review case: %s', (_label, code) => {
     const result = analyzeScriptContent(code)
     expect(result.coverage).not.toBe('complete')

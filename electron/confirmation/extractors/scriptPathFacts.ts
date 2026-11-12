@@ -150,16 +150,44 @@ function isPrimitiveLike(expr: IrExpr, env: WalkEnv): boolean {
 }
 
 function collectWrites(stmts: IrStmt[], output = new Set<string>()): Set<string> {
+  const expression = (expr: IrExpr | null | undefined): void => {
+    if (!expr) return
+    const visit = (e: IrExpr | null | undefined) => expression(e)
+    switch (expr.kind) {
+      case 'named_expr': output.add(expr.target); visit(expr.value); break
+      case 'attr': visit(expr.base); break
+      case 'call': visit(expr.callee); expr.args.forEach(visit); expr.kwargs.forEach((kw) => visit(kw.value)); break
+      case 'binop': case 'compare': visit(expr.left); visit(expr.right); break
+      case 'unaryop': visit(expr.operand); break
+      case 'await': case 'starred': visit(expr.value); break
+      case 'boolop': expr.values.forEach(visit); break
+      case 'conditional': visit(expr.test); visit(expr.body); visit(expr.orelse); break
+      case 'list': case 'tuple': case 'set': expr.elts.forEach(visit); break
+      case 'dict': expr.keys.forEach(visit); expr.values.forEach(visit); break
+      case 'subscript': visit(expr.value); visit(expr.index); break
+      case 'slice': visit(expr.lower); visit(expr.upper); visit(expr.step); break
+      case 'f_string': expr.interpolations.forEach(visit); break
+      case 'lambda': expr.defaults.forEach(visit); break
+      case 'comprehension': visit(expr.elt); expr.generators.forEach((g) => { visit(g.iter); g.conditions.forEach(visit) }); break
+      case 'yield': visit(expr.value); break
+    }
+  }
   for (const stmt of stmts) {
-    if (stmt.kind === 'assign') stmt.targets.forEach((name) => output.add(name))
-    else if (stmt.kind === 'aug_assign') output.add(stmt.target)
+    if (stmt.kind === 'assign') { stmt.targets.forEach((name) => output.add(name)); expression(stmt.value); expression(stmt.annotation) }
+    else if (stmt.kind === 'annotation') expression(stmt.annotation)
+    else if (stmt.kind === 'aug_assign') { output.add(stmt.target); expression(stmt.targetExpr); expression(stmt.value) }
+    else if (stmt.kind === 'expr') expression(stmt.value)
     else if (stmt.kind === 'for') { output.add(stmt.target); collectWrites([...stmt.body, ...stmt.orelse], output) }
-    else if (stmt.kind === 'if' || stmt.kind === 'while') collectWrites([...stmt.body, ...stmt.orelse], output)
+    else if (stmt.kind === 'if' || stmt.kind === 'while') { expression(stmt.test); collectWrites([...stmt.body, ...stmt.orelse], output) }
     else if (stmt.kind === 'with') { stmt.items.flatMap((item) => item.optionalVars).forEach((name) => output.add(name)); collectWrites(stmt.body, output) }
     else if (stmt.kind === 'try') collectWrites([...stmt.body, ...stmt.handlers.flatMap((handler) => handler.body), ...stmt.orelse, ...stmt.finalbody], output)
     else if (stmt.kind === 'import') stmt.names.forEach((item) => output.add(item.alias ?? item.module.split('.')[0]!))
     else if (stmt.kind === 'from_import') stmt.names.forEach((item) => { if (item.name !== '*') output.add(item.alias ?? item.name) })
-    else if (stmt.kind === 'function_def' || stmt.kind === 'class_def') output.add(stmt.name)
+    else if (stmt.kind === 'function_def') { output.add(stmt.name); stmt.defaults.forEach(expression); stmt.decorators.forEach(expression); (stmt.annotations ?? []).forEach(expression) }
+    else if (stmt.kind === 'class_def') { output.add(stmt.name); stmt.bases.forEach(expression); stmt.decorators.forEach(expression) }
+    else if (stmt.kind === 'return') expression(stmt.value)
+    else if (stmt.kind === 'raise') { expression(stmt.value); expression(stmt.cause) }
+    else if (stmt.kind === 'assert') { expression(stmt.test); expression(stmt.message) }
   }
   return output
 }
@@ -521,11 +549,20 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         }
         break
       }
+      case 'annotation':
+        walkExpr(stmt.annotation, blockEnv, paths, state, false)
+        break
       case 'aug_assign':
         // P0-4:aug_assign 不再无条件 unknown(f14);但 IR 丢失运算符,无法证明「+= 后仍静态」——
         // 一律失效(N3:p += os.environ["X"] 不得误判可静态确定)。仅 import 名重绑定保持 unknown。
         if (scope.modules.has(stmt.target) || scope.attrs.has(stmt.target)) { state.dynamicExecution = true; state.dynamicKinds.add('binding-chain-broken') }
+        walkExpr(stmt.targetExpr, blockEnv, paths, state, false)
         walkExpr(stmt.value, blockEnv, paths, state, false)
+        if (!isPrimitiveLike(stmt.targetExpr, blockEnv) || !isPrimitiveLike(stmt.value, blockEnv)) {
+          const targetExpr = stmt.targetExpr.kind === 'subscript' ? stmt.targetExpr.value : stmt.targetExpr
+          const containerMutation = stmt.targetExpr.kind === 'subscript' && targetExpr.kind === 'name' && blockEnv.pure.has(targetExpr.id)
+          if (!containerMutation) { state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable') }
+        }
         invalidateTargetText(stmt.target, blockEnv, state)
         break
       case 'expr': walkExpr(stmt.value, blockEnv, paths, state, false); break
@@ -550,7 +587,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
           walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
         }
         walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
-        invalidateBlockWrites(stmt.body, blockEnv, state)
+        invalidateBlockWrites([...stmt.body, ...stmt.orelse], blockEnv, state)
         break
       }
       case 'while':

@@ -15,7 +15,14 @@ describe('extractScriptPathFacts', () => {
     'from external_module import obj\n[i for i in [1] if obj]',
     'from external_module import obj\n{obj for i in [1]}',
     'from external_module import obj\n{obj: 1 for i in [1]}',
-    'from external_module import obj\na, b = obj'
+    'from external_module import obj\na, b = obj',
+    'from external_module import obj\na = b, c = obj',
+    'from external_module import obj\nx = obj\nx: int\nopen(x)',
+    'from external_module import obj\nx = obj\nx += 1\nopen(x)',
+    'x = 1\nf = lambda x: x + 1\nfrom external_module import obj\nf(obj)',
+    'from external_module import obj\nx = 1\nif True:\n    (x := obj)\nopen(str(x))',
+    'from external_module import obj\nx = 1\nfor _ in []:\n    pass\nelse:\n    x = obj\nopen(x)',
+    'from external_module import obj, mutate\na = ["/tmp/safe"]\nmutate(a, obj)\nopen(a[0])'
   ])('marks path extraction incomplete when executable facts include an unmodeled protocol: %s', (code) => {
     expect(extractScriptPathFacts(code, 'python').completeness).toBe('unknown')
   })
