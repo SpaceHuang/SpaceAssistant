@@ -170,6 +170,7 @@ interface Binding {
 interface HeapFacts {
   invalidatedObjects: Set<number>
   nextObjectId: number
+  expressionObjectIds: WeakMap<object, number>
 }
 
 interface Scope {
@@ -180,6 +181,7 @@ interface Scope {
   mutableObjectIds: Map<string, Set<number>>
   heap: HeapFacts
   knownClassRoots: Set<string>
+  shadowedBuiltinRoots: Set<string>
   classBody: boolean
 }
 
@@ -190,8 +192,9 @@ function createScope(parent?: Scope): Scope {
     unknownRoots: new Set(parent?.unknownRoots),
     knownPrimitiveRoots: new Set(parent?.knownPrimitiveRoots),
     mutableObjectIds: new Map([...parent?.mutableObjectIds ?? []].map(([key, ids]) => [key, new Set(ids)])),
-    heap: parent?.heap ?? { invalidatedObjects: new Set(), nextObjectId: 1 },
+    heap: parent?.heap ?? { invalidatedObjects: new Set(), nextObjectId: 1, expressionObjectIds: new WeakMap() },
     knownClassRoots: new Set(parent?.knownClassRoots),
+    shadowedBuiltinRoots: new Set(parent?.shadowedBuiltinRoots),
     classBody: parent?.classBody ?? false
   }
 }
@@ -205,11 +208,20 @@ function isKnownPrimitiveExpr(expr: IrExpr, scope: Scope): boolean {
     case 'list': case 'tuple': case 'set': return expr.elts.every((item) => isKnownPrimitiveExpr(item, scope))
     case 'dict': return expr.keys.every((item) => item === null || isKnownPrimitiveExpr(item, scope)) && expr.values.every((item) => isKnownPrimitiveExpr(item, scope))
     case 'slice': return (!expr.lower || isKnownPrimitiveExpr(expr.lower, scope)) && (!expr.upper || isKnownPrimitiveExpr(expr.upper, scope)) && (!expr.step || isKnownPrimitiveExpr(expr.step, scope))
+    case 'subscript': return isKnownPrimitiveExpr(expr.value, scope) && isKnownPrimitiveExpr(expr.index, scope)
     case 'binop': return isKnownPrimitiveExpr(expr.left, scope) && isKnownPrimitiveExpr(expr.right, scope)
     case 'unaryop': return isKnownPrimitiveExpr(expr.operand, scope)
     case 'compare': return isKnownPrimitiveExpr(expr.left, scope) && isKnownPrimitiveExpr(expr.right, scope)
     case 'boolop': return expr.values.every((item) => isKnownPrimitiveExpr(item, scope))
     case 'conditional': return isKnownPrimitiveExpr(expr.test, scope) && isKnownPrimitiveExpr(expr.body, scope) && isKnownPrimitiveExpr(expr.orelse, scope)
+    case 'comprehension': {
+      const child = createScope(scope)
+      for (const generator of expr.generators) {
+        if (!isKnownPrimitiveIterable(generator.iter, child) || generator.conditions.some((condition) => !isKnownPrimitiveExpr(condition, child))) return false
+        for (const target of bindingNames(generator.target)) { child.unknownRoots.delete(target); child.knownPrimitiveRoots.add(target); child.mutableObjectIds.delete(target) }
+      }
+      return expr.elt.kind === 'tuple' ? expr.elt.elts.every((item) => isKnownPrimitiveExpr(item, child)) : isKnownPrimitiveExpr(expr.elt, child)
+    }
     default: return false
   }
 }
@@ -225,9 +237,52 @@ function hasKnownAttributeOrigin(expr: IrExpr, scope: Scope): boolean {
   return Boolean(chain.root && (scope.modules.has(chain.root) || scope.attrs.has(chain.root) || scope.knownPrimitiveRoots.has(chain.root) || scope.knownClassRoots.has(chain.root)))
 }
 
+function expressionObjectId(expr: IrExpr, scope: Scope): number {
+  let id = scope.heap.expressionObjectIds.get(expr)
+  if (id === undefined) { id = scope.heap.nextObjectId++; scope.heap.expressionObjectIds.set(expr, id) }
+  return id
+}
+
+function collectAssignedObjectIds(expr: IrExpr, scope: Scope, output = new Set<number>()): Set<number> {
+  const initialSize = output.size
+  const visit = (node: IrExpr | null | undefined) => { if (node) collectAssignedObjectIds(node, scope, output) }
+  switch (expr.kind) {
+    case 'name': {
+      for (const id of scope.mutableObjectIds.get(expr.id) ?? []) output.add(id)
+      if (output.size === initialSize && !isKnownPrimitiveExpr(expr, scope) && !scope.modules.has(expr.id)) output.add(expressionObjectId(expr, scope))
+      break
+    }
+    case 'list': case 'dict': case 'set':
+      output.add(expressionObjectId(expr, scope))
+      if (expr.kind === 'dict') { expr.keys.forEach(visit); expr.values.forEach(visit) } else expr.elts.forEach(visit)
+      break
+    case 'tuple': expr.elts.forEach(visit); break
+    case 'conditional': visit(expr.body); visit(expr.orelse); break
+    case 'binop': { const before = output.size; visit(expr.left); visit(expr.right); if (output.size > before) output.add(expressionObjectId(expr, scope)); break }
+    case 'comprehension': if (expr.compKind !== 'generator') output.add(expressionObjectId(expr, scope)); visit(expr.elt); expr.generators.forEach((g) => { visit(g.iter); g.conditions.forEach(visit) }); break
+    case 'call': case 'attr': case 'subscript': case 'await': case 'lambda':
+      if (!isKnownPrimitiveExpr(expr, scope)) output.add(expressionObjectId(expr, scope))
+      if (expr.kind === 'call') { visit(expr.callee); expr.args.forEach(visit); expr.kwargs.forEach((kw) => visit(kw.value)) }
+      else if (expr.kind === 'attr') visit(expr.base)
+      else if (expr.kind === 'subscript') { visit(expr.value); visit(expr.index) }
+      else if (expr.kind === 'await') visit(expr.value)
+      else expr.defaults.forEach(visit)
+      break
+    case 'slice': visit(expr.lower); visit(expr.upper); visit(expr.step); break
+    case 'starred': visit(expr.value); break
+    case 'unaryop': visit(expr.operand); break
+    case 'compare': visit(expr.left); visit(expr.right); break
+    case 'boolop': expr.values.forEach(visit); break
+    case 'f_string': expr.interpolations.forEach(visit); break
+    case 'named_expr': visit(expr.value); break
+    case 'yield': visit(expr.value); break
+  }
+  if (!isKnownPrimitiveExpr(expr, scope) && output.size === initialSize && expr.kind !== 'name' && expr.kind !== 'tuple') output.add(expressionObjectId(expr, scope))
+  return output
+}
+
 function setPrimitiveBinding(target: string, value: IrExpr, scope: Scope): void {
-  const objectIds = mutableObjectsReachable(value, scope)
-  if (value.kind === 'list' || value.kind === 'dict' || value.kind === 'set') objectIds.add(scope.heap.nextObjectId++)
+  const objectIds = collectAssignedObjectIds(value, scope)
   if (objectIds.size) scope.mutableObjectIds.set(target, objectIds)
   else scope.mutableObjectIds.delete(target)
   if (isKnownPrimitiveExpr(value, scope)) scope.knownPrimitiveRoots.add(target)
@@ -237,6 +292,7 @@ function setPrimitiveBinding(target: string, value: IrExpr, scope: Scope): void 
 function invalidateBinding(name: string, scope: Scope): void {
   const key = name.trim()
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return
+  if (key === 'print') scope.shadowedBuiltinRoots.add(key)
   scope.modules.delete(key)
   scope.attrs.delete(key)
   scope.knownPrimitiveRoots.delete(key)
@@ -293,8 +349,30 @@ function writtenNames(stmts: IrStmt[]): Set<string> {
   return names
 }
 
-function invalidateBranchWrites(stmts: IrStmt[], scope: Scope): void {
-  for (const name of writtenNames(stmts)) invalidateBinding(name, scope)
+// facts: preserve only bindings whose loop-carried values remain statically primitive.
+function stablePrimitiveLoopWrites(stmts: IrStmt[], scope: Scope): Set<string> {
+  const candidates = new Set([...writtenNames(stmts)].filter((name) => scope.knownPrimitiveRoots.has(name)))
+  const unstable = new Set<string>()
+  const scanExpr = (expr?: IrExpr | null) => { if (expr) collectExprWrites(expr, unstable) }
+  const scan = (items: IrStmt[]) => { for (const stmt of items) {
+    if (stmt.kind === 'assign') { for (const raw of stmt.targets) for (const name of bindingNames(raw)) if (stmt.unpacksValue || !isKnownPrimitiveExpr(stmt.value, scope)) unstable.add(name); scanExpr(stmt.value) }
+    else if (stmt.kind === 'aug_assign') { if (!isKnownPrimitiveExpr(stmt.targetExpr, scope) || !isKnownPrimitiveExpr(stmt.value, scope)) unstable.add(stmt.target); scanExpr(stmt.value) }
+    else if (stmt.kind === 'if' || stmt.kind === 'while') { scanExpr(stmt.test); scan([...stmt.body, ...stmt.orelse]) }
+    else if (stmt.kind === 'for') { bindingNames(stmt.target).forEach((name) => unstable.add(name)); scanExpr(stmt.iter); scan([...stmt.body, ...stmt.orelse]) }
+    else if (stmt.kind === 'with') { stmt.items.flatMap((item) => item.optionalVars).forEach((name) => unstable.add(name)); scan(stmt.body) }
+    else if (stmt.kind === 'try') scan([...stmt.body, ...stmt.handlers.flatMap((h) => h.body), ...stmt.orelse, ...stmt.finalbody])
+    else if (stmt.kind === 'expr') scanExpr(stmt.value)
+    else if (stmt.kind === 'function_def' || stmt.kind === 'class_def') unstable.add(stmt.name)
+    else if (stmt.kind === 'import') stmt.names.forEach((item) => unstable.add(item.alias ?? item.module.split('.')[0]!))
+    else if (stmt.kind === 'from_import') stmt.names.forEach((item) => { if (item.name !== '*') unstable.add(item.alias ?? item.name) })
+    else if (stmt.kind === 'delete') stmt.targets.forEach((target) => { if (target.kind === 'name') unstable.add(target.id) })
+  } }
+  scan(stmts)
+  return new Set([...candidates].filter((name) => !unstable.has(name)))
+}
+
+function invalidateBranchWrites(stmts: IrStmt[], scope: Scope, preserve: ReadonlySet<string> = new Set()): void {
+  for (const name of writtenNames(stmts)) if (!preserve.has(name)) invalidateBinding(name, scope)
 }
 
 function mutableObjectsReachable(expr: IrExpr, scope: Scope, output = new Set<number>()): Set<number> {
@@ -408,6 +486,7 @@ function applyImportStmt(stmt: Extract<IrStmt, { kind: 'import' }>, scope: Scope
   for (const { module, alias } of stmt.names) {
     const root = module.split('.')[0]!
     const bound = alias ?? root
+    if (bound === 'print') scope.shadowedBuiltinRoots.add(bound)
     scope.unknownRoots.delete(bound)
     scope.knownPrimitiveRoots.delete(bound)
     scope.mutableObjectIds.delete(bound)
@@ -425,6 +504,7 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
       continue
     }
     const bound = alias ?? name
+    if (bound === 'print') scope.shadowedBuiltinRoots.add(bound)
     scope.unknownRoots.delete(bound)
     scope.knownPrimitiveRoots.delete(bound)
     scope.mutableObjectIds.delete(bound)
@@ -443,6 +523,8 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
  * `g = getattr`) which are never registered via import/from-import scope tracking.
  */
 function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): void {
+  // facts: name spelling alone cannot prove a trusted builtin after any local rebinding.
+  if (target === 'print') scope.shadowedBuiltinRoots.add(target)
   const sourceModuleBinding = value.kind === 'name' ? scope.modules.get(value.id) : undefined
   const sourceAttrBinding = value.kind === 'name' ? scope.attrs.get(value.id) : undefined
   const sourceAttrChain = value.kind === 'attr' ? resolveExprChain(value, scope) : undefined
@@ -481,7 +563,7 @@ function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): voi
     }
     return
   }
-  if (value.kind === 'call' || value.kind === 'lambda' || value.kind === 'comprehension') scope.unknownRoots.add(target)
+  if (value.kind === 'call' || value.kind === 'comprehension') scope.unknownRoots.add(target)
 }
 
 /** Extract a static Path(...) constructor literal path, if resolvable, for write-path checks. */
@@ -672,7 +754,7 @@ class Analyzer {
         // precise module origin, matching the value actually assigned.
         for (const target of stmt.targets.flatMap(bindingNames)) applyAssignmentRebind(target, stmt.value, scope)
         if (modName) {
-          for (const target of stmt.targets.flatMap(bindingNames)) scope.modules.set(target, modName)
+          for (const target of stmt.targets.flatMap(bindingNames)) { scope.unknownRoots.delete(target); scope.modules.set(target, modName) }
           if (isDangerousModule(modName)) {
             const importEvidence: ScriptFindingEvidence = { kind: 'dynamic-import', moduleName: modName, boundName: stmt.targets[0]! }
             this.addHit('B4', importEvidence)
@@ -726,14 +808,13 @@ class Analyzer {
             child.unknownRoots.add(target)
           }
         }
+        const stableWrites = stablePrimitiveLoopWrites(stmt.body, child)
+        invalidateBranchWrites(stmt.body, child, stableWrites)
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
-        const nextIteration = createScope(child)
-        invalidateBranchWrites(stmt.body, nextIteration)
-        this.walkStmts(stmt.body, nextIteration, stmtIndex, decodeBindings)
         // P0-3 评审修复：for...else 的 else 体在循环正常结束时真实执行——必须分析
         this.walkStmts(stmt.orelse, child, stmtIndex, decodeBindings)
         if (stmt.targetUnpacks && !isKnownPrimitiveIterable(stmt.iter, scope) && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
-        invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope)
+        invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope, stableWrites)
         continue
       }
 
@@ -756,15 +837,16 @@ class Analyzer {
         continue
       }
       if (stmt.kind === 'while') {
-        if (!isKnownPrimitiveExpr(stmt.test, scope) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
-        this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
-        this.walkStmts(stmt.body, createScope(scope), stmtIndex, decodeBindings)
         const loopState = createScope(scope)
-        invalidateBranchWrites(stmt.body, loopState)
+        const stableWrites = stablePrimitiveLoopWrites([...stmt.body, ...stmt.orelse], loopState)
+        invalidateBranchWrites([...stmt.body, ...stmt.orelse], loopState, stableWrites)
+        if (!isKnownPrimitiveExpr(stmt.test, loopState) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
+        this.analyzeExpr(stmt.test, loopState, decodeBindings, stmtIndex)
         this.walkStmts(stmt.body, loopState, stmtIndex, decodeBindings)
+        if (!isKnownPrimitiveExpr(stmt.test, loopState) && stmt.test.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.test.range, sourceStatus: 'unknown', dynamicAccess: true })
         // P1-1 评审修复（补全）：while...else 的 else 体在循环正常结束时真实执行——必须分析
-        this.walkStmts(stmt.orelse, createScope(scope), stmtIndex, decodeBindings)
-        invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope)
+        this.walkStmts(stmt.orelse, loopState, stmtIndex, decodeBindings)
+        invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope, stableWrites)
         continue
       }
       if (stmt.kind === 'with') {
@@ -801,6 +883,7 @@ class Analyzer {
         continue
       }
       if (stmt.kind === 'function_def') {
+        if (stmt.name === 'print') scope.shadowedBuiltinRoots.add(stmt.name)
         if (stmt.decorators.length > 0 && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
         for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
         // P0-1 评审修复：默认参数值在 def 定义时真实执行——必须分析
@@ -809,6 +892,7 @@ class Analyzer {
         // 函数体在定义作用域内静态可见：递归捕获（禁止 def 内危险调用逃逸）
         const child = createScope(scope)
         for (const param of stmt.params) {
+          if (param === 'print') child.shadowedBuiltinRoots.add(param)
           child.modules.delete(param)
           child.attrs.delete(param)
           child.knownPrimitiveRoots.delete(param)
@@ -821,11 +905,13 @@ class Analyzer {
         continue
       }
       if (stmt.kind === 'class_def') {
+        if (stmt.name === 'print') scope.shadowedBuiltinRoots.add(stmt.name)
         if ((stmt.decorators.length > 0 || stmt.bases.length > 0) && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
         for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
         // P0-1 评审修复：基类/关键字参数表达式在 class 创建时真实执行——必须分析
         for (const b of stmt.bases) this.analyzeExpr(b, scope, decodeBindings, stmtIndex)
         scope.knownClassRoots.add(stmt.name)
+        if (stmt.name === 'print') scope.shadowedBuiltinRoots.add(stmt.name)
         const child = createScope(scope)
         child.classBody = true
         this.walkStmts(stmt.body, child, stmtIndex)
@@ -905,8 +991,12 @@ class Analyzer {
       const mutableObjectIds = new Set<number>()
       for (const arg of [...expr.args, ...expr.kwargs.map((item) => item.value)]) mutableObjectsReachable(arg, scope, mutableObjectIds)
       if (expr.callee.kind === 'attr') mutableObjectsReachable(expr.callee.base, scope, mutableObjectIds)
-      if (mutableObjectIds.size) {
-        if (expr.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
+      const trustedPrint = expr.callee.kind === 'name' && expr.callee.id === 'print' && !scope.shadowedBuiltinRoots.has('print') && !scope.unknownRoots.has('print') &&
+        !scope.modules.has('print') && !scope.attrs.has('print') && !scope.knownClassRoots.has('print') && expr.kwargs.length === 0 &&
+        expr.args.every((arg) => isKnownPrimitiveExpr(arg, scope))
+      if (mutableObjectIds.size && !trustedPrint) {
+        const callHasClassifiedFinding = expr.range && this.hits.some((hit) => hit.range && sameRange(hit.range, expr.range) && FINDING_CLASS_BY_PATTERN[hit.pattern])
+        if (expr.range && !callHasClassifiedFinding) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
         for (const id of mutableObjectIds) scope.heap.invalidatedObjects.add(id)
       }
       return
@@ -1608,6 +1698,7 @@ class ScriptUncertaintyCollector {
           break
         }
         case 'function_def': {
+          if (stmt.name === 'print') scope.shadowedBuiltinRoots.add(stmt.name)
           if (stmt.decorators.length > 0 && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           for (const decorator of stmt.decorators) this.walkExpr(decorator, scope)
           for (const value of stmt.defaults) this.walkExpr(value, scope)
@@ -1616,6 +1707,7 @@ class ScriptUncertaintyCollector {
           break
         }
         case 'class_def': {
+          if (stmt.name === 'print') scope.shadowedBuiltinRoots.add(stmt.name)
           if ((stmt.decorators.length > 0 || stmt.bases.length > 0) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           for (const decorator of stmt.decorators) this.walkExpr(decorator, scope)
           for (const base of stmt.bases) this.walkExpr(base, scope)

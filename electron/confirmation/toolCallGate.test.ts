@@ -1718,7 +1718,11 @@ describe('evaluateToolCallGate', () => {
     ['function heap effect', 'from external_module import obj\na = [1]\ndef change():\n    a.append(obj)\nchange()\nf"{a}"', 'partial'],
     ['callback heap effect', 'from external_module import obj\na = [1]\ndef key(x):\n    a.append(obj)\n    return 0\nsorted(a, key=key)\nf"{a}"', 'partial'],
     ['rebound builtin identity', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(a, obj)\nf"{a}"', 'partial'],
-    ['rebound builtin with no container argument', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(obj)\nf"{a}"', 'partial']
+    ['rebound builtin with no container argument', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(obj)\nf"{a}"', 'partial'],
+    ['nested mutable allocation', 'from external_module import obj, mutate\nt = ([1],)\nmutate(t, obj)\nf"{t}"', 'partial'],
+    ['conditional mutable allocation', 'from external_module import obj, mutate\na = [1] if True else [2]\nmutate(a, obj)\nf"{a}"', 'partial'],
+    ['binary mutable allocation', 'from external_module import obj, mutate\na = [1] + [2]\nmutate(a, obj)\nf"{a}"', 'partial'],
+    ['while next condition carries rebound value', 'from external_module import obj\nx = 1\nwhile x:\n    x = obj', 'partial']
   ] as const)('真实 Gate 阻止 %s 获得 clean allow 或记忆档位', async (_name, code, expectedFact) => {
     for (const lane of ['desktop', 'feishu'] as const) {
       const lookup = vi.fn(() => null)

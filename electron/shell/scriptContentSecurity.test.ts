@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { analyzeScriptContent, DANGEROUS_MODULES, parsePythonModule } from './scriptContentSecurity'
+import { scriptParserService } from './scriptParserService'
 
 type Expectation = { patternIds?: string[] }
 
@@ -362,7 +363,11 @@ describe('script uncertainty facts', () => {
     ['function method effect reaches outer binding', 'from external_module import obj\na = [1]\ndef change():\n    a.append(obj)\nchange()\nf"{a}"'],
     ['sorted callback effect reaches outer binding', 'from external_module import obj\na = [1]\ndef key(x):\n    a.append(obj)\n    return 0\nsorted(a, key=key)\nf"{a}"'],
     ['rebound builtin name is not trusted', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(a, obj)\nf"{a}"'],
-    ['rebound builtin remains unknown without mutable argument', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(obj)\nf"{a}"']
+    ['rebound builtin remains unknown without mutable argument', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(obj)\nf"{a}"'],
+    ['nested mutable allocation escapes', 'from external_module import obj, mutate\nt = ([1],)\nmutate(t, obj)\nf"{t}"'],
+    ['conditional mutable allocation escapes', 'from external_module import obj, mutate\na = [1] if True else [2]\nmutate(a, obj)\nf"{a}"'],
+    ['binary mutable allocation escapes', 'from external_module import obj, mutate\na = [1] + [2]\nmutate(a, obj)\nf"{a}"'],
+    ['while next condition uses loop-carried value', 'from external_module import obj\nx = 1\nwhile x:\n    x = obj']
   ])('fails closed for systematic-review case: %s', (_label, code) => {
     const result = analyzeScriptContent(code)
     expect(result.coverage).not.toBe('complete')
@@ -404,6 +409,28 @@ describe('script uncertainty facts', () => {
       expect(result.coverage, code).toBe('complete')
       expect(result.uncertainties, code).toEqual([])
     }
+  })
+
+  it('keeps nested loop analysis work bounded and complete', async () => {
+    await scriptParserService.ensureInitialized()
+    const depth = 22
+    const code = Array.from({ length: depth }, (_, index) => `${'    '.repeat(index)}for i in [1]:`)
+      .concat(`${'    '.repeat(depth)}pass`).join('\n')
+    const ir = parsePythonModule(code)
+    const startedAt = performance.now()
+    const result = analyzeScriptContent(code, ir)
+    expect(performance.now() - startedAt).toBeLessThan(1_000)
+    expect(result.coverage).toBe('complete')
+  })
+
+  it.each([
+    ['lambda rebound builtin name is not trusted', 'from external_module import obj\nprint = lambda *args: None\na = [1]\nprint(a, obj)\nf"{a}"'],
+    ['function definition shadows trusted builtin', 'from external_module import obj\ndef print(*args):\n    return None\na = [1]\nprint(a, obj)\nf"{a}"'],
+    ['branch rebind invalidates trusted builtin identity', 'from external_module import obj\nif flag:\n    print = lambda *args: None\na = [1]\nprint(a, obj)\nf"{a}"']
+  ])('does not trust a rebound builtin with mutable arguments: %s', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
   })
 
   it('tracks both aliases produced by chained assignment before dangerous calls', () => {
