@@ -223,6 +223,41 @@ describe('review scope cache gate integration', () => {
     expect(oldCache.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
   })
 
+  it('R5: a valid Agent grant from session B supersedes session A user cache without losing expiry', async () => {
+    const db = openDb()
+    const conn = getDbConnection(db)
+    conn.prepare("INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('desktop',7) ON CONFLICT(domain) DO UPDATE SET epoch=7").run()
+    const root = await fs.realpath(await makeTempDir('same-file-r5-cross-session-'))
+    await fs.writeFile(path.join(root, 'notes.txt'), 'before')
+    let now = Date.now() + 1_000
+    const store = new ReviewScopeGrantStore(conn, { now: () => now })
+    const cache = new ReviewScopeCache({ grantStore: store })
+    const args = base({ lane: 'desktop', sessionId: 'r5-session-a', requestId: 'r5', toolUseId: 'r5-user', toolName: 'write_file',
+      toolInput: { path: 'notes.txt', content: 'after' }, workDir: root, userDataDir: '/profile',
+      policyBinding: { domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 1, epoch: 7 },
+      reviewScopeEvidenceComplete: true, reviewScopeCache: cache, toolsConfig: DEFAULT_TOOLS_CONFIG,
+      effectiveRules: DEFAULT_POLICY_RULES, lanePackage: 'standard' })
+    expect(store.setDefaultLifetime('session')).toBe(true)
+    const first = await evaluateToolCallGate(args)
+    expect(first.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(cache.grantDigest({ lane: 'desktop', sessionId: 'r5-session-a', source: 'user', scope: first.reviewScopeCandidateScope!,
+      scopeCandidateDigest: first.reviewScopeCandidateDigest!, lifetime: 'session' })).toBe(true)
+    expect(store.setDefaultLifetime('24h')).toBe(true)
+    const second = await evaluateToolCallGate({ ...args, sessionId: 'r5-session-b', toolUseId: 'r5-agent' })
+    expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(cache.grantDigest({ lane: 'desktop', sessionId: 'r5-session-b', source: 'agent', scope: second.reviewScopeCandidateScope!,
+      scopeCandidateDigest: second.reviewScopeCandidateDigest!, lifetime: '24h' })).toBe(true)
+    const fresh = await evaluateToolCallGate({ ...args, toolUseId: 'r5-fresh', reviewScopeCache: new ReviewScopeCache({ grantStore: store }) })
+    expect(fresh.decision).toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+    const original = await evaluateToolCallGate({ ...args, toolUseId: 'r5-original-cache' })
+    expect(original.decision).toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+    now += 86_400_000
+    const freshExpired = await evaluateToolCallGate({ ...args, toolUseId: 'r5-fresh-expired', reviewScopeCache: new ReviewScopeCache({ grantStore: store }) })
+    expect(freshExpired.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    const originalExpired = await evaluateToolCallGate({ ...args, toolUseId: 'r5-original-expired' })
+    expect(originalExpired.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+  })
+
   it('reuses a same-path ordinary directory grant after the directory is recreated', async () => {
     const root = await fs.realpath(await makeTempDir('grep-review-recreated-root-'))
     const rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'grep-workdir-recursive-reusable'

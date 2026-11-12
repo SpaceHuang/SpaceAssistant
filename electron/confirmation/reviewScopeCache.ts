@@ -253,6 +253,16 @@ export class ReviewScopeCache {
     try { digest = this.candidateDigest(scope) } catch { return null }
     let entry = this.entries.get(digest)
     if (entry && !this.isCachedEntryValid(entry)) entry = undefined
+    // Durable grants can arrive from another session after this session cached a user fallback.
+    // Resolve the preferred source on cache hits too; a valid user entry must not shadow Agent.
+    if (entry?.source === 'user' && this.grantStore) {
+      const agentGrant = this.grantStore.lookup(this.storeIdentity(scope, 'agent'))
+      if (agentGrant?.source === 'agent') {
+        entry.source = 'agent'
+        entry.generation = ++this.generation
+        entry.touchedAt = this.now()
+      }
+    }
     let inheritedParentScope: ReviewScopeEntryView['inheritedParentScope']
     if (!entry && scope.toolName === 'grep') {
       const key = sessionKey(scope.lane, scope.sessionId)
