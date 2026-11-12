@@ -2,5 +2,8 @@
   "id": "b09-def-basic",
   "group": "previously-failed",
   "patternIds": [],
-  "coverage": "complete"
+  "coverage": "partial",
+  "uncertaintyKinds": [
+    "implicit-call-unresolved"
+  ]
 }

@@ -1664,7 +1664,7 @@ describe('evaluateToolCallGate', () => {
     expect(uncertain.facts.signals).not.toContainEqual({ kind: 'script-uncertified' })
     expect(uncertain.facts.signals.find((signal) => signal.kind === 'script-analysis')).toMatchObject({ coverage: 'partial',
       uncertainties: [expect.objectContaining({ kind: 'call-target-unresolved' })] })
-    expect(uncertain.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-uncertainty-confirm' })
+    expect(uncertain.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-uncertified-ask-remote' })
 
     const certified = await evaluateToolCallGate(base({
       lane: 'feishu', remoteContext: remoteContext(), imPolicySnapshot,
@@ -1672,6 +1672,36 @@ describe('evaluateToolCallGate', () => {
     }))
     expect(certified.facts.signals).not.toContainEqual({ kind: 'script-uncertified' })
     expect(certified.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-certified-remote' })
+  })
+
+  it('locks all partial Python analysis at the desktop gate before an approval agent can receive it', async () => {
+    const result = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code: 'value = obj[index]' }, lanePackage: 'standard' }))
+    expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial' }))
+    expect(result.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', disposition: 'human-required' })
+    expect(result.decision.ruleId).toBe('script-analysis-uncertainty-confirm')
+  })
+
+  it.each([
+    ['process child module', 'from multiprocessing.pool import Pool\nPool(2)', 'process-creation'],
+    ['network child module', 'from xmlrpc.client import ServerProxy\nServerProxy("https://example.test").ping()', 'network-api'],
+    ['nested setter', 'from external_module import obj\nif True:\n    obj.field = 1', 'partial'],
+    ['aliased function entry', 'def f(x):\n    return x + 1\nf(1)\ng = f\ng(obj)', 'partial']
+  ] as const)('真实 Gate 阻止 %s 获得 clean allow 或记忆档位', async (_name, code, expectedFact) => {
+    const result = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code }, lanePackage: 'standard' }))
+    const analysis = result.facts.signals.find((signal) => signal.kind === 'script-analysis')
+    if (expectedFact === 'partial') expect(analysis).toMatchObject({ coverage: 'partial' })
+    else expect(analysis).toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ class: expectedFact })]) })
+    expect(result.decision.type).not.toBe('auto-allow')
+    if (result.decision.type === 'require-confirm') expect(result.decision.memoryTiers).toEqual([])
+  })
+
+  it('remote 子模块网络调用命中 network deny，而不是不确定路径审批', async () => {
+    const result = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }),
+      toolName: 'run_script', toolInput: { code: 'from xmlrpc.client import ServerProxy\nServerProxy("https://example.test").ping()' } }))
+    expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', findings: expect.arrayContaining([
+      expect.objectContaining({ class: 'network-api' })
+    ]) }))
+    expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'script-network-deny-remote' })
   })
 
   it('applies the version-pinned IM standard candidate map in the real policy gate', async () => {
@@ -2042,7 +2072,7 @@ describe('evaluateToolCallGate', () => {
   it.each([
     // A POSIX-rooted path passed to os.path.join has different semantics under ntpath;
     // Windows conservatively reports incomplete analysis and requires the user directly.
-    ['absolute path inside join', "import os\nopen(os.path.join('base', '/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', path.sep === '\\' ? 'script-analysis-incomplete-confirm' : 'script-finding-review', path.sep === '\\' ? 'user' : 'agent'],
+    ['absolute path inside join', "import os\nopen(os.path.join('base', '/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', 'script-analysis-uncertainty-confirm', 'user'],
     ['arbitrary call result', "open(custom_path('/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', 'script-non-write-path-confirm', 'user'],
     ['multi-argument Path', "from pathlib import Path\nPath('base', '/tmp/script-finding-review-absolute.txt').write_text('x')", 'unresolved', 'require-confirm', 'script-unresolved-write-review', 'agent']
   ] as const)('写目标表达式 %s 不被误折叠为相对路径', async (_case, code, pathClass, decisionType, ruleId, answerer) => {

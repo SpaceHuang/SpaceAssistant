@@ -420,7 +420,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-analysis-uncertainty-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:uncertainty:call-target-unresolved', 'script-analysis:partial'] },
+    match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-analysis:partial'] },
     action: 'confirm-every-time', locked: true, reason: '脚本调用来源无法静态确认，必须逐次由真人确认'
   },
   {

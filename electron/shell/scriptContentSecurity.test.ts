@@ -462,6 +462,36 @@ describe('script uncertainty facts', () => {
 
 describe('D3 行为类别补齐', () => {
   it.each([
+    ['multiprocessing.pool.Pool', 'from multiprocessing.pool import Pool\nPool(2)', 'process-creation'],
+    ['xmlrpc.client.ServerProxy', 'from xmlrpc.client import ServerProxy\nServerProxy("https://example.test").ping()', 'network-api'],
+    ['concurrent.futures.ProcessPoolExecutor', 'from concurrent.futures import ProcessPoolExecutor\nProcessPoolExecutor()', 'process-creation'],
+    ['concurrent.futures.process.ProcessPoolExecutor', 'from concurrent.futures.process import ProcessPoolExecutor\nProcessPoolExecutor()', 'process-creation']
+  ] as const)('classifies child-module capability %s as %s', (_name, code, expected) => {
+    expect(analyzeScriptContent(code).findings.map((finding) => finding.class)).toContain(expected)
+  })
+
+  it.each([
+    ['nested if assignment', 'from external_module import obj\nif True:\n    obj.field = 1'],
+    ['nested augmented assignment', 'from external_module import obj\ndef f():\n    obj.field += 1'],
+    ['nested delete', 'from external_module import obj\ntry:\n    del obj.field\nexcept Exception:\n    pass']
+  ] as const)('marks %s as implicit behavior uncertainty', (_name, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it.each([
+    ['alias call', 'def f(x):\n    return x + 1\nf(1)\ng = f\ng(obj)'],
+    ['callback escape', 'def f(x):\n    return x + 1\nf(1)\nregister(f)'],
+    ['rebound function name', 'def f(x):\n    return x + 1\nf(1)\nf = other\nf(obj)'],
+    ['aliased lambda call', 'f = lambda x: x + 1\nf(1)\ng = f\ng(obj)']
+  ] as const)('does not use a direct call to prove parameters primitive after %s', (_name, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it.each([
     ['multiprocessing.Process', 'import multiprocessing\nmultiprocessing.Process(target=print)', 'process-creation'],
     ['ProcessPoolExecutor', 'from concurrent.futures import ProcessPoolExecutor\nProcessPoolExecutor()', 'process-creation'],
     ['pickle.load', 'import pickle\npickle.load(stream)', 'dynamic-execution'],

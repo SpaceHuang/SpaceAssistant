@@ -2,5 +2,8 @@
   "id": "b17-lambda-basic",
   "group": "previously-failed",
   "patternIds": [],
-  "coverage": "complete"
+  "coverage": "partial",
+  "uncertaintyKinds": [
+    "implicit-call-unresolved"
+  ]
 }

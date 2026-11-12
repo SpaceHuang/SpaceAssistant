@@ -308,11 +308,17 @@ export function resolveExprChain(expr: IrExpr, scope: Scope): ResolvedChain {
 }
 
 function isDangerousModule(name: string | null): boolean {
-  return name !== null && DANGEROUS_MODULES.has(name)
+  return name !== null && DANGEROUS_MODULES.has(name.split('.')[0]!)
 }
 
 function isNetworkModule(name: string | null): boolean {
-  return name !== null && NETWORK_MODULES.has(name)
+  return name !== null && NETWORK_MODULES.has(name.split('.')[0]!)
+}
+
+function implicitAssignmentTarget(target: string, scope: Scope): boolean {
+  const bracket = target.indexOf('[')
+  if (bracket >= 0) return !scope.knownPrimitiveRoots.has(target.slice(0, bracket).trim())
+  return target.includes('.')
 }
 
 function isDangerousAttr(name: string): boolean {
@@ -471,61 +477,33 @@ function isExecImportCallee(callee: IrExpr): boolean {
 class Analyzer {
   private readonly hits: PatternHit[] = []
   private readonly uncertainties: ScriptUncertainty[] = []
-  private readonly knownPrimitiveFunctionParams = new Map<string, Set<string>>()
   private readonly knownPrimitiveLambdaParams = new WeakSet<object>()
   private activeRange?: SourceRange
   private activeExpr?: IrExpr
   private activeScope?: Scope
 
   analyze(ast: IrModule): PatternHit[] {
-    this.inferKnownCallableParameters(ast)
+    this.inferKnownPrimitiveLambdaParameters(ast)
     this.walkStmts(ast.body, createScope(), 0)
     return this.hits
   }
 
   getUncertainties(): ScriptUncertainty[] { return this.uncertainties }
 
-  private inferKnownCallableParameters(ast: IrModule): void {
+  private inferKnownPrimitiveLambdaParameters(ast: IrModule): void {
     const scope = createScope()
-    const functions = new Map<string, Extract<IrStmt, { kind: 'function_def' }>>()
-    const lambdas = new Map<string, Extract<IrExpr, { kind: 'lambda' }>>()
     for (const stmt of ast.body) {
       if (stmt.kind === 'import') applyImportStmt(stmt, scope)
       else if (stmt.kind === 'from_import') applyFromImportStmt(stmt, scope)
       else if (stmt.kind === 'assign') {
-        if (stmt.value.kind === 'lambda') for (const target of stmt.targets) lambdas.set(target, stmt.value)
         for (const target of stmt.targets) applyAssignmentRebind(target, stmt.value, scope)
-        const implicitTarget = stmt.targets.some((target) => {
-          const bracket = target.indexOf('[')
-          if (bracket >= 0) return !scope.knownPrimitiveRoots.has(target.slice(0, bracket).trim())
-          return target.includes('.')
-        })
-        if (implicitTarget && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
-      } else if (stmt.kind === 'function_def') functions.set(stmt.name, stmt)
+      }
     }
     const calls: Array<Extract<IrExpr, { kind: 'call' }>> = []
     walkIrExpressions(ast, (expr) => { if (expr.kind === 'call') calls.push(expr) })
-    for (const [name, definition] of functions) {
-      const directCalls = calls.filter((call) => call.callee.kind === 'name' && call.callee.id === name)
-      if (directCalls.length === 0) continue
-      const known = new Set<string>()
-      const firstDefault = definition.params.length - definition.defaults.length
-      definition.params.forEach((param, index) => {
-        const isKnownAtEveryCall = directCalls.every((call) => {
-          const kwarg = call.kwargs.find((item) => item.name === param)?.value
-          const value = kwarg ?? call.args[index] ?? (index >= firstDefault ? definition.defaults[index - firstDefault] : undefined)
-          return value !== undefined && isKnownPrimitiveExpr(value, scope)
-        })
-        if (isKnownAtEveryCall) known.add(param)
-      })
-      this.knownPrimitiveFunctionParams.set(name, known)
-    }
-    for (const [name, lambda] of lambdas) {
-      const directCalls = calls.filter((call) => call.callee.kind === 'name' && call.callee.id === name)
-      const known = lambda.params.length > 0 && directCalls.length > 0 && directCalls.every((call) =>
-        call.args[0] !== undefined && isKnownPrimitiveExpr(call.args[0], scope))
-      if (known) this.knownPrimitiveLambdaParams.add(lambda)
-    }
+    // Standalone defs and named lambdas are externally callable or can escape through imports;
+    // local call-site scans cannot prove that their parameter origins are closed-world.
+    // Only keep the narrow builtin sorted(key=...) case with a known primitive iterable.
     for (const call of calls) {
       if (call.callee.kind !== 'name' || call.callee.id !== 'sorted' || !call.args[0] || !isKnownPrimitiveIterable(call.args[0], scope)) continue
       const key = call.kwargs.find((item) => item.name === 'key')?.value
@@ -652,6 +630,7 @@ class Analyzer {
       }
 
       if (stmt.kind === 'assign') {
+        this.checkImplicitAssignmentTargets(stmt.targets, stmt.range, scope)
         const modName = this.extractImportModuleName(stmt.value)
         if (modName) {
           for (const target of stmt.targets) scope.modules.set(target, modName)
@@ -709,10 +688,7 @@ class Analyzer {
       // —— IR 扩展语句（tree-sitter 全语法；判定语义保守对齐：体/表达式递归，不新增黑名单）——
       if (stmt.kind === 'aug_assign') {
         // i += 1：按赋值重绑同语义处理（value 为 os.system 等 attr 时保持别名追踪）
-        const bracket = stmt.target.indexOf('[')
-        if ((stmt.target.includes('.') || bracket >= 0 && !scope.knownPrimitiveRoots.has(stmt.target.slice(0, bracket).trim())) && stmt.range) {
-          this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
-        }
+        this.checkImplicitAssignmentTargets([stmt.target], stmt.range, scope)
         applyAssignmentRebind(stmt.target, stmt.value, scope)
         if (isDecodeCall(stmt.value)) decodeBindings.push({ name: stmt.target, stmtOffset: stmtIndex, decodeFn: decodeFunctionName(stmt.value) })
         this.analyzeExpr(stmt.value, scope, decodeBindings, stmtIndex)
@@ -763,10 +739,8 @@ class Analyzer {
         for (const dv of stmt.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
         // 函数体在定义作用域内静态可见：递归捕获（禁止 def 内危险调用逃逸）
         const child = createScope(scope)
-        const knownParams = this.knownPrimitiveFunctionParams.get(stmt.name) ?? new Set<string>()
         for (const param of stmt.params) {
           if (scope.classBody && param === stmt.params[0]) child.knownClassRoots.add(param)
-          else if (knownParams.has(param)) child.knownPrimitiveRoots.add(param)
           else child.unknownRoots.add(param)
         }
         this.walkStmts(stmt.body, child, stmtIndex)
@@ -797,6 +771,12 @@ class Analyzer {
       if (stmt.kind === 'global_nonlocal' || stmt.kind === 'break' || stmt.kind === 'continue' || stmt.kind === 'pass') {
         continue
       }
+    }
+  }
+
+  private checkImplicitAssignmentTargets(targets: string[], range: SourceRange | undefined, scope: Scope): void {
+    if (targets.some((target) => implicitAssignmentTarget(target, scope)) && range) {
+      this.uncertainties.push({ kind: 'implicit-call-unresolved', range, sourceStatus: 'unknown', dynamicAccess: true })
     }
   }
 
@@ -1118,8 +1098,8 @@ class Analyzer {
     }
 
     // Process creation and process pools; ThreadPoolExecutor is intentionally excluded.
-    if ((chain.module === 'multiprocessing' && lastAttr && PROCESS_CREATION_CALLS.has(lastAttr)) ||
-        (chain.module?.startsWith('concurrent.') && chain.module === 'concurrent.futures' && lastAttr === 'ProcessPoolExecutor')) {
+    if ((chain.module?.startsWith('multiprocessing') && lastAttr && PROCESS_CREATION_CALLS.has(lastAttr)) ||
+        (chain.module?.startsWith('concurrent.') && lastAttr === 'ProcessPoolExecutor')) {
       this.addHit('A1')
       return
     }
@@ -1467,10 +1447,12 @@ class ScriptUncertaintyCollector {
           applyFromImportStmt(stmt, scope)
           break
         case 'assign':
+          if (stmt.targets.some((target) => implicitAssignmentTarget(target, scope)) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           this.walkExpr(stmt.value, scope)
           for (const target of stmt.targets) applyAssignmentRebind(target, stmt.value, scope)
           break
         case 'aug_assign':
+          if (implicitAssignmentTarget(stmt.target, scope) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           this.walkExpr(stmt.value, scope)
           break
         case 'expr':
@@ -1536,6 +1518,7 @@ class ScriptUncertaintyCollector {
           this.walkExpr(stmt.test, scope)
           break
         case 'delete':
+          if (stmt.targets.some((target) => target.kind === 'attr' || target.kind === 'subscript') && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           for (const target of stmt.targets) this.walkExpr(target, scope)
           break
         case 'global_nonlocal':
