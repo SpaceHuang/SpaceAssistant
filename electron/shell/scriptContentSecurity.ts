@@ -219,6 +219,41 @@ function setPrimitiveBinding(target: string, value: IrExpr, scope: Scope): void 
   else scope.knownPrimitiveRoots.delete(target)
 }
 
+function invalidateBinding(name: string, scope: Scope): void {
+  const key = name.trim()
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return
+  scope.modules.delete(key)
+  scope.attrs.delete(key)
+  scope.knownPrimitiveRoots.delete(key)
+  scope.knownClassRoots.delete(key)
+  scope.unknownRoots.add(key)
+}
+
+function bindingNames(text: string): string[] {
+  return text.split(',').map((name) => name.trim()).filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+}
+
+function writtenNames(stmts: IrStmt[]): Set<string> {
+  const names = new Set<string>()
+  const add = (raw: string) => raw.split(',').forEach((name) => { if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim())) names.add(name.trim()) })
+  for (const stmt of stmts) {
+    if (stmt.kind === 'assign') stmt.targets.forEach(add)
+    else if (stmt.kind === 'aug_assign') add(stmt.target)
+    else if (stmt.kind === 'for') { add(stmt.target); writtenNames([...stmt.body, ...stmt.orelse]).forEach((n) => names.add(n)) }
+    else if (stmt.kind === 'if' || stmt.kind === 'while') writtenNames([...stmt.body, ...stmt.orelse]).forEach((n) => names.add(n))
+    else if (stmt.kind === 'with') { stmt.items.flatMap((item) => item.optionalVars).forEach(add); writtenNames(stmt.body).forEach((n) => names.add(n)) }
+    else if (stmt.kind === 'try') writtenNames([...stmt.body, ...stmt.handlers.flatMap((h) => h.body), ...stmt.orelse, ...stmt.finalbody]).forEach((n) => names.add(n))
+    else if (stmt.kind === 'function_def' || stmt.kind === 'class_def') add(stmt.name)
+    else if (stmt.kind === 'import') stmt.names.forEach((item) => add(item.alias ?? item.module.split('.')[0]!))
+    else if (stmt.kind === 'from_import') stmt.names.forEach((item) => { if (item.name !== '*') add(item.alias ?? item.name) })
+  }
+  return names
+}
+
+function invalidateBranchWrites(stmts: IrStmt[], scope: Scope): void {
+  for (const name of writtenNames(stmts)) invalidateBinding(name, scope)
+}
+
 export interface ResolvedChain {
   root: string | null
   module: string | null
@@ -304,6 +339,8 @@ function applyImportStmt(stmt: Extract<IrStmt, { kind: 'import' }>, scope: Scope
     const bound = alias ?? root
     scope.unknownRoots.delete(bound)
     scope.knownPrimitiveRoots.delete(bound)
+    scope.knownClassRoots.delete(bound)
+    scope.attrs.delete(bound)
     scope.modules.set(bound, root)
   }
 }
@@ -318,6 +355,8 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
     const bound = alias ?? name
     scope.unknownRoots.delete(bound)
     scope.knownPrimitiveRoots.delete(bound)
+    scope.knownClassRoots.delete(bound)
+    scope.modules.delete(bound)
     scope.attrs.set(bound, { module: mod, attr: name })
     if (isDangerousAttr(name)) {
       scope.attrs.set(bound, { module: mod, attr: name })
@@ -331,21 +370,19 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
  * `g = getattr`) which are never registered via import/from-import scope tracking.
  */
 function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): void {
-  scope.unknownRoots.delete(target)
-  setPrimitiveBinding(target, value, scope)
-  const currentAttrBinding = scope.attrs.get(target)
-  const pathAlias = (currentAttrBinding?.module === 'pathlib' && currentAttrBinding.attr === 'Path') || scope.modules.get(target) === 'pathlib'
   const sourceModuleBinding = value.kind === 'name' ? scope.modules.get(value.id) : undefined
   const sourceAttrBinding = value.kind === 'name' ? scope.attrs.get(value.id) : undefined
   const sourceAttrChain = value.kind === 'attr' ? resolveExprChain(value, scope) : undefined
-  if (pathAlias) {
-    scope.modules.delete(target)
-    scope.attrs.delete(target)
-  }
+  const sourceUnknown = value.kind === 'name' && scope.unknownRoots.has(value.id)
+  // A binding update replaces every old proof atomically. Parallel maps must never retain an
+  // earlier module/attribute/class/primitive claim after the name is rebound.
+  scope.unknownRoots.delete(target)
+  scope.modules.delete(target)
+  scope.attrs.delete(target)
+  scope.knownClassRoots.delete(target)
+  setPrimitiveBinding(target, value, scope)
   if (value.kind === 'name') {
-    if (scope.unknownRoots.has(value.id)) {
-      scope.modules.delete(target)
-      scope.attrs.delete(target)
+    if (sourceUnknown) {
       scope.unknownRoots.add(target)
       return
     }
@@ -361,10 +398,6 @@ function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): voi
       scope.attrs.set(target, { module: 'builtins', attr: value.id })
       return
     }
-    if (pathAlias) {
-      scope.modules.delete(target)
-      scope.attrs.delete(target)
-    }
     return
   }
   if (value.kind === 'attr') {
@@ -373,15 +406,7 @@ function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): voi
       scope.attrs.set(target, { module: sourceAttrChain.module, attr: lastAttr })
       return
     }
-    if (pathAlias) {
-      scope.modules.delete(target)
-      scope.attrs.delete(target)
-    }
     return
-  }
-  if (pathAlias) {
-    scope.modules.delete(target)
-    scope.attrs.delete(target)
   }
 }
 
@@ -566,9 +591,14 @@ class Analyzer {
 
       if (stmt.kind === 'assign') {
         this.checkImplicitAssignmentTargets(stmt.targets, stmt.range, scope)
+        if (stmt.unpacksValue && !isKnownPrimitiveIterable(stmt.value, scope) && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
+        if (stmt.annotation) this.analyzeExpr(stmt.annotation, scope, decodeBindings, stmtIndex)
         const modName = this.extractImportModuleName(stmt.value)
+        // Update existing binding state first; a modeled dynamic import result then gets its
+        // precise module origin, matching the value actually assigned.
+        for (const target of stmt.targets.flatMap(bindingNames)) applyAssignmentRebind(target, stmt.value, scope)
         if (modName) {
-          for (const target of stmt.targets) scope.modules.set(target, modName)
+          for (const target of stmt.targets.flatMap(bindingNames)) scope.modules.set(target, modName)
           if (isDangerousModule(modName)) {
             const importEvidence: ScriptFindingEvidence = { kind: 'dynamic-import', moduleName: modName, boundName: stmt.targets[0]! }
             this.addHit('B4', importEvidence)
@@ -576,7 +606,6 @@ class Analyzer {
           }
         }
         // Same-scope rebind: x = os / y = os.system / z = o (alias) / w = y (callable alias)
-        for (const target of stmt.targets) applyAssignmentRebind(target, stmt.value, scope)
         if (isDecodeCall(stmt.value) && stmt.targets.length === 1) {
           decodeBindings.push({ name: stmt.targets[0]!, stmtOffset: stmtIndex, decodeFn: decodeFunctionName(stmt.value) })
         }
@@ -596,6 +625,7 @@ class Analyzer {
         const child = createScope(scope)
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
         this.walkStmts(stmt.orelse, child, stmtIndex, decodeBindings)
+        invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope)
         continue
       }
 
@@ -605,18 +635,22 @@ class Analyzer {
           this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
         }
         const child = createScope(scope)
-        child.modules.delete(stmt.target)
-        child.attrs.delete(stmt.target)
-        if (isKnownPrimitiveIterable(stmt.iter, scope)) {
-          child.unknownRoots.delete(stmt.target)
-          child.knownPrimitiveRoots.add(stmt.target)
-        } else {
-          child.knownPrimitiveRoots.delete(stmt.target)
-          child.unknownRoots.add(stmt.target)
+        for (const target of bindingNames(stmt.target)) {
+          child.modules.delete(target)
+          child.attrs.delete(target)
+          if (isKnownPrimitiveIterable(stmt.iter, scope)) {
+            child.unknownRoots.delete(target)
+            child.knownPrimitiveRoots.add(target)
+          } else {
+            child.knownPrimitiveRoots.delete(target)
+            child.unknownRoots.add(target)
+          }
         }
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
         // P0-3 评审修复：for...else 的 else 体在循环正常结束时真实执行——必须分析
         this.walkStmts(stmt.orelse, child, stmtIndex, decodeBindings)
+        if (stmt.targetUnpacks && !isKnownPrimitiveIterable(stmt.iter, scope) && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
+        invalidateBranchWrites(stmt.body, scope)
         continue
       }
 
@@ -635,6 +669,7 @@ class Analyzer {
         this.walkStmts(stmt.body, createScope(scope), stmtIndex, decodeBindings)
         // P1-1 评审修复（补全）：while...else 的 else 体在循环正常结束时真实执行——必须分析
         this.walkStmts(stmt.orelse, createScope(scope), stmtIndex, decodeBindings)
+        invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope)
         continue
       }
       if (stmt.kind === 'with') {
@@ -656,6 +691,7 @@ class Analyzer {
           }
         }
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
+        invalidateBranchWrites(stmt.body, scope)
         continue
       }
       if (stmt.kind === 'try') {
@@ -666,6 +702,7 @@ class Analyzer {
         }
         this.walkStmts(stmt.orelse, createScope(scope), stmtIndex, decodeBindings)
         this.walkStmts(stmt.finalbody, createScope(scope), stmtIndex, decodeBindings)
+        invalidateBranchWrites([...stmt.body, ...stmt.handlers.flatMap((handler) => handler.body), ...stmt.orelse, ...stmt.finalbody], scope)
         continue
       }
       if (stmt.kind === 'function_def') {
@@ -673,9 +710,14 @@ class Analyzer {
         for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
         // P0-1 评审修复：默认参数值在 def 定义时真实执行——必须分析
         for (const dv of stmt.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
+        for (const annotation of stmt.annotations ?? []) this.analyzeExpr(annotation, scope, decodeBindings, stmtIndex)
         // 函数体在定义作用域内静态可见：递归捕获（禁止 def 内危险调用逃逸）
         const child = createScope(scope)
         for (const param of stmt.params) {
+          child.modules.delete(param)
+          child.attrs.delete(param)
+          child.knownPrimitiveRoots.delete(param)
+          child.knownClassRoots.delete(param)
           if (scope.classBody && param === stmt.params[0]) child.knownClassRoots.add(param)
           else child.unknownRoots.add(param)
         }
@@ -699,6 +741,8 @@ class Analyzer {
           this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
         }
         else if (stmt.value) this.analyzeExpr(stmt.value, scope, decodeBindings, stmtIndex)
+        if (stmt.kind === 'assert' && stmt.message) this.analyzeExpr(stmt.message, scope, decodeBindings, stmtIndex)
+        if (stmt.kind === 'raise' && stmt.cause) this.analyzeExpr(stmt.cause, scope, decodeBindings, stmtIndex)
         continue
       }
       if (stmt.kind === 'delete') {
@@ -762,6 +806,7 @@ class Analyzer {
   ): void {
     if (expr.kind === 'call') {
       this.analyzeCall(expr, scope, decodeBindings, stmtIndex)
+      if (expr.callee.kind === 'attr') scope.knownPrimitiveRoots.clear()
       return
     }
     if (expr.kind === 'binop') {
@@ -780,6 +825,7 @@ class Analyzer {
       return
     }
     if (expr.kind === 'list' || expr.kind === 'tuple' || expr.kind === 'set') {
+      if (expr.kind === 'set' && expr.elts.some((item) => !isKnownPrimitiveExpr(item, scope)) && expr.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
       for (const e of expr.elts) this.analyzeExpr(e, scope, decodeBindings, stmtIndex)
       return
     }
@@ -872,15 +918,22 @@ class Analyzer {
         if (!knownIterable && generator.iter.range) {
           this.uncertainties.push({ kind: 'implicit-call-unresolved', range: generator.iter.range, sourceStatus: 'unknown', dynamicAccess: true })
         }
-        if (knownIterable) {
-          child.unknownRoots.delete(generator.target)
-          child.knownPrimitiveRoots.add(generator.target)
-        } else {
-          child.knownPrimitiveRoots.delete(generator.target)
-          child.unknownRoots.add(generator.target)
+        for (const target of bindingNames(generator.target)) {
+          if (knownIterable) {
+            child.unknownRoots.delete(target)
+            child.knownPrimitiveRoots.add(target)
+          } else {
+            child.knownPrimitiveRoots.delete(target)
+            child.unknownRoots.add(target)
+          }
         }
-        for (const condition of generator.conditions) this.analyzeExpr(condition, child, decodeBindings, stmtIndex)
+        for (const condition of generator.conditions) {
+          if (!isKnownPrimitiveExpr(condition, child) && condition.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: condition.range, sourceStatus: 'unknown', dynamicAccess: true })
+          this.analyzeExpr(condition, child, decodeBindings, stmtIndex)
+        }
       }
+      if (expr.compKind === 'set' && !isKnownPrimitiveExpr(expr.elt, child) && expr.elt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.elt.range, sourceStatus: 'unknown', dynamicAccess: true })
+      if (expr.compKind === 'dict' && expr.elt.kind === 'tuple' && expr.elt.elts[0] && !isKnownPrimitiveExpr(expr.elt.elts[0], child) && expr.elt.elts[0].range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.elt.elts[0].range, sourceStatus: 'unknown', dynamicAccess: true })
       this.analyzeExpr(expr.elt, child, decodeBindings, stmtIndex)
       for (const g of expr.generators) {
         this.analyzeExpr(g.iter, scope, decodeBindings, stmtIndex)
@@ -1385,6 +1438,8 @@ class ScriptUncertaintyCollector {
           applyFromImportStmt(stmt, scope)
           break
         case 'assign':
+          if (stmt.unpacksValue && !isKnownPrimitiveIterable(stmt.value, scope) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
+          if (stmt.annotation) this.walkExpr(stmt.annotation, scope)
           if (stmt.targets.some((target) => implicitAssignmentTarget(target)) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           this.walkExpr(stmt.value, scope)
           for (const target of stmt.targets) applyAssignmentRebind(target, stmt.value, scope)
@@ -1401,6 +1456,7 @@ class ScriptUncertaintyCollector {
           const child = createScope(scope)
           this.walkStmts(stmt.body, child)
           this.walkStmts(stmt.orelse, child)
+          invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope)
           break
         }
         case 'while': {
@@ -1408,10 +1464,12 @@ class ScriptUncertaintyCollector {
           const child = createScope(scope)
           this.walkStmts(stmt.body, child)
           this.walkStmts(stmt.orelse, child)
+          invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope)
           break
         }
         case 'for': {
           this.walkExpr(stmt.iter, scope)
+          if (stmt.targetUnpacks && !isKnownPrimitiveIterable(stmt.iter, scope) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           const child = createScope(scope)
           child.modules.delete(stmt.target)
           child.attrs.delete(stmt.target)
@@ -1419,11 +1477,13 @@ class ScriptUncertaintyCollector {
           this.walkStmts(stmt.body, child)
           // P0-3 评审修复：漏遍历 else 体会丢失未建模/危险行为事实（remote fail-open）。
           this.walkStmts(stmt.orelse, child)
+          invalidateBranchWrites(stmt.body, scope)
           break
         }
         case 'with': {
           for (const item of stmt.items) this.walkExpr(item.contextExpr, scope)
           this.walkStmts(stmt.body, createScope(scope))
+          invalidateBranchWrites(stmt.body, scope)
           break
         }
         case 'try': {
@@ -1434,12 +1494,14 @@ class ScriptUncertaintyCollector {
           }
           this.walkStmts(stmt.orelse, createScope(scope))
           this.walkStmts(stmt.finalbody, createScope(scope))
+          invalidateBranchWrites([...stmt.body, ...stmt.handlers.flatMap((handler) => handler.body), ...stmt.orelse, ...stmt.finalbody], scope)
           break
         }
         case 'function_def': {
           if (stmt.decorators.length > 0 && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           for (const decorator of stmt.decorators) this.walkExpr(decorator, scope)
           for (const value of stmt.defaults) this.walkExpr(value, scope)
+          for (const annotation of stmt.annotations ?? []) this.walkExpr(annotation, scope)
           this.walkStmts(stmt.body, createScope(scope))
           break
         }
@@ -1451,11 +1513,15 @@ class ScriptUncertaintyCollector {
           break
         }
         case 'return':
+          if (stmt.value) this.walkExpr(stmt.value, scope)
+          break
         case 'raise':
           if (stmt.value) this.walkExpr(stmt.value, scope)
+          if (stmt.cause) this.walkExpr(stmt.cause, scope)
           break
         case 'assert':
           this.walkExpr(stmt.test, scope)
+          if (stmt.message) this.walkExpr(stmt.message, scope)
           break
         case 'delete':
           if (stmt.targets.some((target) => target.kind === 'attr' || target.kind === 'subscript') && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
@@ -1491,6 +1557,7 @@ class ScriptUncertaintyCollector {
       case 'list':
       case 'tuple':
       case 'set':
+        if (expr.kind === 'set' && expr.elts.some((item) => !isKnownPrimitiveExpr(item, scope)) && expr.range) this.fail('implicit-call-unresolved', expr.range)
         for (const e of expr.elts) this.walkExpr(e, scope)
         return
       case 'dict':
@@ -1536,12 +1603,27 @@ class ScriptUncertaintyCollector {
         if (expr.value) this.walkExpr(expr.value, scope)
         return
       case 'comprehension':
+        {
+        const child = createScope(scope)
         for (const generator of expr.generators) {
           this.walkExpr(generator.iter, scope)
-          for (const condition of generator.conditions) this.walkExpr(condition, scope)
+          const knownIterable = isKnownPrimitiveIterable(generator.iter, child)
+          for (const target of bindingNames(generator.target)) {
+            child.modules.delete(target)
+            child.attrs.delete(target)
+            if (knownIterable) { child.unknownRoots.delete(target); child.knownPrimitiveRoots.add(target) }
+            else { child.knownPrimitiveRoots.delete(target); child.unknownRoots.add(target) }
+          }
+          for (const condition of generator.conditions) {
+            if (!isKnownPrimitiveExpr(condition, child) && condition.range) this.fail('implicit-call-unresolved', condition.range)
+            this.walkExpr(condition, child)
+          }
         }
-        this.walkExpr(expr.elt, scope)
+        if (expr.compKind === 'set' && !isKnownPrimitiveExpr(expr.elt, child) && expr.elt.range) this.fail('implicit-call-unresolved', expr.elt.range)
+        if (expr.compKind === 'dict' && expr.elt.kind === 'tuple' && expr.elt.elts[0] && !isKnownPrimitiveExpr(expr.elt.elts[0], child) && expr.elt.elts[0].range) this.fail('implicit-call-unresolved', expr.elt.elts[0].range)
+        this.walkExpr(expr.elt, child)
         return
+        }
       case 'named_expr':
         this.walkExpr(expr.value, scope)
         return

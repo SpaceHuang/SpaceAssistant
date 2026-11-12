@@ -99,11 +99,11 @@ export interface IrImportName {
 type IrStmtShape =
   | { kind: 'import'; names: IrImportName[] }
   | { kind: 'from_import'; module: string; names: Array<{ name: string; alias?: string }> }
-  | { kind: 'assign'; targets: string[]; value: IrExpr }
+  | { kind: 'assign'; targets: string[]; value: IrExpr; annotation?: IrExpr | null; unpacksValue?: boolean }
   | { kind: 'aug_assign'; target: string; value: IrExpr }
   | { kind: 'expr'; value: IrExpr }
   | { kind: 'if'; test: IrExpr; body: IrStmt[]; orelse: IrStmt[] }
-  | { kind: 'for'; target: string; iter: IrExpr; body: IrStmt[]; orelse: IrStmt[] }
+  | { kind: 'for'; target: string; iter: IrExpr; targetUnpacks?: boolean; body: IrStmt[]; orelse: IrStmt[] }
   | { kind: 'while'; test: IrExpr; body: IrStmt[]; orelse: IrStmt[] }
   | { kind: 'with'; items: Array<{ contextExpr: IrExpr; optionalVars: string[] }>; body: IrStmt[] }
   | {
@@ -114,14 +114,14 @@ type IrStmtShape =
       finalbody: IrStmt[]
     }
   // P0-1 评审修复：defaults/bases 在定义/创建时求值——必须进 IR 被分析（禁止静默丢弃）
-  | { kind: 'function_def'; name: string; params: string[]; defaults: IrExpr[]; body: IrStmt[]; decorators: IrExpr[]; isAsync: boolean }
+  | { kind: 'function_def'; name: string; params: string[]; defaults: IrExpr[]; annotations?: IrExpr[]; body: IrStmt[]; decorators: IrExpr[]; isAsync: boolean }
   | { kind: 'class_def'; name: string; bases: IrExpr[]; body: IrStmt[]; decorators: IrExpr[] }
   | { kind: 'return'; value: IrExpr | null }
   | { kind: 'pass' }
   | { kind: 'break' }
   | { kind: 'continue' }
-  | { kind: 'assert'; test: IrExpr }
-  | { kind: 'raise'; value: IrExpr | null }
+  | { kind: 'assert'; test: IrExpr; message?: IrExpr | null }
+  | { kind: 'raise'; value: IrExpr | null; cause?: IrExpr | null }
   | { kind: 'delete'; targets: IrExpr[] }
   | { kind: 'global_nonlocal'; names: string[] }
 

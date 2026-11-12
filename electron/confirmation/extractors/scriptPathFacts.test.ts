@@ -3,6 +3,23 @@ import { resetScriptParserServiceForTests, scriptParserService } from '../../she
 import { extractScriptPathFacts } from './scriptPathFacts'
 
 describe('extractScriptPathFacts', () => {
+  it.each([
+    'assert False, __import__("os").system("id")',
+    'raise ValueError() from __import__("os").system("id")',
+    'def f(x: __import__("os").system("id")) -> __import__("os").system("id"): pass',
+    `f"{42:{__import__('os').system('id')}}"`,
+    `f"{ {'x': __import__('os').system('id')} }"`,
+    'from external_module import obj\nx = "/tmp/safe"\nif True:\n    x = obj\nopen(x)',
+    'from external_module import obj\na = ["/tmp/safe"]\nb = a\nb.append(obj)\nopen(a[0])',
+    'from external_module import obj\nvalue = {obj}',
+    'from external_module import obj\n[i for i in [1] if obj]',
+    'from external_module import obj\n{obj for i in [1]}',
+    'from external_module import obj\n{obj: 1 for i in [1]}',
+    'from external_module import obj\na, b = obj'
+  ])('marks path extraction incomplete when executable facts include an unmodeled protocol: %s', (code) => {
+    expect(extractScriptPathFacts(code, 'python').completeness).toBe('unknown')
+  })
+
   beforeAll(async () => {
     await scriptParserService.ensureInitialized()
   })
@@ -692,8 +709,8 @@ describe('extractScriptPathFacts:v5 评审 B5(字典推导式 key)', () => {
     expect(extractScriptPathFacts('d = {make(k): v for k, v in rows}', 'python')).toMatchObject({ completeness: 'unknown' })
   })
 
-  it('B5 对照:良性 key 与普通字典字面量不误伤', () => {
-    expect(extractScriptPathFacts('d = {str(k): len(v) for k, v in rows}', 'python')).toMatchObject({ completeness: 'complete' })
+  it('B5 对照:字面量字典保持 complete,未知迭代对象的隐式转换需标 unknown', () => {
+    expect(extractScriptPathFacts('d = {str(k): len(v) for k, v in rows}', 'python')).toMatchObject({ completeness: 'unknown' })
     expect(extractScriptPathFacts('d = {"a": 1, "b": 2}', 'python')).toMatchObject({ completeness: 'complete' })
   })
 })
@@ -751,14 +768,14 @@ describe('extractScriptPathFacts:v4 评审观察项(walrus 重绑 / 模块级 gl
       'import os',
       'names = [y for y in rows if os.path.exists(y)]',
       'print(names)'
-    ].join('\n'), 'python')).toMatchObject({ completeness: 'complete' })
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
     expect(extractScriptPathFacts('rows = [make(y) for y in rows if check(y)]', 'python')).toMatchObject({ completeness: 'unknown' })
   })
 
-  it('comp-cond 对照:纯比较条件不误伤(正常推导保持 complete)', () => {
+  it('comp-cond 对照:已知原始值比较保持 complete', () => {
     expect(extractScriptPathFacts([
       'p = "/a"',
-      'rows = [y for y in rows if y > 0]',
+      'rows = [y for y in [1, 2] if y > 0]',
       'open(p)'
     ].join('\n'), 'python')).toMatchObject({ paths: ['/a'], completeness: 'complete' })
   })
@@ -800,12 +817,12 @@ describe('extractScriptPathFacts:v2 评审修复回归(变体形态)', () => {
     ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
   })
 
-  it('B2-R 对照:元组目标与常量不同名时不误伤(正常传播保持)', () => {
+  it('B2-R 对照:未知迭代对象的解包需标 unknown', () => {
     expect(extractScriptPathFacts([
       'p = "/safe.txt"',
       'for x, y in items:',
       '    open(p)'
-    ].join('\n'), 'python')).toMatchObject({ paths: ['/safe.txt'], completeness: 'complete' })
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/safe.txt'], completeness: 'unknown' })
   })
 
   // ---- B1-R:函数参数遮蔽 def 名 ----

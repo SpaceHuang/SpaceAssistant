@@ -1685,14 +1685,34 @@ describe('evaluateToolCallGate', () => {
     ['process child module', 'from multiprocessing.pool import Pool\nPool(2)', 'process-creation'],
     ['network child module', 'from xmlrpc.client import ServerProxy\nServerProxy("https://example.test").ping()', 'network-api'],
     ['nested setter', 'from external_module import obj\nif True:\n    obj.field = 1', 'partial'],
-    ['aliased function entry', 'def f(x):\n    return x + 1\nf(1)\ng = f\ng(obj)', 'partial']
+    ['aliased function entry', 'def f(x):\n    return x + 1\nf(1)\ng = f\ng(obj)', 'partial'],
+    ['assert message', 'assert False, __import__("os").system("id")', 'partial'],
+    ['raise cause', 'raise ValueError() from __import__("os").system("id")', 'partial'],
+    ['parameter annotation', 'def f(x: __import__("os").system("id")): pass', 'partial'],
+    ['return annotation', 'def f() -> __import__("os").system("id"): pass', 'partial'],
+    ['f-string format', `f"{42:{__import__('os').system('id')}}"`, 'partial'],
+    ['f-string dictionary', `f"{ {'x': __import__('os').system('id')} }"`, 'partial'],
+    ['shadowed parameter', 'x = 1\ndef f(x):\n    return x + 1\nfrom external_module import obj\nf(obj)', 'partial'],
+    ['branch rebind', 'from external_module import obj\nx = 1\nif True:\n    x = obj\nf"{x}"', 'partial'],
+    ['loop rebind', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = obj\nf"{x}"', 'partial'],
+    ['mutable alias', 'from external_module import obj\na = [1]\nb = a\nb.append(obj)\nf"{a}"', 'partial'],
+    ['set element hash', 'from external_module import obj\nvalue = {obj}', 'partial'],
+    ['comprehension truthiness', 'from external_module import obj\n[i for i in [1] if obj]', 'partial'],
+    ['set comprehension hash', 'from external_module import obj\n{obj for i in [1]}', 'partial'],
+    ['dict comprehension key hash', 'from external_module import obj\n{obj: 1 for i in [1]}', 'partial'],
+    ['unpack iteration', 'from external_module import obj\na, b = obj', 'partial']
   ] as const)('真实 Gate 阻止 %s 获得 clean allow 或记忆档位', async (_name, code, expectedFact) => {
-    const result = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code }, lanePackage: 'standard' }))
-    const analysis = result.facts.signals.find((signal) => signal.kind === 'script-analysis')
-    if (expectedFact === 'partial') expect(analysis).toMatchObject({ coverage: 'partial' })
-    else expect(analysis).toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ class: expectedFact })]) })
-    expect(result.decision.type).not.toBe('auto-allow')
-    if (result.decision.type === 'require-confirm') expect(result.decision.memoryTiers).toEqual([])
+    for (const lane of ['desktop', 'feishu'] as const) {
+      const result = await evaluateToolCallGate(base({ lane,
+        ...(lane === 'feishu' ? { remoteContext: remoteContext({ source: 'feishu' }),
+          imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } } } : {}),
+        toolName: 'run_script', toolInput: { code }, lanePackage: 'standard' }))
+      const analysis = result.facts.signals.find((signal) => signal.kind === 'script-analysis')
+      if (expectedFact === 'partial') expect(analysis, `${lane}: ${_name}`).toMatchObject({ coverage: 'partial' })
+      else expect(analysis, `${lane}: ${_name}`).toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ class: expectedFact })]) })
+      expect(result.decision.type, `${lane}: ${_name}`).not.toBe('auto-allow')
+      if (result.decision.type === 'require-confirm') expect(result.decision.memoryTiers, `${lane}: ${_name}`).toEqual([])
+    }
   })
 
   it('remote 子模块网络调用命中 network deny，而不是不确定路径审批', async () => {

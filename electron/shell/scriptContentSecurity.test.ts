@@ -330,6 +330,28 @@ describe('scriptContentSecurity — List A (baseline)', () => {
 })
 
 describe('script uncertainty facts', () => {
+  it.each([
+    ['assert message', 'assert False, __import__("os").system("id")'],
+    ['raise cause', 'raise ValueError() from __import__("os").system("id")'],
+    ['parameter annotation', 'def f(x: __import__("os").system("id")): pass'],
+    ['return annotation', 'def f() -> __import__("os").system("id"): pass'],
+    ['nested f-string format', `f"{42:{__import__('os').system('id')}}"`],
+    ['f-string dictionary colon', `f"{ {'x': __import__('os').system('id')} }"`],
+    ['shadowed primitive parameter', 'x = 1\ndef f(x):\n    return x + 1\nfrom external_module import obj\nf(obj)'],
+    ['branch rebind', 'from external_module import obj\nx = 1\nif True:\n    x = obj\nf"{x}"'],
+    ['loop rebind', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = obj\nf"{x}"'],
+    ['aliased mutable value mutation', 'from external_module import obj\na = [1]\nb = a\nb.append(obj)\nf"{a}"'],
+    ['set element hash', 'from external_module import obj\nvalue = {obj}'],
+    ['comprehension truthiness', 'from external_module import obj\n[i for i in [1] if obj]'],
+    ['set comprehension hash', 'from external_module import obj\n{obj for i in [1]}'],
+    ['dict comprehension key hash', 'from external_module import obj\n{obj: 1 for i in [1]}'],
+    ['unpack iteration', 'from external_module import obj\na, b = obj']
+  ])('fails closed for systematic-review case: %s', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).not.toBe('complete')
+    expect(result.findings.length + result.uncertainties.length).toBeGreaterThan(0)
+  })
+
   it('does not trust a loop target as an imported module root', () => {
     const result = analyzeScriptContent('for x in range(3):\n    x()')
     expect(result.coverage).toBe('partial')

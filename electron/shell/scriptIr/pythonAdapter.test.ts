@@ -247,9 +247,22 @@ describe('pythonAdapter：穷尽性 + 白名单叶子性 + ③ 双护栏（机�
     expect(missing).toEqual([])
     const tabled = new Set([...IR_MODELED, ...IGNORABLE_LEAF_NODES, ...PASSTHROUGH_NODES, ...Object.keys(EXPLICITLY_UNMODELED)])
     // as_pattern_target 是 grammar 运行时种类（node-types.json 顶层条目未列出，实测语法树出现）
-    const RUNTIME_EXTRA = ['as_pattern_target']
+    const RUNTIME_EXTRA = ['as_pattern_target', 'annotated_assignment']
     const extra = [...tabled].filter((t) => !concrete.includes(t) && !RUNTIME_EXTRA.includes(t))
     expect(extra).toEqual([])
+  })
+
+  it('retains executable fields and unpack semantics in the IR', () => {
+    expect(adapt('assert False, danger()').body[0]).toMatchObject({ kind: 'assert', message: { kind: 'call' } })
+    expect(adapt('raise ValueError() from danger()').body[0]).toMatchObject({ kind: 'raise', cause: { kind: 'call' } })
+    expect(adapt('def f(x: danger()) -> danger():\n    pass').body[0]).toMatchObject({ kind: 'function_def', annotations: [{ kind: 'call' }, { kind: 'call' }] })
+    expect(adapt('x: danger() = 1').body[0]).toMatchObject({ kind: 'assign', annotation: { kind: 'call' } })
+    expect(adapt('a, b = source').body[0]).toMatchObject({ kind: 'assign', unpacksValue: true })
+  })
+
+  it('retains calls in f-string primary and nested format expressions as CST children', () => {
+    expect(adapt(`f"{42:{danger()}}"`).body[0]).toMatchObject({ kind: 'expr', value: { kind: 'f_string', interpolations: [{ kind: 'number' }, { kind: 'call' }] } })
+    expect(adapt(`f"{ {'x': danger()} }"`).body[0]).toMatchObject({ kind: 'expr', value: { kind: 'f_string', interpolations: [{ kind: 'dict', values: [{ kind: 'call' }] }] } })
   })
 
   it('② 白名单叶子性：每个可忽略种类在 node-types.json 中无 fields 且无 named children（M2‴）', () => {
