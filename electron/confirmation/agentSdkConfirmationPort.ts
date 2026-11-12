@@ -195,11 +195,9 @@ export function createAgentSdkConfirmationPort(input: {
       if (outcome.kind === 'approved') input.onApproved?.(confirmation.call, outcome, confirmation, confirmation.context as GateConfirmationContext, outcome.selectedMemory)
       if (!confirmation.signal?.aborted && outcome.kind === 'approved') {
         const answererKind = outcome.answerer === 'agent' ? 'agent' : 'user'
-        const reuseOnce = 'outcome' in result && result.outcome.kind === 'approved' &&
-          result.outcome.reuse === 'once' && answererKind === 'user'
         input.onScopeApproved?.(confirmation.call, confirmation.context as GateConfirmationContext, {
           kind: 'approved', answererKind, cause: answererKind === 'agent' ? 'agent-approved' : 'user-approved',
-          ...(reuseOnce ? { reuse: 'once' as const } : {})
+          ...('reuse' in outcome && outcome.reuse === 'once' ? { reuse: 'once' as const } : {})
         })
       }
       if (outcome.kind === 'denied' && outcome.answerer === 'user' && normalizedTarget) {

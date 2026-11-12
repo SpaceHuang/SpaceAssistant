@@ -132,6 +132,14 @@ describe('review scope cache gate integration', () => {
       expect(disabled.reviewScopeCandidateScope).toBeUndefined()
       const rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'grep-workdir-recursive-reusable'
         ? { ...rule, action: 'ask' as const, userOverride: true as const } : rule)
+      for (const action of ['deny', 'ask'] as const) {
+        const overriddenRules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'grep-workdir-recursive-reusable'
+          ? { ...rule, action, userOverride: true as const } : rule)
+        const overridden = await evaluateToolCallGate(base({ ...common, effectiveRules: overriddenRules,
+          reviewScopeEvidenceComplete: action === 'deny', toolName: 'grep', toolInput: { path: '.', pattern: 'needle' } }))
+        expect(overridden.reviewScopeCandidate).toBeUndefined()
+        expect(overridden.decision.type).toBe(action === 'deny' ? 'deny' : 'require-confirm')
+      }
       const approvedParent = await evaluateToolCallGate(base({ ...common, effectiveRules: rules, toolName: 'grep', toolInput: { path: '.', pattern: 'needle' } }))
       expect(approvedParent.decision).toMatchObject({ type: 'require-confirm', ruleId: 'grep-workdir-recursive-reusable', answerer: 'user' })
       expect(approvedParent.reviewScopeCandidateScope).toBeDefined()

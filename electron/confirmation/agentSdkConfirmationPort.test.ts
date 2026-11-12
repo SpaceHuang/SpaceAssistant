@@ -130,6 +130,24 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(onScopeApproved.mock.calls[0]?.[2]).toMatchObject({ kind: 'approved', answererKind: 'user', cause: 'user-approved', reuse: 'once' })
   })
 
+  it.each(['agent', 'fallback'] as const)('将最终 %s 的仅本次选择传给授权登记回调', async (source) => {
+    const onScopeApproved = vi.fn()
+    const port = createAgentSdkConfirmationPort({
+      createChannel: () => ({ request: async () => source === 'agent'
+        ? { kind: 'approved' as const, answererKind: 'agent' as const, cause: 'agent-approved' as const, reuse: 'once' as const }
+        : { kind: 'timeout' as const, answererKind: 'agent' as const, cause: 'timeout' as const }, cancel: vi.fn() }),
+      publish: vi.fn(), cancel: vi.fn(), onScopeApproved,
+      ...(source === 'fallback' ? { fallback: async () => ({ kind: 'approved' as const, answerer: 'user' as const,
+        cause: 'user-approved' as const, receipt: 'fallback', reuse: 'once' as const }) } : {})
+    })
+    const result = await port({ call: { invocationId: `once-${source}`, toolCallId: `once-${source}`, toolName: 'grep', input: {} },
+      confirmationId: `once-${source}`, answerer: 'agent', reasonCode: 'review', context: {
+        ...context, reviewScopeCandidate: { toolName: 'grep' }, reviewScopeCandidateScope: { toolName: 'grep' }
+      } })
+    expect(result).toMatchObject({ kind: 'approved', reuse: 'once' })
+    expect(onScopeApproved.mock.calls[0]?.[2]).toMatchObject({ kind: 'approved', reuse: 'once' })
+  })
+
   it('通过真实 channel 与 SDK port 保留 Agent 裁决和 fail-closed fallback 语义', async () => {
     const { AgentChannel } = await import('./agentChannel')
     const { resolveConfirmChannel } = await import('./channels')

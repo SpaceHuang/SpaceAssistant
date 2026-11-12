@@ -271,6 +271,7 @@ export class ReviewScopeCache {
         if (this.makeRoom(key)) {
           entry = { digest, sessionKey: key, source: durable.source, state: 'active', generation: ++this.generation, touchedAt: this.now() }
           this.entries.set(digest, entry)
+          this.scopes.set(digest, scope)
         }
       }
       if (!entry && scope.toolName === 'grep') {
@@ -367,7 +368,10 @@ export class ReviewScopeCache {
   private isCachedEntryValid(entry: ReviewScopeEntry): boolean {
     if (!this.grantStore) return true
     const scope = this.scopes.get(entry.digest)
-    if (!scope) return false
+    if (!scope) {
+      this.revokeEntry(entry)
+      return false
+    }
     if (this.grantStore.lookup(this.storeIdentity(scope, entry.source))) return true
     this.revokeEntry(entry)
     return false

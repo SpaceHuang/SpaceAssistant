@@ -1,6 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { execFileSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
@@ -25,6 +26,20 @@ describe('grep subtree grant containment', () => {
 
     expect(isGrepSubtreeSemanticallyContained(root, path.join(root, 'private'), { includeIgnored: false })).toBe(false)
 
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  it.each(['.ignore', '.rgignore'])('still rejects an %s-excluded child when includeIgnored only disables VCS ignores', (ignoreFile) => {
+    const root = tempDir()
+    fs.mkdirSync(path.join(root, 'private'))
+    fs.writeFileSync(path.join(root, ignoreFile), 'private/\n')
+    fs.writeFileSync(path.join(root, 'private', 'a.txt'), 'needle\n')
+    fs.writeFileSync(path.join(root, 'public.txt'), 'needle\n')
+    const parentMatches = execFileSync('rg', ['--hidden', '--no-ignore-vcs', '--files-with-matches', 'needle', '.'], { cwd: root, encoding: 'utf8' })
+    const childMatches = execFileSync('rg', ['--hidden', '--no-ignore-vcs', '--files-with-matches', 'needle', 'private'], { cwd: root, encoding: 'utf8' })
+    expect(parentMatches).not.toContain('private/a.txt')
+    expect(childMatches).toContain('private/a.txt')
+    expect(isGrepSubtreeSemanticallyContained(root, path.join(root, 'private'), { includeIgnored: true })).toBe(false)
     fs.rmSync(root, { recursive: true, force: true })
   })
 })

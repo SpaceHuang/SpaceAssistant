@@ -197,6 +197,30 @@ export class ReviewScopeGrantStore {
     const current = JSON.parse(currentJson) as { workDir?: unknown; objects?: unknown; query?: unknown }
     const currentRoot = scopeRoot(current)
     if (!currentRoot) return null
+    const containsCurrentScope = (parent: { workDir?: unknown; objects?: unknown; query?: unknown }): boolean => {
+      const parentRoot = scopeRoot(parent)
+      if (!parentRoot || parent.workDir !== current.workDir || !sameGrepQuery(parent.query, current.query)) return false
+      const relative = path.relative(parentRoot, currentRoot)
+      const query = current.query && typeof current.query === 'object' ? current.query as { includeIgnored?: unknown; glob?: unknown; ignoreDigest?: unknown } : {}
+      return (relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`))) &&
+        typeof query.ignoreDigest === 'string' && /^[a-f0-9]{64}$/.test(query.ignoreDigest) &&
+        isGrepSubtreeSemanticallyContained(parentRoot, currentRoot, {
+          includeIgnored: query.includeIgnored === true,
+          ...(typeof query.glob === 'string' ? { glob: query.glob } : {})
+        })
+    }
+    // Volatile session/process grants use the same scope proof as durable grants.
+    // Session grants stay within their issuing session; process grants intentionally cross sessions.
+    for (const [key, grant] of this.volatile) {
+      let parts: unknown[]
+      try { parts = JSON.parse(key) as unknown[] } catch { continue }
+      if (parts[0] !== input.lane || parts[1] !== input.subjectId || parts[2] !== input.domain ||
+        parts[3] !== input.policyRevision || parts[4] !== input.policyEpoch || parts[5] !== input.policyVersion ||
+        parts[6] !== 'grep' || parts[7] !== input.source ||
+        (grant.lifetime === 'session' && parts[9] !== input.sessionId) || !grant.scope) continue
+      const parent = grant.scope as { workDir?: unknown; objects?: unknown; query?: unknown }
+      if (containsCurrentScope(parent)) return grant
+    }
     const now = this.commitTime()
     if (now === null) return null
     try {
@@ -207,16 +231,7 @@ export class ReviewScopeGrantStore {
         Array<{ id: number; source: ReviewScopeSource; lifetime: '24h' | '7d'; issued_at_ms: number; expires_at_ms: number; scope_json: string }>
       for (const row of rows) {
         const parent = JSON.parse(row.scope_json) as { workDir?: unknown; objects?: unknown; query?: unknown }
-        const parentRoot = scopeRoot(parent)
-        if (!parentRoot || parent.workDir !== current.workDir || !sameGrepQuery(parent.query, current.query)) continue
-        const relative = path.relative(parentRoot, currentRoot)
-        const query = current.query && typeof current.query === 'object' ? current.query as { includeIgnored?: unknown; glob?: unknown; ignoreDigest?: unknown } : {}
-        if ((relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`))) &&
-          typeof query.ignoreDigest === 'string' && /^[a-f0-9]{64}$/.test(query.ignoreDigest) &&
-          isGrepSubtreeSemanticallyContained(parentRoot, currentRoot, {
-            includeIgnored: query.includeIgnored === true,
-            ...(typeof query.glob === 'string' ? { glob: query.glob } : {})
-          })) {
+        if (containsCurrentScope(parent)) {
           return Object.freeze({ source: row.source, lifetime: row.lifetime, issuedAtMs: row.issued_at_ms, expiresAtMs: row.expires_at_ms, scope: parent })
         }
       }
@@ -279,7 +294,14 @@ export class ReviewScopeGrantStore {
     const now = this.now()
     runInTransaction(this.db, () => {
       this.db.prepare('INSERT OR IGNORE INTO schema_meta(key,value) VALUES(?,?)').run(SCHEMA_META_KEYS.reviewScopeDefaultLifetime, 'session')
-      this.db.prepare('INSERT OR IGNORE INTO schema_meta(key,value) VALUES(?,?)').run(SCHEMA_META_KEYS.reviewScopeWallFloorMs, String(now))
+      const floorRow = this.db.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.reviewScopeWallFloorMs) as { value: string } | undefined
+      const validFloor = floorRow && /^(?:0|[1-9]\d*)$/.test(floorRow.value) && Number.isSafeInteger(Number(floorRow.value))
+      if (!validFloor) {
+        const hasGrants = this.db.prepare('SELECT 1 FROM review_scope_grants LIMIT 1').get() !== undefined
+        if (hasGrants) this.db.prepare('DELETE FROM review_scope_grants').run()
+        this.db.prepare('INSERT INTO schema_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+          .run(SCHEMA_META_KEYS.reviewScopeWallFloorMs, String(now))
+      }
       this.db.prepare('DELETE FROM review_scope_grants WHERE expires_at_ms <= ?').run(now)
     })
   }

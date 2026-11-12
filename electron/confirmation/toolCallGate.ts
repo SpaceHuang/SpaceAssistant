@@ -1173,7 +1173,6 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     for (const name of names) autoEvaluatorRoutes.set(name, rule.id)
   }
   const reviewScopeCandidate = await buildReviewScopeCandidate(args, lane, writePathFact, readPathFact)
-  if (reviewScopeCandidate?.toolName === 'grep') facts.signals.push({ kind: 'review-scope-candidate', status: 'eligible' })
   let reviewScopeEntry = reviewScopeCandidate ? args.reviewScopeCache?.lookup(reviewScopeCandidate) : null
   let grepParentScopeMaterial: import('./readExecutionPermit').GrepParentScope | undefined
   if (reviewScopeEntry?.inheritedParentScope && reviewScopeCandidate?.toolName === 'grep' && readPathFact?.identity) {

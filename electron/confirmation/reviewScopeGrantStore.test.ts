@@ -116,6 +116,17 @@ describe('ReviewScopeGrantStore', () => {
     expect(restarted.lookup(identity())).toBeNull()
   })
 
+  it('does not restore durable grants when the clock floor is missing and grants remain', () => {
+    const db = open()
+    const now = Date.now() + 2_000
+    const store = new ReviewScopeGrantStore(db, { now: () => now })
+    expect(store.grant({ ...identity(), lifetime: '24h' })).toBe(true)
+    db.prepare('DELETE FROM schema_meta WHERE key=?').run(SCHEMA_META_KEYS.reviewScopeWallFloorMs)
+    const restarted = new ReviewScopeGrantStore(db, { now: () => now + 100 })
+    expect(restarted.lookup(identity())).toBeNull()
+    expect(db.prepare('SELECT COUNT(*) AS count FROM review_scope_grants').get()).toEqual({ count: 0 })
+  })
+
   it('connects durable scope lookup across messages and the edit_file/write_file pair', () => {
     const db = open()
     const firstStore = new ReviewScopeGrantStore(db, { now: () => Date.now() + 1_000 })
@@ -188,6 +199,26 @@ describe('ReviewScopeGrantStore', () => {
     expect(cache.lookup(child)).toBeNull()
   })
 
+  it('allows fresh approval after a restored cache index expires', () => {
+    const db = open()
+    let now = Date.now() + 10_000
+    const store = new ReviewScopeGrantStore(db, { now: () => now })
+    const scope = {
+      lane: 'desktop' as const, sessionId: 'session-a', subjectId: 'profile-a',
+      authorizationDomain: { id: 'desktop', revision: 4, epoch: 7 }, toolName: 'write_file' as const, operation: 'write' as const,
+      objects: [{ role: 'target', value: '/work/a.txt' }], environment: '/work', policyVersion: 'policy-v3',
+      exactParameters: {}, taskConstraint: '', approvalLifetime: '24h' as const
+    }
+    const first = new ReviewScopeCache({ grantStore: store })
+    expect(first.grant({ scope, source: 'user', scopeCandidateDigest: first.candidateDigest(scope) })).toBe(true)
+    const restored = new ReviewScopeCache({ grantStore: store })
+    expect(restored.lookup(scope)).not.toBeNull()
+    now += 86_400_000
+    expect(restored.lookup(scope)).toBeNull()
+    expect(restored.grantDigest({ lane: scope.lane, sessionId: scope.sessionId, source: 'user', scope,
+      scopeCandidateDigest: restored.candidateDigest(scope) })).toBe(true)
+  })
+
   it('persists only a remote directory disclosure digest for cross-session listing reuse', () => {
     const db = open()
     db.prepare("INSERT INTO policy_authorization_epochs(domain,epoch) VALUES('im',4)").run()
@@ -214,6 +245,27 @@ describe('ReviewScopeGrantStore', () => {
     expect(store.lookupGrepAncestor(child)).toMatchObject({ source: 'agent', lifetime: '24h', scope: base.scope })
     expect(store.lookupGrepAncestor({ ...child, scope: { ...child.scope, objects: [{ role: 'root', value: '/work/project-other' }] } })).toBeNull()
     expect(store.lookupGrepAncestor({ ...child, scope: { ...child.scope, query: { pattern: 'other', includeIgnored: false, ignoreDigest: 'c'.repeat(64) } } })).toBeNull()
+  })
+
+  it.each(['process', 'session'] as const)('finds a %s grep parent from the authorization store after cache/session changes', (lifetime) => {
+    const db = open()
+    const store = new ReviewScopeGrantStore(db)
+    const cache = new ReviewScopeCache({ grantStore: store, maxEntriesTotal: 1 })
+    const parent = {
+      lane: 'desktop' as const, sessionId: 'session-a', subjectId: 'profile-a',
+      authorizationDomain: { id: 'desktop', revision: 4, epoch: 7 }, toolName: 'grep' as const, operation: 'search' as const,
+      objects: [{ role: 'root', value: '/work/project' }], environment: '/work', policyVersion: 'policy-v3',
+      exactParameters: { pattern: 'needle', includeIgnored: true, engine: 'walk', engineFingerprint: 'e'.repeat(64), ignoreDigest: 'c'.repeat(64) },
+      taskConstraint: '', approvalLifetime: lifetime
+    }
+    expect(cache.grant({ scope: parent, source: 'user', scopeCandidateDigest: cache.candidateDigest(parent), lifetime })).toBe(true)
+    if (lifetime === 'session') {
+      const other = { ...parent, objects: [{ role: 'root', value: '/work/other' }] }
+      expect(cache.grant({ scope: other, source: 'user', scopeCandidateDigest: cache.candidateDigest(other), lifetime })).toBe(true)
+    }
+    const child = { ...parent, sessionId: lifetime === 'process' ? 'session-b' : 'session-a', objects: [{ role: 'root', value: '/work/project/child' }] }
+    if (lifetime === 'session') expect(cache.lookup({ ...child, sessionId: 'session-b' })).toBeNull()
+    expect(cache.lookup(child)).toMatchObject({ source: 'user', inheritedParentScope: { root: '/work/project' } })
   })
 
   it('restores an inherited grep parent scope through a newly created cache', () => {

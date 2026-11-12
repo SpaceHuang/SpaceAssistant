@@ -455,7 +455,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'grep-workdir-recursive-reusable',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'grep', actionClass: 'read', signals: ['path-target:workdir-normal', 'review-scope-candidate:eligible'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'grep', actionClass: 'read', signals: ['path-target:workdir-normal', 'read-target-scope:subtree'] },
     action: 'allow',
     reviewCacheSources: ['user'],
     reason: '普通工作目录内递归搜索可按用户批准范围复用'

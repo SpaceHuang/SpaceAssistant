@@ -106,57 +106,57 @@ function hasHiddenSegment(searchRel: string): boolean {
  * when searching from the approved parent. Without a full engine-equivalent proof,
  * the caller treats any applicable ignore configuration as unproven containment and requires a fresh approval.
  */
-function hasApplicableIgnoreConfiguration(root: string): boolean {
-  if (!fs.existsSync(root)) return false
-  const ignoreNames = new Set(['.gitignore', '.ignore', '.rgignore'])
+function hasApplicableIgnoreConfiguration(parentRoot: string, childRoot: string, includeIgnored: boolean): boolean {
+  const parentExists = fs.existsSync(parentRoot)
+  const childExists = fs.existsSync(childRoot)
+  if (!parentExists && !childExists) return false
+  if (!parentExists || !childExists) return true
+  const ignoreNames = new Set(includeIgnored ? ['.ignore', '.rgignore'] : ['.gitignore', '.ignore', '.rgignore'])
   const hasActiveLines = (file: string): boolean => {
     try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).some((line) => line.trim() && !line.trimStart().startsWith('#')) }
     catch (error) { return (error as NodeJS.ErrnoException).code !== 'ENOENT' }
   }
-  for (let current = root;; current = path.dirname(current)) {
-    for (const name of ignoreNames) if (fs.existsSync(path.join(current, name))) return true
-    const gitMarker = path.join(current, '.git')
-    try {
-      const marker = fs.lstatSync(gitMarker)
-      if (marker.isSymbolicLink()) return true
-      let gitDir: string | undefined
-      if (marker.isDirectory()) gitDir = gitMarker
-      if (marker.isFile()) {
-        const pointer = /^gitdir:\s*(.+)$/i.exec(fs.readFileSync(gitMarker, 'utf8').trim())
-        if (!pointer) return true
-        gitDir = path.resolve(current, pointer[1]!)
-      }
-      if (gitDir && (hasActiveLines(path.join(gitDir, 'info', 'exclude')) ||
-        hasActiveLines(path.join(gitDir, 'config')) && /\bexcludesfile\s*=/i.test(fs.readFileSync(path.join(gitDir, 'config'), 'utf8')))) return true
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true
-    }
+  const directories = new Set<string>()
+  for (let current = childRoot; current !== parentRoot; current = path.dirname(current)) directories.add(current)
+  for (let current = parentRoot;; current = path.dirname(current)) {
+    directories.add(current)
     const parent = path.dirname(current)
     if (parent === current) break
   }
+  for (const current of directories) {
+    for (const name of ignoreNames) if (fs.existsSync(path.join(current, name))) return true
+    if (!includeIgnored) {
+      const gitMarker = path.join(current, '.git')
+      try {
+        const marker = fs.lstatSync(gitMarker)
+        if (marker.isSymbolicLink()) return true
+        let gitDir: string | undefined
+        if (marker.isDirectory()) gitDir = gitMarker
+        if (marker.isFile()) {
+          const pointer = /^gitdir:\s*(.+)$/i.exec(fs.readFileSync(gitMarker, 'utf8').trim())
+          if (!pointer) return true
+          gitDir = path.resolve(current, pointer[1]!)
+        }
+        if (gitDir && (hasActiveLines(path.join(gitDir, 'info', 'exclude')) ||
+          hasActiveLines(path.join(gitDir, 'config')) && /\bexcludesfile\s*=/i.test(fs.readFileSync(path.join(gitDir, 'config'), 'utf8')))) return true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true
+      }
+    }
+  }
   const home = process.env.HOME ?? process.env.USERPROFILE
   const xdg = process.env.XDG_CONFIG_HOME ?? (home ? path.join(home, '.config') : undefined)
-  if (Object.keys(process.env).some((key) => key === 'GIT_CONFIG_COUNT' || key === 'GIT_CONFIG_PARAMETERS' ||
-    /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key))) return true
-  const gitConfigs = [process.env.GIT_CONFIG_GLOBAL, process.env.GIT_CONFIG_SYSTEM, '/etc/gitconfig',
-    home ? path.join(home, '.gitconfig') : undefined, xdg ? path.join(xdg, 'git', 'config') : undefined]
-  if (gitConfigs.some((file) => file && fs.existsSync(file) && /\bexcludesfile\s*=/i.test(fs.readFileSync(file, 'utf8')))) return true
-  if ([process.env.RIPGREP_CONFIG_PATH, xdg ? path.join(xdg, 'git', 'ignore') : undefined]
-    .some((file) => file && hasActiveLines(file))) return true
-
-  let visited = 0
-  const walk = (directory: string): boolean => {
-    let entries: fs.Dirent[]
-    try { entries = fs.readdirSync(directory, { withFileTypes: true }) } catch { return true }
-    for (const entry of entries) {
-      if (++visited > 100_000 || entry.isSymbolicLink()) return true
-      const fullPath = path.join(directory, entry.name)
-      if (ignoreNames.has(entry.name) && hasActiveLines(fullPath)) return true
-      if (entry.isDirectory() && entry.name !== '.git' && walk(fullPath)) return true
-    }
-    return false
+  if (process.env.RIPGREP_CONFIG_PATH && hasActiveLines(process.env.RIPGREP_CONFIG_PATH)) return true
+  if (!includeIgnored) {
+    if (Object.keys(process.env).some((key) => key === 'GIT_CONFIG_COUNT' || key === 'GIT_CONFIG_PARAMETERS' ||
+      /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key))) return true
+    const gitConfigs = [process.env.GIT_CONFIG_GLOBAL, process.env.GIT_CONFIG_SYSTEM, '/etc/gitconfig',
+      home ? path.join(home, '.gitconfig') : undefined, xdg ? path.join(xdg, 'git', 'config') : undefined]
+    if (gitConfigs.some((file) => file && fs.existsSync(file) && /\bexcludesfile\s*=/i.test(fs.readFileSync(file, 'utf8')))) return true
+    if (xdg && hasActiveLines(path.join(xdg, 'git', 'ignore'))) return true
   }
-  return walk(root)
+
+  return false
 }
 
 /** Same-root grants are exact; child inheritance rejects root-relative filter changes and default exclusions. */
@@ -167,7 +167,7 @@ export function isGrepSubtreeSemanticallyContained(parentRoot: string, childRoot
   const relative = path.relative(parentRoot, childRoot)
   if (relative === '') return true
   if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) return false
-  if (!options.includeIgnored && hasApplicableIgnoreConfiguration(parentRoot)) return false
+  if (hasApplicableIgnoreConfiguration(parentRoot, childRoot, options.includeIgnored)) return false
   if (!options.includeIgnored) {
     const segments = toPosix(relative).split('/')
     if (segments.some((segment) => segment.startsWith('.') || GREP_DEFAULT_IGNORES.some((ignored) => ignored.toLowerCase() === segment.toLowerCase()))) return false
