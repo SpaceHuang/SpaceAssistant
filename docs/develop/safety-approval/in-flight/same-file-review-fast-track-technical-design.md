@@ -628,4 +628,12 @@ R-1 至 R-3 已获复审关闭。R-4 修订将三个 IPC 提交边界的改动�
 | 微信 | 候选配置显示 SDK 已就绪但未绑定。用户明确选择“不绑定，WeChat 保持待验”，因此不进行账号绑定，微信真实入口待验。 |
 | 全量测试 | 首轮 `npm test` 发现两条“新建目标在审批期间出现”的已有断言仍期望旧 fallback 规则 ID；安全行为仍将目标变化升级为真人确认。已同步更新断言，两个关联用例通过。桌面默认策略快照落地后，又更新启动 revision/epoch 和审计条数的既有预期。一次全量复跑仅因 `editDiagnosis` 性能比例测得 15.60、略超 15 的门槛失败；该用例独立运行通过，随后最终 `npm test` 退出码 0：1290 个测试文件通过、1 个跳过；12722 项通过、140 项跳过（总计 12862 项）。 |
 
+### 2026-11-12 代码评审 P1 修复【机｜人工可跳过】
+
+| 评审反例 | 修复与证据 |
+| --- | --- |
+| 限时批准到期后，缓存仍命中；重启恢复和内存父目录继承也可能绕过到期检查。 | 内存缓存仅作索引；精确命中与父目录继承前均重新向授权存储核验，失效时逐出缓存。24 小时边界前命中、到期时失效；7 天记录到期后重启不恢复；已缓存父授权到期后不能覆盖子搜索。 |
+| 父搜索忽略规则跳过的目录，作为显式子目录根搜索时可能扩大实际读取文件集。 | 默认忽略规则启用时，只要父范围的祖先、本地、仓库或全局 ignore 配置存在，或 ignore 配置扫描不完整，就拒绝子目录继承并重新审批；精确根匹配不变，明确包含忽略项的查询继续按原范围判断。测试使用 `.gitignore` 中的 `private/` 反例。 |
+| 修复验证 | 反例先红后绿。定向：`npm exec vitest run electron/confirmation/reviewScopeGrantStore.test.ts electron/confirmation/reviewScopeCache.test.ts electron/tools/grepScope.test.ts electron/tools/grepScopeExecutor.test.ts electron/tools/grepFallback.test.ts electron/confirmation/readPermitExecutor.test.ts electron/confirmation/toolCallGate.test.ts`（7 文件、344 项通过）。全量首轮发现两条原子目录继承测试未隔离本机全局 Git ignore 配置；已隔离测试环境并重跑。最终 `npm test` 通过：1290 个测试文件通过、1 个跳过；12726 项通过、140 项跳过。`npm run build:electron:incremental`、`npm run typecheck:shared`、`npm run check:system-invariant-registry` 通过。 |
+
 复核真实入口日志可在隔离夹具工作目录的 `.agent/logs/SecurityAudit-20261111.log`、`.agent/logs/SecurityAudit-20261112.log` 与 `.agent/logs/FeishuCli-20261111.log` 完成；测试文件内容只作隔离夹具证据。不要将消息正文或真实用户文件路径写入安全审计日志。
