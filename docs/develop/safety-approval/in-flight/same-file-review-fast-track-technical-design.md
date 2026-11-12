@@ -633,7 +633,7 @@ R-1 至 R-3 已获复审关闭。R-4 修订将三个 IPC 提交边界的改动�
 | 评审反例 | 修复与证据 |
 | --- | --- |
 | 限时批准到期后，缓存仍命中；重启恢复和内存父目录继承也可能绕过到期检查。 | 内存缓存仅作索引；精确命中与父目录继承前均重新向授权存储核验，失效时逐出缓存。24 小时边界前命中、到期时失效；7 天记录到期后重启不恢复；已缓存父授权到期后不能覆盖子搜索。 |
-| 父搜索忽略规则跳过的目录，作为显式子目录根搜索时可能扩大实际读取文件集。 | 子根相对父根的路径祖先及其上级若含有会排除目标的 VCS 或 ripgrep 忽略配置，就拒绝继承；`include_ignored=true` 仍检查 `.ignore` / `.rgignore` 与 ripgrep 配置。实际规则验证沿相关路径祖先进行，不递归遍历无关子树。测试用 `.gitignore`、`.ignore`、`.rgignore` 夹具覆盖。 |
+| 父搜索忽略规则跳过的目录，作为显式子目录根搜索时可能扩大实际读取文件集。 | 子根相对父根的路径祖先及其上级若存在适用的 VCS 或 ripgrep 忽略配置，就保守拒绝继承，不解析规则是否恰好命中该子根；`include_ignored=true` 仍检查 `.ignore` / `.rgignore` 与 ripgrep 配置。检查沿相关路径祖先进行，不递归遍历无关子树。测试用 `.gitignore`、`.ignore`、`.rgignore` 夹具覆盖。 |
 | 修复验证 | 反例先红后绿。定向：`npm exec vitest run electron/confirmation/reviewScopeGrantStore.test.ts electron/confirmation/reviewScopeCache.test.ts electron/tools/grepScope.test.ts electron/tools/grepScopeExecutor.test.ts electron/tools/grepFallback.test.ts electron/confirmation/readPermitExecutor.test.ts electron/confirmation/toolCallGate.test.ts`（7 文件、344 项通过）。全量首轮发现两条原子目录继承测试未隔离本机全局 Git ignore 配置；已隔离测试环境并重跑。最终 `npm test` 通过：1290 个测试文件通过、1 个跳过；12726 项通过、140 项跳过。`npm run build:electron:incremental`、`npm run typecheck:shared`、`npm run check:system-invariant-registry` 通过。 |
 
 ### 2026-11-12 系统复审 R-01～R-07 修复【机｜人工可跳过】
