@@ -1726,7 +1726,10 @@ describe('evaluateToolCallGate', () => {
     ['for transitive loop-carried read', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2, 3]:\n    f"{x}"\n    x = y\n    y = obj', 'partial'],
     ['for transitive loop exit value', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2]:\n    x = y\n    y = obj\nf"{x}"', 'partial'],
     ['for else overwrites body primitive', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = 1\nelse:\n    x = obj\nf"{x}"', 'partial'],
-    ['while transitive loop-carried read', 'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj', 'partial']
+    ['while transitive loop-carried read', 'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj', 'partial'],
+    ['while import rebinding after numeric update', 'i = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    from external_module import x\n    i += 1', 'partial'],
+    ['while aliased import rebinding after numeric update', 'from external_module import obj\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x = x + 1\n    from external_module import obj as x\n    i += 1', 'partial'],
+    ['while with-as rebinding after numeric update', 'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1', 'partial']
   ] as const)('真实 Gate 阻止 %s 获得 clean allow 或记忆档位', async (_name, code, expectedFact) => {
     for (const lane of ['desktop', 'feishu'] as const) {
       const lookup = vi.fn(() => null)
@@ -2291,6 +2294,38 @@ describe('evaluateToolCallGate', () => {
         const second = await evaluateToolCallGate(args)
         expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
         expect(lookup).not.toHaveBeenCalled()
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('循环数值更新后的导入与 with-as 重绑定不提供缓存资格', async () => {
+    await scriptParserService.ensureInitialized()
+    const db = openDb()
+    const root = await fs.realpath(await makeTempDir('script-loop-rebind-no-memory-'))
+    try {
+      const cases = [
+        'i = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    from external_module import x\n    i += 1',
+        'from external_module import obj\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x = x + 1\n    from external_module import obj as x\n    i += 1',
+        'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1'
+      ]
+      for (const [index, code] of cases.entries()) {
+        const sessionId = `loop-rebind-no-memory-${index}`
+        const cache = new SqliteDecisionCache(getDbConnection(db))
+        const args = base({ appDb: db, lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }),
+          imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } },
+          workDir: root, userDataDir: path.join(root, '.userdata'), sessionId, lanePackage: 'standard', toolName: 'run_script', toolInput: { code }, decisionCache: cache })
+        const first = await evaluateToolCallGate(args)
+        expect(first.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial',
+          uncertainties: expect.arrayContaining([expect.objectContaining({ kind: 'implicit-call-unresolved' })]) }))
+        expect(first.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+        const lookup = vi.spyOn(cache, 'lookup')
+        const record = vi.spyOn(cache, 'record')
+        const second = await evaluateToolCallGate(args)
+        expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+        expect(lookup).not.toHaveBeenCalled()
+        expect(record).not.toHaveBeenCalled()
       }
     } finally {
       await fs.rm(root, { recursive: true, force: true })

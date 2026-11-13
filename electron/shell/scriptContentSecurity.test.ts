@@ -337,6 +337,9 @@ describe('script uncertainty facts', () => {
     ['reverse assignment order still invalidates dependency', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2]:\n    y = obj\n    x = y\nf"{x}"'],
     ['three-link dependency closure', 'from external_module import obj\nx = 1\ny = 1\nz = 1\nfor _ in [1, 2, 3]:\n    x = y\n    y = z\n    z = obj\nf"{x}"'],
     ['primitive increment loop remains fully modeled', 'total = 0\nfor item in [1, 2, 3]:\n    total += item\nf"{total}"'],
+    ['import rebinding invalidates numeric self update', 'i = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    from external_module import x\n    i += 1'],
+    ['aliased import rebinding invalidates numeric self update', 'from external_module import obj\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x = x + 1\n    from external_module import obj as x\n    i += 1'],
+    ['with target rebinding invalidates numeric self update', 'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1'],
     ['for else overwrite at exit', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = 1\nelse:\n    x = obj\nf"{x}"'],
     ['loop-carried dependency at while body read', 'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj']
   ])('fails closed for transitive loop invalidation: %s', (_label, code) => {

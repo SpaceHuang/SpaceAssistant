@@ -822,6 +822,8 @@ class Analyzer {
         const stableLoopWrites = new Set<string>()
         const assignments = new Map<string, IrExpr[]>()
         const primitiveSelfUpdates = new Set<string>()
+        const unknownRebindings = new Set<string>()
+        const deletedBindings = new Set<string>()
         const collectAssignments = (items: IrStmt[]) => { for (const item of items) {
           if (item.kind === 'assign') for (const target of item.targets) for (const name of bindingNames(target)) {
             assignments.set(name, [...assignments.get(name) ?? [], item.value])
@@ -835,11 +837,11 @@ class Analyzer {
           }
           else if (item.kind === 'if' || item.kind === 'while' || item.kind === 'for') collectAssignments([...item.body, ...item.orelse])
           else if (item.kind === 'try') collectAssignments([...item.body, ...item.handlers.flatMap((handler) => handler.body), ...item.orelse, ...item.finalbody])
-          else if (item.kind === 'with') collectAssignments(item.body)
-          else if (item.kind === 'function_def' || item.kind === 'class_def') assignments.set(item.name, [...assignments.get(item.name) ?? [], { kind: 'name', id: item.name }])
-          else if (item.kind === 'import') for (const imported of item.names) { const name = imported.alias ?? imported.module.split('.')[0]!; assignments.set(name, [...assignments.get(name) ?? [], { kind: 'name', id: name }]) }
-          else if (item.kind === 'from_import') { for (const imported of item.names) if (imported.name !== '*') { const name = imported.alias ?? imported.name; assignments.set(name, [...assignments.get(name) ?? [], { kind: 'name', id: name }]) } }
-          else if (item.kind === 'delete') for (const target of item.targets) if (target.kind === 'name') assignments.set(target.id, [...assignments.get(target.id) ?? [], { kind: 'name', id: target.id }])
+          else if (item.kind === 'with') { item.items.flatMap((context) => context.optionalVars).forEach((name) => unknownRebindings.add(name)); collectAssignments(item.body) }
+          else if (item.kind === 'function_def' || item.kind === 'class_def') unknownRebindings.add(item.name)
+          else if (item.kind === 'import') for (const imported of item.names) unknownRebindings.add(imported.alias ?? imported.module.split('.')[0]!)
+          else if (item.kind === 'from_import') { for (const imported of item.names) if (imported.name !== '*') unknownRebindings.add(imported.alias ?? imported.name) }
+          else if (item.kind === 'delete') for (const target of item.targets) if (target.kind === 'name') deletedBindings.add(target.id)
         } }
         collectAssignments(stmt.body)
         collectAssignments(stmt.orelse)
@@ -879,7 +881,9 @@ class Analyzer {
         }
         const mayRemainPrimitive = (name: string): boolean => {
           const values = assignments.get(name) ?? []
-          return values.length > 0 && values.every((value) => isKnownPrimitiveExpr(value, scope) && !dependsOnLoopWrite(value, name))
+          if (unknownRebindings.has(name) || deletedBindings.has(name)) return false
+          return values.length > 0 && values.every((value) => isKnownPrimitiveExpr(value, scope) &&
+            (!dependsOnLoopWrite(value, name) || (primitiveSelfUpdates.has(name) && [...readNamesIn(value)].every((read) => read === name))))
         }
         for (const name of loopWrites) {
           if (scope.knownPrimitiveRoots.has(name) && (!bodyWrites.has(name) || mayRemainPrimitive(name)) && (!elseWrites.has(name) || mayRemainPrimitive(name))) stableLoopWrites.add(name)
