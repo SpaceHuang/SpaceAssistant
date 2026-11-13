@@ -354,6 +354,34 @@ describe('script uncertainty facts', () => {
   })
 
   it.each([
+    ['unknown range binding does not prove primitive iteration', 'from external_module import range\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
+    ['assigned range binding does not prove primitive iteration', 'from external_module import factory\nrange = factory\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
+    ['defined range binding does not prove primitive iteration', 'def range(n):\n    return [object()]\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
+    ['parameter range binding does not prove primitive iteration', 'def run(range):\n    x = 1\n    for x in range(1):\n        pass\n    f"{x}"'],
+    ['loop target range binding does not prove later iteration', 'for range in [None]:\n    pass\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
+    ['unknown open binding does not prove file context', 'from external_module import open\nwith open("x") as x:\n    f"{x}"'],
+    ['assigned open binding does not prove file context', 'from external_module import factory\nopen = factory\nwith open("x") as x:\n    f"{x}"'],
+    ['defined open binding does not prove file context', 'def open(path):\n    return []\nwith open("x") as x:\n    f"{x}"'],
+    ['parameter open binding does not prove file context', 'def run(open):\n    with open("x") as x:\n        f"{x}"'],
+    ['open callback forms execution uncertainty', 'from external_module import opener\nwith open("x", opener=opener) as f:\n    pass'],
+    ['local opener callback forms execution uncertainty', 'def opener(path, flags):\n    return 1\nwith open("x", opener=opener) as f:\n    pass'],
+    ['positional opener callback forms execution uncertainty', 'from external_module import opener\nwith open("x", "r", -1, None, None, None, True, opener) as f:\n    pass'],
+    ['open callback through keyword expansion forms uncertainty', 'options = {}\nwith open("x", **options) as f:\n    pass']
+  ])('rejects builtin proof without identity: %s', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).not.toBe('complete')
+    expect(result.findings.length + result.uncertainties.length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    'with open("x") as f:\n    pass',
+    'with open("x", opener=None) as f:\n    pass',
+    'for x in range(1):\n    pass'
+  ])('retains builtin control behavior: %s', (code) => {
+    expect(analyzeScriptContent(code)).toMatchObject({ coverage: 'complete', findings: [], uncertainties: [] })
+  })
+
+  it.each([
     ['assert message', 'assert False, __import__("os").system("id")'],
     ['raise cause', 'raise ValueError() from __import__("os").system("id")'],
     ['parameter annotation', 'def f(x: __import__("os").system("id")): pass'],

@@ -1652,6 +1652,14 @@ describe('evaluateToolCallGate', () => {
     expect(gate.facts.extractorVersion).toEqual(expect.any(String))
   })
 
+  it('内置 open 的默认 opener 与 opener=None 保持完整放行', async () => {
+    for (const code of ['with open("x") as f:\n    pass', 'with open("x", opener=None) as f:\n    pass']) {
+      const result = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code } }))
+      expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'complete' }))
+      expect(result.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
+    }
+  })
+
   it('remote uncertainty requires user confirmation while complete clean analysis can auto-allow', async () => {
     const imPolicySnapshot = {
       domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 1,
@@ -1732,7 +1740,12 @@ describe('evaluateToolCallGate', () => {
     ['while with-as rebinding after numeric update', 'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1', 'partial'],
     ['while walrus rebinding after numeric update', 'from external_module import obj\nx = 1\ni = 0\nwhile i < 2:\n    f"{x}"\n    x += 1\n    (x := obj)\n    i += 1', 'partial'],
     ['except alias shadows outer primitive', 'from external_module import Error\nx = 1\ntry:\n    raise Error()\nexcept Error as x:\n    f"{x}"', 'partial'],
-    ['except alias invalidates after handler', 'x = 1\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    pass\nf"{x}"', 'partial']
+    ['except alias invalidates after handler', 'x = 1\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    pass\nf"{x}"', 'partial'],
+    ['unknown range binding loses primitive iterable proof', 'from external_module import range\nx = 1\nfor x in range(1):\n    pass\nf"{x}"', 'partial'],
+    ['unknown open binding loses file context proof', 'from external_module import open\nwith open("x") as x:\n    f"{x}"', 'partial'],
+    ['open opener callback requires confirmation', 'from external_module import opener\nwith open("x", opener=opener) as f:\n    pass', 'partial'],
+    ['open lambda callback requires confirmation', 'with open("x", opener=lambda path, flags: 1) as f:\n    pass', 'partial'],
+    ['open keyword expansion requires confirmation', 'options = {}\nwith open("x", **options) as f:\n    pass', 'partial']
   ] as const)('真实 Gate 阻止 %s 获得 clean allow 或记忆档位', async (_name, code, expectedFact) => {
     for (const lane of ['desktop', 'feishu'] as const) {
       const lookup = vi.fn(() => null)
@@ -2314,7 +2327,12 @@ describe('evaluateToolCallGate', () => {
         'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1',
         'from external_module import obj\nx = 1\ni = 0\nwhile i < 2:\n    f"{x}"\n    x += 1\n    (x := obj)\n    i += 1',
         'from external_module import Error\nx = 1\ntry:\n    raise Error()\nexcept Error as x:\n    f"{x}"',
-        'x = 1\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    pass\nf"{x}"'
+        'x = 1\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    pass\nf"{x}"',
+        'from external_module import range\nx = 1\nfor x in range(1):\n    pass\nf"{x}"',
+        'from external_module import open\nwith open("x") as x:\n    f"{x}"',
+        'from external_module import opener\nwith open("x", opener=opener) as f:\n    pass',
+        'with open("x", opener=lambda path, flags: 1) as f:\n    pass',
+        'options = {}\nwith open("x", **options) as f:\n    pass'
       ]
       for (const [index, code] of cases.entries()) {
         const sessionId = `loop-rebind-no-memory-${index}`

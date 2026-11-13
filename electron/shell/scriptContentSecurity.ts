@@ -185,6 +185,12 @@ interface Scope {
   classBody: boolean
 }
 
+const TRACKED_BUILTIN_IDENTITIES = new Set(['open', 'print', 'range'])
+
+function markShadowedBuiltin(name: string, scope: Scope): void {
+  if (TRACKED_BUILTIN_IDENTITIES.has(name)) scope.shadowedBuiltinRoots.add(name)
+}
+
 function createScope(parent?: Scope): Scope {
   return {
     modules: new Map(parent?.modules),
@@ -228,8 +234,23 @@ function isKnownPrimitiveExpr(expr: IrExpr, scope: Scope): boolean {
 
 function isKnownPrimitiveIterable(expr: IrExpr, scope: Scope): boolean {
   if (isKnownPrimitiveExpr(expr, scope)) return true
-  if (expr.kind !== 'call' || expr.callee.kind !== 'name' || expr.callee.id !== 'range') return false
+  if (expr.kind !== 'call' || expr.callee.kind !== 'name' || expr.callee.id !== 'range' || !isKnownBuiltinName('range', scope)) return false
   return expr.args.every((arg) => isKnownPrimitiveExpr(arg, scope)) && expr.kwargs.every((arg) => isKnownPrimitiveExpr(arg.value, scope))
+}
+
+/** facts: a builtin spelling proves behavior only when its binding still resolves to that builtin. */
+function isKnownBuiltinName(name: string, scope: Scope): boolean {
+  const attribute = scope.attrs.get(name)
+  if (attribute) return attribute.module === 'builtins' && attribute.attr === name
+  return !scope.shadowedBuiltinRoots.has(name) && !scope.unknownRoots.has(name) && !scope.modules.has(name) &&
+    !scope.knownPrimitiveRoots.has(name) && !scope.mutableObjectIds.has(name) && !scope.knownClassRoots.has(name)
+}
+
+function hasUnknownOpenCallback(call: IrExpr & { kind: 'call' }): boolean {
+  if (call.args.some((arg) => arg.kind === 'starred')) return true
+  if (call.kwargs.some((kwarg) => kwarg.name === '')) return true
+  const callback = call.kwargs.find((kwarg) => kwarg.name === 'opener')?.value ?? call.args[7]
+  return callback !== undefined && callback.kind !== 'none'
 }
 
 function hasKnownAttributeOrigin(expr: IrExpr, scope: Scope): boolean {
@@ -292,7 +313,7 @@ function setPrimitiveBinding(target: string, value: IrExpr, scope: Scope): void 
 function invalidateBinding(name: string, scope: Scope): void {
   const key = name.trim()
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return
-  if (key === 'print') scope.shadowedBuiltinRoots.add(key)
+  markShadowedBuiltin(key, scope)
   scope.modules.delete(key)
   scope.attrs.delete(key)
   scope.knownPrimitiveRoots.delete(key)
@@ -464,7 +485,7 @@ function applyImportStmt(stmt: Extract<IrStmt, { kind: 'import' }>, scope: Scope
   for (const { module, alias } of stmt.names) {
     const root = module.split('.')[0]!
     const bound = alias ?? root
-    if (bound === 'print') scope.shadowedBuiltinRoots.add(bound)
+    markShadowedBuiltin(bound, scope)
     scope.unknownRoots.delete(bound)
     scope.knownPrimitiveRoots.delete(bound)
     scope.mutableObjectIds.delete(bound)
@@ -482,7 +503,7 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
       continue
     }
     const bound = alias ?? name
-    if (bound === 'print') scope.shadowedBuiltinRoots.add(bound)
+    markShadowedBuiltin(bound, scope)
     scope.unknownRoots.delete(bound)
     scope.knownPrimitiveRoots.delete(bound)
     scope.mutableObjectIds.delete(bound)
@@ -502,7 +523,7 @@ function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, sco
  */
 function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): void {
   // facts: name spelling alone cannot prove a trusted builtin after any local rebinding.
-  if (target === 'print') scope.shadowedBuiltinRoots.add(target)
+  markShadowedBuiltin(target, scope)
   const sourceModuleBinding = value.kind === 'name' ? scope.modules.get(value.id) : undefined
   const sourceAttrBinding = value.kind === 'name' ? scope.attrs.get(value.id) : undefined
   const sourceAttrChain = value.kind === 'attr' ? resolveExprChain(value, scope) : undefined
@@ -775,6 +796,7 @@ class Analyzer {
         }
         const child = createScope(scope)
         for (const target of bindingNames(stmt.target)) {
+          markShadowedBuiltin(target, child)
           child.modules.delete(target)
           child.attrs.delete(target)
           child.mutableObjectIds.delete(target)
@@ -791,8 +813,8 @@ class Analyzer {
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
         // P0-3 评审修复：for...else 的 else 体在循环正常结束时真实执行——必须分析
         this.walkStmts(stmt.orelse, child, stmtIndex, decodeBindings)
-        if (stmt.targetUnpacks && !isKnownPrimitiveIterable(stmt.iter, scope) && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
         invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope)
+        for (const target of bindingNames(stmt.target)) invalidateBinding(target, scope)
         continue
       }
 
@@ -947,12 +969,13 @@ class Analyzer {
       if (stmt.kind === 'with') {
         const child = createScope(scope)
         for (const item of stmt.items) {
-          const knownOpen = item.contextExpr.kind === 'call' && item.contextExpr.callee.kind === 'name' && item.contextExpr.callee.id === 'open'
+          const knownOpen = item.contextExpr.kind === 'call' && item.contextExpr.callee.kind === 'name' && item.contextExpr.callee.id === 'open' && isKnownBuiltinName('open', scope)
           if (!knownOpen && !isKnownPrimitiveExpr(item.contextExpr, scope) && item.contextExpr.range) {
             this.uncertainties.push({ kind: 'implicit-call-unresolved', range: item.contextExpr.range, sourceStatus: 'unknown', dynamicAccess: true })
           }
           this.analyzeExpr(item.contextExpr, scope, decodeBindings, stmtIndex)
           for (const target of item.optionalVars) {
+            markShadowedBuiltin(target, child)
             if (knownOpen) {
               child.unknownRoots.delete(target)
               child.knownPrimitiveRoots.add(target)
@@ -964,6 +987,7 @@ class Analyzer {
         }
         this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
         invalidateBranchWrites(stmt.body, scope)
+        for (const target of stmt.items.flatMap((item) => item.optionalVars)) invalidateBinding(target, scope)
         continue
       }
       if (stmt.kind === 'try') {
@@ -982,16 +1006,17 @@ class Analyzer {
         continue
       }
       if (stmt.kind === 'function_def') {
-        if (stmt.name === 'print') scope.shadowedBuiltinRoots.add(stmt.name)
         if (stmt.decorators.length > 0 && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
         for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
         // P0-1 评审修复：默认参数值在 def 定义时真实执行——必须分析
         for (const dv of stmt.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
         for (const annotation of stmt.annotations ?? []) this.analyzeExpr(annotation, scope, decodeBindings, stmtIndex)
+        invalidateBinding(stmt.name, scope)
+        scope.unknownRoots.delete(stmt.name)
         // 函数体在定义作用域内静态可见：递归捕获（禁止 def 内危险调用逃逸）
         const child = createScope(scope)
         for (const param of stmt.params) {
-          if (param === 'print') child.shadowedBuiltinRoots.add(param)
+          markShadowedBuiltin(param, child)
           child.modules.delete(param)
           child.attrs.delete(param)
           child.knownPrimitiveRoots.delete(param)
@@ -1004,13 +1029,13 @@ class Analyzer {
         continue
       }
       if (stmt.kind === 'class_def') {
-        if (stmt.name === 'print') scope.shadowedBuiltinRoots.add(stmt.name)
         if ((stmt.decorators.length > 0 || stmt.bases.length > 0) && stmt.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: stmt.range, sourceStatus: 'unknown', dynamicAccess: true })
         for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
         // P0-1 评审修复：基类/关键字参数表达式在 class 创建时真实执行——必须分析
         for (const b of stmt.bases) this.analyzeExpr(b, scope, decodeBindings, stmtIndex)
+        invalidateBinding(stmt.name, scope)
         scope.knownClassRoots.add(stmt.name)
-        if (stmt.name === 'print') scope.shadowedBuiltinRoots.add(stmt.name)
+        scope.unknownRoots.delete(stmt.name)
         const child = createScope(scope)
         child.classBody = true
         this.walkStmts(stmt.body, child, stmtIndex)
@@ -1346,7 +1371,12 @@ class Analyzer {
 
     // open()
     if (callee.kind === 'name' && callee.id === 'open') {
-      this.checkOpenCall(call)
+      if (isKnownBuiltinName('open', scope)) {
+        this.checkOpenCall(call)
+        if (hasUnknownOpenCallback(call) && call.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: call.range, sourceStatus: 'unknown', dynamicAccess: true })
+      } else if (call.range) {
+        this.uncertainties.push({ kind: 'implicit-call-unresolved', range: call.range, sourceStatus: 'unknown', dynamicAccess: true })
+      }
       return
     }
 
@@ -1769,21 +1799,40 @@ class ScriptUncertaintyCollector {
         }
         case 'for': {
           this.walkExpr(stmt.iter, scope)
-          if (stmt.targetUnpacks && !isKnownPrimitiveIterable(stmt.iter, scope) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
+          if (!isKnownPrimitiveIterable(stmt.iter, scope) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           const child = createScope(scope)
           child.modules.delete(stmt.target)
           child.attrs.delete(stmt.target)
+          markShadowedBuiltin(stmt.target, child)
+          child.knownPrimitiveRoots.delete(stmt.target)
           child.unknownRoots.add(stmt.target)
           this.walkStmts(stmt.body, child)
           // P0-3 评审修复：漏遍历 else 体会丢失未建模/危险行为事实（remote fail-open）。
           this.walkStmts(stmt.orelse, child)
           invalidateBranchWrites([...stmt.body, ...stmt.orelse], scope)
+          invalidateBinding(stmt.target, scope)
           break
         }
         case 'with': {
-          for (const item of stmt.items) this.walkExpr(item.contextExpr, scope)
-          this.walkStmts(stmt.body, createScope(scope))
+          const child = createScope(scope)
+          for (const item of stmt.items) {
+            const knownOpen = item.contextExpr.kind === 'call' && item.contextExpr.callee.kind === 'name' && item.contextExpr.callee.id === 'open' && isKnownBuiltinName('open', scope)
+            if (!knownOpen && !isKnownPrimitiveExpr(item.contextExpr, scope) && item.contextExpr.range) this.fail('implicit-call-unresolved', item.contextExpr.range)
+            this.walkExpr(item.contextExpr, scope)
+            for (const target of item.optionalVars) {
+              markShadowedBuiltin(target, child)
+              if (knownOpen) {
+                child.unknownRoots.delete(target)
+                child.knownPrimitiveRoots.add(target)
+              } else {
+                child.knownPrimitiveRoots.delete(target)
+                child.unknownRoots.add(target)
+              }
+            }
+          }
+          this.walkStmts(stmt.body, child)
           invalidateBranchWrites(stmt.body, scope)
+          for (const target of stmt.items.flatMap((item) => item.optionalVars)) invalidateBinding(target, scope)
           break
         }
         case 'try': {
@@ -1802,19 +1851,22 @@ class ScriptUncertaintyCollector {
           break
         }
         case 'function_def': {
-          if (stmt.name === 'print') scope.shadowedBuiltinRoots.add(stmt.name)
           if (stmt.decorators.length > 0 && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           for (const decorator of stmt.decorators) this.walkExpr(decorator, scope)
           for (const value of stmt.defaults) this.walkExpr(value, scope)
           for (const annotation of stmt.annotations ?? []) this.walkExpr(annotation, scope)
+          invalidateBinding(stmt.name, scope)
+          scope.unknownRoots.delete(stmt.name)
           this.walkStmts(stmt.body, createScope(scope))
           break
         }
         case 'class_def': {
-          if (stmt.name === 'print') scope.shadowedBuiltinRoots.add(stmt.name)
           if ((stmt.decorators.length > 0 || stmt.bases.length > 0) && stmt.range) this.fail('implicit-call-unresolved', stmt.range)
           for (const decorator of stmt.decorators) this.walkExpr(decorator, scope)
           for (const base of stmt.bases) this.walkExpr(base, scope)
+          invalidateBinding(stmt.name, scope)
+          scope.knownClassRoots.add(stmt.name)
+          scope.unknownRoots.delete(stmt.name)
           this.walkStmts(stmt.body, createScope(scope))
           break
         }
@@ -1965,6 +2017,10 @@ class ScriptUncertaintyCollector {
     const chain = resolveExprChain(callee, scope)
     const lastAttr = chain.attrs[chain.attrs.length - 1] ?? null
     const directName = callee.kind === 'name' ? callee.id : null
+
+    if (directName === 'open') {
+      if (!isKnownBuiltinName('open', scope) || hasUnknownOpenCallback(call)) this.fail('implicit-call-unresolved', call.range)
+    }
 
     // getattr/hasattr/setattr/delattr/vars/globals/locals/eval/exec/compile/__import__ —
     // always forced ask on remote, regardless of whether args fold to literals.
