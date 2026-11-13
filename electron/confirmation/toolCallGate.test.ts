@@ -1729,7 +1729,10 @@ describe('evaluateToolCallGate', () => {
     ['while transitive loop-carried read', 'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj', 'partial'],
     ['while import rebinding after numeric update', 'i = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    from external_module import x\n    i += 1', 'partial'],
     ['while aliased import rebinding after numeric update', 'from external_module import obj\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x = x + 1\n    from external_module import obj as x\n    i += 1', 'partial'],
-    ['while with-as rebinding after numeric update', 'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1', 'partial']
+    ['while with-as rebinding after numeric update', 'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1', 'partial'],
+    ['while walrus rebinding after numeric update', 'from external_module import obj\nx = 1\ni = 0\nwhile i < 2:\n    f"{x}"\n    x += 1\n    (x := obj)\n    i += 1', 'partial'],
+    ['except alias shadows outer primitive', 'from external_module import Error\nx = 1\ntry:\n    raise Error()\nexcept Error as x:\n    f"{x}"', 'partial'],
+    ['except alias invalidates after handler', 'x = 1\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    pass\nf"{x}"', 'partial']
   ] as const)('真实 Gate 阻止 %s 获得 clean allow 或记忆档位', async (_name, code, expectedFact) => {
     for (const lane of ['desktop', 'feishu'] as const) {
       const lookup = vi.fn(() => null)
@@ -2300,7 +2303,7 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('循环数值更新后的导入与 with-as 重绑定不提供缓存资格', async () => {
+  it('循环与异常处理中的重绑定不提供缓存资格', async () => {
     await scriptParserService.ensureInitialized()
     const db = openDb()
     const root = await fs.realpath(await makeTempDir('script-loop-rebind-no-memory-'))
@@ -2308,7 +2311,10 @@ describe('evaluateToolCallGate', () => {
       const cases = [
         'i = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    from external_module import x\n    i += 1',
         'from external_module import obj\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x = x + 1\n    from external_module import obj as x\n    i += 1',
-        'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1'
+        'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1',
+        'from external_module import obj\nx = 1\ni = 0\nwhile i < 2:\n    f"{x}"\n    x += 1\n    (x := obj)\n    i += 1',
+        'from external_module import Error\nx = 1\ntry:\n    raise Error()\nexcept Error as x:\n    f"{x}"',
+        'x = 1\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    pass\nf"{x}"'
       ]
       for (const [index, code] of cases.entries()) {
         const sessionId = `loop-rebind-no-memory-${index}`

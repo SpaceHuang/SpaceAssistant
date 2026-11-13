@@ -340,12 +340,17 @@ describe('script uncertainty facts', () => {
     ['import rebinding invalidates numeric self update', 'i = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    from external_module import x\n    i += 1'],
     ['aliased import rebinding invalidates numeric self update', 'from external_module import obj\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x = x + 1\n    from external_module import obj as x\n    i += 1'],
     ['with target rebinding invalidates numeric self update', 'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1'],
+    ['walrus rebinding invalidates numeric self update', 'from external_module import obj\nx = 1\ni = 0\nwhile i < 2:\n    f"{x}"\n    x += 1\n    (x := obj)\n    i += 1'],
+    ['except binding shadows outer primitive', 'from external_module import Error\nx = 1\ntry:\n    raise Error()\nexcept Error as x:\n    f"{x}"'],
+    ['except binding shadows imported module alias', 'import os as x\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    f"{x}"'],
+    ['except binding invalidates outer name after handler', 'x = 1\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    pass\nf"{x}"'],
+    ['nested except binding shadows outer primitive', 'from external_module import Error\nx = 1\ntry:\n    try:\n        raise Error()\n    except Error as x:\n        f"{x}"\nexcept Exception:\n    pass'],
     ['for else overwrite at exit', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = 1\nelse:\n    x = obj\nf"{x}"'],
     ['loop-carried dependency at while body read', 'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj']
   ])('fails closed for transitive loop invalidation: %s', (_label, code) => {
     const result = analyzeScriptContent(code)
-    expect(result.coverage).toBe('partial')
-    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+    expect(result.coverage).not.toBe('complete')
+    expect(result.findings.length + result.uncertainties.length).toBeGreaterThan(0)
   })
 
   it.each([

@@ -261,6 +261,7 @@ describe('pythonAdapter：穷尽性 + 白名单叶子性 + ③ 双护栏（机�
     expect(adapt('a = b, c = source').body[0]).toMatchObject({ kind: 'assign', unpacksValue: true })
     expect(adapt('x: int').body[0]).toMatchObject({ kind: 'annotation', targets: ['x'], annotation: { kind: 'name', id: 'int' } })
     expect(adapt('x += 1').body[0]).toMatchObject({ kind: 'aug_assign', targetExpr: { kind: 'name', id: 'x' }, op: '+=' })
+    expect(adapt('try:\n    pass\nexcept ValueError as error:\n    pass').body[0]).toMatchObject({ kind: 'try', handlers: [expect.objectContaining({ name: 'error' })] })
   })
 
   it('retains calls in f-string primary and nested format expressions as CST children', () => {

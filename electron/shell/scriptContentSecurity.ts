@@ -824,24 +824,56 @@ class Analyzer {
         const primitiveSelfUpdates = new Set<string>()
         const unknownRebindings = new Set<string>()
         const deletedBindings = new Set<string>()
+        const collectWalrusWrites = (expr: IrExpr): void => {
+          const writes = new Set<string>()
+          collectExprWrites(expr, writes)
+          writes.forEach((name) => unknownRebindings.add(name))
+        }
         const collectAssignments = (items: IrStmt[]) => { for (const item of items) {
-          if (item.kind === 'assign') for (const target of item.targets) for (const name of bindingNames(target)) {
-            assignments.set(name, [...assignments.get(name) ?? [], item.value])
-            if (item.targets.length === 1 && item.targets.every((value) => !value.includes(',')) && item.value.kind === 'binop' &&
-              ((item.value.left.kind === 'name' && item.value.left.id === name && isKnownPrimitiveExpr(item.value.right, scope)) ||
-               (item.value.right.kind === 'name' && item.value.right.id === name && isKnownPrimitiveExpr(item.value.left, scope)))) primitiveSelfUpdates.add(name)
+          if (item.kind === 'assign') {
+            for (const target of item.targets) for (const name of bindingNames(target)) {
+              assignments.set(name, [...assignments.get(name) ?? [], item.value])
+              if (item.targets.length === 1 && item.targets.every((value) => !value.includes(',')) && item.value.kind === 'binop' &&
+                ((item.value.left.kind === 'name' && item.value.left.id === name && isKnownPrimitiveExpr(item.value.right, scope)) ||
+                 (item.value.right.kind === 'name' && item.value.right.id === name && isKnownPrimitiveExpr(item.value.left, scope)))) primitiveSelfUpdates.add(name)
+            }
+            if (item.annotation) collectWalrusWrites(item.annotation)
+            collectWalrusWrites(item.value)
           }
           else if (item.kind === 'aug_assign') {
             assignments.set(item.target, [...assignments.get(item.target) ?? [], item.value])
             if (isKnownPrimitiveExpr(item.targetExpr, scope) && isKnownPrimitiveExpr(item.value, scope)) primitiveSelfUpdates.add(item.target)
+            collectWalrusWrites(item.value)
+            collectWalrusWrites(item.targetExpr)
           }
-          else if (item.kind === 'if' || item.kind === 'while' || item.kind === 'for') collectAssignments([...item.body, ...item.orelse])
-          else if (item.kind === 'try') collectAssignments([...item.body, ...item.handlers.flatMap((handler) => handler.body), ...item.orelse, ...item.finalbody])
-          else if (item.kind === 'with') { item.items.flatMap((context) => context.optionalVars).forEach((name) => unknownRebindings.add(name)); collectAssignments(item.body) }
-          else if (item.kind === 'function_def' || item.kind === 'class_def') unknownRebindings.add(item.name)
-          else if (item.kind === 'import') for (const imported of item.names) unknownRebindings.add(imported.alias ?? imported.module.split('.')[0]!)
+          else if (item.kind === 'expr') collectWalrusWrites(item.value)
+          else if (item.kind === 'assert') { collectWalrusWrites(item.test); if (item.message) collectWalrusWrites(item.message) }
+          else if (item.kind === 'raise') { if (item.value) collectWalrusWrites(item.value); if (item.cause) collectWalrusWrites(item.cause) }
+          else if (item.kind === 'annotation') collectWalrusWrites(item.annotation)
+          else if (item.kind === 'delete') { for (const target of item.targets) if (target.kind === 'name') deletedBindings.add(target.id) }
+          else if (item.kind === 'import') { for (const imported of item.names) unknownRebindings.add(imported.alias ?? imported.module.split('.')[0]!) }
           else if (item.kind === 'from_import') { for (const imported of item.names) if (imported.name !== '*') unknownRebindings.add(imported.alias ?? imported.name) }
-          else if (item.kind === 'delete') for (const target of item.targets) if (target.kind === 'name') deletedBindings.add(target.id)
+          else if (item.kind === 'function_def') {
+            unknownRebindings.add(item.name)
+            item.defaults.forEach(collectWalrusWrites)
+            item.decorators.forEach(collectWalrusWrites)
+            item.annotations?.forEach(collectWalrusWrites)
+          }
+          else if (item.kind === 'class_def') {
+            unknownRebindings.add(item.name)
+            item.bases.forEach(collectWalrusWrites)
+            item.decorators.forEach(collectWalrusWrites)
+          }
+          if (item.kind === 'if' || item.kind === 'while' || item.kind === 'for') {
+            if (item.kind === 'if' || item.kind === 'while') collectWalrusWrites(item.test)
+            else { collectWalrusWrites(item.iter); for (const name of bindingNames(item.target)) unknownRebindings.add(name) }
+            collectAssignments([...item.body, ...item.orelse])
+          } else if (item.kind === 'try') {
+            item.handlers.forEach((handler) => { if (handler.typeExpr) collectWalrusWrites(handler.typeExpr) })
+            item.handlers.forEach((handler) => { if (handler.name) unknownRebindings.add(handler.name) })
+            collectAssignments([...item.body, ...item.handlers.flatMap((handler) => handler.body), ...item.orelse, ...item.finalbody])
+          }
+          else if (item.kind === 'with') { item.items.flatMap((context) => context.optionalVars).forEach((name) => unknownRebindings.add(name)); item.items.forEach((context) => collectWalrusWrites(context.contextExpr)); collectAssignments(item.body) }
         } }
         collectAssignments(stmt.body)
         collectAssignments(stmt.orelse)
@@ -938,11 +970,15 @@ class Analyzer {
         this.walkStmts(stmt.body, createScope(scope), stmtIndex, decodeBindings)
         for (const handler of stmt.handlers) {
           if (handler.typeExpr) this.analyzeExpr(handler.typeExpr, scope, decodeBindings, stmtIndex)
-          this.walkStmts(handler.body, createScope(scope), stmtIndex, decodeBindings)
+          const handlerScope = createScope(scope)
+          if (handler.name) invalidateBinding(handler.name, handlerScope)
+          this.walkStmts(handler.body, handlerScope, stmtIndex, decodeBindings)
         }
         this.walkStmts(stmt.orelse, createScope(scope), stmtIndex, decodeBindings)
         this.walkStmts(stmt.finalbody, createScope(scope), stmtIndex, decodeBindings)
-        invalidateBranchWrites([...stmt.body, ...stmt.handlers.flatMap((handler) => handler.body), ...stmt.orelse, ...stmt.finalbody], scope)
+        const handlerBindings = stmt.handlers.flatMap((handler) => handler.name ? [{ kind: 'delete' as const, targets: [{ kind: 'name' as const, id: handler.name }] }] : [])
+        invalidateBranchWrites([...stmt.body, ...stmt.handlers.flatMap((handler) => handler.body), ...handlerBindings, ...stmt.orelse, ...stmt.finalbody], scope)
+        for (const handler of stmt.handlers) if (handler.name) invalidateBinding(handler.name, scope)
         continue
       }
       if (stmt.kind === 'function_def') {
@@ -1157,6 +1193,7 @@ class Analyzer {
       // 使 (x := b64decode(...)); exec(x) 仍升级为 dangerous(而非降级 locked 确认)。
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(expr.target)) {
         applyAssignmentRebind(expr.target, expr.value, scope)
+        if (!isKnownPrimitiveExpr(expr.value, scope) && expr.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: expr.range, sourceStatus: 'unknown', dynamicAccess: true })
         if (isDecodeCall(expr.value)) decodeBindings.push({ name: expr.target, stmtOffset: stmtIndex, decodeFn: decodeFunctionName(expr.value) })
       }
       this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
@@ -1753,11 +1790,15 @@ class ScriptUncertaintyCollector {
           this.walkStmts(stmt.body, createScope(scope))
           for (const handler of stmt.handlers) {
             if (handler.typeExpr) this.walkExpr(handler.typeExpr, scope)
-            this.walkStmts(handler.body, createScope(scope))
+            const handlerScope = createScope(scope)
+            if (handler.name) invalidateBinding(handler.name, handlerScope)
+            this.walkStmts(handler.body, handlerScope)
           }
           this.walkStmts(stmt.orelse, createScope(scope))
           this.walkStmts(stmt.finalbody, createScope(scope))
-          invalidateBranchWrites([...stmt.body, ...stmt.handlers.flatMap((handler) => handler.body), ...stmt.orelse, ...stmt.finalbody], scope)
+          const handlerBindings = stmt.handlers.flatMap((handler) => handler.name ? [{ kind: 'delete' as const, targets: [{ kind: 'name' as const, id: handler.name }] }] : [])
+          invalidateBranchWrites([...stmt.body, ...stmt.handlers.flatMap((handler) => handler.body), ...handlerBindings, ...stmt.orelse, ...stmt.finalbody], scope)
+          for (const handler of stmt.handlers) if (handler.name) invalidateBinding(handler.name, scope)
           break
         }
         case 'function_def': {
@@ -1892,6 +1933,7 @@ class ScriptUncertaintyCollector {
         }
       case 'named_expr':
         this.walkExpr(expr.value, scope)
+        if (!isKnownPrimitiveExpr(expr.value, scope) && expr.range) this.fail('implicit-call-unresolved', expr.range)
         return
       case 'ellipsis':
         return
