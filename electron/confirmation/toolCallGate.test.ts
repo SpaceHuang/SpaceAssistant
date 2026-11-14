@@ -1660,6 +1660,54 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
+  it('open 能力别名保留文件写拒绝与 opener 回调的无记忆确认', async () => {
+    await scriptParserService.ensureInitialized()
+    const db = openDb()
+    const root = await fs.realpath(await makeTempDir('script-open-capability-alias-'))
+    try {
+      const writeAliases = [
+        'open("/etc/example", "w")',
+        'f = open\nf("/etc/example", "w")',
+        'f = g = open\ng("/etc/example", "w")',
+        'import builtins\nf = builtins.open\nf("/etc/example", "w")',
+        'from builtins import open as f\nf("/etc/example", "w")'
+      ]
+      for (const [index, code] of writeAliases.entries()) {
+        const cache = new SqliteDecisionCache(getDbConnection(db))
+        const lookup = vi.spyOn(cache, 'lookup')
+        const record = vi.spyOn(cache, 'record')
+        const result = await evaluateToolCallGate(base({ appDb: db, lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }),
+          imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } },
+          workDir: root, userDataDir: path.join(root, '.userdata'), sessionId: `open-alias-write-${index}`,
+          lanePackage: 'standard', toolName: 'run_script', toolInput: { code }, decisionCache: cache }))
+        expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', findings: expect.arrayContaining([
+          expect.objectContaining({ pattern: 'A7', evidence: expect.objectContaining({ kind: 'write-path', rawPath: '/etc/example', pathClass: 'absolute' }) })
+        ]) }))
+        expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'script-dangerous-deny' })
+        expect(lookup).not.toHaveBeenCalled()
+        expect(record).not.toHaveBeenCalled()
+      }
+
+      const openerCache = new SqliteDecisionCache(getDbConnection(db))
+      const openerLookup = vi.spyOn(openerCache, 'lookup')
+      const openerRecord = vi.spyOn(openerCache, 'record')
+      const openerArgs = base({ appDb: db, lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }),
+        imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } },
+        workDir: root, userDataDir: path.join(root, '.userdata'), sessionId: 'open-alias-opener',
+        lanePackage: 'standard', toolName: 'run_script',
+        toolInput: { code: 'from external_module import opener\nf = open\nf("x", opener=opener)' }, decisionCache: openerCache })
+      const first = await evaluateToolCallGate(openerArgs)
+      expect(first.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial' }))
+      expect(first.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+      const second = await evaluateToolCallGate(openerArgs)
+      expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+      expect(openerLookup).not.toHaveBeenCalled()
+      expect(openerRecord).not.toHaveBeenCalled()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('remote uncertainty requires user confirmation while complete clean analysis can auto-allow', async () => {
     const imPolicySnapshot = {
       domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 1,

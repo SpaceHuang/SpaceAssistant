@@ -36,6 +36,22 @@ describe('scriptContentSecurity — List A (baseline)', () => {
   })
 
   it.each([
+    ['direct assignment alias', 'f = open\nf("/etc/example", "w")'],
+    ['chained assignment alias', 'f = g = open\ng("/etc/example", "w")'],
+    ['builtins module alias', 'import builtins\nf = builtins.open\nf("/etc/example", "w")'],
+    ['builtins import alias', 'from builtins import open as f\nf("/etc/example", "w")']
+  ])('preserves builtin open write capability through %s', (_label, code) => {
+    const finding = analyzeScriptContent(code).findings[0]
+    expect(finding).toMatchObject({ pattern: 'A7', class: 'file-write', evidence: { kind: 'write-path', rawPath: '/etc/example', pathClass: 'absolute' } })
+  })
+
+  it('does not derive builtin capability from a shadowed builtins name', () => {
+    const result = analyzeScriptContent('def builtins():\n    return None\nf = builtins.open\nf("/etc/example", "w")')
+    expect(result.findings).not.toContainEqual(expect.objectContaining({ pattern: 'A7' }))
+    expect(result.coverage).toBe('partial')
+  })
+
+  it.each([
     ['dynamic-execution with bound input', "source = input()\nexec(source)", 'dynamic-execution', 'dynamic-exec'],
     ['network call without static host', "import requests\nrequests.get(url)", 'network-api', 'network'],
     ['cwd change with dynamic path', "import os\nos.chdir(target)", 'cwd-change', 'cwd-change'],
@@ -357,6 +373,7 @@ describe('script uncertainty facts', () => {
     ['unknown range binding does not prove primitive iteration', 'from external_module import range\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
     ['assigned range binding does not prove primitive iteration', 'from external_module import factory\nrange = factory\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
     ['defined range binding does not prove primitive iteration', 'def range(n):\n    return [object()]\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
+    ['imported range alias does not prove primitive iteration', 'from external_module import range as iterate\nx = 1\nfor x in iterate(1):\n    pass\nf"{x}"'],
     ['parameter range binding does not prove primitive iteration', 'def run(range):\n    x = 1\n    for x in range(1):\n        pass\n    f"{x}"'],
     ['loop target range binding does not prove later iteration', 'for range in [None]:\n    pass\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
     ['unknown open binding does not prove file context', 'from external_module import open\nwith open("x") as x:\n    f"{x}"'],
@@ -364,6 +381,8 @@ describe('script uncertainty facts', () => {
     ['defined open binding does not prove file context', 'def open(path):\n    return []\nwith open("x") as x:\n    f"{x}"'],
     ['parameter open binding does not prove file context', 'def run(open):\n    with open("x") as x:\n        f"{x}"'],
     ['open callback forms execution uncertainty', 'from external_module import opener\nwith open("x", opener=opener) as f:\n    pass'],
+    ['open assignment alias preserves callback uncertainty', 'from external_module import opener\nf = open\nf("x", opener=opener)'],
+    ['chained open alias preserves callback uncertainty', 'from external_module import opener\nf = g = open\ng("x", opener=opener)'],
     ['local opener callback forms execution uncertainty', 'def opener(path, flags):\n    return 1\nwith open("x", opener=opener) as f:\n    pass'],
     ['positional opener callback forms execution uncertainty', 'from external_module import opener\nwith open("x", "r", -1, None, None, None, True, opener) as f:\n    pass'],
     ['open callback through keyword expansion forms uncertainty', 'options = {}\nwith open("x", **options) as f:\n    pass']
@@ -376,7 +395,8 @@ describe('script uncertainty facts', () => {
   it.each([
     'with open("x") as f:\n    pass',
     'with open("x", opener=None) as f:\n    pass',
-    'for x in range(1):\n    pass'
+    'for x in range(1):\n    pass',
+    'iterate = range\nfor x in iterate(1):\n    pass'
   ])('retains builtin control behavior: %s', (code) => {
     expect(analyzeScriptContent(code)).toMatchObject({ coverage: 'complete', findings: [], uncertainties: [] })
   })

@@ -186,6 +186,7 @@ interface Scope {
 }
 
 const TRACKED_BUILTIN_IDENTITIES = new Set(['open', 'print', 'range'])
+const BUILTIN_CAPABILITIES = new Set(['open', 'range'])
 
 function markShadowedBuiltin(name: string, scope: Scope): void {
   if (TRACKED_BUILTIN_IDENTITIES.has(name)) scope.shadowedBuiltinRoots.add(name)
@@ -234,7 +235,7 @@ function isKnownPrimitiveExpr(expr: IrExpr, scope: Scope): boolean {
 
 function isKnownPrimitiveIterable(expr: IrExpr, scope: Scope): boolean {
   if (isKnownPrimitiveExpr(expr, scope)) return true
-  if (expr.kind !== 'call' || expr.callee.kind !== 'name' || expr.callee.id !== 'range' || !isKnownBuiltinName('range', scope)) return false
+  if (expr.kind !== 'call' || !hasBuiltinCapability(expr.callee, 'range', scope)) return false
   return expr.args.every((arg) => isKnownPrimitiveExpr(arg, scope)) && expr.kwargs.every((arg) => isKnownPrimitiveExpr(arg.value, scope))
 }
 
@@ -251,6 +252,15 @@ function hasUnknownOpenCallback(call: IrExpr & { kind: 'call' }): boolean {
   if (call.kwargs.some((kwarg) => kwarg.name === '')) return true
   const callback = call.kwargs.find((kwarg) => kwarg.name === 'opener')?.value ?? call.args[7]
   return callback !== undefined && callback.kind !== 'none'
+}
+
+function hasBuiltinCapability(callee: IrExpr, capability: string, scope: Scope): boolean {
+  if (callee.kind === 'name' && callee.id === capability && isKnownBuiltinName(capability, scope)) return true
+  const chain = resolveExprChain(callee, scope)
+  if (chain.module !== 'builtins' || chain.attrs.at(-1) !== capability || !chain.root) return false
+  const rootAttribute = scope.attrs.get(chain.root)
+  if (rootAttribute) return rootAttribute.module === 'builtins' && rootAttribute.attr === capability
+  return scope.modules.get(chain.root) === 'builtins'
 }
 
 function hasKnownAttributeOrigin(expr: IrExpr, scope: Scope): boolean {
@@ -548,6 +558,10 @@ function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): voi
       scope.attrs.set(target, { module: sourceAttrBinding.module, attr: sourceAttrBinding.attr })
       return
     }
+    if (BUILTIN_CAPABILITIES.has(value.id) && isKnownBuiltinName(value.id, scope)) {
+      scope.attrs.set(target, { module: 'builtins', attr: value.id })
+      return
+    }
     if (DANGEROUS_BUILTIN_NAMES.has(value.id)) {
       scope.attrs.set(target, { module: 'builtins', attr: value.id })
       return
@@ -557,6 +571,10 @@ function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): voi
   if (value.kind === 'attr') {
     const lastAttr = sourceAttrChain?.attrs.at(-1)
     if (sourceAttrChain?.module && lastAttr) {
+      if (sourceAttrChain.module === 'builtins' && BUILTIN_CAPABILITIES.has(lastAttr) && !hasBuiltinCapability(value, lastAttr, scope)) {
+        scope.unknownRoots.add(target)
+        return
+      }
       scope.attrs.set(target, { module: sourceAttrChain.module, attr: lastAttr })
       return
     }
@@ -653,7 +671,7 @@ class Analyzer {
       return { kind: 'fs-destructive', operation: attr || 'unknown', rawPath, pathClass: rawPath ? classifyPath(rawPath) : 'unresolved' }
     }
     if (pattern === 'A7' || pattern === 'A8') {
-      const isOpen = expr.callee.kind === 'name' && expr.callee.id === 'open'
+      const isOpen = hasBuiltinCapability(expr.callee, 'open', scope)
       const pathExpr = isOpen ? expr.args[0] : expr.callee.kind === 'attr' ? expr.callee.base : undefined
       const modeExpr = expr.kwargs.find((kw) => kw.name === 'mode')?.value ?? expr.args[1]
       const mode = isOpen && modeExpr ? foldStringIr(modeExpr) : null
@@ -1369,12 +1387,15 @@ class Analyzer {
       }
     }
 
-    // open()
+    // open capability: direct, module-qualified, imported and assigned aliases share one model.
+    if (hasBuiltinCapability(callee, 'open', scope)) {
+      this.checkOpenCall(call)
+      if (hasUnknownOpenCallback(call) && call.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: call.range, sourceStatus: 'unknown', dynamicAccess: true })
+      return
+    }
+    if (hasBuiltinCapability(callee, 'range', scope)) return
     if (callee.kind === 'name' && callee.id === 'open') {
-      if (isKnownBuiltinName('open', scope)) {
-        this.checkOpenCall(call)
-        if (hasUnknownOpenCallback(call) && call.range) this.uncertainties.push({ kind: 'implicit-call-unresolved', range: call.range, sourceStatus: 'unknown', dynamicAccess: true })
-      } else if (call.range) {
+      if (call.range) {
         this.uncertainties.push({ kind: 'implicit-call-unresolved', range: call.range, sourceStatus: 'unknown', dynamicAccess: true })
       }
       return
@@ -2018,9 +2039,12 @@ class ScriptUncertaintyCollector {
     const lastAttr = chain.attrs[chain.attrs.length - 1] ?? null
     const directName = callee.kind === 'name' ? callee.id : null
 
-    if (directName === 'open') {
-      if (!isKnownBuiltinName('open', scope) || hasUnknownOpenCallback(call)) this.fail('implicit-call-unresolved', call.range)
+    if (hasBuiltinCapability(callee, 'open', scope)) {
+      if (hasUnknownOpenCallback(call)) this.fail('implicit-call-unresolved', call.range)
+    } else if (directName === 'open') {
+      this.fail('implicit-call-unresolved', call.range)
     }
+    if (hasBuiltinCapability(callee, 'range', scope)) return
 
     // getattr/hasattr/setattr/delattr/vars/globals/locals/eval/exec/compile/__import__ —
     // always forced ask on remote, regardless of whether args fold to literals.
