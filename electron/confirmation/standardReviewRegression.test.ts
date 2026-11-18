@@ -97,7 +97,7 @@ describe('IM standard re-review blockers', () => {
     const before = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
     expect(() => reenableImStandardV3(conn, { expectedRevision: before.revision, releaseGate: gate, updatedAt: 5, eventId: 'reenable-invalid' })).toThrow(/qualification|package/i)
     expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })).toEqual(before)
-    expect(conn.prepare('SELECT COUNT(*) AS count FROM policy_audit_events').get()).toEqual({ count: 5 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM policy_audit_events').get()).toEqual({ count: 6 })
     db.close()
   })
 })

@@ -139,10 +139,10 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
   },
   {
     id: 'SYS-REVIEWCACHE-001', owner: 'electron/confirmation + electron/tools', stage: 'final-check', category: 'integrity',
-    rationale: 'A reused file review scope remains active only while the named regular single-link file matches the latest controlled-write receipt and task-bound scope.',
-    effect: 'revoke', scope: 'electron/confirmation/toolCallGate.ts:review-scope-receipt;electron/tools/builtinExecutors.ts:controlled-write-receipt',
-    audit: 'Receipt mismatch revokes the in-memory grant and returns to the existing policy decision; write receipt includes opened file identity and content SHA-256.',
-    tests: ['electron/safeAtomicWrite.test.ts', 'electron/confirmation/reviewScopeWrite.test.ts', 'electron/confirmation/toolCallGate.test.ts'],
+    rationale: 'A reusable file review grant is not an execution permit; every call must pass current policy and receive a fresh permit bound to the current target facts.',
+    effect: 'validate', scope: 'electron/confirmation/toolCallGate.ts:review-scope-policy-consumption;electron/confirmation/readPermitExecutor.ts:permit-target-identity',
+    audit: 'A grant lookup alone cannot dispatch a tool; current policy must consume its source and final-check rejects a permit whose target identity changed.',
+    tests: ['electron/confirmation/toolCallGate.test.ts', 'electron/confirmation/readPermitExecutor.test.ts'],
     overrideability: 'none'
   },
   {

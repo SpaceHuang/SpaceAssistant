@@ -55,6 +55,16 @@ describe('ToolCallCard approval explanations', () => {
     expect(screen.getByText(/recovery-a\.md/)).toBeDefined()
   })
 
+  it.each(['grep', 'list_work_dirs'])('%s 路由的确认卡保留仅本次选择', (toolName) => {
+    const onConfirm = vi.fn()
+    render(<ToolCallCard record={writeRecord('confirming', {
+      toolName, input: { path: '.', pattern: 'needle' }, allowReuseOnce: true
+    })} onConfirm={onConfirm} />)
+    const once = screen.getByRole('button', { name: /仅允许本次|Allow this time only|confirm\.write\.allowOnce/ })
+    fireEvent.click(once)
+    expect(onConfirm).toHaveBeenCalledWith(true, { reuse: 'once' })
+  })
+
   it('shows a localized reason when script analysis is incomplete', () => {
     render(<ToolCallCard record={writeRecord('confirming', {
       toolName: 'run_script', input: { code: 'private script source' },

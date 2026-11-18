@@ -7,8 +7,8 @@ export type DirectoryWriteIdentity = Pick<Stats, 'dev' | 'ino' | 'mode' | 'size'
 export type DirectoryWriteParentIdentity = Pick<Stats, 'dev' | 'ino' | 'mode' | 'size' | 'mtimeMs'>
 export type DirectoryWriteFileIdentity = Pick<Stats, 'dev' | 'ino' | 'size' | 'mtimeMs' | 'nlink'>
 export type DirectoryWriteResult =
-  | Readonly<{ ok: true; identity: DirectoryWriteIdentity; receipt?: Readonly<{ dev: number; ino: number; mode: number; size: number; nlink: number; sha256: string }> }>
-  | Readonly<{ ok: false; caseId: 'write-directory-identity-changed' | 'write-file-identity-changed' | 'write-target-exists' | 'write-directory-cancelled' | 'write-directory-unavailable' | 'write-committed-receipt-invalid' }>
+  | Readonly<{ ok: true; identity: DirectoryWriteIdentity }>
+  | Readonly<{ ok: false; caseId: 'write-directory-identity-changed' | 'write-file-identity-changed' | 'write-target-exists' | 'write-directory-cancelled' | 'write-directory-unavailable' | 'write-committed-content-invalid' }>
 
 type Input = {
   directory: string
@@ -19,7 +19,7 @@ type Input = {
   expectedFileIdentity: DirectoryWriteFileIdentity | null
   mode?: number
   signal?: AbortSignal
-  captureReceipt?: boolean
+  verifyCommittedContent?: boolean
 }
 
 export const DIRECTORY_WRITER_SOURCE = String.raw`
@@ -44,7 +44,7 @@ const temp = path.join('.', input.tempName)
 let tempCreated = false
 let tempFd = null
 let committed = false
-const failCommitted = () => fail('write-committed-receipt-invalid')
+const failCommitted = () => fail('write-committed-content-invalid')
 try {
   if (path.basename(input.targetName) !== input.targetName || path.basename(input.tempName) !== input.tempName) throw new Error('invalid basename')
   const directoryBefore = identity(fs.statSync('.'))
@@ -58,7 +58,7 @@ try {
   }
   const body = Buffer.from(input.bodyBase64, 'base64')
   const approvedSha256 = crypto.createHash('sha256').update(body).digest('hex')
-  const fd = fs.openSync(temp, (input.captureReceipt ? fs.constants.O_RDWR : fs.constants.O_WRONLY) | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), input.mode)
+  const fd = fs.openSync(temp, (input.verifyCommittedContent ? fs.constants.O_RDWR : fs.constants.O_WRONLY) | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), input.mode)
   tempCreated = true
   tempFd = fd
   let offset = 0
@@ -68,17 +68,17 @@ try {
     offset += written
   }
   fs.fsyncSync(fd)
-  let receiptIdentity = null
-  if (input.captureReceipt) {
-    receiptIdentity = identity(fs.fstatSync(fd))
-    if ((receiptIdentity.mode & 0o170000) !== 0o100000 || receiptIdentity.size !== body.length || receiptIdentity.nlink !== 1) {
+  let committedIdentity = null
+  if (input.verifyCommittedContent) {
+    committedIdentity = identity(fs.fstatSync(fd))
+    if ((committedIdentity.mode & 0o170000) !== 0o100000 || committedIdentity.size !== body.length || committedIdentity.nlink !== 1) {
       fail('write-file-identity-changed'); process.exit(0)
     }
     const preCommitHash = crypto.createHash('sha256')
     const preCommitBuffer = Buffer.alloc(64 * 1024)
     let preCommitOffset = 0
-    while (preCommitOffset < receiptIdentity.size) {
-      const bytesRead = fs.readSync(fd, preCommitBuffer, 0, Math.min(preCommitBuffer.length, receiptIdentity.size - preCommitOffset), preCommitOffset)
+    while (preCommitOffset < committedIdentity.size) {
+      const bytesRead = fs.readSync(fd, preCommitBuffer, 0, Math.min(preCommitBuffer.length, committedIdentity.size - preCommitOffset), preCommitOffset)
       if (bytesRead <= 0) { fail('write-file-identity-changed'); process.exit(0) }
       preCommitHash.update(preCommitBuffer.subarray(0, bytesRead))
       preCommitOffset += bytesRead
@@ -103,25 +103,25 @@ try {
   }
   const final = identity(fs.lstatSync(target))
   if (final.nlink !== 1) { failCommitted(); process.exit(0) }
-  if (input.captureReceipt) {
+  if (input.verifyCommittedContent) {
     const hash = crypto.createHash('sha256')
     const readBuffer = Buffer.alloc(64 * 1024)
     let readOffset = 0
-    while (readOffset < receiptIdentity.size) {
-      const bytesRead = fs.readSync(fd, readBuffer, 0, Math.min(readBuffer.length, receiptIdentity.size - readOffset), readOffset)
+    while (readOffset < committedIdentity.size) {
+      const bytesRead = fs.readSync(fd, readBuffer, 0, Math.min(readBuffer.length, committedIdentity.size - readOffset), readOffset)
       if (bytesRead <= 0) { failCommitted(); process.exit(0) }
       hash.update(readBuffer.subarray(0, bytesRead))
       readOffset += bytesRead
     }
     const opened = identity(fs.fstatSync(fd))
     const check = identity(fs.lstatSync(target))
-    if (opened.dev !== receiptIdentity.dev || opened.ino !== receiptIdentity.ino || opened.mode !== receiptIdentity.mode || opened.size !== receiptIdentity.size || opened.mtimeMs !== receiptIdentity.mtimeMs || hash.copy().digest('hex') !== approvedSha256 ||
+    if (opened.dev !== committedIdentity.dev || opened.ino !== committedIdentity.ino || opened.mode !== committedIdentity.mode || opened.size !== committedIdentity.size || opened.mtimeMs !== committedIdentity.mtimeMs || hash.copy().digest('hex') !== approvedSha256 ||
       opened.dev !== check.dev || opened.ino !== check.ino || opened.mode !== check.mode || opened.size !== check.size || opened.mtimeMs !== check.mtimeMs ||
       opened.nlink !== 1 || check.nlink !== 1 || (check.mode & 0o170000) !== 0o100000) { failCommitted(); process.exit(0) }
-    process.stdout.write(JSON.stringify({ ok: true, identity: final, receipt: { dev: opened.dev, ino: opened.ino, mode: opened.mode, size: opened.size, nlink: opened.nlink, sha256: hash.digest('hex') } }))
+    process.stdout.write(JSON.stringify({ ok: true, identity: final }))
   } else process.stdout.write(JSON.stringify({ ok: true, identity: final }))
 } catch {
-  fail(committed ? 'write-committed-receipt-invalid' : 'write-directory-unavailable')
+    fail(committed ? 'write-committed-content-invalid' : 'write-directory-unavailable')
 } finally {
   if (tempFd !== null) { try { fs.closeSync(tempFd) } catch {} }
   if (tempCreated) { try { fs.unlinkSync(temp) } catch {} }

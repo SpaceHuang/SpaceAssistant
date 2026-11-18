@@ -36,6 +36,7 @@ import { resolveModelContextWindow } from '../../src/shared/llmModelConfig'
 import { readAppLocale } from './ipcShared'
 import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
 import { surfaceItemIdentities } from '../../src/shared/surfaceReplay'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 
 export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   const sessionStorage = ctx.sessionStorage
@@ -293,6 +294,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     clearSessionToolResources(sessionId)
     // D-8：方言错配计数为会话级作用域，会话删除时一并清理
     dialectRetryBreaker.forgetSession(sessionId)
+    getDefaultAgentRuntime().reviewScopeCache.clearDeletedSession(sessionId)
     sessionCommands.deleteSession(sessionId)
     ctx.wakeSourceTruthSpillGc?.()
     // §5.3：会话删除时清空会话级 decision_cache 条目；清理失败不阻塞删除流程

@@ -101,6 +101,82 @@ function hasHiddenSegment(searchRel: string): boolean {
   return rel.split('/').some((seg) => seg.startsWith('.'))
 }
 
+/** facts: report whether any applicable ignore source exists; this function never decides grant allow/deny.
+ * A child path passed directly to ripgrep can override ignore rules which excluded it
+ * when searching from the approved parent. Without a full engine-equivalent proof,
+ * the caller treats any applicable ignore configuration as unproven containment and requires a fresh approval.
+ */
+function hasApplicableIgnoreConfiguration(parentRoot: string, childRoot: string, includeIgnored: boolean): boolean {
+  const parentExists = fs.existsSync(parentRoot)
+  const childExists = fs.existsSync(childRoot)
+  if (!parentExists && !childExists) return false
+  if (!parentExists || !childExists) return true
+  const ignoreNames = new Set(includeIgnored ? ['.ignore', '.rgignore'] : ['.gitignore', '.ignore', '.rgignore'])
+  const hasActiveLines = (file: string): boolean => {
+    try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).some((line) => line.trim() && !line.trimStart().startsWith('#')) }
+    catch (error) { return (error as NodeJS.ErrnoException).code !== 'ENOENT' }
+  }
+  const directories = new Set<string>()
+  for (let current = childRoot; current !== parentRoot; current = path.dirname(current)) directories.add(current)
+  for (let current = parentRoot;; current = path.dirname(current)) {
+    directories.add(current)
+    const parent = path.dirname(current)
+    if (parent === current) break
+  }
+  for (const current of directories) {
+    for (const name of ignoreNames) if (fs.existsSync(path.join(current, name))) return true
+    if (!includeIgnored) {
+      const gitMarker = path.join(current, '.git')
+      try {
+        const marker = fs.lstatSync(gitMarker)
+        if (marker.isSymbolicLink()) return true
+        let gitDir: string | undefined
+        if (marker.isDirectory()) gitDir = gitMarker
+        if (marker.isFile()) {
+          const pointer = /^gitdir:\s*(.+)$/i.exec(fs.readFileSync(gitMarker, 'utf8').trim())
+          if (!pointer) return true
+          gitDir = path.resolve(current, pointer[1]!)
+        }
+        if (gitDir && (hasActiveLines(path.join(gitDir, 'info', 'exclude')) ||
+          hasActiveLines(path.join(gitDir, 'config')) && /\bexcludesfile\s*=/i.test(fs.readFileSync(path.join(gitDir, 'config'), 'utf8')))) return true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true
+      }
+    }
+  }
+  const home = process.env.HOME ?? process.env.USERPROFILE
+  const xdg = process.env.XDG_CONFIG_HOME ?? (home ? path.join(home, '.config') : undefined)
+  if (process.env.RIPGREP_CONFIG_PATH && hasActiveLines(process.env.RIPGREP_CONFIG_PATH)) return true
+  if (!includeIgnored) {
+    if (Object.keys(process.env).some((key) => key === 'GIT_CONFIG_COUNT' || key === 'GIT_CONFIG_PARAMETERS' ||
+      /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key))) return true
+    const gitConfigs = [process.env.GIT_CONFIG_GLOBAL, process.env.GIT_CONFIG_SYSTEM, '/etc/gitconfig',
+      home ? path.join(home, '.gitconfig') : undefined, xdg ? path.join(xdg, 'git', 'config') : undefined]
+    if (gitConfigs.some((file) => file && fs.existsSync(file) && /\bexcludesfile\s*=/i.test(fs.readFileSync(file, 'utf8')))) return true
+    if (xdg && hasActiveLines(path.join(xdg, 'git', 'ignore'))) return true
+  }
+
+  return false
+}
+
+/** Same-root grants are exact; child inheritance rejects root-relative filter changes and default exclusions. */
+export function isGrepSubtreeSemanticallyContained(parentRoot: string, childRoot: string, options: {
+  includeIgnored: boolean
+  glob?: string
+}): boolean {
+  const relative = path.relative(parentRoot, childRoot)
+  if (relative === '') return true
+  if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) return false
+  if (hasApplicableIgnoreConfiguration(parentRoot, childRoot, options.includeIgnored)) return false
+  if (!options.includeIgnored) {
+    const segments = toPosix(relative).split('/')
+    if (segments.some((segment) => segment.startsWith('.') || GREP_DEFAULT_IGNORES.some((ignored) => ignored.toLowerCase() === segment.toLowerCase()))) return false
+  }
+  const glob = options.glob
+  if (glob && (glob.startsWith('!') || /[\\/]/.test(glob) && !glob.startsWith('**/'))) return false
+  return true
+}
+
 /**
  * 一次 grep 调用的范围规划（rg / walk 共用）。
  * 不做安全判定——这里只产「哪些目录会被跳过、隐藏过滤开不开、敏感 glob 加不加」的范围事实。

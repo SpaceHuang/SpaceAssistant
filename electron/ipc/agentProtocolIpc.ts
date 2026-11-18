@@ -461,6 +461,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         trustMcpToolName?: string
         memoryTier?: import('../../src/shared/confirmation/types').CacheKey
         memoryTierOptionId?: number
+        reuse?: 'once'
       }
     ): Promise<import('../toolConfirmRegistry').ToolConfirmSubmitResult> => {
       // H1：信任写入必须与 pending 确认挂钩——agent 裁决路径（AgentChannel）不登记 waiter，
@@ -485,6 +486,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       if (!ownerGeneration || !ownerRevision) return { accepted: false, outcome: 'missing' }
       // 先一次性消费 pending，再进行任何异步导入/持久化；避免确认超时或被并发响应消费后仍落信任。
       const pendingMemoryTiers = getPendingMemoryTiers(payload.requestId, payload.toolUseId, ownerSessionId)
+      if (payload.approved && payload.reuse === 'once' && (payload.memoryTierOptionId !== undefined || payload.memoryTier !== undefined || payload.trustCommand?.trim() || payload.trustDomain?.trim() || payload.trustActDomain?.trim() || payload.trustMcpServerId || payload.trustMcpToolName)) {
+        return submitToolConfirmResponse(payload.requestId, payload.toolUseId, false, ownerSessionId)
+      }
       const pendingToolName = getPendingConfirmToolName(payload.requestId, payload.toolUseId, ownerSessionId)
       const commandTrustAllowed = !payload.trustCommand?.trim() || !pendingToolName || (pendingToolName === 'run_shell' && isPendingTrust(payload.requestId, payload.toolUseId, 'command', payload.trustCommand.trim(), undefined, ownerSessionId))
       const domainTrustAllowed = !payload.trustDomain?.trim() || !pendingToolName || (pendingToolName === 'browser' && isPendingTrust(payload.requestId, payload.toolUseId, 'domain', payload.trustDomain.trim(), undefined, ownerSessionId))
@@ -660,7 +664,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         ? isMcpSessionTrusted(mcpTrustKey.sessionId, mcpTrustKey.serverId, mcpTrustKey.toolName)
         : false
       if (payload.approved && mcpTrustKey && !mcpTrustAlreadyPresent) rememberMcpSessionTrust(mcpTrustKey.sessionId, mcpTrustKey.serverId, mcpTrustKey.toolName)
-      const response = submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved, ownerSessionId)
+      const response = submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved, ownerSessionId, payload.reuse)
       if (mcpTrustKey && !mcpTrustAlreadyPresent && !response.accepted) forgetMcpSessionTrust(mcpTrustKey.sessionId, mcpTrustKey.serverId, mcpTrustKey.toolName)
       return response
       } catch (error) {

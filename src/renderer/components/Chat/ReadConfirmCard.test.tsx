@@ -43,6 +43,13 @@ describe('ReadConfirmCard（读取类工具确认卡，真机验证发现的桌�
     expect(onConfirm.mock.calls[0]?.[0]).toBe(false)
   })
 
+  it('主机提供可复用候选时显示仅本次按钮并提交单次选择', () => {
+    const onConfirm = vi.fn()
+    render(<ReadConfirmCard record={{ ...confirmingGrepRecord(), allowReuseOnce: true }} onConfirm={onConfirm} />)
+    fireEvent.click(screen.getByRole('button', { name: 'confirm.write.allowOnce' }))
+    expect(onConfirm).toHaveBeenCalledWith(true, { reuse: 'once' })
+  })
+
   it('path 缺失时回退到占位摘要（不抛错）', () => {
     const record = { id: 'c2', toolName: 'read_file', status: 'confirming', input: {} } as unknown as ToolCallRecord
     const onConfirm = vi.fn()

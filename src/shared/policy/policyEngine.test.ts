@@ -134,9 +134,25 @@ describe('review scope cache policy boundary', () => {
 
   it('consumes an active Agent scope only when every effective ask explicitly permits that source', () => {
     expect(decide(facts, context, [eligible], deps({ reviewScopeGrant: { source: 'agent' } })))
-      .toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1', cause: 'review-cache-current-task-constraint-v1' })
+      .toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1', cause: 'review-cache-scope-grant-v1' })
     const additionalAsk = { ...eligible, id: 'unapproved-ask', reviewCacheSources: undefined }
     expect(decide(facts, context, [eligible, additionalAsk], deps({ reviewScopeGrant: { source: 'agent' } })))
+      .toMatchObject({ type: 'require-confirm' })
+  })
+
+  it('permits the narrow same-file grep user override while preserving per-call confirmation for other asks', () => {
+    const grepFacts = mkFacts('grep', 'read', [{ kind: 'path-target', path: '/work', zone: 'workdir-normal' }], 'low')
+    const grepContext = { ...mkContext('desktop'), policyTier: 'custom' as const }
+    const eligible = { id: 'grep-workdir-recursive-reusable', when: 'invocation' as const,
+      match: { lane: ['desktop', 'feishu', 'wechat'] as const, toolName: 'grep' }, action: 'ask' as const,
+      answerer: 'user' as const, reviewCacheSources: ['user'] as const, reason: 'review' }
+    expect(decide(grepFacts, grepContext, [eligible], deps({ reviewScopeGrant: { source: 'user' } })))
+      .toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+    expect(decide(grepFacts, grepContext, [eligible, { ...eligible, id: 'other-grep-ask', reviewCacheSources: undefined }],
+      deps({ reviewScopeGrant: { source: 'user' } }))).toMatchObject({ type: 'require-confirm' })
+    expect(decide(grepFacts, grepContext, [{ ...eligible, userOverride: true }], deps({ reviewScopeGrant: { source: 'user' } })))
+      .toMatchObject({ type: 'auto-allow', ruleId: 'review-cache-scope-grant-v1' })
+    expect(decide(grepFacts, grepContext, [{ ...eligible, action: 'confirm-every-time' }], deps({ reviewScopeGrant: { source: 'user' } })))
       .toMatchObject({ type: 'require-confirm' })
   })
 
@@ -171,7 +187,7 @@ describe('review scope cache policy boundary', () => {
       factsId: 'review-facts', factsDigest: 'b'.repeat(64), extractorVersion: 'facts-v1', factsRevision: 1,
       policyDomain: 'desktop', tier: 'standard', policyVersion: 'v1', policyRevision: 1, policyLane: 'desktop',
       rules: [eligible], disabledRuleIds: [], policyConfig: {}, migrationComplete: false })
-    expect(trace.ruleIds).toEqual(['review-cache-scope-grant-v1', 'review-cache-current-task-constraint-v1'])
+    expect(trace.ruleIds).toEqual(['review-cache-scope-grant-v1'])
     const before = fingerprintPolicyDependencies({ policyVersion: 'v1', policyRevision: 1, tier: 'standard', policyLane: 'desktop',
       rules: [eligible], disabledRuleIds: [], policyConfig: {}, migrationComplete: false })
     const after = fingerprintPolicyDependencies({ policyVersion: 'v1', policyRevision: 1, tier: 'standard', policyLane: 'desktop',

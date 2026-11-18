@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { executeRegisteredTool } from './toolInvocationCoordinator'
-import { createListWorkDirsRegisteredTool } from './listWorkDirsRegisteredTool'
+import { createListWorkDirsRegisteredTool, workDirDisclosureDigest } from './listWorkDirsRegisteredTool'
 import type { ToolExecutionContext } from './types'
 
 function setup() {
@@ -17,6 +17,17 @@ function setup() {
 }
 
 describe('list_work_dirs prepared registration', () => {
+  it('builds a stable digest from disclosed profile configuration and changes when disclosure changes', () => {
+    const { result } = setup()
+    const first = workDirDisclosureDigest(result)
+    const data = result.data as { directories: Array<Record<string, unknown>>; currentBoundId: string; activeProfileId: string }
+    expect(first).toMatch(/^[a-f0-9]{64}$/)
+    expect(workDirDisclosureDigest({ ...result, data: { ...data, currentBoundId: 'other', activeProfileId: 'other' } })).toBe(first)
+    expect(workDirDisclosureDigest({ ...result, data: { ...data, directories: [...data.directories].reverse() } })).toBe(first)
+    expect(workDirDisclosureDigest({ ...result, data: { ...data, directories: [{ ...data.directories[0], name: 'Changed' }] } })).not.toBe(first)
+    expect(workDirDisclosureDigest({ success: false, error: 'failure' })).toBeUndefined()
+  })
+
   it.each([
     ['null', null], ['array', []], ['string', 'profile'], ['number', 1], ['non-plain object', new Date()]
   ])('rejects malformed %s input before reading directory state', async (_shape, rawInput) => {

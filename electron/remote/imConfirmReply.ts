@@ -8,6 +8,7 @@ import type { MemoryTier } from '../../src/shared/confirmation/types'
 
 export type ImConfirmReply =
   | { kind: 'approve'; confirmId: string }
+  | { kind: 'approve_once'; confirmId: string }
   | { kind: 'approve_and_trust'; confirmId: string }
   /** 记N <id>：确认并记住第 N 档（编号对应 memoryTiers 顺序）。 */
   | { kind: 'remember'; confirmId: string; tier: number }
@@ -35,6 +36,7 @@ export function parseImConfirmReply(raw: string): ImConfirmReply {
     text === '确认' ||
     text === '否' ||
     text === '取消' ||
+    text === '仅本次' ||
     bareLower === 'y trust' ||
     bareLower === 'yes trust' ||
     text === '确认并信任'
@@ -44,7 +46,7 @@ export function parseImConfirmReply(raw: string): ImConfirmReply {
 
   const parts = text.split(/\s+/).filter(Boolean)
   if (parts.length < 2) {
-    if (/^(y|yes|n|no|确认|是|否|取消)/i.test(text) || /^信任/.test(text)) {
+    if (/^(y|yes|n|no|确认|是|否|取消|仅本次)/i.test(text) || /^信任/.test(text)) {
       return { kind: 'usage_hint' }
     }
     return { kind: 'not_confirm' }
@@ -57,6 +59,8 @@ export function parseImConfirmReply(raw: string): ImConfirmReply {
     return { kind: 'not_confirm' }
   }
   const confirmId = idRaw.toUpperCase()
+
+  if (parts.length === 2 && (verb === 'once' || verb === '仅本次' || verb === '本次')) return { kind: 'approve_once', confirmId }
 
   // 记N <id> / N <id>：确认并记住第 N 档（memoryTiers 编号）。
   // 数字简写是 IM 用户常用格式；第二项仍必须是两位确认码。
@@ -101,14 +105,16 @@ export const IM_CONFIRM_QUOTE_REQUIRED_HINT = '请引用当前确认提示，再
 
 export function formatImConfirmPromptFooter(opts?: {
   trustEligible?: boolean
+  allowReuseOnce?: boolean
   confirmId?: string
   memoryTiers?: MemoryTier[]
 }): string {
   const id = opts?.confirmId ? ` ${opts.confirmId}` : ' <两位确认码>'
+  const once = opts?.allowReuseOnce ? `，或「仅本次 ${id.trim()}」` : ''
   const base =
     opts?.trustEligible === false
-      ? `引用本条确认提示，再回复 Y${id} 确认，N${id} 取消`
-      : `引用本条确认提示，再回复 Y${id} 确认，N${id} 取消，或 Y${id} TRUST`
+      ? `引用本条确认提示，再回复 Y${id} 确认，N${id} 取消${once}`
+      : `引用本条确认提示，再回复 Y${id} 确认，N${id} 取消${once}，或 Y${id} TRUST`
   const tiers = opts?.memoryTiers
   if (!tiers || tiers.length === 0) return base
   // 记忆档位：用户可回复 `N <确认码>`，编号对应 memoryTiers 顺序。

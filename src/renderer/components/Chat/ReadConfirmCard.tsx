@@ -32,6 +32,8 @@ export function ReadConfirmCard({ record, onConfirm }: Props) {
         actionSummary={actionSummary}
         allowLabel={t('confirm.read.allow')}
         denyLabel={t('confirm.read.deny')}
+        onceLabel={t('confirm.write.allowOnce')}
+        allowOnce={record.allowReuseOnce === true}
         onConfirm={onConfirm}
       >
         <p className="read-confirm-card__note">{t('confirm.read.sensitiveNote')}</p>

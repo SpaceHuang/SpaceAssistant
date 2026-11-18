@@ -66,7 +66,7 @@ export function WriteConfirmCard({ record, onConfirm }: Props) {
   const memoryTierOptions = (record.memoryTiers ?? []).map((mt, i) => ({ label: mt.label, tier: i + 1 }))
   const handleConfirm: ToolConfirmHandler = (approved, options) => {
     const sel = memoryTier
-    onConfirm(approved, { ...options, ...(approved && sel != null ? { memoryTierOptionId: sel } : {}) })
+    onConfirm(approved, { ...options, ...(approved && options?.reuse !== 'once' && sel != null ? { memoryTierOptionId: sel } : {}) })
   }
 
   return (
@@ -75,6 +75,8 @@ export function WriteConfirmCard({ record, onConfirm }: Props) {
         actionSummary={actionSummary}
         allowLabel={t('confirm.write.allow')}
         denyLabel={t('confirm.write.deny')}
+        onceLabel={t('confirm.write.allowOnce')}
+        allowOnce={record.allowReuseOnce === true}
         onConfirm={handleConfirm}
         badges={
           add > 0 || remove > 0 ? (

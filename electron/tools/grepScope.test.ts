@@ -1,10 +1,12 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   GREP_DEFAULT_IGNORES,
+  isGrepSubtreeSemanticallyContained,
   grepSensitiveExcludes,
   planGrepInvocation,
   formatGrepNoMatchOutput,
@@ -14,6 +16,50 @@ import {
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-grep-scope-'))
 }
+
+describe('grep subtree grant containment', () => {
+  it('does not inherit a parent grant when a local ignore rule can widen an explicit child-root search', () => {
+    const root = tempDir()
+    fs.mkdirSync(path.join(root, 'private'))
+    fs.writeFileSync(path.join(root, '.gitignore'), 'private/\n')
+    fs.writeFileSync(path.join(root, 'private', 'a.txt'), 'needle\n')
+
+    expect(isGrepSubtreeSemanticallyContained(root, path.join(root, 'private'), { includeIgnored: false })).toBe(false)
+
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  it.each(['.ignore', '.rgignore'])('still rejects an %s-excluded child when includeIgnored only disables VCS ignores', (ignoreFile) => {
+    const root = tempDir()
+    fs.mkdirSync(path.join(root, 'private'))
+    fs.writeFileSync(path.join(root, ignoreFile), 'private/\n')
+    fs.writeFileSync(path.join(root, 'private', 'a.txt'), 'needle\n')
+    // includeIgnored only disables VCS ignores; these ripgrep-specific files can still
+    // make an explicit child-root invocation wider than the approved parent search.
+    // Keep the engine comparison when system rg is installed; CI need not install a global binary.
+    let hasSystemRipgrep = true
+    try {
+      execFileSync('rg', ['--version'], { stdio: 'ignore' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      hasSystemRipgrep = false
+    }
+    if (hasSystemRipgrep) {
+      const runRipgrep = (searchRoot: string) => {
+        const result = spawnSync('rg', ['--hidden', '--no-ignore-vcs', '--files-with-matches', 'needle', searchRoot], { cwd: root, encoding: 'utf8' })
+        expect(result.error).toBeUndefined()
+        expect([0, 1]).toContain(result.status)
+        return result.stdout
+      }
+      const parentMatches = runRipgrep('.')
+      const childMatches = runRipgrep('private')
+      expect(parentMatches).not.toContain('private/a.txt')
+      expect(childMatches).toContain('private/a.txt')
+    }
+    expect(isGrepSubtreeSemanticallyContained(root, path.join(root, 'private'), { includeIgnored: true })).toBe(false)
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+})
 
 describe('grepSensitiveExcludes（两引擎共用同一份规则生成，C1 配套硬要求 2）', () => {
   it('覆盖 .env / .env.* / secrets/ 三类敏感形态', () => {

@@ -57,6 +57,15 @@ describe('toolConfirmRegistry', () => {
     await expect(pending).resolves.toBe('approved')
   })
 
+  it('accepts the once choice only when the pending request enabled it', async () => {
+    const enabled = waitForToolConfirm('req-once', 'tool-enabled', undefined, undefined, undefined, true)
+    expect(submitToolConfirmResponse('req-once', 'tool-enabled', true, undefined, 'once')).toMatchObject({ accepted: true, outcome: 'approved-once' })
+    await expect(enabled).resolves.toBe('approved-once')
+    const disabled = waitForToolConfirm('req-once', 'tool-disabled')
+    expect(submitToolConfirmResponse('req-once', 'tool-disabled', true, undefined, 'once')).toMatchObject({ accepted: true, outcome: 'approved' })
+    await expect(disabled).resolves.toBe('approved')
+  })
+
   it('accepts a memory tier that belongs to the pending confirm decision', async () => {
     const pending = waitForToolConfirm('req-tier', 'tool-2', [
       { key: sessionTierKey, label: '本会话' },

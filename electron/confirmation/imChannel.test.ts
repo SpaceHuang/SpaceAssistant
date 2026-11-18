@@ -27,6 +27,17 @@ function audit(): AuditSink & { events: SecurityAuditEvent[] } {
 }
 
 describe('ImChannel（飞书/微信合并通道）', () => {
+  it('仅本次答复要求绑定编号和启用的请求，且不转换为复用批准', async () => {
+    const ch = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: () => ({ messageId: 'prompt' }) })
+    const p = ch.request({ ...req(), allowReuseOnce: true }, {
+      sessionId: 's-once', toolName: 'edit_file', messageId: 'm1', matchKey: 'owner'
+    })
+    const confirmId = ch.listPending()[0]!.confirmId!
+    await Promise.resolve()
+    expect(ch.tryResolveFromInbound({ kind: 'approve_once', confirmId }, { matchKey: 'owner', messageId: 'm2', quotedMessageId: 'prompt' })).toBe(true)
+    await expect(p).resolves.toMatchObject({ kind: 'approved', reuse: 'once', cause: 'user-approved' })
+  })
+
   it('把同步确认的 pending/settled 子工作事实关联到 Track', async () => {
     const child = vi.fn()
     const channel = createImChannelForTest({

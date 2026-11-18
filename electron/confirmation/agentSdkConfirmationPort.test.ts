@@ -107,6 +107,47 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(onApproved).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'approved' }), expect.anything(), context, memory)
   })
 
+  it('真人批准候选范围时触发授权登记回调，并保留仅本次选择', async () => {
+    const onScopeApproved = vi.fn()
+    const approvedCandidate = {
+      toolName: 'write_file', operation: 'write', scopeCandidateDigest: 'a'.repeat(64),
+      objects: [{ role: 'target', target: '/workspace/a.txt' }]
+    }
+    const approvedContext = {
+      ...context,
+      reviewScopeCandidate: approvedCandidate,
+      reviewScopeCandidateScope: { toolName: 'write_file', operation: 'write', sessionId: 'session-1', lane: 'desktop', approvalLifetime: 'session', objects: [{ role: 'target', value: '/workspace/a.txt' }] }
+    }
+    const port = createAgentSdkConfirmationPort({
+      createChannel: () => ({ request: async (request) => {
+        expect(request.allowReuseOnce).toBe(true)
+        return { kind: 'approved', answererKind: 'user', cause: 'user-approved', reuse: 'once' }
+      }, cancel: vi.fn() }),
+      publish: vi.fn(), cancel: vi.fn(), onScopeApproved
+    })
+    await port({ call: { invocationId: 'inv', toolCallId: 'scope-once', toolName: 'write_file', input: {} }, confirmationId: 'scope-once', answerer: 'user', reasonCode: 'write-confirm', context: approvedContext })
+    expect(onScopeApproved).toHaveBeenCalledOnce()
+    expect(onScopeApproved.mock.calls[0]?.[2]).toMatchObject({ kind: 'approved', answererKind: 'user', cause: 'user-approved', reuse: 'once' })
+  })
+
+  it.each(['agent', 'fallback'] as const)('将最终 %s 的仅本次选择传给授权登记回调', async (source) => {
+    const onScopeApproved = vi.fn()
+    const port = createAgentSdkConfirmationPort({
+      createChannel: () => ({ request: async () => source === 'agent'
+        ? { kind: 'approved' as const, answererKind: 'agent' as const, cause: 'agent-approved' as const, reuse: 'once' as const }
+        : { kind: 'timeout' as const, answererKind: 'agent' as const, cause: 'timeout' as const }, cancel: vi.fn() }),
+      publish: vi.fn(), cancel: vi.fn(), onScopeApproved,
+      ...(source === 'fallback' ? { fallback: async () => ({ kind: 'approved' as const, answerer: 'user' as const,
+        cause: 'user-approved' as const, receipt: 'fallback', reuse: 'once' as const }) } : {})
+    })
+    const result = await port({ call: { invocationId: `once-${source}`, toolCallId: `once-${source}`, toolName: 'grep', input: {} },
+      confirmationId: `once-${source}`, answerer: 'agent', reasonCode: 'review', context: {
+        ...context, reviewScopeCandidate: { toolName: 'grep' }, reviewScopeCandidateScope: { toolName: 'grep' }
+      } })
+    expect(result).toMatchObject({ kind: 'approved', reuse: 'once' })
+    expect(onScopeApproved.mock.calls[0]?.[2]).toMatchObject({ kind: 'approved', reuse: 'once' })
+  })
+
   it('通过真实 channel 与 SDK port 保留 Agent 裁决和 fail-closed fallback 语义', async () => {
     const { AgentChannel } = await import('./agentChannel')
     const { resolveConfirmChannel } = await import('./channels')
@@ -130,6 +171,16 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(invokeApproval).toHaveBeenCalledOnce()
     expect(result).toMatchObject({ kind: 'denied', answerer: 'agent', cause: 'agent-undetermined', userMessage: '缺少影响范围证据' })
     expect(fallback).not.toHaveBeenCalled()
+  })
+
+  it('把 gate 冻结的审核范围期限传入 ConfirmRequest', async () => {
+    const channel: ConfirmationChannel = { request: vi.fn(async () => ({ kind: 'approved' as const, answererKind: 'agent' as const, cause: 'agent-approved' as const })), cancel: vi.fn() }
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: vi.fn(), cancel: vi.fn() })
+    await port({ call: { invocationId: 'inv', toolCallId: 'lifetime', toolName: 'edit_file', input: {} }, confirmationId: 'lifetime', answerer: 'agent', reasonCode: 'agent-approval',
+      context: { ...context, lane: 'desktop', reviewScopeCandidate: { scopeCandidateDigest: 'a'.repeat(64), toolName: 'edit_file', operation: 'edit', objects: [{ role: 'target', target: '/work/a.txt' }] },
+        reviewScopeCandidateScope: { approvalLifetime: '7d' } } })
+    expect(channel.request).toHaveBeenCalledOnce()
+    expect(channel.request).toHaveBeenCalledWith(expect.objectContaining({ reviewScopeLifetime: '7d' }))
   })
 
   it('Desktop Agent 无法判定时进入人工 fallback，最终由真人审批', async () => {

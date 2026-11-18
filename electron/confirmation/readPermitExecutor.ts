@@ -9,6 +9,9 @@ import { recordPolicyExecutionVeto } from './audit'
 import type { ExecutionLane } from '../../src/shared/confirmation/types'
 import { findRegisteredFeishuAttachment, MAX_FEISHU_ATTACHMENT_BYTES } from '../feishu/feishuAttachmentRegistry'
 import { isPathWithinGrantedDirectory, normalizeDirectoryGrantPath } from '../../src/shared/sessionDirectoryGrant'
+import { isGrepSubtreeSemanticallyContained } from '../tools/grepScope'
+import { grepIgnoreContextDigest } from '../tools/grepIgnoreContext'
+import { getGrepExecutionProfile } from '../tools/grepExecutionProfile'
 
 type PermitResolveFailure = { ok: false; caseId: string; failureClass: 'input' | 'mechanism' | 'environment' | 'integration-violation'; factId?: string }
 type FilePermitResolveSuccess = { ok: true; path: string; targetKind: 'file'; fileHandle: FileHandle }
@@ -71,6 +74,26 @@ export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | '
   if (toolName === 'grep' && target.targetKind === 'directory') {
     if (target.scope !== 'subtree' || !target.identity) return deny('permit-target-scope-mismatch', 'mechanism')
     try {
+      if (target.grepParentScope) {
+        const parent = target.grepParentScope
+        if (path.resolve(ctx.workDir) !== path.resolve(parent.workDir)) return deny('read-grep-parent-workdir-mismatch', 'mechanism')
+        if (!isGrepSubtreeSemanticallyContained(parent.normalizedPath, target.normalizedPath, {
+          includeIgnored: input.include_ignored === true,
+          ...(typeof input.glob === 'string' ? { glob: input.glob } : {})
+        })) return deny('read-grep-parent-scope-mismatch', 'mechanism')
+        if (await fs.realpath(parent.normalizedPath) !== parent.normalizedPath) return deny('read-grep-parent-realpath-changed', 'mechanism')
+        const parentStat = await fs.stat(parent.normalizedPath)
+        if (!parentStat.isDirectory() || parentStat.dev !== parent.identity.dev || parentStat.ino !== parent.identity.ino || parentStat.mode !== parent.identity.mode) {
+          return deny('read-grep-parent-identity-changed', 'mechanism')
+        }
+        if (await grepIgnoreContextDigest(parent.workDir, parent.normalizedPath) !== parent.ignoreDigest) {
+          return deny('read-grep-parent-range-changed', 'mechanism')
+        }
+        const executionProfile = await getGrepExecutionProfile()
+        if (!executionProfile || executionProfile.engine !== parent.engine || executionProfile.fingerprint !== parent.engineFingerprint) {
+          return deny('read-grep-engine-changed', 'mechanism')
+        }
+      }
       if (await fs.realpath(target.normalizedPath) !== target.normalizedPath) return deny('read-directory-realpath-changed', 'mechanism')
       const stat = await fs.stat(target.normalizedPath)
       if (!stat.isDirectory() || stat.dev !== target.identity.dev || stat.ino !== target.identity.ino || stat.mode !== target.identity.mode) {

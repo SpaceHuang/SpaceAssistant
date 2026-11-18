@@ -234,6 +234,7 @@ export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string 
   const progressPrefix = formatFeishuRemoteProgressPrefix(pending.sessionId)
   const footer = formatImConfirmPromptFooter({
     trustEligible: pending.trustEligible === true,
+    allowReuseOnce: pending.allowReuseOnce === true,
     confirmId: pending.confirmId,
     memoryTiers: pending.memoryTiers
   })

@@ -42,6 +42,7 @@ export type ToolConfirmResponsePayload = {
   trustMcpServerId?: string
   trustMcpToolName?: string
   memoryTierOptionId?: number
+  reuse?: 'once'
 }
 
 export type ToolConfirmResponseResult =
@@ -350,6 +351,7 @@ export type SpaceAssistantApi = {
   // ===== 「安全策略」设置页（§7 五区，P4）=====
   /** 五区数据装配结果（套餐/确认模式/工具开关/确认记忆/审计摘要/规则视图）。 */
   securityGetSettingsModel: () => Promise<SecuritySettingsModelPayload>
+  securitySetReviewScopeLifetime: (payload: { lifetime: 'session' | 'process' | '24h' | '7d' }) => Promise<{ ok: true } | { ok: false; error: string }>
   /** Read the main-process policy domain selected by a trusted execution lane mapping. */
   securityReadPolicyForLane: (payload: { lane: 'desktop' | 'wechat' | 'feishu' }) => Promise<{
     domain: 'desktop' | 'im' | 'automation'

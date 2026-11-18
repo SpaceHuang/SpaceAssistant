@@ -120,7 +120,7 @@ function migrateLegacyDesktopDisabledRules(db: AppDatabase, disabled: string[]):
   })
   const selectedPackage = isPolicyPackage(current?.snapshot.selectedPackage)
     ? current.snapshot.selectedPackage : readPolicyPackages(db).desktop
-  const shouldCreateSnapshot = current === undefined && (disabled.length > 0 || legacyOverrides.length > 0 || selectedPackage !== 'standard')
+  const shouldCreateSnapshot = current === undefined
   if ((disabled.length === 0 && migrationComplete) || (current === undefined && !shouldCreateSnapshot)) return
   const overrides: Record<string, unknown> = { ...Object.fromEntries(legacyOverrides.map(({ ruleId, action }) => [ruleId, action])), ...currentOverrides }
   // The legacy disabled bit represented an explicit allow override and wins over

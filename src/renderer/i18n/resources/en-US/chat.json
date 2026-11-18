@@ -207,6 +207,7 @@
     },
     "write": {
       "allow": "Allow write",
+      "allowOnce": "Allow this time only",
       "deny": "Deny write",
       "editAction": "Edit \"{{fileName}}\"",
       "writeAction": "Write \"{{fileName}}\"",

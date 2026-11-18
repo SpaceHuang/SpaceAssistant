@@ -9,8 +9,7 @@ import {
   SafeAtomicWriteUncertainError,
   cleanupSafeWriteTemps,
   captureFileIdentity,
-  safeAtomicWrite,
-  verifyReviewFileReceipt
+  safeAtomicWrite
 } from './safeAtomicWrite'
 import * as directoryHandleWriterModule from './confirmation/directoryHandleWriter'
 import { DIRECTORY_WRITER_SOURCE } from './confirmation/directoryHandleWriter'
@@ -29,16 +28,13 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
     await fs.rm(outside, { recursive: true, force: true }).catch(() => {})
   })
 
-  it('returns a content and open-handle receipt only when explicitly requested', async () => {
+  it('verifies committed content through the opened handle before returning success', async () => {
     const target = await resolveSafeWriteTarget(workDir, 'receipt.txt')
     const result = await safeAtomicWrite({ targetPath: target.targetPath, parentReal: target.parentReal,
-      body: 'receipt body', expectedIdentity: null, captureReceipt: true })
-    expect(result.receipt).toMatchObject({ size: 12, nlink: 1, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
+      body: 'receipt body', expectedIdentity: null, verifyCommittedContent: true })
     const written = await fs.stat(target.targetPath)
-    expect(result.receipt).toMatchObject({ dev: written.dev, ino: written.ino })
-    expect(await verifyReviewFileReceipt(target.targetPath, result.receipt!)).toBe(true)
-    await fs.writeFile(target.targetPath, 'changed')
-    expect(await verifyReviewFileReceipt(target.targetPath, result.receipt!)).toBe(false)
+    expect(result).toMatchObject({ dev: written.dev, ino: written.ino, size: 12 })
+    expect(await fs.readFile(target.targetPath, 'utf8')).toBe('receipt body')
   })
 
   it('rejects a same-length in-place rewrite immediately after the atomic commit', async () => {
@@ -46,7 +42,7 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
     const payload = JSON.stringify({ directory: workDir,
       expectedDirectoryIdentity: (() => { const { dev, ino, mode, size, mtimeMs } = require('fs').statSync(workDir); return { dev, ino, mode, size, mtimeMs } })(),
       targetName: 'race-receipt.txt', tempName: '.sa-wtmp-race', bodyBase64: Buffer.from('approved').toString('base64'),
-      expectedFileIdentity: null, mode: 0o600, captureReceipt: true })
+      expectedFileIdentity: null, mode: 0o600, verifyCommittedContent: true })
     const realFs = require('fs') as typeof import('fs')
     const injectedFs = Object.create(realFs) as typeof import('fs')
     injectedFs.readFileSync = ((file: unknown, ...args: unknown[]) => file === 0 ? payload : realFs.readFileSync(file as never, ...(args as never[]))) as typeof realFs.readFileSync
@@ -70,7 +66,7 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
     }
     const firstResultEnd = output.indexOf('}{') + 1
     expect(JSON.parse(firstResultEnd > 0 ? output.slice(0, firstResultEnd) : output))
-      .toMatchObject({ ok: false, caseId: 'write-committed-receipt-invalid' })
+      .toMatchObject({ ok: false, caseId: 'write-committed-content-invalid' })
     expect(await fs.readFile(target.targetPath, 'utf8')).toBe('tampered')
   })
 
@@ -85,7 +81,7 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
     const payload = JSON.stringify({ directory: workDir,
       expectedDirectoryIdentity: { dev: parent.dev, ino: parent.ino, mode: parent.mode, size: parent.size, mtimeMs: parent.mtimeMs },
       targetName: path.basename(targetPath), tempName: `.sa-wtmp-truncated-${commitMethod}`, bodyBase64: Buffer.from('approved').toString('base64'),
-      expectedFileIdentity, mode: 0o600, captureReceipt: true })
+      expectedFileIdentity, mode: 0o600, verifyCommittedContent: true })
     const realFs = require('fs') as typeof import('fs')
     const injectedFs = Object.create(realFs) as typeof import('fs')
     const localPath = (value: string) => path.isAbsolute(value) ? value : path.join(workDir, value)
@@ -109,17 +105,17 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
     }
     const firstResultEnd = output.indexOf('}{') + 1
     expect(JSON.parse(firstResultEnd > 0 ? output.slice(0, firstResultEnd) : output))
-      .toMatchObject({ ok: false, caseId: 'write-committed-receipt-invalid' })
+      .toMatchObject({ ok: false, caseId: 'write-committed-content-invalid' })
     expect(await fs.readFile(targetPath, 'utf8')).toBe('')
   })
 
-  it('maps a committed receipt failure to SafeAtomicWriteUncertainError', async () => {
+  it('maps a committed-content verification failure to SafeAtomicWriteUncertainError', async () => {
     const worker = vi.spyOn(directoryHandleWriterModule, 'writeFileAtomicallyBoundToDirectory').mockResolvedValue({
-      ok: false, caseId: 'write-committed-receipt-invalid'
+      ok: false, caseId: 'write-committed-content-invalid'
     })
     try {
       await expect(safeAtomicWrite({ targetPath: path.join(workDir, 'uncertain.txt'), parentReal: workDir,
-        body: 'approved', expectedIdentity: null, captureReceipt: true })).rejects.toBeInstanceOf(SafeAtomicWriteUncertainError)
+        body: 'approved', expectedIdentity: null, verifyCommittedContent: true })).rejects.toBeInstanceOf(SafeAtomicWriteUncertainError)
     } finally { worker.mockRestore() }
   })
 

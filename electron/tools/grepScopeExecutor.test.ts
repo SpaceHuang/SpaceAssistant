@@ -221,6 +221,32 @@ describe('G8：--no-ignore-vcs 接线守卫（§7.9 改动 3，B1：漏 grepWith
   })
 })
 
+describe('G-02 inherited parent execution exclusions', () => {
+  it('passes the inherited mount exclusion to ripgrep planning', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-grep-inherited-mount-'))
+    try {
+      const captured: string[][] = []
+      await grepWithRg('rg', root, path.resolve(root, 'child'), 'needle', baseArgs(), 5000,
+        new AbortController().signal, () => {}, capturingSpawn(captured), undefined, undefined, undefined,
+        { extraExcludeDirNames: ['wiki-vocabulary'] })
+      expect(captured[0]).toContain('!**/wiki-vocabulary/**')
+      expect(captured[0]).toContain('!**/wiki-vocabulary')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('keeps inherited mount exclusions active in the JS fallback', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-grep-inherited-walk-'))
+    const alias = path.join(root, 'wiki-vocabulary')
+    fs.mkdirSync(alias)
+    fs.writeFileSync(path.join(alias, 'private.txt'), 'needle')
+    try {
+      const output = await grepFallbackJs(root, root, 'needle', baseArgs({ outputMode: 'files_with_matches' }),
+        new AbortController().signal, () => {}, 5000, undefined, undefined, ['wiki-vocabulary'])
+      expect(output).toBe('No matches found')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
 describe('I3：超长行统一「行首截断 + 明示标注」（§7.11 子项 2，D14/D15，AC-45/46）', () => {
   it('rgArgs 常含 --max-columns 300 与 --max-columns-preview（AC-46）', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-maxcols-'))

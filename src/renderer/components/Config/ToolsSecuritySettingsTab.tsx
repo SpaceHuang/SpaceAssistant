@@ -878,7 +878,9 @@ function AuditSection({
  */
 export function SecuritySettingsTab({ active, browser, onBrowserChange }: Props) {
   const { t } = useTypedTranslation('config')
+  const { message } = App.useApp()
   const [model, setModel] = useState<SecuritySettingsModelPayload | null>(null)
+  const [savingReviewScopeLifetime, setSavingReviewScopeLifetime] = useState(false)
 
   const reloadModel = useCallback(async () => {
     try {
@@ -887,6 +889,17 @@ export function SecuritySettingsTab({ active, browser, onBrowserChange }: Props)
       /* 装配失败保持现状 */
     }
   }, [])
+
+  const saveReviewScopeLifetime = useCallback(async (lifetime: 'session' | 'process' | '24h' | '7d') => {
+    setSavingReviewScopeLifetime(true)
+    try {
+      const result = await window.api.securitySetReviewScopeLifetime({ lifetime })
+      if (!result.ok) { message.error(result.error); return }
+      message.success(t('toolsSecurity.reviewScope.saved'))
+      await reloadModel()
+    } catch { message.error(t('toolsSecurity.reviewScope.saveFailed')) }
+    finally { setSavingReviewScopeLifetime(false) }
+  }, [message, reloadModel, t])
 
   useEffect(() => {
     if (active) void reloadModel()
@@ -900,6 +913,25 @@ export function SecuritySettingsTab({ active, browser, onBrowserChange }: Props)
         className="config-security-settings"
         defaultActiveKey={['policy']}
         items={[
+          {
+            key: 'reviewScope',
+            label: t('toolsSecurity.reviewScope.title'),
+            children: (
+              <Form.Item label={t('toolsSecurity.reviewScope.lifetimeLabel')} extra={t('toolsSecurity.reviewScope.hint')}>
+                <Select
+                  disabled={savingReviewScopeLifetime}
+                  value={model?.reviewScopeLifetime ?? 'session'}
+                  onChange={(value: 'session' | 'process' | '24h' | '7d') => void saveReviewScopeLifetime(value)}
+                  options={[
+                    { value: 'session', label: t('toolsSecurity.reviewScope.session') },
+                    { value: 'process', label: t('toolsSecurity.reviewScope.process') },
+                    { value: '24h', label: t('toolsSecurity.reviewScope.day') },
+                    { value: '7d', label: t('toolsSecurity.reviewScope.week') }
+                  ]}
+                />
+              </Form.Item>
+            )
+          },
           {
             key: 'policy',
             label: t('toolsSecurity.policy.title'),

@@ -21,7 +21,6 @@ import { resolveReadPermitTarget } from '../confirmation/readPermitExecutor'
 import { recordPolicyExecutionVeto } from '../confirmation/audit'
 import { readDirectoryBoundToIdentity } from '../confirmation/directoryHandleReader'
 import { validateWriteExecutionPermit } from '../confirmation/writeExecutionPermit'
-import { beginReviewScopeWrite } from '../confirmation/reviewScopeWrite'
 import { resolvePermittedWriteTarget } from '../confirmation/writePermitExecutor'
 import { resolveWikiMount } from '../wiki/wikiMount'
 import { acquireWikiWriteMutex } from '../wiki/wikiWriteMutex'
@@ -51,6 +50,11 @@ import {
   type RipgrepUnavailableReason
 } from './ripgrepBinary'
 import { planGrepInvocation, formatGrepNoMatchOutput, type GrepScope } from './grepScope'
+import { getGrepExecutionProfile } from './grepExecutionProfile'
+import { normalizeGrepArgs } from './grepArgs'
+import type { GrepExecArgs } from './grepArgs'
+export { normalizeGrepArgs, validateGrepInput } from './grepArgs'
+export type { GrepExecArgs, GrepNormalizeResult } from './grepArgs'
 import { probeReadPathFact } from '../confirmation/extractors/readPathFacts'
 import { buildReadExecutionPermit } from '../confirmation/readExecutionPermit'
 import { WIKI_VOCABULARY_PREFIX, DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
@@ -967,26 +971,22 @@ export const editFileExecutor: ToolExecutor = {
         if (ctx.writeExecutionPermit !== writePermitAtStart) {
           return { ...writePermitFailure(new Error('write-permit-changed-during-execution')), duration: Date.now() - started }
         }
-        const reviewScopeWrite = beginReviewScopeWrite(ctx)
-        let writeReceipt: Awaited<ReturnType<typeof safeAtomicWrite>>
         try {
-          writeReceipt = await safeAtomicWrite({
+          await safeAtomicWrite({
             targetPath: abs,
             parentReal: writeTarget.parentReal,
             body: next,
             expectedIdentity,
-            ...(reviewScopeWrite.captureReceipt ? { captureReceipt: true } : {}),
+            verifyCommittedContent: true,
             ...(ctx.writeExecutionPermit ? { expectedParentIdentity: ctx.writeExecutionPermit.target.parentIdentity } : {}),
             signal: op
           })
         } catch (e) {
-          reviewScopeWrite.fail()
           if (e instanceof SafeAtomicWriteUncertainError) throw e
           const ab = fileToolAbortResult(op, '编辑超时', started)
           if (ab) return ab
           throw e
         }
-        reviewScopeWrite.complete(writeReceipt.receipt)
         await recordFileStateAfterWrite(ctx.fileStateCache, abs, next)
         return {
           success: true,
@@ -1115,26 +1115,22 @@ export const writeFileExecutor: ToolExecutor = {
       if (ctx.writeExecutionPermit !== writePermitAtStart) {
         return { ...writePermitFailure(new Error('write-permit-changed-during-execution')), duration: Date.now() - started }
       }
-      const reviewScopeWrite = beginReviewScopeWrite(ctx)
-      let writeReceipt: Awaited<ReturnType<typeof safeAtomicWrite>>
       try {
-        writeReceipt = await safeAtomicWrite({
+        await safeAtomicWrite({
           targetPath: abs,
           parentReal: writeTarget.parentReal,
           body,
           expectedIdentity,
-          ...(reviewScopeWrite.captureReceipt ? { captureReceipt: true } : {}),
+          verifyCommittedContent: true,
           ...(ctx.writeExecutionPermit ? { expectedParentIdentity: ctx.writeExecutionPermit.target.parentIdentity } : {}),
           signal: op
         })
       } catch (e) {
-        reviewScopeWrite.fail()
         if (e instanceof SafeAtomicWriteUncertainError) throw e
         const ab = fileToolAbortResult(op, '写入超时，可稍后重试', started)
         if (ab) return ab
         throw e
       }
-      reviewScopeWrite.complete(writeReceipt.receipt)
       await recordFileStateAfterWrite(ctx.fileStateCache, abs, body)
       const lineStats = boundedWriteLineStats(beforeContent, body)
       return { success: true, data: { path: rel, bytesWritten: Buffer.byteLength(body, 'utf8'), ...lineStats }, duration: Date.now() - started }
@@ -1146,25 +1142,6 @@ export const writeFileExecutor: ToolExecutor = {
       dispose()
     }
   }
-}
-
-export type GrepExecArgs = {
-  glob?: string
-  outputMode: string
-  ignoreCase: boolean
-  showLineNumber: boolean
-  context?: number
-  multiline: boolean
-  headLimit: number
-  /** 调用级超时秒数（clamp 后 5～600）；缺省回落设置值 grepTimeoutSec（产品增强：超时可操作引导） */
-  timeoutSeconds?: number
-  /**
-   * R6：解除默认忽略名单（GREP_DEFAULT_IGNORES）与隐藏条目过滤（--hidden），
-   * 并经 noIgnoreVcs（与设置项 grepSearchGitignored 的 OR，§7.9）追加 --no-ignore-vcs 解除 .gitignore 等
-   * 版本库忽略规则；不解除 .ignore/.rgignore（越界的 --no-ignore 不推）。
-   * 敏感路径不由此开关解除。（§1.5 订正：原注释声称对齐 -uu 落了一半，--no-ignore 从未推送）
-   */
-  includeIgnored: boolean
 }
 
 export type RipgrepRunResult =
@@ -1186,127 +1163,6 @@ export type GrepTerminateInfo = {
 
 const GREP_TERMINATE_GRACE_MS = 1_500
 const GREP_SETTLE_SLACK_MS = 500
-
-/**
- * R7：grep 参数归一的唯一入口（校验层与执行层共用，判定按「生效值」而非「字段是否出现」）。
- * - 等价默认值（context=0 / multiline=false / show_line_number 任意值于非 content 模式）不报错；
- * - 有实际效果的冲突（非 content + context>0 / multiline=true）报 param-conflict 并给可执行建议。
- */
-export type GrepNormalizeResult =
-  | { ok: true; args: GrepExecArgs; effectful: string[] }
-  | {
-      ok: false
-      error: { code: 'param-conflict'; field: string; mode: string; allowed: string; suggestedWrite: string }
-    }
-
-const GREP_MODES = ['files_with_matches', 'content', 'count'] as const
-
-export function normalizeGrepArgs(input: Record<string, unknown>): GrepNormalizeResult {
-  const outputMode = (typeof input.output_mode === 'string' ? input.output_mode : 'files_with_matches') as
-    | (typeof GREP_MODES)[number]
-    | string
-  if (!GREP_MODES.includes(outputMode as (typeof GREP_MODES)[number])) {
-    return {
-      ok: false,
-      error: {
-        code: 'param-conflict',
-        field: 'output_mode',
-        mode: String(outputMode),
-        allowed: 'files_with_matches | content | count',
-        suggestedWrite: '去掉 output_mode 或改用 files_with_matches / content / count 之一'
-      }
-    }
-  }
-  const contextRaw = typeof input.context === 'number' ? input.context : undefined
-  if (contextRaw !== undefined && (!Number.isInteger(contextRaw) || contextRaw < 0 || contextRaw > 1000)) {
-    return {
-      ok: false,
-      error: {
-        code: 'param-conflict',
-        field: 'context',
-        mode: outputMode,
-        allowed: '0～1000 的整数',
-        suggestedWrite: '去掉 context 或改为 0～1000 的整数'
-      }
-    }
-  }
-  const headLimit = typeof input.head_limit === 'number' ? input.head_limit : 100
-  if (!Number.isInteger(headLimit) || headLimit < 0 || headLimit > 1_000_000) {
-    return {
-      ok: false,
-      error: {
-        code: 'param-conflict',
-        field: 'head_limit',
-        mode: outputMode,
-        allowed: '0～1000000 的整数',
-        suggestedWrite: '去掉 head_limit 或改为 0～1000000 的整数'
-      }
-    }
-  }
-  // 调用级超时（产品增强）：clamp 到 5～600 秒；缺省 undefined（回落设置值 grepTimeoutSec）
-  const GREP_TIMEOUT_MIN = 5
-  const GREP_TIMEOUT_MAX = 600
-  let timeoutSeconds: number | undefined
-  if (input.timeout !== undefined) {
-    // 非法值（非数字 / 非正数）直接 paramConflict；只有正数才进入 clamp
-    if (typeof input.timeout !== 'number' || !Number.isFinite(input.timeout) || input.timeout <= 0) {
-      return {
-        ok: false,
-        error: {
-          code: 'param-conflict',
-          field: 'timeout',
-          mode: outputMode,
-          allowed: '5～600 的数字（秒）',
-          suggestedWrite: '去掉 timeout 或改为 5～600 的数字'
-        }
-      }
-    }
-    timeoutSeconds = Math.min(GREP_TIMEOUT_MAX, Math.max(GREP_TIMEOUT_MIN, input.timeout))
-  }
-
-  // 判定依据：生效值（>0 / true），不是「字段是否出现」。show_line_number 不计入冲突
-  // （评审 P2-1：它只在 content 模式有效果，而 content 正是它适用的模式）。
-  const effectful: string[] = []
-  if (contextRaw !== undefined && contextRaw > 0) effectful.push(`context=${contextRaw}`)
-  if (input.multiline === true) effectful.push('multiline=true')
-  if (outputMode !== 'content' && effectful.length > 0) {
-    return {
-      ok: false,
-      error: {
-        code: 'param-conflict',
-        field: effectful[0]!,
-        mode: outputMode,
-        allowed: '仅 output_mode=content 下生效',
-        suggestedWrite: `改用 output_mode=content，或去掉 ${effectful.join(' / ')}`
-      }
-    }
-  }
-
-  return {
-    ok: true,
-    effectful,
-    args: {
-      glob: typeof input.glob === 'string' ? input.glob : undefined,
-      outputMode,
-      ignoreCase: Boolean(input.ignore_case),
-      // 生效值只在 content 模式有意义；非 content 模式一律归一为「无效果」
-      showLineNumber: outputMode === 'content' && input.show_line_number !== false,
-      context: outputMode === 'content' ? contextRaw : undefined,
-      multiline: outputMode === 'content' && Boolean(input.multiline),
-      headLimit,
-      timeoutSeconds,
-      includeIgnored: Boolean(input.include_ignored)
-    }
-  }
-}
-
-/** R7 兼容导出：薄壳——判定规则只有 normalizeGrepArgs 一份。 */
-export function validateGrepInput(input: Record<string, unknown>): string | null {
-  const r = normalizeGrepArgs(input)
-  if (r.ok) return null
-  const { field, mode, allowed, suggestedWrite } = r.error
-  return `grep.paramConflict(${field};${mode};${allowed};${suggestedWrite})`
-}
 
 export function createGrepRipgrepDiagnostic(resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch' | 'path'>): string {
   return `source=${resolved.source};platform=${resolved.platform};arch=${resolved.arch};status=${resolved.path ? 'ready' : 'unavailable'}`
@@ -2223,13 +2079,16 @@ export const grepExecutor: ToolExecutor = {
       // 必须同一组 overrides，否则 rg 实际行为与对外报告的范围会不一致（§7.6 改动 2，B1）
       const searchKind: 'file' | 'directory' = ctx.readExecutionPermit?.targets[0]?.targetKind === 'directory' ? 'directory' : 'file'
       // T1.11c：双根编排的 workDir 根子调用携带挂载前缀实体目录排除（§7.7 去重）
-      const extraExcludeDirNames = dualRootExtrasByCtx.get(ctx)
+      const extraExcludeDirNames = [...new Set([
+        ...(dualRootExtrasByCtx.get(ctx) ?? []),
+        ...(ctx.readExecutionPermit?.targets[0]?.grepParentScope?.extraExcludeDirNames ?? [])
+      ])]
       const planOverrides = { searchKind, searchGitignored: ctx.toolsConfig.grepSearchGitignored, extraExcludeDirNames }
       const executeFallback = async (): Promise<ToolExecutorResult> => {
         const fallbackText = await grepFallbackJs(
           ctx.workDir, absSearch, pattern, gargs, ctx.signal,
           (message) => ctx.sendProgress('grep', message), timeoutMs, permitFileHandle,
-          undefined, extraExcludeDirNames
+          undefined, planOverrides.extraExcludeDirNames
         )
         const permitTarget = ctx.readExecutionPermit?.targets[0]
         const authorizedIdentity = permitTarget?.identity
@@ -2275,6 +2134,16 @@ export const grepExecutor: ToolExecutor = {
           duration: Date.now() - started
         }
       }
+      const grepParentScope = ctx.readExecutionPermit?.targets[0]?.grepParentScope
+      if (grepParentScope) {
+        const currentProfile = await getGrepExecutionProfile()
+        if (!currentProfile || currentProfile.engine !== grepParentScope.engine || currentProfile.fingerprint !== grepParentScope.engineFingerprint) {
+          const caseId = 'read-grep-engine-changed'
+          recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass: 'mechanism', caseId })
+          return { success: false, error: '搜索引擎已变化，已停止继承范围搜索。', diagnostic: { caseId, retryable: false, category: 'mechanism' }, duration: Date.now() - started }
+        }
+        if (grepParentScope.engine === 'walk') return await executeFallback()
+      }
       if (!resolved.path) {
         void ctx.recordDiagnostic?.({
           code: 'grep-ripgrep-unavailable',
@@ -2284,6 +2153,11 @@ export const grepExecutor: ToolExecutor = {
       }
       const availability = await inspectRipgrepBinary(resolved)
       if (!availability.available) {
+        if (grepParentScope) {
+          const caseId = 'read-grep-engine-changed'
+          recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass: 'mechanism', caseId })
+          return { success: false, error: '搜索引擎已变化，已停止继承范围搜索。', diagnostic: { caseId, retryable: false, category: 'mechanism' }, duration: Date.now() - started }
+        }
         void ctx.recordDiagnostic?.({
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, availability.reason)

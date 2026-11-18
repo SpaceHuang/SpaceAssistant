@@ -3,7 +3,7 @@ import { canonicalKeyJson } from './confirmation/sqliteDecisionCache'
 import { tokenizeShellArgv } from './shell/shellCommandParser'
 import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmation/confirmationTimeout'
 
-export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
+export type ToolConfirmOutcome = 'approved' | 'approved-once' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
 
 type Waiter = {
   requestId: string
@@ -22,6 +22,7 @@ type Waiter = {
   trustMcpServerId?: string
   trustMcpToolName?: string
   sessionId?: string
+  allowReuseOnce?: boolean
   generation: number
   revision: number
   status?: 'pending' | 'committing' | 'cancelled'
@@ -42,7 +43,8 @@ export function waitForToolConfirm(
   toolUseId: string,
   memoryTiers?: MemoryTier[],
   scope?: { toolName: string; lane: string; sessionId?: string; generation?: number; revision?: number; trustCommands?: string[]; trustDomains?: string[]; trustActDomains?: string[]; trustMcpServerId?: string; trustMcpToolName?: string },
-  timeoutMs?: number
+  timeoutMs?: number,
+  allowReuseOnce = false
 ): Promise<ToolConfirmOutcome> {
   const key = confirmKey(requestId, toolUseId, scope?.sessionId)
   const existing = pending.get(key)
@@ -79,7 +81,8 @@ export function waitForToolConfirm(
       ...(scope?.trustActDomains ? { trustActDomains: new Set(scope.trustActDomains) } : {}),
       ...(scope?.trustMcpServerId ? { trustMcpServerId: scope.trustMcpServerId } : {}),
       ...(scope?.trustMcpToolName ? { trustMcpToolName: scope.trustMcpToolName } : {}),
-      ...(memoryTiers?.length ? { memoryTiers: memoryTiers.map((tier) => ({ ...tier })) } : {})
+      ...(memoryTiers?.length ? { memoryTiers: memoryTiers.map((tier) => ({ ...tier })) } : {}),
+      allowReuseOnce
     })
   })
   const registered = pending.get(key)
@@ -93,9 +96,10 @@ export function prepareToolConfirm(
   toolUseId: string,
   memoryTiers?: MemoryTier[],
   scope?: { toolName: string; lane: string; sessionId?: string; generation?: number; revision?: number; trustCommands?: string[]; trustDomains?: string[]; trustActDomains?: string[]; trustMcpServerId?: string; trustMcpToolName?: string },
-  timeoutMs?: number
+  timeoutMs?: number,
+  allowReuseOnce = false
 ): Promise<ToolConfirmOutcome> {
-  return waitForToolConfirm(requestId, toolUseId, memoryTiers, scope, timeoutMs)
+  return waitForToolConfirm(requestId, toolUseId, memoryTiers, scope, timeoutMs, allowReuseOnce)
 }
 
 export function isPendingTrust(requestId: string, toolUseId: string, kind: 'command' | 'domain' | 'act-domain' | 'mcp', value: string, secondaryValue?: string, sessionId?: string): boolean {
@@ -170,16 +174,17 @@ export function getPendingMemoryTiers(requestId: string, toolUseId: string, sess
 }
 
 export type ToolConfirmSubmitResult =
-  | { accepted: true; outcome: 'approved' | 'rejected' }
+  | { accepted: true; outcome: 'approved' | 'approved-once' | 'rejected' }
   | { accepted: false; outcome: 'missing' }
 
-export function submitToolConfirmResponse(requestId: string, toolUseId: string, approved: boolean, sessionId?: string): ToolConfirmSubmitResult {
+export function submitToolConfirmResponse(requestId: string, toolUseId: string, approved: boolean, sessionId?: string, reuse?: 'once'): ToolConfirmSubmitResult {
   const key = confirmKey(requestId, toolUseId, sessionId)
   const w = pending.get(key)
   if (!w || w.status === 'cancelled') return { accepted: false, outcome: 'missing' }
+  if (reuse === 'once' && !w.allowReuseOnce) reuse = undefined
   clearTimeout(w.timeoutId)
   pending.delete(key)
-  const outcome: ToolConfirmOutcome = approved ? 'approved' : 'rejected'
+  const outcome: ToolConfirmOutcome = approved ? (reuse === 'once' ? 'approved-once' : 'approved') : 'rejected'
   // 推迟到下一事件循环，避免在 IPC handler 返回前同步续跑 toolChatLoop（浏览器启动等重活）
   setImmediate(() => w.resolve(outcome))
   return { accepted: true, outcome }

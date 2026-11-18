@@ -46,8 +46,8 @@ describe('security policy action API compatibility contract', () => {
     const setPackage = handlers.get('security:set-policy-package')!
     const publish = vi.spyOn(getDefaultAgentRuntime().policyAuthorizationChanges, 'publish')
     try {
-      const first = await setPackage({}, { lane: 'desktop', package: 'custom', expectedRevision: 0 })
-      expect(first).toMatchObject({ ok: true, revision: 1 })
+      const first = await setPackage({}, { lane: 'desktop', package: 'custom', expectedRevision: 1 })
+      expect(first).toMatchObject({ ok: true, revision: 2 })
       expect(publish).toHaveBeenCalledTimes(1)
       expect(publish).toHaveBeenCalledWith('desktop')
       const before = readPolicyBehaviorSnapshot(getDbConnection(db), 'desktop', { supportedBehaviorVersions: ['desktop-v1'] })
@@ -56,7 +56,7 @@ describe('security policy action API compatibility contract', () => {
 
       const stale = await setPackage({}, { lane: 'desktop', package: 'standard', expectedRevision: 0 })
 
-      expect(stale).toMatchObject({ ok: false, error: 'POLICY_REVISION_CONFLICT', currentRevision: 1 })
+      expect(stale).toMatchObject({ ok: false, error: 'POLICY_REVISION_CONFLICT', currentRevision: 2 })
       expect(readPolicyBehaviorSnapshot(getDbConnection(db), 'desktop', { supportedBehaviorVersions: ['desktop-v1'] })).toEqual(before)
       expect(getDbConnection(db).prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get()).toEqual(beforeEpoch)
       expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM policy_audit_events WHERE domain='desktop'").get()).toEqual(beforeAuditCount)

@@ -308,6 +308,14 @@ describe('AssistantFactAggregator', () => {
 })
 
 describe('AssistantFactAggregator：agent 裁决路径标记（H1）', () => {
+  it('仅将主进程授予的范围候选资格投影到确认工具记录', () => {
+    const result = apply([
+      { type: 'tool-use', id: 't-scope', toolName: 'write_file', input: { path: '/workspace/a.txt' } },
+      { type: 'confirm-requested', id: 't-scope', riskLevel: 'high', allowReuseOnce: true }
+    ])
+    expect(result.toolCalls?.[0]?.allowReuseOnce).toBe(true)
+  })
+
   it('confirm-requested 将脚本路径分析提示投影到工具记录', () => {
     const result = apply([
       { type: 'tool-use', id: 't-script', toolName: 'run_script', input: { code: 'custom_accessor(x)' } },
