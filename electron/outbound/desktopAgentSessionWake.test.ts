@@ -37,4 +37,14 @@ describe('wakeQueuedAgentSessions', () => {
     expect(drain).toHaveBeenCalledWith('blocked-target', 'startup-recovery')
     expect(recoverTarget).not.toHaveBeenCalled()
   })
+
+  it('只查询有桌面队列消息的候选会话，空队列不查询队首', () => {
+    const getNextQueued = vi.fn((sessionId: string) => sessionId === 'agent-target' ? { source: 'agent-session' } : null)
+    const drain = vi.fn()
+    wakeQueuedAgentSessions({ sessionIds: () => ['agent-target'], getNextQueued,
+      recoverTarget: () => ({ status: 'ready' }), reason: 'startup-recovery', drain })
+    expect(getNextQueued).toHaveBeenCalledTimes(1)
+    expect(getNextQueued).toHaveBeenCalledWith('agent-target')
+    expect(drain).toHaveBeenCalledWith('agent-target', 'startup-recovery')
+  })
 })

@@ -2106,6 +2106,13 @@ export function getNextDesktopQueueInput(db: AppDatabase, sessionId: string): Qu
     ...(row.queue_request_id ? { requestId: row.queue_request_id } : {}), source }
 }
 
+/** Candidate sessions for desktop queue recovery; the partial index keeps empty databases cheap. */
+export function listDesktopQueuedSessionIds(db: AppDatabase): string[] {
+  return (getDbConnection(db).prepare(`SELECT DISTINCT session_id FROM messages INDEXED BY idx_messages_queued_desktop_session
+    WHERE queue_scope='desktop' AND role='user' AND status='queued'
+    ORDER BY session_id`).all() as Array<{ session_id: string }>).map(({ session_id }) => session_id)
+}
+
 /** Facts-only source projection for session.read; never parses the visible message envelope. */
 export function readAgentSessionMessageSource(db: AppDatabase, input: { sessionId: string; messageId: string }):
   { kind: 'agent-session'; ownerSessionId: string; requestId: string } | undefined {

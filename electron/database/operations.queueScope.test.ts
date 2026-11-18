@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appendMessage, createSession, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getNextQueuedMessageInScope, listQueuedUserMessages, claimQueuedTurnAtomically, claimQueuedTurnAtomicallyInScope, updateQueueInputReceiptState, updateQueueInputReceiptStateInScope, reorderQueuedUserMessages, reorderQueuedUserMessagesInScope, getChatMessagePage, getMessageSkeletons, getMessagesPage } from './operations'
+import { appendMessage, createSession, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getNextQueuedMessageInScope, listQueuedUserMessages, claimQueuedTurnAtomically, claimQueuedTurnAtomicallyInScope, updateQueueInputReceiptState, updateQueueInputReceiptStateInScope, reorderQueuedUserMessages, reorderQueuedUserMessagesInScope, getChatMessagePage, getMessageSkeletons, getMessagesPage, listDesktopQueuedSessionIds } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { serializeQueueScope } from '../../src/shared/queueScope'
@@ -11,6 +11,22 @@ function addDesktopQueueReceipt(db: ReturnType<typeof createMemoryAppDb>, sessio
 }
 
 describe('queue scope queries', () => {
+  it('enumerates only sessions with queued desktop user messages using the candidate index', () => {
+    const db = createMemoryAppDb()
+    const queued = createSession(db, { name: 'queued' })
+    const empty = createSession(db, { name: 'empty' })
+    const imQueued = createSession(db, { name: 'im-queued' })
+    enqueueQueuedUserMessage(db, { sessionId: queued.id, requestId: 'queued-desktop', content: 'payload' })
+    const imMessage = appendMessage(db, { id: 'candidate-im', sessionId: imQueued.id, role: 'user', content: 'payload', timestamp: 1, status: 'queued' })
+    getDbConnection(db).prepare('UPDATE messages SET queue_scope=? WHERE id=?')
+      .run(serializeQueueScope({ kind: 'im', channel: 'feishu', sessionId: 'remote' } as never), imMessage.message.id)
+    expect(listDesktopQueuedSessionIds(db)).toEqual([queued.id])
+    expect(getDbConnection(db).prepare(`EXPLAIN QUERY PLAN SELECT DISTINCT session_id FROM messages INDEXED BY idx_messages_queued_desktop_session
+      WHERE queue_scope='desktop' AND role='user' AND status='queued'`).all())
+      .toEqual(expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining('idx_messages_queued_desktop_session') })]))
+    db.close()
+  })
+
   it('desktop list and get-next return only desktop queued messages', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'desktop-queue-scope' })

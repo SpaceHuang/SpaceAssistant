@@ -2529,6 +2529,13 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 124
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  // v124 → v125: index the small set of durable desktop queue candidates for startup recovery.
+  if (version === 124) runInTransaction(conn, () => {
+    conn.exec(`CREATE INDEX IF NOT EXISTS idx_messages_queued_desktop_session ON messages(session_id, sequence)
+      WHERE queue_scope='desktop' AND role='user' AND status='queued'`)
+    version = 125
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {
