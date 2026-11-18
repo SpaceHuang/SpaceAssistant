@@ -105,8 +105,8 @@ describe('P1-T2/T3 未知构造与包裹式反向用例（IrCoverageError → ex
     expect(r2.findings.map((finding) => finding.class)).toContain('process-creation')
   })
 
-  it('P0-3 Certifier 独立事实：else 体中的未建模 with 产 script-uncertified', () => {
-    // facts analyzer 不拥有 verdict；对未建模 with 的独立认证事实由 extractor contract 测试覆盖。
+  it('P0-3 with 不确定性作为脚本分析事实输出', () => {
+    // facts analyzer 不拥有 verdict；建模的 open 上下文管理器不会引入不确定性。
     const code = 'for i in [1]:\n    pass\nelse:\n    with open("f") as fh:\n        pass'
     const r = analyzeScriptContent(code)
     expect(r.coverage).toBe('complete')

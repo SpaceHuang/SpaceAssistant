@@ -177,10 +177,10 @@ describe('createAgentSdkSafetyPolicy', () => {
       inputSnapshotHash: createHash('sha256').update('{"args":["first"],"code":"print(1)","language":"python"}').digest('hex'),
       capability: { state: 'known-authorized' as const, id: 'run_script' } }
     const scriptArgs = { ...baseArgs, toolName: 'run_script', toolInput } as ToolCallGateArgs
-    const makeResult = (sha256: string, parametersSha256: string): ToolCallGateResult => {
-      const scriptFacts: ContentFacts = { toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+    const makeResult = (sha256: string, parametersSha256: string, extractorVersion = 'script-extractor-v1'): ToolCallGateResult => {
+      const scriptFacts: ContentFacts = { toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high', extractorVersion,
         signals: [{ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
-          contentDigest: sha256, parametersDigest: parametersSha256, environmentDigest: 'env-a', authenticationVersion: 'script-certifier-v1' }],
+          contentDigest: sha256, parametersDigest: parametersSha256, environmentDigest: 'env-a' }],
         summary: { text: 'script review' } }
       return { decision: { type: 'require-confirm', ruleId: 'automation-script-review', answerer: 'agent', riskLevel: 'high',
         facts: scriptFacts, memoryTiers: [], timeoutMs: 1000, disposition: 'auto-eligible' }, facts: scriptFacts, approvedFactIds: [] }
@@ -191,7 +191,27 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate(scriptBinding)).resolves.toMatchObject({ kind: 'ask', answerer: 'agent' })
     markAgentSdkSafetyDecisionConfirmed(policy, scriptBinding, 'agent')
     await expect(policy.evaluate({ ...scriptBinding, phase: 'recheck', authorizationVersion: 'script-v1' }))
-      .resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'automation-script-review' })
+      .resolves.toMatchObject({ kind: 'ask', answerer: 'user' })
+  })
+
+  it('run_script extractor 版本变化或旧待审快照缺版本时要求重新审批', async () => {
+    const toolInput = { code: 'print(1)' }
+    const scriptBinding = { ...binding, capabilityId: 'run_script', inputSnapshotHash: createHash('sha256').update('{"code":"print(1)"}').digest('hex'), capability: { state: 'known-authorized' as const, id: 'run_script' } }
+    const scriptArgs = { ...baseArgs, toolName: 'run_script', toolInput } as ToolCallGateArgs
+    const make = (extractorVersion?: string): ToolCallGateResult => {
+      const scriptFacts: ContentFacts = { toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+        ...(extractorVersion ? { extractorVersion } : {}),
+        signals: [{ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'env' }],
+        summary: { text: 'script review' } }
+      return { decision: { type: 'require-confirm', ruleId: 'automation-script-review', answerer: 'agent', riskLevel: 'high', facts: scriptFacts, memoryTiers: [], timeoutMs: 1000 }, facts: scriptFacts, approvedFactIds: [] }
+    }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(make()).mockResolvedValueOnce(make('extractor-v2'))
+    const onReapprovalRequired = vi.fn(() => true)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => scriptArgs, evaluateGate, onReapprovalRequired })
+    await policy.evaluate(scriptBinding)
+    markAgentSdkSafetyDecisionConfirmed(policy, scriptBinding, 'agent')
+    await expect(policy.evaluate({ ...scriptBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'ask', answerer: 'user' })
+    expect(onReapprovalRequired).toHaveBeenCalledOnce()
   })
 
   it('把用户明确选择的记忆键传到确认提交回调，未选择则不写入', async () => {

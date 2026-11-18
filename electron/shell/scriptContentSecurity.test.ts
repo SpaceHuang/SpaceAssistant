@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeScriptContent } from './scriptContentSecurity'
+import { analyzeScriptContent, DANGEROUS_MODULES, parsePythonModule } from './scriptContentSecurity'
+import { scriptParserService } from './scriptParserService'
 
 type Expectation = { patternIds?: string[] }
 
@@ -32,6 +33,22 @@ describe('scriptContentSecurity — List A (baseline)', () => {
       expect.objectContaining({ pattern, class: findingClass, range: expect.any(Object), snippet: expect.any(String), evidence: expect.objectContaining({ kind: evidenceKind }) })
     ])
     expect(result.totalCount).toBe(result.findings?.length)
+  })
+
+  it.each([
+    ['direct assignment alias', 'f = open\nf("/etc/example", "w")'],
+    ['chained assignment alias', 'f = g = open\ng("/etc/example", "w")'],
+    ['builtins module alias', 'import builtins\nf = builtins.open\nf("/etc/example", "w")'],
+    ['builtins import alias', 'from builtins import open as f\nf("/etc/example", "w")']
+  ])('preserves builtin open write capability through %s', (_label, code) => {
+    const finding = analyzeScriptContent(code).findings[0]
+    expect(finding).toMatchObject({ pattern: 'A7', class: 'file-write', evidence: { kind: 'write-path', rawPath: '/etc/example', pathClass: 'absolute' } })
+  })
+
+  it('does not derive builtin capability from a shadowed builtins name', () => {
+    const result = analyzeScriptContent('def builtins():\n    return None\nf = builtins.open\nf("/etc/example", "w")')
+    expect(result.findings).not.toContainEqual(expect.objectContaining({ pattern: 'A7' }))
+    expect(result.coverage).toBe('partial')
   })
 
   it.each([
@@ -327,4 +344,345 @@ describe('scriptContentSecurity — List A (baseline)', () => {
     })
   })
 
+})
+
+describe('script uncertainty facts', () => {
+  it.each([
+    ['loop-carried dependency before next body read', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2, 3]:\n    f"{x}"\n    x = y\n    y = obj'],
+    ['loop-carried dependency at for exit', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2]:\n    x = y\n    y = obj\nf"{x}"'],
+    ['reverse assignment order still invalidates dependency', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2]:\n    y = obj\n    x = y\nf"{x}"'],
+    ['three-link dependency closure', 'from external_module import obj\nx = 1\ny = 1\nz = 1\nfor _ in [1, 2, 3]:\n    x = y\n    y = z\n    z = obj\nf"{x}"'],
+    ['primitive increment loop remains fully modeled', 'total = 0\nfor item in [1, 2, 3]:\n    total += item\nf"{total}"'],
+    ['import rebinding invalidates numeric self update', 'i = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    from external_module import x\n    i += 1'],
+    ['aliased import rebinding invalidates numeric self update', 'from external_module import obj\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x = x + 1\n    from external_module import obj as x\n    i += 1'],
+    ['with target rebinding invalidates numeric self update', 'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1'],
+    ['walrus rebinding invalidates numeric self update', 'from external_module import obj\nx = 1\ni = 0\nwhile i < 2:\n    f"{x}"\n    x += 1\n    (x := obj)\n    i += 1'],
+    ['except binding shadows outer primitive', 'from external_module import Error\nx = 1\ntry:\n    raise Error()\nexcept Error as x:\n    f"{x}"'],
+    ['except binding shadows imported module alias', 'import os as x\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    f"{x}"'],
+    ['except binding invalidates outer name after handler', 'x = 1\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    pass\nf"{x}"'],
+    ['nested except binding shadows outer primitive', 'from external_module import Error\nx = 1\ntry:\n    try:\n        raise Error()\n    except Error as x:\n        f"{x}"\nexcept Exception:\n    pass'],
+    ['for else overwrite at exit', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = 1\nelse:\n    x = obj\nf"{x}"'],
+    ['loop-carried dependency at while body read', 'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj']
+  ])('fails closed for transitive loop invalidation: %s', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).not.toBe('complete')
+    expect(result.findings.length + result.uncertainties.length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    ['unknown range binding does not prove primitive iteration', 'from external_module import range\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
+    ['assigned range binding does not prove primitive iteration', 'from external_module import factory\nrange = factory\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
+    ['defined range binding does not prove primitive iteration', 'def range(n):\n    return [object()]\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
+    ['imported range alias does not prove primitive iteration', 'from external_module import range as iterate\nx = 1\nfor x in iterate(1):\n    pass\nf"{x}"'],
+    ['parameter range binding does not prove primitive iteration', 'def run(range):\n    x = 1\n    for x in range(1):\n        pass\n    f"{x}"'],
+    ['loop target range binding does not prove later iteration', 'for range in [None]:\n    pass\nx = 1\nfor x in range(1):\n    pass\nf"{x}"'],
+    ['unknown open binding does not prove file context', 'from external_module import open\nwith open("x") as x:\n    f"{x}"'],
+    ['assigned open binding does not prove file context', 'from external_module import factory\nopen = factory\nwith open("x") as x:\n    f"{x}"'],
+    ['defined open binding does not prove file context', 'def open(path):\n    return []\nwith open("x") as x:\n    f"{x}"'],
+    ['parameter open binding does not prove file context', 'def run(open):\n    with open("x") as x:\n        f"{x}"'],
+    ['open callback forms execution uncertainty', 'from external_module import opener\nwith open("x", opener=opener) as f:\n    pass'],
+    ['open assignment alias preserves callback uncertainty', 'from external_module import opener\nf = open\nf("x", opener=opener)'],
+    ['chained open alias preserves callback uncertainty', 'from external_module import opener\nf = g = open\ng("x", opener=opener)'],
+    ['local opener callback forms execution uncertainty', 'def opener(path, flags):\n    return 1\nwith open("x", opener=opener) as f:\n    pass'],
+    ['positional opener callback forms execution uncertainty', 'from external_module import opener\nwith open("x", "r", -1, None, None, None, True, opener) as f:\n    pass'],
+    ['open callback through keyword expansion forms uncertainty', 'options = {}\nwith open("x", **options) as f:\n    pass']
+  ])('rejects builtin proof without identity: %s', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).not.toBe('complete')
+    expect(result.findings.length + result.uncertainties.length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    'with open("x") as f:\n    pass',
+    'with open("x", opener=None) as f:\n    pass',
+    'for x in range(1):\n    pass',
+    'iterate = range\nfor x in iterate(1):\n    pass'
+  ])('retains builtin control behavior: %s', (code) => {
+    expect(analyzeScriptContent(code)).toMatchObject({ coverage: 'complete', findings: [], uncertainties: [] })
+  })
+
+  it.each([
+    ['assert message', 'assert False, __import__("os").system("id")'],
+    ['raise cause', 'raise ValueError() from __import__("os").system("id")'],
+    ['parameter annotation', 'def f(x: __import__("os").system("id")): pass'],
+    ['return annotation', 'def f() -> __import__("os").system("id"): pass'],
+    ['nested f-string format', `f"{42:{__import__('os').system('id')}}"`],
+    ['f-string dictionary colon', `f"{ {'x': __import__('os').system('id')} }"`],
+    ['shadowed primitive parameter', 'x = 1\ndef f(x):\n    return x + 1\nfrom external_module import obj\nf(obj)'],
+    ['branch rebind', 'from external_module import obj\nx = 1\nif True:\n    x = obj\nf"{x}"'],
+    ['loop rebind', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = obj\nf"{x}"'],
+    ['aliased mutable value mutation', 'from external_module import obj\na = [1]\nb = a\nb.append(obj)\nf"{a}"'],
+    ['set element hash', 'from external_module import obj\nvalue = {obj}'],
+    ['comprehension truthiness', 'from external_module import obj\n[i for i in [1] if obj]'],
+    ['set comprehension hash', 'from external_module import obj\n{obj for i in [1]}'],
+    ['dict comprehension key hash', 'from external_module import obj\n{obj: 1 for i in [1]}'],
+    ['unpack iteration', 'from external_module import obj\na, b = obj'],
+    ['chained unpack iteration', 'from external_module import obj\na = b, c = obj'],
+    ['annotation-only preserves runtime binding', 'from external_module import obj\nx = obj\nx: int\nf"{x}"'],
+    ['augmented assignment reads old receiver', 'from external_module import obj\nx = obj\nx += 1\nf"{x}"'],
+    ['lambda parameter shadows primitive', 'x = 1\nf = lambda x: x + 1\nfrom external_module import obj\nf(obj)'],
+    ['walrus block write invalidates outer binding', 'from external_module import obj\nx = 1\nif True:\n    (x := obj)\nf"{x}"'],
+    ['for else write invalidates outer binding', 'from external_module import obj\nx = 1\nfor _ in []:\n    pass\nelse:\n    x = obj\nf"{x}"'],
+    ['bare mutator invalidates container alias', 'from external_module import obj, mutate\na = [1]\nmutate(a, obj)\nf"{a}"'],
+    ['for loop carried write before next iteration', 'from external_module import obj\nx = 1\nfor _ in [1, 2]:\n    f"{x}"\n    x = obj'],
+    ['while loop carried write before next iteration', 'from external_module import obj\nx = 1\nwhile flag:\n    f"{x}"\n    x = obj'],
+    ['mutable inside tuple passed to mutator', 'from external_module import obj, mutate\na = [1]\nt = (a,)\nmutate(t, obj)\nf"{a}"'],
+    ['mutable inside literal wrapper passed to mutator', 'from external_module import obj, mutate\na = [1]\nmutate([a], obj)\nf"{a}"'],
+    ['mutable inside starred wrapper passed to mutator', 'from external_module import obj, mutate\na = [1]\nt = (a,)\nmutate(*t, marker=obj)\nf"{a}"'],
+    ['branch method effect reaches outer binding', 'from external_module import obj\na = [1]\nif True:\n    a.append(obj)\nf"{a}"'],
+    ['function method effect reaches outer binding', 'from external_module import obj\na = [1]\ndef change():\n    a.append(obj)\nchange()\nf"{a}"'],
+    ['sorted callback effect reaches outer binding', 'from external_module import obj\na = [1]\ndef key(x):\n    a.append(obj)\n    return 0\nsorted(a, key=key)\nf"{a}"'],
+    ['rebound builtin name is not trusted', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(a, obj)\nf"{a}"'],
+    ['rebound builtin remains unknown without mutable argument', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(obj)\nf"{a}"'],
+    ['nested mutable allocation escapes', 'from external_module import obj, mutate\nt = ([1],)\nmutate(t, obj)\nf"{t}"'],
+    ['conditional mutable allocation escapes', 'from external_module import obj, mutate\na = [1] if True else [2]\nmutate(a, obj)\nf"{a}"'],
+    ['binary mutable allocation escapes', 'from external_module import obj, mutate\na = [1] + [2]\nmutate(a, obj)\nf"{a}"'],
+    ['while next condition uses loop-carried value', 'from external_module import obj\nx = 1\nwhile x:\n    x = obj']
+  ])('fails closed for systematic-review case: %s', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).not.toBe('complete')
+    expect(result.findings.length + result.uncertainties.length).toBeGreaterThan(0)
+  })
+
+  it('does not trust a loop target as an imported module root', () => {
+    const result = analyzeScriptContent('for x in range(3):\n    x()')
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'binding-origin-unknown' })]))
+  })
+
+  it.each([
+    ['dynamic f-string formatting', 'f"{value}"'],
+    ['dynamic subscript', 'value = obj[index]'],
+    ['dynamic iteration', 'for item in source:\n    pass'],
+    ['dynamic context manager', 'with manager():\n    pass'],
+    ['overloaded arithmetic', 'value = left + right'],
+    ['overloaded comparison', 'value = left < right'],
+    ['dynamic truthiness', 'if value:\n    pass'],
+    ['dynamic conditional truthiness', 'result = "yes" if value else "no"'],
+    ['dynamic attribute descriptor', 'result = value.field'],
+    ['dynamic mapping key hashing', 'mapping = {value: 1}'],
+    ['dynamic attribute setter', 'value.field = 1']
+  ])('reports uncertainty for implicit invocation: %s', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'implicit-call-unresolved', sourceStatus: 'unknown', dynamicAccess: true })]))
+  })
+
+  it('keeps literal and known builtin iteration operations complete', () => {
+    for (const code of [
+      'items = [1, 2]\nvalue = items[0]',
+      'for value in range(3):\n    print(value)',
+      'label = f"{42}"',
+      'value = 1 + 2'
+    ]) {
+      const result = analyzeScriptContent(code)
+      expect(result.coverage, code).toBe('complete')
+      expect(result.uncertainties, code).toEqual([])
+    }
+  })
+
+  it('keeps nested loop analysis work bounded and complete', async () => {
+    await scriptParserService.ensureInitialized()
+    const depth = 22
+    const code = Array.from({ length: depth }, (_, index) => `${'    '.repeat(index)}for i in [1]:`)
+      .concat(`${'    '.repeat(depth)}pass`).join('\n')
+    const ir = parsePythonModule(code)
+    const startedAt = performance.now()
+    const result = analyzeScriptContent(code, ir)
+    expect(performance.now() - startedAt).toBeLessThan(1_000)
+    expect(result.coverage).toBe('complete')
+  })
+
+  it.each([
+    ['lambda rebound builtin name is not trusted', 'from external_module import obj\nprint = lambda *args: None\na = [1]\nprint(a, obj)\nf"{a}"'],
+    ['function definition shadows trusted builtin', 'from external_module import obj\ndef print(*args):\n    return None\na = [1]\nprint(a, obj)\nf"{a}"'],
+    ['branch rebind invalidates trusted builtin identity', 'from external_module import obj\nif flag:\n    print = lambda *args: None\na = [1]\nprint(a, obj)\nf"{a}"']
+  ])('does not trust a rebound builtin with mutable arguments: %s', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it('tracks both aliases produced by chained assignment before dangerous calls', () => {
+    const code = "import os\nleft = right = os.system\nleft('id')\nright('id')"
+    const ir = parsePythonModule(code)
+    expect(ir.body[1]).toMatchObject({ kind: 'assign', targets: ['left', 'right'] })
+    const result = analyzeScriptContent(code, ir)
+    expect(result.findings.filter((finding) => finding.class === 'process-creation')).toHaveLength(2)
+  })
+
+  it('reports a stable uncertainty for unresolved calls instead of complete clean facts', () => {
+    const result = analyzeScriptContent('factory()()')
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toEqual([expect.objectContaining({ kind: 'call-target-unresolved', sourceStatus: 'unresolved', range: expect.any(Object) })])
+  })
+
+  it.each([
+    ['while statement', 'while True:\n    pass'],
+    ['literal f-string', 'value = f"{42}"'],
+    ['with statement', 'with open("data.txt") as f:\n    data = f.read()'],
+    ['function definition', 'def helper(x):\n    return 1 * 2\nprint(helper(3))'],
+    ['literal conditional expression', 'value = "yes" if True else "no"'],
+    ['literal subscript', 'items = [1, 2, 3]\nitem = items[0]'],
+    ['dynamic import target', 'import importlib\nimportlib.import_module(module_name)'],
+    ['unclassified dangerous call', 'import os\nos.getcwd()', 'unclassified-dangerous-call'],
+    ['unknown reflection target', 'getattr(obj, name)', 'reflection-target-unresolved']
+  ] as const)('%s does not become incomplete solely from a supported IR shape', (_name, code) => {
+    const result = analyzeScriptContent(code)
+    if (_name === 'dynamic import target' || _name === 'unclassified dangerous call' || _name === 'unknown reflection target') {
+      expect(result.coverage).toBe('partial')
+      const expectedKind = _name === 'dynamic import target' ? 'dynamic-import-target-unresolved'
+        : _name === 'unclassified dangerous call' ? 'unclassified-dangerous-call' : 'reflection-target-unresolved'
+      expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: expectedKind, range: expect.any(Object) }))
+    } else {
+      expect(result.coverage, result.reason).toBe('complete')
+      expect(result.uncertainties).toEqual([])
+    }
+  })
+
+  it('continues after one certification failure and records every distinct incomplete site', () => {
+    const result = analyzeScriptContent('import os\nos.getcwd()\nvalue = getattr(obj, name)')
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties.map((item) => item.kind)).toEqual(expect.arrayContaining([
+      'unclassified-dangerous-call', 'reflection-target-unresolved'
+    ]))
+  })
+
+  it('represents an unclassified call for every dangerous module root', () => {
+    for (const root of DANGEROUS_MODULES) {
+      const result = analyzeScriptContent(`import ${root}\n${root}.unmodeled_capability()`)
+      expect(result.findings.length + result.uncertainties.length, root).toBeGreaterThan(0)
+      if (result.findings.length === 0) {
+        expect(result.uncertainties, root).toContainEqual(expect.objectContaining({ kind: 'unclassified-dangerous-call' }))
+      }
+    }
+  })
+
+  it('records an unresolved computed callee when the IR carries no statically resolvable root', () => {
+    const ir = parsePythonModule('f()')
+    const statement = ir.body[0]
+    if (!statement || statement.kind !== 'expr' || statement.value.kind !== 'call') throw new Error('expected call expression IR')
+    statement.value.callee = { kind: 'none', range: statement.value.callee.range }
+    const result = analyzeScriptContent('f()', ir)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'call-target-unresolved', sourceStatus: 'unresolved' }))
+  })
+
+  it.each([
+    ['unknown binding origin', '(left + right).run()', 'binding-origin-unknown'],
+    ['dangerous capability without a modeled effect', 'import os\nos.getcwd()', 'unclassified-dangerous-call'],
+    ['unresolved reflection target', 'getattr(obj, name)', 'reflection-target-unresolved'],
+    ['unresolved dynamic import target', 'import importlib\nimportlib.import_module(name)', 'dynamic-import-target-unresolved']
+  ])('maps script uncertainty collector branch: %s', (_label, code, kind) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind, range: expect.any(Object) }))
+  })
+
+  it('maps unknown future IR statement and expression variants to explicit partial facts', () => {
+    const statementIr = parsePythonModule('pass')
+    statementIr.body[0] = { kind: 'future_statement', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 5 } } as never
+    const statementResult = analyzeScriptContent('pass', statementIr)
+    expect(statementResult.coverage).toBe('partial')
+    expect(statementResult.uncertainties).toContainEqual(expect.objectContaining({ kind: 'unmodeled-statement' }))
+
+    const expressionIr = parsePythonModule('f()')
+    const expressionStatement = expressionIr.body[0]
+    if (!expressionStatement || expressionStatement.kind !== 'expr') throw new Error('expected expression statement')
+    expressionStatement.value = { kind: 'future_expression', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 4 } } as never
+    const expressionResult = analyzeScriptContent('f()', expressionIr)
+    expect(expressionResult.coverage).toBe('partial')
+    expect(expressionResult.uncertainties).toContainEqual(expect.objectContaining({ kind: 'unmodeled-expression' }))
+  })
+})
+
+describe('D3 行为类别补齐', () => {
+  it.each([
+    ['multiprocessing.pool.Pool', 'from multiprocessing.pool import Pool\nPool(2)', 'process-creation'],
+    ['xmlrpc.client.ServerProxy', 'from xmlrpc.client import ServerProxy\nServerProxy("https://example.test").ping()', 'network-api'],
+    ['concurrent.futures.ProcessPoolExecutor', 'from concurrent.futures import ProcessPoolExecutor\nProcessPoolExecutor()', 'process-creation'],
+    ['concurrent.futures.process.ProcessPoolExecutor', 'from concurrent.futures.process import ProcessPoolExecutor\nProcessPoolExecutor()', 'process-creation']
+  ] as const)('classifies child-module capability %s as %s', (_name, code, expected) => {
+    expect(analyzeScriptContent(code).findings.map((finding) => finding.class)).toContain(expected)
+  })
+
+  it.each([
+    ['nested if assignment', 'from external_module import obj\nif True:\n    obj.field = 1'],
+    ['nested augmented assignment', 'from external_module import obj\ndef f():\n    obj.field += 1'],
+    ['nested delete', 'from external_module import obj\ntry:\n    del obj.field\nexcept Exception:\n    pass']
+  ] as const)('marks %s as implicit behavior uncertainty', (_name, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it.each([
+    ['alias call', 'def f(x):\n    return x + 1\nf(1)\ng = f\ng(obj)'],
+    ['callback escape', 'def f(x):\n    return x + 1\nf(1)\nregister(f)'],
+    ['rebound function name', 'def f(x):\n    return x + 1\nf(1)\nf = other\nf(obj)'],
+    ['aliased lambda call', 'f = lambda x: x + 1\nf(1)\ng = f\ng(obj)']
+  ] as const)('does not use a direct call to prove parameters primitive after %s', (_name, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it.each([
+    ['multiprocessing.Process', 'import multiprocessing\nmultiprocessing.Process(target=print)', 'process-creation'],
+    ['ProcessPoolExecutor', 'from concurrent.futures import ProcessPoolExecutor\nProcessPoolExecutor()', 'process-creation'],
+    ['pickle.load', 'import pickle\npickle.load(stream)', 'dynamic-execution'],
+    ['marshal.loads', 'import marshal\nmarshal.loads(data)', 'dynamic-execution'],
+    ['ftplib', 'import ftplib\nftplib.FTP(host)', 'network-api'],
+    ['smtplib', 'import smtplib\nsmtplib.SMTP(host)', 'network-api'],
+    ['xmlrpc', 'import xmlrpc.client\nxmlrpc.client.ServerProxy(url)', 'network-api'],
+    ['telnetlib', 'import telnetlib\ntelnetlib.Telnet(host)', 'network-api']
+  ] as const)('%s produces %s finding', (_name, code, findingClass) => {
+    expect(analyzeScriptContent(code).findings.map((finding) => finding.class)).toContain(findingClass)
+  })
+
+  it('does not label ThreadPoolExecutor as process creation', () => {
+    expect(analyzeScriptContent('from concurrent.futures import ThreadPoolExecutor\nThreadPoolExecutor()').findings.map((finding) => finding.class)).not.toContain('process-creation')
+  })
+})
+
+describe('隐式调用完整性复审 R1-R3', () => {
+  it.each([
+    ['sorted 未知默认参数', 'from external_module import obj\nsorted([1], key=lambda x, y=obj: y + 1)'],
+    ['sorted 调用后的绑定', 'from external_module import obj\nx = obj\nsorted(x, key=lambda item: item + 1)\nx = [1]'],
+    ['sorted 被遮蔽', 'from external_module import obj\nsorted = obj\nsorted([1], key=lambda item: item + 1)']
+  ] as const)('%s 不会证明 lambda 参数是原始值', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it.each([
+    ['list index protocol', 'from external_module import obj\nvalue = [1]\nvalue[obj]'],
+    ['dict key protocol', 'from external_module import obj\nvalue = {1: 2}\nvalue[obj]'],
+    ['slice boundary protocol', 'from external_module import obj\nvalue = [1, 2]\nvalue[obj:2]'],
+    ['indexed assignment protocol', 'items = [1]\nitems[0] = 2'],
+    ['indexed augmented assignment protocol', 'items = [1]\nitems[0] += 2'],
+    ['indexed deletion protocol', 'items = [1]\ndel items[0]']
+  ] as const)('%s 被记为隐式调用不确定事实', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it.each([
+    ['bare function decorator', 'from external_module import decorator\n@decorator\ndef f():\n    pass'],
+    ['decorator factory', 'from external_module import decorator\n@decorator()\ndef f():\n    pass'],
+    ['class decorator', 'from external_module import decorator\n@decorator\nclass C:\n    pass'],
+    ['unknown class base', 'from external_module import base\nclass C(base):\n    pass']
+  ] as const)('%s 在定义/创建时形成隐式调用不确定事实', (_label, code) => {
+    const result = analyzeScriptContent(code)
+    expect(result.coverage).toBe('partial')
+    expect(result.uncertainties).toContainEqual(expect.objectContaining({ kind: 'implicit-call-unresolved' }))
+  })
+
+  it('保留纯字面量内置容器索引的完整分析', () => {
+    const result = analyzeScriptContent('items = [1, 2]\nvalue = items[0]')
+    expect(result.coverage).toBe('complete')
+    expect(result.uncertainties).toEqual([])
+  })
 })

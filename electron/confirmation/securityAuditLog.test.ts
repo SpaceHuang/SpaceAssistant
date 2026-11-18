@@ -111,7 +111,8 @@ describe('脚本发现审计：结构投影与片段摘要', () => {
     ['不同引号组合', 'eval(f\'{dict(secret="mixed-private-value")}\')', 'mixed-private-value']
   ])('真实分析器到最终 JSONL 不泄露%s中的字符串字面量', async (label, code, secret) => {
     const analysis = analyzeScriptContent(code)
-    expect(analysis.coverage, label).toBe('complete')
+    expect(analysis.coverage, label).toBe('partial')
+    expect(analysis.uncertainties, label).not.toHaveLength(0)
     expect(analysis.findings.length, label).toBeGreaterThan(0)
     const dir = await tmpDir()
     const log = new SecurityAuditLog({ logDir: dir })

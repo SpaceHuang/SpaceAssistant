@@ -29,7 +29,15 @@ export function canonicalKeyJson(key: CacheKey): string {
 
 export function parseCacheKey(json: string): CacheKey | null {
   try {
-    return JSON.parse(json) as CacheKey
+    const value = JSON.parse(json) as Partial<CacheKey>
+    if (value.kind === 'script-content') {
+      const candidate = value as Partial<Extract<CacheKey, { kind: 'script-content' }>>
+      if (typeof candidate.extractorVersion !== 'string' || !candidate.extractorVersion.trim() ||
+        typeof candidate.digest !== 'string' || !/^[a-f0-9]{64}$/.test(candidate.digest) ||
+        typeof candidate.workdirDigest !== 'string' || !/^[a-f0-9]{64}$/.test(candidate.workdirDigest) ||
+        typeof candidate.sessionId !== 'string' || !candidate.sessionId.trim()) return null
+    }
+    return value as CacheKey
   } catch {
     return null
   }
@@ -107,6 +115,7 @@ export class SqliteDecisionCache implements DecisionCacheView {
             .get(keyJson) ?? (legacyKeyJson ? this.db.prepare('SELECT * FROM decision_cache WHERE key_json = ? ORDER BY created_at DESC LIMIT 1').get(legacyKeyJson) : undefined)
     ) as CacheRow | undefined
     if (!row) return null
+    if (!parseCacheKey(row.key_json)) return null
     if (row.expires_at !== null && row.expires_at <= now) return null
     if (now - row.last_hit_at > DORMANT_MS) return null
     this.db
@@ -174,7 +183,7 @@ export class SqliteDecisionCache implements DecisionCacheView {
   /** 确认记忆管理列表：全量读出（按创建时间倒序），供设置页分组展示。 */
   list(): DecisionCacheEntry[] {
     const rows = this.db.prepare('SELECT * FROM decision_cache ORDER BY created_at DESC').all() as unknown as CacheRow[]
-    return rows.map((r) => this.rowToEntry(r))
+    return rows.flatMap((row) => parseCacheKey(row.key_json) ? [this.rowToEntry(row)] : [])
   }
 
   /** 清除全部（清空确认记忆）。 */

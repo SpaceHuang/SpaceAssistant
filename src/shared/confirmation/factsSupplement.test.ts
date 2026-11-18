@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createInvocationFactsSnapshot } from './invocationFactsSnapshot'
 import { verifyAndCreateFactsSupplement } from './factsSupplement'
-import type { ContentFacts } from './types'
 
 const facts: ContentFacts = {
   toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'medium',
@@ -15,7 +14,8 @@ describe('verified fact supplements', () => {
     const prior = await createInvocationFactsSnapshot({ invocationId: 'inv-1', envelope, facts,
       extractorVersion: 'extractor-v1', completeness: 'partial', evidenceReferences: [], environmentVersion: 'env-1', previousFactsRevision: 0 })
     const resolveEvidence = vi.fn(async (reference: string) => reference === 'script:ast'
-      ? { signals: [{ kind: 'script-uncertified' }] as ContentFacts['signals'], completeness: 'complete' as const }
+      ? { signals: [{ kind: 'script-analysis', coverage: 'partial', findings: [], totalCount: 0,
+        uncertainties: [{ kind: 'call-target-unresolved', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 2 }, sourceStatus: 'unresolved', dynamicAccess: true }] }], completeness: 'complete' as const }
       : undefined)
     const next = await verifyAndCreateFactsSupplement({ prior, envelope, requestedReferences: ['script:ast'],
       round: 1, deadlineAt: 10_000, now: () => 1_000, resolveEvidence })
@@ -23,7 +23,8 @@ describe('verified fact supplements', () => {
     expect(next.factsRevision).toBe(2)
     expect(next.completeness).toBe('complete')
     expect(next.facts.signals).toContainEqual(facts.signals[0])
-    expect(next.facts.signals).toContainEqual({ kind: 'script-uncertified' })
+    expect(next.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial',
+      uncertainties: [expect.objectContaining({ kind: 'call-target-unresolved' })] }))
     expect(next.evidenceReferences).toEqual(['script:ast'])
   })
 

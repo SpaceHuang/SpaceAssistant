@@ -2574,6 +2574,16 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 126
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  // v126 → v127: index the small set of durable desktop queue candidates for startup recovery.
+  if (version === 126) runInTransaction(conn, () => {
+    if (hasTable(conn, 'messages') && ['session_id', 'sequence', 'queue_scope', 'role', 'status']
+      .every((column) => hasColumn(conn, 'messages', column))) {
+      conn.exec(`CREATE INDEX IF NOT EXISTS idx_messages_queued_desktop_session ON messages(session_id, sequence)
+        WHERE queue_scope='desktop' AND role='user' AND status='queued'`)
+    }
+    version = 127
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {
@@ -2589,8 +2599,9 @@ export function runMigrations(conn: DatabaseSync): void {
 /** Release rollback only: caller must stop the app, hold an exclusive DB lock, and take a verified backup first. */
 export function rollbackReviewScopeGrantsV125(conn: DatabaseSync): void {
   const version = readSchemaVersion(conn)
-  if (version !== 125 && version !== 126) throw new Error(`Review-scope rollback requires schema 125 or 126; found ${version ?? 'unknown'}`)
+  if (version !== 125 && version !== 126 && version !== 127) throw new Error(`Review-scope rollback requires schema 125, 126 or 127; found ${version ?? 'unknown'}`)
   runInTransaction(conn, () => {
+    conn.exec('DROP INDEX IF EXISTS idx_messages_queued_desktop_session')
     conn.exec('DROP TRIGGER IF EXISTS review_scope_grants_epoch_invalidation; DROP TABLE IF EXISTS review_scope_grants;')
     conn.prepare('DELETE FROM schema_meta WHERE key IN (?,?)')
       .run(SCHEMA_META_KEYS.reviewScopeDefaultLifetime, SCHEMA_META_KEYS.reviewScopeWallFloorMs)

@@ -48,6 +48,7 @@ export const IR_MODELED = new Set([
   'import_prefix',
   'expression_statement',
   'assignment',
+  'annotated_assignment',
   'augmented_assignment',
   'if_statement',
   'for_statement',

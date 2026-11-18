@@ -1,8 +1,8 @@
 // P1-T1：脚本安全分析跨语言事实 IR（类型定义）。
 //
-// IR 是 tree-sitter 语法树（经 scriptIr 适配器）与既有 Analyzer / RemoteCertifier 规则层之间的
+// IR 是 tree-sitter 语法树（经 scriptIr 适配器）与既有 Analyzer / uncertainty collector 规则层之间的
 // 中间表示。设计约束：
-//  1. 覆盖 scriptContentSecurity.ts 中 Analyzer（A0–A9/B1–B11）与 RemoteCertifier 消费的事实全集；
+//  1. 覆盖 scriptContentSecurity.ts 中 Analyzer（A0–A9/B1–B11）与 uncertainty collector 消费的事实全集；
 //  2. 每个节点种类在适配器遍历时必须落入四分类之一（已建模 / 可忽略叶子 / 结构性穿透 / 抛
 //     IrCoverageError），禁止静默丢弃（§3 不变量 7）；
 //  3. 「语法能解析」≠「已建模」——未建模构造由适配器抛错落人工（fail-closed）；
@@ -99,11 +99,12 @@ export interface IrImportName {
 type IrStmtShape =
   | { kind: 'import'; names: IrImportName[] }
   | { kind: 'from_import'; module: string; names: Array<{ name: string; alias?: string }> }
-  | { kind: 'assign'; targets: string[]; value: IrExpr }
-  | { kind: 'aug_assign'; target: string; value: IrExpr }
+  | { kind: 'assign'; targets: string[]; value: IrExpr; annotation?: IrExpr | null; unpacksValue?: boolean }
+  | { kind: 'aug_assign'; target: string; targetExpr: IrExpr; op: string; value: IrExpr }
+  | { kind: 'annotation'; targets: string[]; annotation: IrExpr }
   | { kind: 'expr'; value: IrExpr }
   | { kind: 'if'; test: IrExpr; body: IrStmt[]; orelse: IrStmt[] }
-  | { kind: 'for'; target: string; iter: IrExpr; body: IrStmt[]; orelse: IrStmt[] }
+  | { kind: 'for'; target: string; iter: IrExpr; targetUnpacks?: boolean; body: IrStmt[]; orelse: IrStmt[] }
   | { kind: 'while'; test: IrExpr; body: IrStmt[]; orelse: IrStmt[] }
   | { kind: 'with'; items: Array<{ contextExpr: IrExpr; optionalVars: string[] }>; body: IrStmt[] }
   | {
@@ -114,14 +115,14 @@ type IrStmtShape =
       finalbody: IrStmt[]
     }
   // P0-1 评审修复：defaults/bases 在定义/创建时求值——必须进 IR 被分析（禁止静默丢弃）
-  | { kind: 'function_def'; name: string; params: string[]; defaults: IrExpr[]; body: IrStmt[]; decorators: IrExpr[]; isAsync: boolean }
+  | { kind: 'function_def'; name: string; params: string[]; defaults: IrExpr[]; annotations?: IrExpr[]; body: IrStmt[]; decorators: IrExpr[]; isAsync: boolean }
   | { kind: 'class_def'; name: string; bases: IrExpr[]; body: IrStmt[]; decorators: IrExpr[] }
   | { kind: 'return'; value: IrExpr | null }
   | { kind: 'pass' }
   | { kind: 'break' }
   | { kind: 'continue' }
-  | { kind: 'assert'; test: IrExpr }
-  | { kind: 'raise'; value: IrExpr | null }
+  | { kind: 'assert'; test: IrExpr; message?: IrExpr | null }
+  | { kind: 'raise'; value: IrExpr | null; cause?: IrExpr | null }
   | { kind: 'delete'; targets: IrExpr[] }
   | { kind: 'global_nonlocal'; names: string[] }
 

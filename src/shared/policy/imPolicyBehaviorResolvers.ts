@@ -42,7 +42,7 @@ export function resolveImPolicyRulesForVersion(input: ResolveImPolicyRulesForVer
           if (rule.id === 'remote-wechat-media-outside-deny') return { ...rule, action,
             match: { ...rule.match!, toolName: 'wechat_send', signals: ['wechat-media-target:outside-workdir', 'policy-tier:standard'] } }
           if (rule.id === 'script-network-deny-remote') return { ...rule, match: { ...rule.match!, excludeSignals: ['im-script-network-review-candidate:complete'] } }
-          if (rule.id === 'script-uncertified-ask-remote') return { ...rule, match: { ...rule.match!, excludeSignals: ['im-script-network-review-candidate:complete'] } }
+          if (rule.id === 'script-uncertified-ask-remote') return { ...rule, match: { ...rule.match!, excludeSignals: [...(rule.match?.excludeSignals ?? []), 'im-script-network-review-candidate:complete'] } }
           if (rule.id === 'outbound-mode-standard-review') return { ...rule,
             match: { ...rule.match!, excludeSignals: [...(rule.match?.excludeSignals ?? []), 'wechat-media-review-materials:complete'] } }
           return { ...rule, action }

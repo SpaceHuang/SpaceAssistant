@@ -772,7 +772,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
       policyBehaviorVersion: 'im-standard-v2',
       policyRevision: 17,
       decision: result.decision.type,
-      factsCompleteness: 'unknown',
+      factsCompleteness: 'complete',
       reviewPath: 'deterministic-policy'
     })
     expect(event).not.toHaveProperty('fallbackCause')
@@ -797,7 +797,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
       imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 2, snapshot: {} },
       mcpEntry: { serverId: 'server', toolName: 'read', inputSchema: {}, annotations: {} } as never }))
     expect(audit.events.find((entry) => entry.event === 'policy.decision')?.factsCompleteness).toBe('capability-description-stale')
-    expect(audit.events.find((entry) => entry.event === 'policy.decision')).toMatchObject({ factsSnapshotId: expect.stringMatching(/^fact-[0-9a-f]{24}$/), extractorVersion: 'host-tool-facts-v1', factsRevision: 1, decisionId: expect.stringMatching(/^decision-[0-9a-f]{24}$/), policyDependencyFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/), decisionRuleIds: expect.any(Array) })
+    expect(audit.events.find((entry) => entry.event === 'policy.decision')).toMatchObject({ factsSnapshotId: expect.stringMatching(/^fact-[0-9a-f]{24}$/), extractorVersion: '{"invocation-facts":"v1"}', factsRevision: 1, decisionId: expect.stringMatching(/^decision-[0-9a-f]{24}$/), policyDependencyFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/), decisionRuleIds: expect.any(Array) })
   })
 
   it('assigns the same snapshot id to result and policy decision audit without logging the envelope', async () => {
@@ -805,7 +805,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
     const result = await evaluateToolCallGate(base({ audit, toolInput: { path: 'secret-token=sk-1234567890abcdefghijklmnop' } }))
     const event = audit.events.find((entry) => entry.event === 'policy.decision')!
     expect(event.factsSnapshotId).toBe(result.factsSnapshot?.factId)
-    expect(event.extractorVersion).toBe('host-tool-facts-v1')
+    expect(event.extractorVersion).toBe('{"invocation-facts":"v1"}')
     expect(event.factsRevision).toBe(1)
     expect(JSON.stringify(event)).not.toContain('sk-1234567890abcdefghijklmnop')
   })
@@ -1841,20 +1841,79 @@ describe('evaluateToolCallGate', () => {
     expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, contentDigest: expect.any(String) }))
     expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
     const binding = gate.facts.signals.find((signal) => signal.kind === 'script-path-extraction')
-    expect(binding).toMatchObject({ parametersDigest: expect.any(String), environmentDigest: expect.any(String), authenticationVersion: expect.any(String) })
+    expect(binding).toMatchObject({ parametersDigest: expect.any(String), environmentDigest: expect.any(String) })
+    expect(gate.facts.extractorVersion).toEqual(expect.any(String))
   })
 
-  it('remote clean script requires positive certification before shared policy can auto-allow', async () => {
+  it('内置 open 的默认 opener 与 opener=None 保持完整放行', async () => {
+    for (const code of ['with open("x") as f:\n    pass', 'with open("x", opener=None) as f:\n    pass']) {
+      const result = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code } }))
+      expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'complete' }))
+      expect(result.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
+    }
+  })
+
+  it('open 能力别名保留文件写拒绝与 opener 回调的无记忆确认', async () => {
+    await scriptParserService.ensureInitialized()
+    const db = openDb()
+    const root = await fs.realpath(await makeTempDir('script-open-capability-alias-'))
+    try {
+      const writeAliases = [
+        'open("/etc/example", "w")',
+        'f = open\nf("/etc/example", "w")',
+        'f = g = open\ng("/etc/example", "w")',
+        'import builtins\nf = builtins.open\nf("/etc/example", "w")',
+        'from builtins import open as f\nf("/etc/example", "w")'
+      ]
+      for (const [index, code] of writeAliases.entries()) {
+        const cache = new SqliteDecisionCache(getDbConnection(db))
+        const lookup = vi.spyOn(cache, 'lookup')
+        const record = vi.spyOn(cache, 'record')
+        const result = await evaluateToolCallGate(base({ appDb: db, lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }),
+          imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } },
+          workDir: root, userDataDir: path.join(root, '.userdata'), sessionId: `open-alias-write-${index}`,
+          lanePackage: 'standard', toolName: 'run_script', toolInput: { code }, decisionCache: cache }))
+        expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', findings: expect.arrayContaining([
+          expect.objectContaining({ pattern: 'A7', evidence: expect.objectContaining({ kind: 'write-path', rawPath: '/etc/example', pathClass: 'absolute' }) })
+        ]) }))
+        expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'script-dangerous-deny' })
+        expect(lookup).not.toHaveBeenCalled()
+        expect(record).not.toHaveBeenCalled()
+      }
+
+      const openerCache = new SqliteDecisionCache(getDbConnection(db))
+      const openerLookup = vi.spyOn(openerCache, 'lookup')
+      const openerRecord = vi.spyOn(openerCache, 'record')
+      const openerArgs = base({ appDb: db, lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }),
+        imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } },
+        workDir: root, userDataDir: path.join(root, '.userdata'), sessionId: 'open-alias-opener',
+        lanePackage: 'standard', toolName: 'run_script',
+        toolInput: { code: 'from external_module import opener\nf = open\nf("x", opener=opener)' }, decisionCache: openerCache })
+      const first = await evaluateToolCallGate(openerArgs)
+      expect(first.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial' }))
+      expect(first.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+      const second = await evaluateToolCallGate(openerArgs)
+      expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+      expect(openerLookup).not.toHaveBeenCalled()
+      expect(openerRecord).not.toHaveBeenCalled()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('remote uncertainty requires user confirmation while complete clean analysis can auto-allow', async () => {
     const imPolicySnapshot = {
       domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 1,
       snapshot: { remoteScriptRequiresConfirm: false }
     }
-    const uncertified = await evaluateToolCallGate(base({
+    const uncertain = await evaluateToolCallGate(base({
       lane: 'feishu', remoteContext: remoteContext(), imPolicySnapshot,
       toolName: 'run_script', toolInput: { code: "print('hi')()" }
     }))
-    expect(uncertified.facts.signals).toContainEqual({ kind: 'script-uncertified' })
-    expect(uncertified.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-uncertified-ask-remote' })
+    expect(uncertain.facts.signals).not.toContainEqual({ kind: 'script-uncertified' })
+    expect(uncertain.facts.signals.find((signal) => signal.kind === 'script-analysis')).toMatchObject({ coverage: 'partial',
+      uncertainties: [expect.objectContaining({ kind: 'call-target-unresolved' })] })
+    expect(uncertain.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-uncertified-ask-remote' })
 
     const certified = await evaluateToolCallGate(base({
       lane: 'feishu', remoteContext: remoteContext(), imPolicySnapshot,
@@ -1862,6 +1921,122 @@ describe('evaluateToolCallGate', () => {
     }))
     expect(certified.facts.signals).not.toContainEqual({ kind: 'script-uncertified' })
     expect(certified.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-certified-remote' })
+  })
+
+  it('locks all partial Python analysis at the desktop gate before an approval agent can receive it', async () => {
+    const result = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code: 'value = obj[index]' }, lanePackage: 'standard' }))
+    expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial' }))
+    expect(result.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', disposition: 'human-required' })
+    expect(result.decision.ruleId).toBe('script-analysis-uncertainty-confirm')
+  })
+
+  it.each([
+    ['process child module', 'from multiprocessing.pool import Pool\nPool(2)', 'process-creation'],
+    ['network child module', 'from xmlrpc.client import ServerProxy\nServerProxy("https://example.test").ping()', 'network-api'],
+    ['nested setter', 'from external_module import obj\nif True:\n    obj.field = 1', 'partial'],
+    ['aliased function entry', 'def f(x):\n    return x + 1\nf(1)\ng = f\ng(obj)', 'partial'],
+    ['assert message', 'assert False, __import__("os").system("id")', 'partial'],
+    ['raise cause', 'raise ValueError() from __import__("os").system("id")', 'partial'],
+    ['parameter annotation', 'def f(x: __import__("os").system("id")): pass', 'partial'],
+    ['return annotation', 'def f() -> __import__("os").system("id"): pass', 'partial'],
+    ['f-string format', `f"{42:{__import__('os').system('id')}}"`, 'partial'],
+    ['f-string dictionary', `f"{ {'x': __import__('os').system('id')} }"`, 'partial'],
+    ['shadowed parameter', 'x = 1\ndef f(x):\n    return x + 1\nfrom external_module import obj\nf(obj)', 'partial'],
+    ['branch rebind', 'from external_module import obj\nx = 1\nif True:\n    x = obj\nf"{x}"', 'partial'],
+    ['loop rebind', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = obj\nf"{x}"', 'partial'],
+    ['mutable alias', 'from external_module import obj\na = [1]\nb = a\nb.append(obj)\nf"{a}"', 'partial'],
+    ['set element hash', 'from external_module import obj\nvalue = {obj}', 'partial'],
+    ['comprehension truthiness', 'from external_module import obj\n[i for i in [1] if obj]', 'partial'],
+    ['set comprehension hash', 'from external_module import obj\n{obj for i in [1]}', 'partial'],
+    ['dict comprehension key hash', 'from external_module import obj\n{obj: 1 for i in [1]}', 'partial'],
+    ['unpack iteration', 'from external_module import obj\na, b = obj', 'partial'],
+    ['chained unpack iteration', 'from external_module import obj\na = b, c = obj', 'partial'],
+    ['annotation-only binding', 'from external_module import obj\nx = obj\nx: int\nf"{x}"', 'partial'],
+    ['augmented assignment old receiver', 'from external_module import obj\nx = obj\nx += 1\nf"{x}"', 'partial'],
+    ['lambda parameter shadowing', 'x = 1\nf = lambda x: x + 1\nfrom external_module import obj\nf(obj)', 'partial'],
+    ['walrus block write', 'from external_module import obj\nx = 1\nif True:\n    (x := obj)\nf"{x}"', 'partial'],
+    ['for else write', 'from external_module import obj\nx = 1\nfor _ in []:\n    pass\nelse:\n    x = obj\nf"{x}"', 'partial'],
+    ['bare mutable argument call', 'from external_module import obj, mutate\na = [1]\nmutate(a, obj)\nf"{a}"', 'partial'],
+    ['for loop carried state', 'from external_module import obj\nx = 1\nfor _ in [1, 2]:\n    f"{x}"\n    x = obj', 'partial'],
+    ['while loop carried state', 'from external_module import obj\nx = 1\nwhile True:\n    f"{x}"\n    x = obj', 'partial'],
+    ['wrapped mutable positional argument', 'from external_module import obj, mutate\na = [1]\nt = (a,)\nmutate(t, obj)\nf"{a}"', 'partial'],
+    ['wrapped mutable literal argument', 'from external_module import obj, mutate\na = [1]\nmutate([a], obj)\nf"{a}"', 'partial'],
+    ['wrapped mutable star argument', 'from external_module import obj, mutate\na = [1]\nt = (a,)\nmutate(*t, marker=obj)\nf"{a}"', 'partial'],
+    ['wrapped mutable keyword argument', 'from external_module import obj, mutate\na = [1]\nmutate(value={"nested": (a,)}, marker=obj)\nf"{a}"', 'partial'],
+    ['branch heap effect', 'from external_module import obj\na = [1]\nif True:\n    a.append(obj)\nf"{a}"', 'partial'],
+    ['function heap effect', 'from external_module import obj\na = [1]\ndef change():\n    a.append(obj)\nchange()\nf"{a}"', 'partial'],
+    ['callback heap effect', 'from external_module import obj\na = [1]\ndef key(x):\n    a.append(obj)\n    return 0\nsorted(a, key=key)\nf"{a}"', 'partial'],
+    ['rebound builtin identity', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(a, obj)\nf"{a}"', 'partial'],
+    ['rebound builtin with no container argument', 'from external_module import obj, factory\nprint = factory()\na = [1]\nprint(obj)\nf"{a}"', 'partial'],
+    ['nested mutable allocation', 'from external_module import obj, mutate\nt = ([1],)\nmutate(t, obj)\nf"{t}"', 'partial'],
+    ['conditional mutable allocation', 'from external_module import obj, mutate\na = [1] if True else [2]\nmutate(a, obj)\nf"{a}"', 'partial'],
+    ['binary mutable allocation', 'from external_module import obj, mutate\na = [1] + [2]\nmutate(a, obj)\nf"{a}"', 'partial'],
+    ['while next condition carries rebound value', 'from external_module import obj\nx = 1\nwhile x:\n    x = obj', 'partial'],
+    ['for transitive loop-carried read', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2, 3]:\n    f"{x}"\n    x = y\n    y = obj', 'partial'],
+    ['for transitive loop exit value', 'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2]:\n    x = y\n    y = obj\nf"{x}"', 'partial'],
+    ['for else overwrites body primitive', 'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = 1\nelse:\n    x = obj\nf"{x}"', 'partial'],
+    ['while transitive loop-carried read', 'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj', 'partial'],
+    ['while import rebinding after numeric update', 'i = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    from external_module import x\n    i += 1', 'partial'],
+    ['while aliased import rebinding after numeric update', 'from external_module import obj\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x = x + 1\n    from external_module import obj as x\n    i += 1', 'partial'],
+    ['while with-as rebinding after numeric update', 'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1', 'partial'],
+    ['while walrus rebinding after numeric update', 'from external_module import obj\nx = 1\ni = 0\nwhile i < 2:\n    f"{x}"\n    x += 1\n    (x := obj)\n    i += 1', 'partial'],
+    ['except alias shadows outer primitive', 'from external_module import Error\nx = 1\ntry:\n    raise Error()\nexcept Error as x:\n    f"{x}"', 'partial'],
+    ['except alias invalidates after handler', 'x = 1\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    pass\nf"{x}"', 'partial'],
+    ['unknown range binding loses primitive iterable proof', 'from external_module import range\nx = 1\nfor x in range(1):\n    pass\nf"{x}"', 'partial'],
+    ['unknown open binding loses file context proof', 'from external_module import open\nwith open("x") as x:\n    f"{x}"', 'partial'],
+    ['open opener callback requires confirmation', 'from external_module import opener\nwith open("x", opener=opener) as f:\n    pass', 'partial'],
+    ['open lambda callback requires confirmation', 'with open("x", opener=lambda path, flags: 1) as f:\n    pass', 'partial'],
+    ['open keyword expansion requires confirmation', 'options = {}\nwith open("x", **options) as f:\n    pass', 'partial']
+  ] as const)('真实 Gate 阻止 %s 获得 clean allow 或记忆档位', async (_name, code, expectedFact) => {
+    for (const lane of ['desktop', 'feishu'] as const) {
+      const lookup = vi.fn(() => null)
+      const record = vi.fn(() => undefined)
+      const result = await evaluateToolCallGate(base({ lane,
+        ...(lane === 'feishu' ? { remoteContext: remoteContext({ source: 'feishu' }),
+          imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } } } : {}),
+        toolName: 'run_script', toolInput: { code }, lanePackage: 'standard',
+        decisionCache: { lookup, record, clear: () => 0, clearAllSession: () => 0, expireDormant: () => 0 } }))
+      const analysis = result.facts.signals.find((signal) => signal.kind === 'script-analysis')
+      if (expectedFact === 'partial') expect(analysis, `${lane}: ${_name}`).toMatchObject({ coverage: 'partial' })
+      else expect(analysis, `${lane}: ${_name}`).toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ class: expectedFact })]) })
+      expect(result.decision.type, `${lane}: ${_name}`).not.toBe('auto-allow')
+      if (result.decision.type === 'require-confirm') expect(result.decision.memoryTiers, `${lane}: ${_name}`).toEqual([])
+      expect(lookup, `${lane}: ${_name}`).not.toHaveBeenCalled()
+      expect(record, `${lane}: ${_name}`).not.toHaveBeenCalled()
+    }
+  })
+
+  it('remote 子模块网络调用命中 network deny，而不是不确定路径审批', async () => {
+    const result = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }),
+      toolName: 'run_script', toolInput: { code: 'from xmlrpc.client import ServerProxy\nServerProxy("https://example.test").ping()' } }))
+    expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', findings: expect.arrayContaining([
+      expect.objectContaining({ class: 'network-api' })
+    ]) }))
+    expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'script-network-deny-remote' })
+  })
+
+  it.each([
+    'from external_module import obj\nsorted([1], key=lambda x, y=obj: y + 1)',
+    'from external_module import obj\nvalue = [1]\nvalue[obj]',
+    'items = [1]\nitems[0] = 2',
+    'items = [1]\ndel items[0]',
+    'from external_module import decorator\n@decorator\ndef f():\n    pass',
+    'from external_module import decorator\n@decorator()\ndef f():\n    pass',
+    'from external_module import decorator\n@decorator\nclass C:\n    pass',
+    'from external_module import base\nclass C(base):\n    pass'
+  ])('隐式行为反例跨交互渠道不可 clean allow: %s', async (code) => {
+    for (const lane of ['desktop', 'feishu'] as const) {
+      const result = await evaluateToolCallGate(base({ lane,
+        ...(lane === 'feishu' ? { remoteContext: remoteContext({ source: 'feishu' }),
+          imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } } } : {}),
+        toolName: 'run_script', toolInput: { code }, lanePackage: 'standard' }))
+      expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial' }))
+      expect(result.decision.type).toBe('require-confirm')
+      if (result.decision.type === 'require-confirm') {
+        expect(result.decision.answerer).toBe('user')
+        expect(result.decision.memoryTiers).toEqual([])
+      }
+    }
   })
 
   it('applies the version-pinned IM standard candidate map in the real policy gate', async () => {
@@ -2054,7 +2229,7 @@ describe('evaluateToolCallGate', () => {
     const changedArgs = readBinding(parameterChanged)
     const changedCode = readBinding(codeChanged)
     const changedEnvironment = readBinding(environmentChanged)
-    expect(initial).toMatchObject({ contentDigest: expect.any(String), parametersDigest: expect.any(String), environmentDigest: expect.any(String), authenticationVersion: 'script-certifier-v1' })
+    expect(initial).toMatchObject({ contentDigest: expect.any(String), parametersDigest: expect.any(String), environmentDigest: expect.any(String) })
     expect(changedArgs).toMatchObject({ contentDigest: initial.contentDigest, environmentDigest: initial.environmentDigest })
     expect(changedArgs.parametersDigest).not.toBe(initial.parametersDigest)
     expect(changedCode.contentDigest).not.toBe(initial.contentDigest)
@@ -2136,19 +2311,31 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('V3 run_script 路径分析不可用时桌面逐次真人确认、automation lane 拒绝', async () => {
+  it('D6 parse-failed 在交互和 automation lane 均拒绝', async () => {
     const root = await fs.realpath(await makeTempDir('script-facts-root-'))
     const toolInput = { code: 'def broken(:\n pass' }
     try {
       const desktop = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(desktop.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown' }))
       expect(desktop.scriptPathHint).toContain('脚本含动态执行面：')
-      expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user', memoryTiers: [] })
+      expect(desktop.decision).toMatchObject({ type: 'deny', ruleId: 'script-analysis-parse-failed-deny' })
+      expect(desktop.factsSnapshot?.completeness).toBe('parse-failed')
 
       const unattended = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
-      expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
+      expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'script-analysis-parse-failed-deny' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('D6 parse-failed 在所有 lane 进入策略前统一拒绝', async () => {
+    const toolInput = { code: 'def broken(:\n pass' }
+    for (const lane of ['desktop', 'wechat', 'feishu', 'automation'] as const) {
+      const result = await evaluateToolCallGate(base({ lane, toolName: 'run_script', toolInput,
+        ...(lane === 'desktop' ? {} : { remoteContext: remoteContext() }) }))
+      expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'script-analysis-parse-failed-deny' })
+      expect(result.factsSnapshot?.completeness).toBe('parse-failed')
+      expect(result.facts.signals).toContainEqual({ kind: 'invocation-facts-completeness', completeness: 'parse-failed' })
     }
   })
 
@@ -2231,7 +2418,7 @@ describe('evaluateToolCallGate', () => {
     ['delete', 'import os\nos.remove(target)', 'unresolved-destructive-target'],
     ['transfer', 'import shutil\nshutil.move(source, target)', 'unresolved-transfer-target'],
     ['binding-chain break', 'import os\nos = fake\nopen("/tmp/out.txt", "r")', 'binding-chain-broken'],
-    ['analysis unavailable', 'def broken(:\n pass', 'path-analysis-unavailable'],
+    ['analysis unavailable', 'def f(x):\n    match x:\n        case 1:\n            return 1', 'path-analysis-unavailable'],
     ['eval', 'eval(source)', 'dynamic-code-execution'],
     ['process creation', 'import subprocess\nsubprocess.run(command)', 'dynamic-code-execution'],
     ['dynamic import', 'import importlib\nimportlib.import_module(module_name)', 'dynamic-code-execution']
@@ -2247,7 +2434,7 @@ describe('evaluateToolCallGate', () => {
   it.each([
     // A POSIX-rooted path passed to os.path.join has different semantics under ntpath;
     // Windows conservatively reports incomplete analysis and requires the user directly.
-    ['absolute path inside join', "import os\nopen(os.path.join('base', '/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', path.sep === '\\' ? 'script-analysis-incomplete-confirm' : 'script-finding-review', path.sep === '\\' ? 'user' : 'agent'],
+    ['absolute path inside join', "import os\nopen(os.path.join('base', '/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', 'script-analysis-uncertainty-confirm', 'user'],
     ['arbitrary call result', "open(custom_path('/tmp/script-finding-review-absolute.txt'), 'w')", 'unresolved', 'require-confirm', 'script-non-write-path-confirm', 'user'],
     ['multi-argument Path', "from pathlib import Path\nPath('base', '/tmp/script-finding-review-absolute.txt').write_text('x')", 'unresolved', 'require-confirm', 'script-unresolved-write-review', 'agent']
   ] as const)('写目标表达式 %s 不被误折叠为相对路径', async (_case, code, pathClass, decisionType, ruleId, answerer) => {
@@ -2292,8 +2479,8 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('路径分析不可用的脚本不提供记忆档位且每次都需真人确认', async () => {
-    const code = 'def broken(:\n pass'
+  it('合法但 IR 未覆盖的脚本不提供记忆档位且每次都需真人确认', async () => {
+    const code = 'def f(x):\n    match x:\n        case 1:\n            return 1'
     for (const options of [
       {},
       { workDir: path.join(base().workDir, 'other') },
@@ -2301,7 +2488,139 @@ describe('evaluateToolCallGate', () => {
       { sessionId: 'script-session-2' }
     ]) {
       const result = await evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: { code }, ...options }))
-      expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-analysis-incomplete-confirm', answerer: 'user', memoryTiers: [] })
+      expect(result.decision.type).toBe('require-confirm')
+      expect(result.decision.answerer).toBe('user')
+      expect(result.decision.memoryTiers).toEqual([])
+    }
+  })
+
+  it('computed call uncertainty 在交互 lane 明确逐次确认，automation 明确拒绝', async () => {
+    await scriptParserService.ensureInitialized()
+    const code = 'factory()()'
+    for (const lane of ['desktop', 'wechat', 'feishu'] as const) {
+      const result = await evaluateToolCallGate(base({ lane, ...(lane === 'desktop' ? {} : { remoteContext: remoteContext({ source: lane }) }),
+        toolName: 'run_script', toolInput: { code } }))
+      expect(result.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial',
+        uncertainties: expect.arrayContaining([expect.objectContaining({ kind: 'call-target-unresolved' })]) }))
+      expect(result.decision.type).toBe('require-confirm')
+      expect(result.decision.memoryTiers).toEqual([])
+      expect(result.decision.ruleId).toMatch(/script-(?:analysis-uncertainty|unresolved-origin)-confirm/)
+    }
+    const unattended = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_script', toolInput: { code } }))
+    expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
+  })
+
+  it('来源已解析的未建模路径经真实 SQLite session tier 写入并由同一 gate 命中', async () => {
+    await scriptParserService.ensureInitialized()
+    const db = openDb()
+    const root = await fs.realpath(await makeTempDir('script-versioned-memory-'))
+    try {
+      const input = { code: 'customApi()' }
+      const args = base({ appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'), sessionId: 'script-memory-session', lanePackage: 'custom',
+        toolName: 'run_script', toolInput: input })
+      const first = await evaluateToolCallGate(args)
+      expect(first.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'user' })
+      expect(first.decision.type).toBe('require-confirm')
+      if (first.decision.type !== 'require-confirm') throw new Error('expected confirmation decision')
+      const tier = first.decision.memoryTiers.find((item) => item.key.kind === 'script-content')
+      expect(tier?.key).toMatchObject({ kind: 'script-content', extractorVersion: first.facts.extractorVersion,
+        digest: expect.any(String), workdirDigest: expect.any(String), sessionId: 'script-memory-session' })
+      if (!tier) throw new Error('expected script-content memory tier')
+      recordUserAnswerFromDecision({ db, lane: 'desktop', sessionId: 'script-memory-session', key: tier.key,
+        decision: first.decision, answererKind: 'user', source: 'user-confirm' })
+      const second = await evaluateToolCallGate(args)
+      expect(second.decision).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit', cacheKey: tier.key })
+
+      const otherVersion = { ...first.facts, extractorVersion: 'script-analysis-v-next' }
+      const { decide } = await import('../../src/shared/policy/policyEngine')
+      const versionMiss = decide(otherVersion, { lane: 'desktop', origin: { kind: 'direct-owner' }, sessionId: 'script-memory-session', policyTier: 'standard' },
+        args.effectiveRules, { cache: new SqliteDecisionCache(getDbConnection(db)), config: {}, migrationComplete: true })
+      expect(versionMiss).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
+      if (versionMiss.type === 'require-confirm') expect(versionMiss.memoryTiers.some((item) => item.key.kind === 'script-content' &&
+        item.key.extractorVersion === 'script-analysis-v-next' && item.key.sessionId === 'script-memory-session')).toBe(true)
+
+      const missingVersion = { ...first.facts, extractorVersion: undefined }
+      const missingVersionDecision = decide(missingVersion, { lane: 'desktop', origin: { kind: 'direct-owner' }, sessionId: 'script-memory-session', policyTier: 'standard' },
+        args.effectiveRules, { cache: new SqliteDecisionCache(getDbConnection(db)), config: {}, migrationComplete: true })
+      expect(missingVersionDecision.type).toBe('require-confirm')
+      if (missingVersionDecision.type === 'require-confirm') expect(missingVersionDecision.memoryTiers).toEqual([])
+
+      const otherSession = await evaluateToolCallGate(base({ appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'),
+        sessionId: 'script-memory-other-session', lanePackage: 'custom', toolName: 'run_script', toolInput: input }))
+      expect(otherSession.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('循环传递失效事实不提供 SQLite session tier 且每次都重新真人确认', async () => {
+    await scriptParserService.ensureInitialized()
+    const db = openDb()
+    const root = await fs.realpath(await makeTempDir('script-loop-facts-no-memory-'))
+    try {
+      const cases = [
+        'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2, 3]:\n    f"{x}"\n    x = y\n    y = obj',
+        'from external_module import obj\nx = 1\ny = 1\nfor _ in [1, 2]:\n    x = y\n    y = obj\nf"{x}"',
+        'from external_module import obj\nx = 1\nfor _ in [1]:\n    x = 1\nelse:\n    x = obj\nf"{x}"',
+        'from external_module import obj\nx = 1\ny = 1\nwhile True:\n    f"{x}"\n    x = y\n    y = obj'
+      ]
+      for (const [index, code] of cases.entries()) {
+        const sessionId = `loop-facts-no-memory-${index}`
+        const cache = new SqliteDecisionCache(getDbConnection(db))
+        const args = base({ appDb: db, lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }),
+          imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } },
+          workDir: root, userDataDir: path.join(root, '.userdata'), sessionId, lanePackage: 'standard', toolName: 'run_script', toolInput: { code }, decisionCache: cache })
+        const first = await evaluateToolCallGate(args)
+        expect(first.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial',
+          uncertainties: expect.arrayContaining([expect.objectContaining({ kind: 'implicit-call-unresolved' })]) }))
+        expect(first.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+        const lookup = vi.spyOn(cache, 'lookup')
+        const second = await evaluateToolCallGate(args)
+        expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+        expect(lookup).not.toHaveBeenCalled()
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('循环与异常处理中的重绑定不提供缓存资格', async () => {
+    await scriptParserService.ensureInitialized()
+    const db = openDb()
+    const root = await fs.realpath(await makeTempDir('script-loop-rebind-no-memory-'))
+    try {
+      const cases = [
+        'i = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    from external_module import x\n    i += 1',
+        'from external_module import obj\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x = x + 1\n    from external_module import obj as x\n    i += 1',
+        'from external_module import open\ni = 0\nx = 1\nwhile i < 2:\n    f"{x}"\n    x += 1\n    with open("x") as x:\n        pass\n    i += 1',
+        'from external_module import obj\nx = 1\ni = 0\nwhile i < 2:\n    f"{x}"\n    x += 1\n    (x := obj)\n    i += 1',
+        'from external_module import Error\nx = 1\ntry:\n    raise Error()\nexcept Error as x:\n    f"{x}"',
+        'x = 1\ntry:\n    raise ValueError()\nexcept ValueError as x:\n    pass\nf"{x}"',
+        'from external_module import range\nx = 1\nfor x in range(1):\n    pass\nf"{x}"',
+        'from external_module import open\nwith open("x") as x:\n    f"{x}"',
+        'from external_module import opener\nwith open("x", opener=opener) as f:\n    pass',
+        'with open("x", opener=lambda path, flags: 1) as f:\n    pass',
+        'options = {}\nwith open("x", **options) as f:\n    pass'
+      ]
+      for (const [index, code] of cases.entries()) {
+        const sessionId = `loop-rebind-no-memory-${index}`
+        const cache = new SqliteDecisionCache(getDbConnection(db))
+        const args = base({ appDb: db, lane: 'feishu', remoteContext: remoteContext({ source: 'feishu' }),
+          imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { remoteScriptRequiresConfirm: false } },
+          workDir: root, userDataDir: path.join(root, '.userdata'), sessionId, lanePackage: 'standard', toolName: 'run_script', toolInput: { code }, decisionCache: cache })
+        const first = await evaluateToolCallGate(args)
+        expect(first.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-analysis', coverage: 'partial',
+          uncertainties: expect.arrayContaining([expect.objectContaining({ kind: 'implicit-call-unresolved' })]) }))
+        expect(first.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+        const lookup = vi.spyOn(cache, 'lookup')
+        const record = vi.spyOn(cache, 'record')
+        const second = await evaluateToolCallGate(args)
+        expect(second.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', memoryTiers: [] })
+        expect(lookup).not.toHaveBeenCalled()
+        expect(record).not.toHaveBeenCalled()
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
     }
   })
 
@@ -3962,5 +4281,21 @@ describe('automation result directory write permission', () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('D4 脚本记忆键绑定事实提取版本', () => {
+  it('版本化脚本事实派生 extractorVersion 四元组键，缺版本不派生旧三元组', async () => {
+    const { deriveCacheKeys } = await import('../../src/shared/policy/policyEngine')
+    const extractorVersion = '{"invocation-facts":"v1","script-analysis":"v2"}'
+    const facts = {
+      toolName: 'run_script', actionClass: 'execute' as const, baseRiskLevel: 'high' as const, summary: { text: 'script' }, extractorVersion,
+      signals: [
+        { kind: 'script-analysis' as const, findings: [], coverage: 'complete' as const, totalCount: 0, uncertainties: [{ kind: 'path-analysis-unmodeled-call' as const, range: { startLine: 1, startCol: 1, endLine: 1, endCol: 4 }, sourceStatus: 'resolved' as const, dynamicAccess: false }] },
+        { kind: 'script-path-extraction' as const, completeness: 'unknown' as const, unknownReason: 'unmodeled-call' as const, dynamicAccess: false, contentDigest: 'a'.repeat(64), workdirDigest: 'b'.repeat(64) }
+      ]
+    }
+    expect(deriveCacheKeys(facts, 'session-1', 'desktop')).toContainEqual({ kind: 'script-content', extractorVersion, digest: 'a'.repeat(64), workdirDigest: 'b'.repeat(64), sessionId: 'session-1' })
+    expect(deriveCacheKeys({ ...facts, extractorVersion: undefined }, 'session-1', 'desktop')).toEqual([])
   })
 })

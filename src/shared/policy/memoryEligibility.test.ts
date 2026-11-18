@@ -54,8 +54,33 @@ describe('run_script 记忆资格按 findings 与 coverage 判定', () => {
   })
 
   it('只有 complete 且空 findings/totalCount=0 才能获得桌面持久记忆', () => {
-    expect(deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }), 'desktop'))
+    expect(deriveMemoryEligibility({ ...scriptFacts({ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0 }), extractorVersion: 'facts-v1' }, 'desktop'))
       .toEqual({ eligibility: 'persistent', reasons: [] })
+  })
+
+  it('unknown-source uncertainty 不得得到任何记忆资格', () => {
+    const result = deriveMemoryEligibility({ ...scriptFacts({ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0,
+      uncertainties: [{ kind: 'call-target-unresolved', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 8 }, sourceStatus: 'unknown', dynamicAccess: false }] }), extractorVersion: 'facts-v1' }, 'desktop')
+    expect(result.eligibility).toBe('none')
+  })
+
+  it('旧认证器会拒绝的危险调用 now 由独立 uncertainty 封住记忆资格', () => {
+    const uncertainty = { kind: 'unclassified-dangerous-call', range: { startLine: 2, startCol: 1, endLine: 2, endCol: 15 }, sourceStatus: 'resolved' as const, dynamicAccess: false }
+    const result = deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', findings: [], coverage: 'partial', totalCount: 0, uncertainties: [uncertainty] }), 'desktop')
+    expect(result.eligibility).toBe('none')
+  })
+
+  it('已解析的路径分析缺口只允许 session 记忆', () => {
+    const result = deriveMemoryEligibility({ ...scriptFacts({ kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0,
+      uncertainties: [{ kind: 'path-analysis-unmodeled-call', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 8 }, sourceStatus: 'resolved', dynamicAccess: false }] }),
+      extractorVersion: 'facts-v1', signals: [
+        { kind: 'script-analysis', findings: [], coverage: 'complete', totalCount: 0,
+          uncertainties: [{ kind: 'path-analysis-unmodeled-call', range: { startLine: 1, startCol: 1, endLine: 1, endCol: 8 }, sourceStatus: 'resolved', dynamicAccess: false }] },
+        { kind: 'script-path-extraction', completeness: 'unknown', unknownReason: 'unmodeled-call', dynamicAccess: false,
+          contentDigest: 'a'.repeat(64), workdirDigest: 'b'.repeat(64) }
+      ]
+    }, 'desktop')
+    expect(result.eligibility).toBe('session')
   })
 
   it('12 类任一发现均禁止脚本记忆', () => {
@@ -70,7 +95,7 @@ describe('run_script 记忆资格按 findings 与 coverage 判定', () => {
         evidence: { kind: 'process-create' as const, module: 'os', attr: 'system' }
       }
       expect(deriveMemoryEligibility(scriptFacts({ kind: 'script-analysis', findings: [finding], coverage: 'complete', totalCount: 1 }), 'desktop'))
-        .toEqual({ eligibility: 'none', reasons: [findingClass === 'network-api' ? 'script-network-or-uncertified' : 'script-not-clean'] })
+        .toEqual({ eligibility: 'none', reasons: [findingClass === 'network-api' ? 'script-network-finding' : 'script-not-clean'] })
     }
   })
 

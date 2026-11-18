@@ -161,6 +161,7 @@ export interface SessionQueries {
   readSessionIdForPlatformMessage(input: { channel: 'feishu' | 'wechat'; platformMessageId: string }): string | undefined
   readSessionUsage(sessionId: string): SessionUsage | undefined
   listSessions(options?: { view?: 'all' | 'user-visible'; workDirProfileId?: string }): Session[]
+  listDesktopQueuedSessionIds(): string[]
   readMessage(ref: MessageRef): Message | undefined
   readAgentSessionMessageSource(ref: MessageRef): AgentSessionMessageSourceSummary | undefined
   /** Original body only when the persisted agent-session envelope and source digest validate. */

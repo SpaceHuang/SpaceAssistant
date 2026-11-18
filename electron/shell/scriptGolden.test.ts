@@ -10,6 +10,8 @@ type GoldenBaseline = {
   group: 'legacy-parseable' | 'previously-failed'
   patternIds: string[]
   coverage: 'complete' | 'failed' | 'partial'
+  uncertainties?: unknown[]
+  uncertaintyKinds?: string[]
 }
 
 function loadSamples(): Array<{ id: string; group: GoldenBaseline['group']; pyPath: string; code: string }> {
@@ -28,7 +30,9 @@ function snapshotOf(id: string, group: GoldenBaseline['group'], code: string): G
     id,
     group,
     patternIds: [...new Set(analysis.findings.map((finding) => finding.pattern))].sort(),
-    coverage: analysis.coverage
+    coverage: analysis.coverage,
+    uncertainties: analysis.uncertainties,
+    uncertaintyKinds: [...new Set(analysis.uncertainties.map((item) => item.kind))].sort()
   }
 }
 
@@ -71,7 +75,8 @@ describe('scriptGolden（Python findings 基线）', () => {
     const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8')) as GoldenBaseline
     const current = snapshotOf(sample.id, sample.group, sample.code)
 
-    expect(current.coverage).toBe('complete')
+    expect(current.coverage, `${sample.id}: ${JSON.stringify(current.uncertainties)}`).toBe(baseline.coverage)
     expect(current.patternIds).toEqual(baseline.patternIds)
+    if (baseline.uncertaintyKinds) expect(current.uncertaintyKinds).toEqual(baseline.uncertaintyKinds)
   })
 })

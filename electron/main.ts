@@ -1527,7 +1527,7 @@ app.whenReady().then(async () => {
   // 反序会把上一进程的幻影票据读进内存且永无 release,并发上限被永久蚕食
   resetActiveAdmissionOnStartup(db, Date.now())
   const wakeAgentSessionQueue = (reason: OutboundDrainWakeReason) => wakeQueuedAgentSessions({
-    sessionIds: () => sessionStorage.queries.listSessions({ view: 'all' }).map((session) => session.id),
+    sessionIds: () => sessionStorage.queries.listDesktopQueuedSessionIds(),
     getNextQueued: (sessionId) => sessionStorage.execution.getNextDesktopQueueInput(sessionId),
     recoverTarget: (sessionId) => sessionStorage.execution.recoverExecutionTarget(sessionId),
     reason,

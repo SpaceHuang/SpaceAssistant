@@ -4,6 +4,7 @@ import {
   getSession,
   getSessionUsage,
   listSessions,
+  listDesktopQueuedSessionIds,
   getContextHistorySummarySourceRows,
   getMessageSequence,
   getSessionMessageRevisionSnapshot,
@@ -188,6 +189,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
     },
     readSessionUsage: (sessionId) => getSessionUsage(db, sessionId),
     listSessions: (options) => listSessions(db, options),
+    listDesktopQueuedSessionIds: () => listDesktopQueuedSessionIds(db),
     readMessage: ({ sessionId, messageId }: MessageRef) => {
       const message = getProjectedMessage(db, messageId)
       return message?.sessionId === sessionId ? message : undefined

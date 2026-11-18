@@ -154,12 +154,22 @@ function adaptStmtCore(node: TsNode): IrStmt | null {
     case 'assignment': {
       return adaptAssignment(node)
     }
+    case 'annotated_assignment': {
+      const left = fieldNode(node, 'left')
+      const annotation = fieldNode(node, 'type')
+      const right = fieldNode(node, 'right')
+      if (!left || !annotation) throw new IrCoverageError(type, 'annotated assignment missing fields')
+      const targets = splitAssignmentTargets(left)
+      if (!right) return { kind: 'annotation', targets, annotation: adaptExpr(annotation) }
+      return { kind: 'assign', targets, value: adaptExpr(right), annotation: adaptExpr(annotation), ...(left.type === 'pattern_list' || left.type === 'tuple' ? { unpacksValue: true } : {}) }
+    }
     case 'augmented_assignment': {
       const left = fieldNode(node, 'left')
       const right = fieldNode(node, 'right')
       if (!left || !right) throw new IrCoverageError(type, 'augmented_assignment missing operands')
       const target = assignTargetName(left)
-      return { kind: 'aug_assign', target, value: adaptExpr(right) }
+      const operator = fieldNode(node, 'operator') ?? operatorToken(node)
+      return { kind: 'aug_assign', target, targetExpr: adaptExpr(left), op: operator ? nodeText(operator) : '?', value: adaptExpr(right) }
     }
     case 'if_statement': {
       const cond = fieldNode(node, 'condition')
@@ -182,6 +192,7 @@ function adaptStmtCore(node: TsNode): IrStmt | null {
       return {
         kind: 'for',
         target,
+        ...(left && (left.type === 'pattern_list' || left.type === 'tuple') ? { targetUnpacks: true } : {}),
         iter: right ? adaptExpr(right) : { kind: 'none' },
         body: body ? adaptBlock(body) : [],
         orelse: alts.length > 0 ? adaptAlternatives(alts) : []
@@ -274,13 +285,13 @@ function adaptStmtCore(node: TsNode): IrStmt | null {
       return { kind: 'continue' }
     case 'assert_statement': {
       const test = firstNamed(node)
-      return { kind: 'assert', test: test ? adaptExpr(test) : { kind: 'none' } }
+      const message = fieldNode(node, 'message') ?? namedChildren(node).find((child) => child.id !== test?.id)
+      return { kind: 'assert', test: test ? adaptExpr(test) : { kind: 'none' }, ...(message ? { message: adaptExpr(message) } : {}) }
     }
     case 'raise_statement': {
       const arg = fieldNode(node, 'argument') ?? firstNamed(node)
       const cause = fieldNode(node, 'cause')
-      if (cause) adaptExpr(cause) // from 子句递归（无独立 IR 承载，遍历保证全量覆盖）
-      return { kind: 'raise', value: arg ? adaptExpr(arg) : null }
+      return { kind: 'raise', value: arg ? adaptExpr(arg) : null, ...(cause ? { cause: adaptExpr(cause) } : {}) }
     }
     case 'delete_statement': {
       const arg = fieldNode(node, 'argument')
@@ -299,11 +310,12 @@ function adaptStmtCore(node: TsNode): IrStmt | null {
       const decorators = fieldNodes(node, 'decorator')
       // 返回类型/类型参数遍历（全量覆盖；generic_type 等落 ④ 抛错）
       const returnType = fieldNode(node, 'return_type')
-      if (returnType) for (const c of namedChildren(returnType)) adaptExpr(c)
+      const returnAnnotations = returnType ? namedChildren(returnType).map((c) => adaptExpr(c)) : []
       const typeParams = fieldNode(node, 'type_parameters')
       if (typeParams) for (const c of namedChildren(typeParams)) adaptExpr(c)
       // P0-1 评审修复：默认参数值在定义时求值——递归进 IR（禁止静默丢弃）
       const defaults = params ? collectParamDefaults(params) : []
+      const annotations = params ? collectParamAnnotations(params) : []
       // async def：tree-sitter 产出 function_definition，其首个子节点为匿名 'async' token
       const first = node.child(0)
       const isAsync = first?.type === 'async'
@@ -312,6 +324,7 @@ function adaptStmtCore(node: TsNode): IrStmt | null {
         name: name ? nodeText(name) : '',
         params: params ? collectParamNames(params) : [],
         defaults,
+        ...([...annotations, ...returnAnnotations].length ? { annotations: [...annotations, ...returnAnnotations] } : {}),
         body: body ? adaptBlock(body) : [],
         decorators: decorators.map((d) => adaptDecorator(d)),
         isAsync
@@ -447,6 +460,17 @@ function collectParamDefaults(paramsNode: TsNode): IrExpr[] {
   return defaults
 }
 
+function collectParamAnnotations(paramsNode: TsNode): IrExpr[] {
+  const annotations: IrExpr[] = []
+  for (const child of namedChildren(paramsNode)) {
+    if (child.type === 'typed_parameter' || child.type === 'typed_default_parameter') {
+      const typeNode = fieldNode(child, 'type')
+      if (typeNode) annotations.push(adaptExpr(typeNode))
+    }
+  }
+  return annotations
+}
+
 function assignTargetName(target: TsNode): string {
   switch (target.type) {
     case 'identifier':
@@ -465,9 +489,21 @@ function assignTargetName(target: TsNode): string {
 function adaptAssignment(node: TsNode): IrStmt {
   const left = fieldNode(node, 'left')
   const right = fieldNode(node, 'right')
-  if (!left || !right) throw new IrCoverageError(node.type, 'assignment missing operands')
+  const annotation = fieldNode(node, 'type')
+  if (!left || (!right && !annotation)) throw new IrCoverageError(node.type, 'assignment missing operands')
   const targets = splitAssignmentTargets(left)
-  return { kind: 'assign', targets, value: adaptExpr(right) }
+  let unpacksValue = left.type === 'pattern_list' || left.type === 'tuple'
+  if (annotation && !right) return { kind: 'annotation', targets, annotation: adaptExpr(annotation) }
+  let valueNode = right
+  while (valueNode?.type === 'assignment') {
+    const chainedLeft = fieldNode(valueNode, 'left')
+    const chainedRight = fieldNode(valueNode, 'right')
+    if (!chainedLeft || !chainedRight) throw new IrCoverageError(valueNode.type, 'chained assignment missing operands')
+    if (chainedLeft.type === 'pattern_list' || chainedLeft.type === 'tuple') unpacksValue = true
+    targets.push(...splitAssignmentTargets(chainedLeft))
+    valueNode = chainedRight
+  }
+  return { kind: 'assign', targets, value: valueNode ? adaptExpr(valueNode) : { kind: 'none' }, ...(annotation ? { annotation: adaptExpr(annotation) } : {}), ...(unpacksValue ? { unpacksValue: true } : {}) }
 }
 
 function splitAssignmentTargets(left: TsNode): string[] {
@@ -511,7 +547,7 @@ function adaptExprCore(node: TsNode): IrExpr {
     case 'identifier':
       return { kind: 'name', id: nodeText(node) }
     case 'string':
-      return adaptString(node)
+      return isFStringNode(node) ? adaptFStringNode(node) : adaptString(node)
     case 'concatenated_string': {
       // 隐式拼接：各段折叠拼接（对齐旧实现「逐段 string」语义，静态可折段合并）
       const parts = namedChildren(node).map((c) => adaptExpr(c))
@@ -775,7 +811,7 @@ function adaptCall(node: TsNode): IrExpr {
       }
     }
   }
-  return { kind: 'call', callee: callee ? adaptExpr(callee) : { kind: 'none' }, args, kwargs }
+  return { kind: 'call', callee: callee ? adaptExpr(callee) : { kind: 'none' }, args, kwargs, range: sourceRange(node) }
 }
 
 function adaptComprehension(node: TsNode): IrExpr {
@@ -829,13 +865,54 @@ function adaptComprehension(node: TsNode): IrExpr {
 
 function adaptString(node: TsNode): IrExpr {
   const raw = nodeText(node)
-  // f-string：剥离前缀 f/F/rf 等，提取静态段与插值
-  const isFString = /^[fFrRbBuU]+['"]/i.test(raw) && /^[fFrF]/i.test(raw)
-  if (isFString && (raw.startsWith('f') || raw.startsWith('F') || raw.startsWith('rf') || raw.startsWith('Rf') || raw.startsWith('fr') || raw.startsWith('Fr'))) {
-    return adaptFString(raw)
-  }
   // 普通/原始/字节字符串：剥离前缀与引号，保留原始文本（对齐旧实现）
   return { kind: 'string', value: stripStringQuotes(raw) }
+}
+
+function isFStringNode(node: TsNode): boolean {
+  return node.type === 'string' && /^[fF][rR]?['"]|^[rR][fF]['"]/.test(nodeText(node))
+}
+
+/** Consume tree-sitter interpolation and format-specifier nodes directly; never split source on ':'/'!'. */
+function adaptFStringNode(node: TsNode): IrExpr {
+  const interpolations: IrExpr[] = []
+  const visitFormat = (part: TsNode): void => {
+    for (const child of namedChildren(part)) {
+      if (child.type === 'format_expression') {
+        const expression = fieldNode(child, 'expression') ?? firstNamed(child)
+        if (expression) interpolations.push(adaptExpr(expression))
+      } else if (child.type === 'interpolation') {
+        visitInterpolation(child)
+      } else {
+        visitFormat(child)
+      }
+    }
+  }
+  const visitInterpolation = (part: TsNode): void => {
+    const expression = fieldNode(part, 'expression')
+    if (!expression) throw new IrCoverageError(part.type, 'interpolation missing expression')
+    interpolations.push(adaptExpr(expression))
+    for (const child of namedChildren(part)) if (child.type === 'format_specifier') visitFormat(child)
+  }
+  for (const child of namedChildren(node)) if (child.type === 'interpolation') visitInterpolation(child)
+  if (interpolations.length === 0 && /(?<!\{)\{(?!\{)/.test(nodeText(node))) {
+    throw new IrCoverageError('string', 'f-string contains braces but parser exposed no interpolation nodes')
+  }
+  const raw = nodeText(node)
+  const all = namedChildren(node).filter((child) => child.type === 'interpolation')
+  const quoteStart = raw.search(/["']/)
+  if (quoteStart < 0) throw new IrCoverageError('string', 'f-string has no opening quote')
+  const quoteLength = raw.slice(quoteStart, quoteStart + 3) === '"""' || raw.slice(quoteStart, quoteStart + 3) === "'''" ? 3 : 1
+  const staticParts: string[] = []
+  let cursor = quoteStart + quoteLength
+  for (const interpolation of all) {
+    const start = interpolation.startIndex - node.startIndex
+    const end = interpolation.endIndex - node.startIndex
+    staticParts.push(raw.slice(cursor, start).replaceAll('{{', '{').replaceAll('}}', '}'))
+    cursor = end
+  }
+  staticParts.push(raw.slice(cursor, raw.length - quoteLength).replaceAll('{{', '{').replaceAll('}}', '}'))
+  return { kind: 'f_string', staticParts, interpolations }
 }
 
 function stripStringQuotes(raw: string): string {
@@ -843,75 +920,6 @@ function stripStringQuotes(raw: string): string {
   const match = /^(?:[fFrRbBuU][fFrRbBuU]?|)?('''|"""|'|")([\s\S]*)\1$/.exec(raw)
   if (!match) return raw
   return match[2] ?? raw
-}
-
-function adaptFString(raw: string): IrExpr {
-  const body = stripStringQuotes(raw)
-  const staticParts: string[] = []
-  const interpolations: IrExpr[] = []
-  let buf = ''
-  let depth = 0
-  let i = 0
-  while (i < body.length) {
-    const ch = body[i]!
-    if (ch === '{' && body[i + 1] === '{') {
-      buf += '{'
-      i += 2
-      continue
-    }
-    if (ch === '}' && body[i + 1] === '}') {
-      buf += '}'
-      i += 2
-      continue
-    }
-    if (ch === '{') {
-      if (depth === 0) {
-        staticParts.push(buf)
-        buf = ''
-      }
-      depth += 1
-      i += 1
-      continue
-    }
-    if (ch === '}') {
-      depth -= 1
-      if (depth === 0) {
-        // buf 为一个插值的源文本：解析为表达式
-        interpolations.push(parseInterpolationText(buf))
-        buf = ''
-      }
-      i += 1
-      continue
-    }
-    buf += ch
-    i += 1
-  }
-  staticParts.push(buf)
-  return { kind: 'f_string', staticParts, interpolations }
-}
-
-function parseInterpolationText(text: string): IrExpr {
-  // 插值文本形如 `expr` / `expr!r` / `expr:spec` / `expr!r:spec`。
-  // 用 ScriptParserService.parse 解析为表达式（expression_statement），不可解析时保守视为字符串。
-  const trimmed = text.split(':')[0]!.split('!')[0]!.trim()
-  const outcome = safeParseExpression(trimmed)
-  if (outcome) return outcome
-  // 含格式说明中的嵌套插值：保守把整段当 string（内容已在命令文本中可见，不产生隐藏调用）
-  return { kind: 'string', value: trimmed }
-}
-
-function safeParseExpression(text: string): IrExpr | null {
-  // scriptParserService 不依赖本模块，无环；插值表达式复用同一 parse 服务
-  const outcome = scriptParserService.parse('python', text)
-  if (!outcome.ok) return null
-  try {
-    const ir = adaptPythonModule(outcome.tree)
-    const stmt = ir.body[0]
-    if (ir.body.length === 1 && stmt?.kind === 'expr') return stmt.value
-    return null
-  } finally {
-    outcome.tree.delete()
-  }
 }
 
 function adaptSubscriptIndex(node: TsNode): IrExpr {

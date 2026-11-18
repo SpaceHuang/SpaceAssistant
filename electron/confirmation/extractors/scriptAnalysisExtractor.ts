@@ -1,6 +1,5 @@
 import {
   analyzeScriptContent,
-  isScriptCertifiedRemoteSafe,
   parsePythonModule
 } from '../../shell/scriptContentSecurity'
 import type { IrModule } from '../../shell/scriptIr/types'
@@ -38,8 +37,7 @@ export function hasStaticNetworkReviewCandidate(code: string): boolean {
 /**
  * 脚本内容分析提取器（run_script / run_script 类）。
  *
- * 原则：只产出 findings 与 coverage，不做放行/拒绝判定；网络类别也只由 `network-api` finding 表达。
- * 远程认证态未通过时仍由独立所有者产 `script-uncertified` 信号。
+ * 原则：只产出 findings、uncertainties 与 coverage，不做放行/拒绝判定。
  * 提取器本身不感知 lane——链路的差异由策略层规则按 lane 消费。
  *
  * P1-T3：单次解析——`preParsedIr` 传入时不再自解析（toolCallGate 门控路径恰好 1 次 parse）；
@@ -50,14 +48,15 @@ export function hasStaticNetworkReviewCandidate(code: string): boolean {
 export function extractScriptSignals(
   code: string,
   _env: EnvFacts,
-  preParsedIr?: IrModule
+  preParsedIr?: IrModule,
+  parseFailureReason?: 'parse_error' | 'script-analysis-ir-uncovered' | 'script-parser-unavailable'
 ): { signals: FactSignal[]; summary: ConfirmSummary } {
   const signals: FactSignal[] = []
 
-  // 单次解析（M8 / P1-T3）：IR 同时供 findings 提取与独立远程认证态检查。
+  // 单次解析（M8 / P1-T3）：同一 IR 同时供行为发现、uncertainty 与路径提取消费。
   let ir: IrModule | null = preParsedIr ?? null
-  let parseFailed = false
-  if (!ir) {
+  let parseFailed = Boolean(parseFailureReason)
+  if (!ir && !parseFailureReason) {
     try {
       ir = parsePythonModule(code)
     } catch {
@@ -67,28 +66,26 @@ export function extractScriptSignals(
 
   const analysis = ir
     ? analyzeScriptContent(code, ir)
-    : { reason: 'parse_error', findings: [], coverage: 'failed' as const, totalCount: 0 }
+    : { reason: parseFailureReason ?? 'parse_error', findings: [], coverage: 'failed' as const, totalCount: 0, uncertainties: [] }
+  const coverage = analysis.coverage === 'complete' && analysis.uncertainties.length > 0 ? 'partial' : analysis.coverage
   signals.push({
     kind: 'script-analysis',
     findings: analysis.findings,
-    coverage: analysis.coverage,
-    totalCount: analysis.totalCount
+    coverage,
+    totalCount: analysis.totalCount,
+    uncertainties: analysis.uncertainties
   })
 
   if (parseFailed || !ir) {
-    signals.push({ kind: 'extraction-failed', reason: 'parse_error' })
+    signals.push({ kind: 'extraction-failed', reason: parseFailureReason ?? 'parse_error' })
   } else {
-    if (analysis.coverage === 'failed') {
+    if (coverage === 'failed') {
       signals.push({ kind: 'extraction-failed', reason: analysis.reason ?? 'script-analysis-location-unavailable' })
     }
     if (analysis.findings.some((finding) => finding.class === 'network-api')) {
       signals.push({ kind: 'script-network', patterns: [...new Set(analysis.findings.filter((finding) => finding.class === 'network-api').map((finding) => finding.pattern))] })
       const candidate = staticNetworkReviewCandidate(ir)
       if (candidate) signals.push({ kind: 'im-script-network-review-candidate', status: 'complete', ...candidate })
-    }
-    // 远程认证态：未通过 isScriptCertifiedRemoteSafe 认证时产 script-uncertified 信号
-    if (!isScriptCertifiedRemoteSafe(ir)) {
-      signals.push({ kind: 'script-uncertified' })
     }
   }
 

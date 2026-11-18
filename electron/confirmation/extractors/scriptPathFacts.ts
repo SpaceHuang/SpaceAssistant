@@ -128,6 +128,74 @@ function recordEvidence(state: WalkState, call: string | null, reason: Exclude<S
   state.evidence.push({ call: name, reason })
 }
 
+function isPrimitiveLike(expr: IrExpr, env: WalkEnv): boolean {
+  switch (expr.kind) {
+    case 'string': case 'number': case 'bool': case 'none': case 'ellipsis': return true
+    case 'name': return env.consts.has(expr.id) || env.pure.has(expr.id)
+    case 'f_string': return expr.interpolations.every((value) => isPrimitiveLike(value, env))
+    case 'list': case 'tuple': case 'set': return expr.elts.every((value) => isPrimitiveLike(value, env))
+    case 'dict': return expr.keys.every((value) => value === null || isPrimitiveLike(value, env)) && expr.values.every((value) => isPrimitiveLike(value, env))
+    case 'slice': return (!expr.lower || isPrimitiveLike(expr.lower, env)) && (!expr.upper || isPrimitiveLike(expr.upper, env)) && (!expr.step || isPrimitiveLike(expr.step, env))
+    case 'binop': return isPrimitiveLike(expr.left, env) && isPrimitiveLike(expr.right, env)
+    case 'unaryop': return isPrimitiveLike(expr.operand, env)
+    case 'compare': return isPrimitiveLike(expr.left, env) && isPrimitiveLike(expr.right, env)
+    case 'boolop': return expr.values.every((value) => isPrimitiveLike(value, env))
+    case 'conditional': return isPrimitiveLike(expr.test, env) && isPrimitiveLike(expr.body, env) && isPrimitiveLike(expr.orelse, env)
+    case 'call': {
+      const chain = normalizeChain(resolveIrChain(expr.callee, env.scope).fullName)
+      return Boolean(chain && isPureCallChain(chain) && expr.args.every((arg) => isPrimitiveLike(arg, env)) && expr.kwargs.every((arg) => isPrimitiveLike(arg.value, env)))
+    }
+    default: return false
+  }
+}
+
+function collectWrites(stmts: IrStmt[], output = new Set<string>()): Set<string> {
+  const expression = (expr: IrExpr | null | undefined): void => {
+    if (!expr) return
+    const visit = (e: IrExpr | null | undefined) => expression(e)
+    switch (expr.kind) {
+      case 'named_expr': output.add(expr.target); visit(expr.value); break
+      case 'attr': visit(expr.base); break
+      case 'call': visit(expr.callee); expr.args.forEach(visit); expr.kwargs.forEach((kw) => visit(kw.value)); break
+      case 'binop': case 'compare': visit(expr.left); visit(expr.right); break
+      case 'unaryop': visit(expr.operand); break
+      case 'await': case 'starred': visit(expr.value); break
+      case 'boolop': expr.values.forEach(visit); break
+      case 'conditional': visit(expr.test); visit(expr.body); visit(expr.orelse); break
+      case 'list': case 'tuple': case 'set': expr.elts.forEach(visit); break
+      case 'dict': expr.keys.forEach(visit); expr.values.forEach(visit); break
+      case 'subscript': visit(expr.value); visit(expr.index); break
+      case 'slice': visit(expr.lower); visit(expr.upper); visit(expr.step); break
+      case 'f_string': expr.interpolations.forEach(visit); break
+      case 'lambda': expr.defaults.forEach(visit); break
+      case 'comprehension': visit(expr.elt); expr.generators.forEach((g) => { visit(g.iter); g.conditions.forEach(visit) }); break
+      case 'yield': visit(expr.value); break
+    }
+  }
+  for (const stmt of stmts) {
+    if (stmt.kind === 'assign') { stmt.targets.forEach((name) => output.add(name)); expression(stmt.value); expression(stmt.annotation) }
+    else if (stmt.kind === 'annotation') expression(stmt.annotation)
+    else if (stmt.kind === 'aug_assign') { output.add(stmt.target); expression(stmt.targetExpr); expression(stmt.value) }
+    else if (stmt.kind === 'expr') expression(stmt.value)
+    else if (stmt.kind === 'for') { output.add(stmt.target); collectWrites([...stmt.body, ...stmt.orelse], output) }
+    else if (stmt.kind === 'if' || stmt.kind === 'while') { expression(stmt.test); collectWrites([...stmt.body, ...stmt.orelse], output) }
+    else if (stmt.kind === 'with') { stmt.items.flatMap((item) => item.optionalVars).forEach((name) => output.add(name)); collectWrites(stmt.body, output) }
+    else if (stmt.kind === 'try') collectWrites([...stmt.body, ...stmt.handlers.flatMap((handler) => handler.body), ...stmt.orelse, ...stmt.finalbody], output)
+    else if (stmt.kind === 'import') stmt.names.forEach((item) => output.add(item.alias ?? item.module.split('.')[0]!))
+    else if (stmt.kind === 'from_import') stmt.names.forEach((item) => { if (item.name !== '*') output.add(item.alias ?? item.name) })
+    else if (stmt.kind === 'function_def') { output.add(stmt.name); stmt.defaults.forEach(expression); stmt.decorators.forEach(expression); (stmt.annotations ?? []).forEach(expression) }
+    else if (stmt.kind === 'class_def') { output.add(stmt.name); stmt.bases.forEach(expression); stmt.decorators.forEach(expression) }
+    else if (stmt.kind === 'return') expression(stmt.value)
+    else if (stmt.kind === 'raise') { expression(stmt.value); expression(stmt.cause) }
+    else if (stmt.kind === 'assert') { expression(stmt.test); expression(stmt.message) }
+  }
+  return output
+}
+
+function invalidateBlockWrites(stmts: IrStmt[], env: WalkEnv, state: WalkState): void {
+  for (const name of collectWrites(stmts)) invalidateTargetText(name, env, state)
+}
+
 /**
  * P0-2:遍历环境。consts 只记录「单次赋值、静态可折」的名字;任何重绑定/参数化写入
  * (aug_assign / for 与 comprehension 目标 / del / with-as / 分支与循环体内赋值)即失效。
@@ -301,9 +369,10 @@ function invalidateTargetText(text: string, env: WalkEnv, state: WalkState): voi
 }
 
 function isPureValueExpr(expr: IrExpr, env: WalkEnv): boolean {
+  if (isPrimitiveLike(expr, env)) return true
   if (expr.kind !== 'call') return false
   const chain = normalizeChain(resolveIrChain(expr.callee, env.scope).fullName)
-  if (isPureCallChain(chain)) return true
+  if (isPureCallChain(chain) && expr.args.every((arg) => isPrimitiveLike(arg, env)) && expr.kwargs.every((arg) => isPrimitiveLike(arg.value, env))) return true
   return chain !== null && env.defs.has(chain.split('.')[0]!)
 }
 
@@ -382,6 +451,11 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
     walkExpr(expr.callee, env, paths, state, conditionallyEvaluated)
     expr.args.forEach((arg) => walkExpr(arg, env, paths, state, conditionallyEvaluated))
     expr.kwargs.forEach((kw) => walkExpr(kw.value, env, paths, state, conditionallyEvaluated))
+    if (expr.callee.kind === 'attr') {
+      // An arbitrary method can mutate any aliased container; discard path constants after
+      // walking this call so later path extraction cannot consume stale element proofs.
+      env.consts.clear()
+    }
     return
   }
   switch (expr.kind) {
@@ -396,7 +470,9 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
     // 条件位置时,首值/test 位同样可能不求值。
     case 'boolop': expr.values.forEach((v, i) => walkExpr(v, env, paths, state, conditionallyEvaluated || i > 0)); break
     case 'conditional': walkExpr(expr.test, env, paths, state, conditionallyEvaluated); walkExpr(expr.body, env, paths, state, true); walkExpr(expr.orelse, env, paths, state, true); break
-    case 'list': case 'tuple': case 'set': expr.elts.forEach((v) => walkExpr(v, env, paths, state, conditionallyEvaluated)); break
+    case 'list': case 'tuple': case 'set':
+      if (expr.kind === 'set' && expr.elts.some((v) => !isPrimitiveLike(v, env))) { state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable') }
+      expr.elts.forEach((v) => walkExpr(v, env, paths, state, conditionallyEvaluated)); break
     case 'dict': [...expr.keys, ...expr.values].forEach((v) => { if (v) walkExpr(v, env, paths, state, conditionallyEvaluated) }); break
     case 'subscript': walkExpr(expr.value, env, paths, state, conditionallyEvaluated); walkExpr(expr.index, env, paths, state, conditionallyEvaluated); break
     case 'slice': [expr.lower, expr.upper, expr.step].forEach((v) => { if (v) walkExpr(v, env, paths, state, conditionallyEvaluated) }); break
@@ -412,11 +488,22 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
     case 'comprehension':
       // N7:comprehension 目标失效属无害的过度保守——先失效再走 elt,防止把迭代变量当常量
       for (const gen of expr.generators) invalidateTargetText(gen.target, env, state)
+      for (const gen of expr.generators) {
+        const rangeCall = gen.iter.kind === 'call' && gen.iter.callee.kind === 'name' && gen.iter.callee.id === 'range' && gen.iter.args.every((arg) => isPrimitiveLike(arg, env))
+        if (isPrimitiveLike(gen.iter, env) || rangeCall) {
+          for (const target of gen.target.split(',').map((name) => name.trim())) if (isSimpleName(target)) env.pure.add(target)
+        }
+      }
       // v4:条件子句与 elt 每轮迭代可能不求值 → 条件求值上下文;首个生成器 iter 恒定求值,
       // 后续生成器依赖外层迭代可能为空 → 条件求值
       for (const gen of expr.generators) {
-        for (const cond of gen.conditions) walkExpr(cond, env, paths, state, true)
+        for (const cond of gen.conditions) {
+          if (!isPrimitiveLike(cond, env)) { state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable') }
+          walkExpr(cond, env, paths, state, true)
+        }
       }
+      if (expr.compKind === 'set' && !isPrimitiveLike(expr.elt, env)) { state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable') }
+      if (expr.compKind === 'dict' && expr.elt.kind === 'tuple' && expr.elt.elts[0] && !isPrimitiveLike(expr.elt.elts[0], env)) { state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable') }
       walkExpr(expr.elt, env, paths, state, true)
       expr.generators.forEach((g, i) => walkExpr(g.iter, env, paths, state, conditionallyEvaluated || i > 0))
       break
@@ -445,6 +532,8 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
     if (stmt.kind === 'import' || stmt.kind === 'from_import') { bindImport(scope, stmt); continue }
     switch (stmt.kind) {
       case 'assign': {
+        if (stmt.annotation) walkExpr(stmt.annotation, blockEnv, paths, state, false)
+        if (stmt.unpacksValue && !isPrimitiveLike(stmt.value, blockEnv)) { state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable') }
         // 折叠先于遍历:RHS 按旧环境求值(允许 p = p + "/x" 自引用旧值),IO 检测仍靠 walkExpr
         const folded = foldPathIr(stmt.value, blockEnv)
         walkExpr(stmt.value, blockEnv, paths, state, false)
@@ -460,11 +549,20 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         }
         break
       }
+      case 'annotation':
+        walkExpr(stmt.annotation, blockEnv, paths, state, false)
+        break
       case 'aug_assign':
         // P0-4:aug_assign 不再无条件 unknown(f14);但 IR 丢失运算符,无法证明「+= 后仍静态」——
         // 一律失效(N3:p += os.environ["X"] 不得误判可静态确定)。仅 import 名重绑定保持 unknown。
         if (scope.modules.has(stmt.target) || scope.attrs.has(stmt.target)) { state.dynamicExecution = true; state.dynamicKinds.add('binding-chain-broken') }
+        walkExpr(stmt.targetExpr, blockEnv, paths, state, false)
         walkExpr(stmt.value, blockEnv, paths, state, false)
+        if (!isPrimitiveLike(stmt.targetExpr, blockEnv) || !isPrimitiveLike(stmt.value, blockEnv)) {
+          const targetExpr = stmt.targetExpr.kind === 'subscript' ? stmt.targetExpr.value : stmt.targetExpr
+          const containerMutation = stmt.targetExpr.kind === 'subscript' && targetExpr.kind === 'name' && blockEnv.pure.has(targetExpr.id)
+          if (!containerMutation) { state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable') }
+        }
         invalidateTargetText(stmt.target, blockEnv, state)
         break
       case 'expr': walkExpr(stmt.value, blockEnv, paths, state, false); break
@@ -472,9 +570,11 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         walkExpr(stmt.test, blockEnv, paths, state, false)
         walkStatements(stmt.body, blockEnv, paths, state, false, depth)
         walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
+        invalidateBlockWrites([...stmt.body, ...stmt.orelse], blockEnv, state)
         break
       case 'for': {
         walkExpr(stmt.iter, blockEnv, paths, state, false)
+        if (stmt.targetUnpacks && !isPrimitiveLike(stmt.iter, blockEnv)) { state.unmodeledCall = true; state.dynamicKinds.add('path-analysis-unavailable') }
         invalidateTargetText(stmt.target, blockEnv, state)
         // 循环体两遍扫描:第一遍收集首轮的静态路径;第二遍在体内写入已失效的环境上重扫,
         // 让 loop-carried 重绑定(p 在体内被改写)在次轮起落 unknown。
@@ -487,6 +587,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
           walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
         }
         walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
+        invalidateBlockWrites([...stmt.body, ...stmt.orelse], blockEnv, state)
         break
       }
       case 'while':
@@ -499,6 +600,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
           walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
         }
         walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
+        invalidateBlockWrites([...stmt.body, ...stmt.orelse], blockEnv, state)
         break
       case 'with': {
         for (const item of stmt.items) {
@@ -509,6 +611,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
           }
         }
         walkStatements(stmt.body, blockEnv, paths, state, false, depth)
+        invalidateBlockWrites(stmt.body, blockEnv, state)
         break
       }
       case 'try':
@@ -516,9 +619,11 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         stmt.handlers.forEach((h) => { if (h.typeExpr) walkExpr(h.typeExpr, blockEnv, paths, state, false); walkStatements(h.body, blockEnv, paths, state, false, depth) })
         walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
         walkStatements(stmt.finalbody, blockEnv, paths, state, false, depth)
+        invalidateBlockWrites([...stmt.body, ...stmt.handlers.flatMap((handler) => handler.body), ...stmt.orelse, ...stmt.finalbody], blockEnv, state)
         break
       case 'function_def': {
         stmt.defaults.forEach((v) => walkExpr(v, blockEnv, paths, state, false))
+        ;(stmt.annotations ?? []).forEach((v) => walkExpr(v, blockEnv, paths, state, false))
         stmt.decorators.forEach((v) => walkExpr(v, blockEnv, paths, state, false))
         blockEnv.defs.add(stmt.name)
         // P0-4:函数定义本身不设 unknown(函数体本就递归扫描);常量/纯值/句柄不跨作用域传播,
@@ -540,8 +645,8 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         break
       }
       case 'return': if (stmt.value) walkExpr(stmt.value, blockEnv, paths, state, false); break
-      case 'assert': walkExpr(stmt.test, blockEnv, paths, state, false); break
-      case 'raise': if (stmt.value) walkExpr(stmt.value, blockEnv, paths, state, false); break
+      case 'assert': walkExpr(stmt.test, blockEnv, paths, state, false); if (stmt.message) walkExpr(stmt.message, blockEnv, paths, state, false); break
+      case 'raise': if (stmt.value) walkExpr(stmt.value, blockEnv, paths, state, false); if (stmt.cause) walkExpr(stmt.cause, blockEnv, paths, state, false); break
       case 'delete':
         // P0-2:del 精确失效目标名;del import 名视同重绑定(保持 unknown);非 name 形态(下标/属性)忽略
         for (const target of stmt.targets) {

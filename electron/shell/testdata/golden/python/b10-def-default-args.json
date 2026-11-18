@@ -2,5 +2,8 @@
   "id": "b10-def-default-args",
   "group": "previously-failed",
   "patternIds": [],
-  "coverage": "complete"
+  "coverage": "partial",
+  "uncertaintyKinds": [
+    "implicit-call-unresolved"
+  ]
 }

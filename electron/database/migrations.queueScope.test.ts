@@ -7,7 +7,8 @@ import { DB_SCHEMA_VERSION } from './schema'
 
 function restoreLegacyV54Schema(db: ReturnType<typeof createMemoryAppDb>): void {
   const conn = getDbConnection(db)
-  conn.exec(`DROP INDEX IF EXISTS idx_messages_queue_scope_status_order;
+  conn.exec(`DROP INDEX IF EXISTS idx_messages_queued_desktop_session;
+    DROP INDEX IF EXISTS idx_messages_queue_scope_status_order;
     DROP INDEX IF EXISTS idx_queue_input_requests_scope_session_request;
     DROP INDEX IF EXISTS idx_queue_input_requests_message;
     ALTER TABLE messages DROP COLUMN queue_scope;
@@ -31,6 +32,18 @@ function restoreLegacyV54Schema(db: ReturnType<typeof createMemoryAppDb>): void 
 }
 
 describe('queue scope migration', () => {
+  it('preserves v124 review-scope migrations and adds the desktop candidate index', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    conn.exec('DROP INDEX idx_messages_queued_desktop_session')
+    conn.prepare("UPDATE schema_meta SET value='124' WHERE key='schema_version'").run()
+    runMigrations(conn)
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queued_desktop_session'").get())
+      .toEqual({ name: 'idx_messages_queued_desktop_session' })
+    db.close()
+  })
+
   it('backfills legacy queued desktop messages and receipts without changing message or turn data', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)

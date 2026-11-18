@@ -70,9 +70,12 @@ const EXPECTED_RULE_IDS = [
   'script-unresolved-write-review',
   'script-suspicious-path-unknown-confirm',
   'script-declared-path-scope-allow-desktop',
+  'script-unresolved-origin-confirm',
   'script-unmodeled-path-ask',
   'script-unverified-language-confirm',
+  'script-analysis-uncertainty-confirm',
   'script-analysis-incomplete-confirm',
+  'script-analysis-parse-failed-deny',
   'shell-precheck-auto-allow',
   'path-sensitive-read-confirm',
   'path-system-dir-ask',
@@ -201,11 +204,17 @@ describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {
 
   it('脚本内容分析失败固定要求真人确认并拒绝无人值守执行', () => {
     const byId = new Map(DEFAULT_POLICY_RULES.map((rule) => [rule.id, rule]))
+    expect(byId.get('script-analysis-uncertainty-confirm')).toMatchObject({
+      locked: true, action: 'confirm-every-time', match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-analysis:partial'] }
+    })
+    expect(byId.get('script-uncertified-ask-remote')).toMatchObject({
+      locked: true, action: 'ask', match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:uncertainty', 'script-analysis:partial'] }
+    })
     expect(byId.get('script-analysis-incomplete-confirm')).toMatchObject({
-      locked: true, action: 'confirm-every-time', match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['extraction-failed'] }
+      locked: true, action: 'confirm-every-time', match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:failed'] }
     })
     expect(byId.get('script-analysis-incomplete-automation-deny')).toMatchObject({
-      locked: true, action: 'deny', match: { lane: ['automation'], toolName: 'run_script', signals: ['extraction-failed'] }
+      locked: true, action: 'deny', match: { lane: ['automation'], toolName: 'run_script', signals: ['invocation-facts-completeness:partial'] }
     })
   })
 })

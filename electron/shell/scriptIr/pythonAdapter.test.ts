@@ -77,7 +77,7 @@ describe('pythonAdapter：已建模范围正例（清单为下限非上限）', 
   it('assign / aug_assign / 重绑赋值', () => {
     expect(adapt('x = 1\n')).toEqual({ body: [{ kind: 'assign', targets: ['x'], value: { kind: 'number', value: '1' } }] })
     const aug = adapt('i += 1\n')
-    expect(aug.body[0]).toEqual({ kind: 'aug_assign', target: 'i', value: { kind: 'number', value: '1' } })
+    expect(aug.body[0]).toEqual({ kind: 'aug_assign', target: 'i', targetExpr: { kind: 'name', id: 'i' }, op: '+=', value: { kind: 'number', value: '1' } })
   })
 
   it('调用与属性链（含 kwargs）', () => {
@@ -247,9 +247,26 @@ describe('pythonAdapter：穷尽性 + 白名单叶子性 + ③ 双护栏（机�
     expect(missing).toEqual([])
     const tabled = new Set([...IR_MODELED, ...IGNORABLE_LEAF_NODES, ...PASSTHROUGH_NODES, ...Object.keys(EXPLICITLY_UNMODELED)])
     // as_pattern_target 是 grammar 运行时种类（node-types.json 顶层条目未列出，实测语法树出现）
-    const RUNTIME_EXTRA = ['as_pattern_target']
+    const RUNTIME_EXTRA = ['as_pattern_target', 'annotated_assignment']
     const extra = [...tabled].filter((t) => !concrete.includes(t) && !RUNTIME_EXTRA.includes(t))
     expect(extra).toEqual([])
+  })
+
+  it('retains executable fields and unpack semantics in the IR', () => {
+    expect(adapt('assert False, danger()').body[0]).toMatchObject({ kind: 'assert', message: { kind: 'call' } })
+    expect(adapt('raise ValueError() from danger()').body[0]).toMatchObject({ kind: 'raise', cause: { kind: 'call' } })
+    expect(adapt('def f(x: danger()) -> danger():\n    pass').body[0]).toMatchObject({ kind: 'function_def', annotations: [{ kind: 'call' }, { kind: 'call' }] })
+    expect(adapt('x: danger() = 1').body[0]).toMatchObject({ kind: 'assign', annotation: { kind: 'call' } })
+    expect(adapt('a, b = source').body[0]).toMatchObject({ kind: 'assign', unpacksValue: true })
+    expect(adapt('a = b, c = source').body[0]).toMatchObject({ kind: 'assign', unpacksValue: true })
+    expect(adapt('x: int').body[0]).toMatchObject({ kind: 'annotation', targets: ['x'], annotation: { kind: 'name', id: 'int' } })
+    expect(adapt('x += 1').body[0]).toMatchObject({ kind: 'aug_assign', targetExpr: { kind: 'name', id: 'x' }, op: '+=' })
+    expect(adapt('try:\n    pass\nexcept ValueError as error:\n    pass').body[0]).toMatchObject({ kind: 'try', handlers: [expect.objectContaining({ name: 'error' })] })
+  })
+
+  it('retains calls in f-string primary and nested format expressions as CST children', () => {
+    expect(adapt(`f"{42:{danger()}}"`).body[0]).toMatchObject({ kind: 'expr', value: { kind: 'f_string', interpolations: [{ kind: 'number' }, { kind: 'call' }] } })
+    expect(adapt(`f"{ {'x': danger()} }"`).body[0]).toMatchObject({ kind: 'expr', value: { kind: 'f_string', interpolations: [{ kind: 'dict', values: [{ kind: 'call' }] }] } })
   })
 
   it('② 白名单叶子性：每个可忽略种类在 node-types.json 中无 fields 且无 named children（M2‴）', () => {
@@ -365,7 +382,7 @@ describe('pythonAdapter：IR 结构快照（独立于判定结果的中间层断
     ['f2 = lambda x: x', [{ kind: 'assign', targets: ['f2'], value: { kind: 'lambda', params: ['x'], defaults: [], body: { kind: 'name', id: 'x' } } }]],
     ['dd = {"k": 1}', [{ kind: 'assign', targets: ['dd'], value: { kind: 'dict', keys: [{ kind: 'string', value: 'k' }], values: [{ kind: 'number', value: '1' }] } }]],
     ['s2 = {1, 2}', [{ kind: 'assign', targets: ['s2'], value: { kind: 'set', elts: [{ kind: 'number', value: '1' }, { kind: 'number', value: '2' }] } }]],
-    ['i += 1', [{ kind: 'aug_assign', target: 'i', value: { kind: 'number', value: '1' } }]],
+    ['i += 1', [{ kind: 'aug_assign', target: 'i', targetExpr: { kind: 'name', id: 'i' }, op: '+=', value: { kind: 'number', value: '1' } }]],
     ['del x', [{ kind: 'delete', targets: [{ kind: 'name', id: 'x' }] }]],
     ['raise ValueError("e")', [{ kind: 'raise', value: { kind: 'call', callee: { kind: 'name', id: 'ValueError' }, args: [{ kind: 'string', value: 'e' }], kwargs: [] } }]],
     ['assert ok', [{ kind: 'assert', test: { kind: 'name', id: 'ok' } }]],
